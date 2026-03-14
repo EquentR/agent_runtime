@@ -1,0 +1,167 @@
+package tools
+
+import (
+	"context"
+	"fmt"
+	"testing"
+
+	coremcp "github.com/EquentR/agent_runtime/core/mcp"
+)
+
+type fakeMCPClient struct {
+	tools        []coremcp.ToolDescriptor
+	prompts      []coremcp.PromptDescriptor
+	callName     string
+	callArgs     map[string]any
+	result       coremcp.CallResult
+	promptName   string
+	promptArgs   map[string]string
+	promptResult coremcp.GetPromptResult
+	err          error
+}
+
+func (f *fakeMCPClient) ListTools(_ context.Context) ([]coremcp.ToolDescriptor, error) {
+	return append([]coremcp.ToolDescriptor(nil), f.tools...), nil
+}
+
+func (f *fakeMCPClient) CallTool(_ context.Context, request coremcp.CallRequest) (coremcp.CallResult, error) {
+	f.callName = request.Name
+	f.callArgs = request.Arguments
+	return f.result, f.err
+}
+
+func (f *fakeMCPClient) ListPrompts(_ context.Context) ([]coremcp.PromptDescriptor, error) {
+	return append([]coremcp.PromptDescriptor(nil), f.prompts...), nil
+}
+
+func (f *fakeMCPClient) GetPrompt(_ context.Context, request coremcp.GetPromptRequest) (coremcp.GetPromptResult, error) {
+	f.promptName = request.Name
+	f.promptArgs = request.Arguments
+	return f.promptResult, f.err
+}
+
+func (f *fakeMCPClient) Close() error {
+	return nil
+}
+
+func TestRegistry_IsEmptyByDefault(t *testing.T) {
+	registry := NewRegistry()
+	if got := registry.List(); len(got) != 0 {
+		t.Fatalf("List() length = %d, want 0", len(got))
+	}
+}
+
+func TestRegistry_RegisterMCPClient(t *testing.T) {
+	registry := NewRegistry()
+	fakeClient := &fakeMCPClient{
+		tools: []coremcp.ToolDescriptor{
+			{
+				Name:        "search_docs",
+				Description: "Search project docs",
+				InputSchema: coremcp.Schema{
+					Type: "object",
+					Properties: map[string]coremcp.SchemaProperty{
+						"query": {
+							Type:        "string",
+							Description: "Search query",
+						},
+					},
+					Required: []string{"query"},
+				},
+			},
+		},
+		result: coremcp.CallResult{Text: "matched docs"},
+	}
+
+	if err := registry.RegisterMCPClient(fakeClient, MCPRegistrationOptions{Prefix: "docs"}); err != nil {
+		t.Fatalf("RegisterMCPClient() error = %v", err)
+	}
+
+	tools := registry.List()
+	if len(tools) != 1 {
+		t.Fatalf("List() length = %d, want 1", len(tools))
+	}
+	if tools[0].Name != "docs.search_docs" {
+		t.Fatalf("tool name = %q, want %q", tools[0].Name, "docs.search_docs")
+	}
+	if tools[0].Parameters.Type != "object" {
+		t.Fatalf("schema type = %q, want %q", tools[0].Parameters.Type, "object")
+	}
+	if tools[0].Parameters.Properties["query"].Type != "string" {
+		t.Fatalf("query type = %q, want %q", tools[0].Parameters.Properties["query"].Type, "string")
+	}
+
+	result, err := registry.Execute(context.Background(), "docs.search_docs", map[string]any{
+		"query": "registry",
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if result != "matched docs" {
+		t.Fatalf("result = %q, want %q", result, "matched docs")
+	}
+	if fakeClient.callName != "search_docs" {
+		t.Fatalf("call name = %q, want %q", fakeClient.callName, "search_docs")
+	}
+	if got := fmt.Sprint(fakeClient.callArgs["query"]); got != "registry" {
+		t.Fatalf("call args query = %q, want %q", got, "registry")
+	}
+}
+
+func TestRegistry_RegisterMCPPrompts(t *testing.T) {
+	registry := NewRegistry()
+	fakeClient := &fakeMCPClient{
+		prompts: []coremcp.PromptDescriptor{
+			{
+				Name:        "compose_release",
+				Description: "Compose release notes",
+				Arguments: []coremcp.PromptArgument{
+					{Name: "topic", Description: "Release topic", Required: true},
+					{Name: "tone", Description: "Writing tone"},
+				},
+			},
+		},
+		promptResult: coremcp.GetPromptResult{
+			Description: "Compose release notes",
+			Text:        "user:\nDraft release notes for registry\n\nassistant:\nFocus on user-facing changes.",
+		},
+	}
+
+	if err := registry.RegisterMCPPrompts(fakeClient, MCPRegistrationOptions{Prefix: "docs"}); err != nil {
+		t.Fatalf("RegisterMCPPrompts() error = %v", err)
+	}
+
+	tools := registry.List()
+	if len(tools) != 1 {
+		t.Fatalf("List() length = %d, want 1", len(tools))
+	}
+	if tools[0].Name != "docs.prompt.compose_release" {
+		t.Fatalf("tool name = %q, want %q", tools[0].Name, "docs.prompt.compose_release")
+	}
+	if tools[0].Parameters.Properties["topic"].Type != "string" {
+		t.Fatalf("topic type = %q, want %q", tools[0].Parameters.Properties["topic"].Type, "string")
+	}
+	if tools[0].Parameters.Properties["tone"].Description != "Writing tone" {
+		t.Fatalf("tone description = %q, want %q", tools[0].Parameters.Properties["tone"].Description, "Writing tone")
+	}
+
+	result, err := registry.Execute(context.Background(), "docs.prompt.compose_release", map[string]any{
+		"topic": "registry",
+		"tone":  "concise",
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if result != fakeClient.promptResult.Text {
+		t.Fatalf("result = %q, want %q", result, fakeClient.promptResult.Text)
+	}
+	if fakeClient.promptName != "compose_release" {
+		t.Fatalf("prompt name = %q, want %q", fakeClient.promptName, "compose_release")
+	}
+	if fakeClient.promptArgs["topic"] != "registry" {
+		t.Fatalf("prompt args topic = %q, want %q", fakeClient.promptArgs["topic"], "registry")
+	}
+	if fakeClient.promptArgs["tone"] != "concise" {
+		t.Fatalf("prompt args tone = %q, want %q", fakeClient.promptArgs["tone"], "concise")
+	}
+}
