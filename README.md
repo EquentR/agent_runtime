@@ -86,11 +86,10 @@ go list ./...
 
 ### 生成 Swagger 文档
 
-Windows 环境可直接使用：
-
 ```bash
-C:\Users\Equent\go\bin\swag.exe init -g "cmd/example_agent/main.go" -o "docs/swagger" --outputTypes json,yaml --parseDependency --parseInternal
+swag init -g "cmd/example_agent/main.go" -o "docs/swagger" --outputTypes json,yaml --parseDependency --parseInternal
 ```
+
 
 生成产物位于 `docs/swagger/swagger.json` 与 `docs/swagger/swagger.yaml`，Swagger UI 页面会直接读取其中的 `swagger.json`。
 
