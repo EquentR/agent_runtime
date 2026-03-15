@@ -2,7 +2,7 @@ server:
   host: "0.0.0.0"
   port: 18080
   apiBasePath: /api/v1
-  staticPath:
+  staticPaths:
     - path: /
       dir: static/web
 
