@@ -19,12 +19,19 @@ var (
 	configFile = flag.String("config", "conf/app.yaml", "config file")
 )
 
+// init 打印当前构建版本信息，便于启动时快速确认二进制来源。
 func init() {
 	// 版本信息
 	fmt.Printf("Version: %s\n", Version)
 	fmt.Printf("Git Commit: %s\n", GitCommit)
 }
 
+// main 是示例应用入口。
+//
+// @title Agent Runtime API
+// @version 0.0.1
+// @description Agent Runtime 示例应用 API 文档。
+// @BasePath /api/v1
 func main() {
 	flag.Parse()
 	cfg, err := loadConfig(*configFile)
@@ -34,7 +41,7 @@ func main() {
 	commands.Serve(cfg, Version, GitCommit)
 }
 
-// 加载配置
+// loadConfig 从配置文件读取并解析应用配置。
 func loadConfig(path string) (*config.Config, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -43,7 +50,7 @@ func loadConfig(path string) (*config.Config, error) {
 	return loadConfigFromBytes(raw)
 }
 
-// 配置中的环境变量替换功能
+// loadConfigFromBytes 在反序列化前先展开环境变量。
 func loadConfigFromBytes(raw []byte) (*config.Config, error) {
 	expanded := os.ExpandEnv(string(raw))
 	cfg := &config.Config{}

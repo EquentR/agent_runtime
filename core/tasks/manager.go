@@ -1,0 +1,287 @@
+package tasks
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync"
+	"time"
+)
+
+// Executor 定义单个 task_type 的执行器签名。
+type Executor func(ctx context.Context, task *Task, runtime *Runtime) (any, error)
+
+// ManagerOptions 定义任务管理器的后台轮询与租约参数。
+type ManagerOptions struct {
+	RunnerID          string
+	PollInterval      time.Duration
+	LeaseDuration     time.Duration
+	HeartbeatInterval time.Duration
+}
+
+// Manager 负责任务的创建、领取、串行执行、取消与事件发布。
+type Manager struct {
+	store *Store
+	hub   *EventHub
+
+	runnerID          string
+	pollInterval      time.Duration
+	leaseDuration     time.Duration
+	heartbeatInterval time.Duration
+
+	mu           sync.RWMutex
+	executors    map[string]Executor
+	activeCancel map[string]context.CancelFunc
+	startOnce    sync.Once
+}
+
+// NewManager 创建一个串行任务管理器实例。
+func NewManager(store *Store, options ManagerOptions) *Manager {
+	runnerID := options.RunnerID
+	if runnerID == "" {
+		runnerID = "local-runner"
+	}
+	pollInterval := options.PollInterval
+	if pollInterval <= 0 {
+		pollInterval = 50 * time.Millisecond
+	}
+	leaseDuration := options.LeaseDuration
+	if leaseDuration <= 0 {
+		leaseDuration = 5 * time.Second
+	}
+	heartbeatInterval := options.HeartbeatInterval
+	if heartbeatInterval <= 0 {
+		heartbeatInterval = leaseDuration / 2
+		if heartbeatInterval <= 0 {
+			heartbeatInterval = 2 * time.Second
+		}
+	}
+
+	return &Manager{
+		store:             store,
+		hub:               NewEventHub(),
+		runnerID:          runnerID,
+		pollInterval:      pollInterval,
+		leaseDuration:     leaseDuration,
+		heartbeatInterval: heartbeatInterval,
+		executors:         make(map[string]Executor),
+		activeCancel:      make(map[string]context.CancelFunc),
+	}
+}
+
+// RegisterExecutor 为指定 task_type 注册执行器。
+func (m *Manager) RegisterExecutor(taskType string, executor Executor) error {
+	if taskType == "" {
+		return fmt.Errorf("task type cannot be empty")
+	}
+	if executor == nil {
+		return fmt.Errorf("executor cannot be nil")
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, exists := m.executors[taskType]; exists {
+		return fmt.Errorf("executor already registered for %s", taskType)
+	}
+	m.executors[taskType] = executor
+	return nil
+}
+
+// Start 启动后台领取循环；重复调用只会生效一次。
+func (m *Manager) Start(ctx context.Context) {
+	m.startOnce.Do(func() {
+		go m.run(ctx)
+	})
+}
+
+// CreateTask 创建并发布一个新的任务。
+func (m *Manager) CreateTask(ctx context.Context, input CreateTaskInput) (*Task, error) {
+	task, events, err := m.store.CreateTask(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	m.publish(events...)
+	return task, nil
+}
+
+// GetTask 查询任务当前快照。
+func (m *Manager) GetTask(ctx context.Context, id string) (*Task, error) {
+	return m.store.GetTask(ctx, id)
+}
+
+// ListEvents 查询任务事件流。
+func (m *Manager) ListEvents(ctx context.Context, taskID string, afterSeq int64, limit int) ([]TaskEvent, error) {
+	return m.store.ListEvents(ctx, taskID, afterSeq, limit)
+}
+
+// Subscribe 订阅某个任务的实时事件。
+func (m *Manager) Subscribe(taskID string) (<-chan TaskEvent, func()) {
+	return m.hub.Subscribe(taskID)
+}
+
+// CancelTask 发起任务取消。
+//
+// 对 queued 任务会直接收敛到 cancelled；对 running 任务会先写入
+// cancel_requested，再通过取消函数向执行上下文传播信号。
+func (m *Manager) CancelTask(ctx context.Context, id string) (*Task, error) {
+	current, err := m.store.GetTask(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if current.Status.IsTerminal() || current.Status == StatusCancelRequested {
+		return current, nil
+	}
+
+	updated, events, err := m.store.RequestCancel(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	m.publish(events...)
+
+	// 尚未执行的任务可直接在管理器层完成终态转换。
+	if updated.Status == StatusCancelRequested && current.Status == StatusQueued {
+		cancelled, finishEvents, err := m.store.MarkCancelled(ctx, id, map[string]any{"message": "task cancelled before execution"})
+		if err != nil {
+			return nil, err
+		}
+		m.publish(finishEvents...)
+		return cancelled, nil
+	}
+
+	// 已在执行中的任务依赖协作式取消，由执行上下文感知并退出。
+	if cancel := m.lookupCancel(id); cancel != nil {
+		cancel()
+	}
+	return updated, nil
+}
+
+// RetryTask 基于原任务创建新的排队任务。
+func (m *Manager) RetryTask(ctx context.Context, id string) (*Task, error) {
+	task, events, err := m.store.RetryTask(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	m.publish(events...)
+	return task, nil
+}
+
+// run 持续轮询并串行执行后台任务。
+func (m *Manager) run(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		// 1. 从持久层领取下一个待执行任务。
+		task, events, err := m.store.ClaimNextTask(ctx, m.runnerID, m.leaseDuration)
+		if err != nil {
+			time.Sleep(m.pollInterval)
+			continue
+		}
+		if task == nil {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(m.pollInterval):
+			}
+			continue
+		}
+
+		// 2. 先发布 task.started，再执行实际任务逻辑。
+		m.publish(events...)
+		m.executeTask(ctx, task)
+	}
+}
+
+// executeTask 执行单个已领取任务，并根据结果写入终态。
+func (m *Manager) executeTask(ctx context.Context, task *Task) {
+	executor, ok := m.executor(task.TaskType)
+	if !ok {
+		failed, events, err := m.store.MarkFailed(context.Background(), task.ID, map[string]any{"message": "executor not found"})
+		if err == nil {
+			m.publish(events...)
+			_ = failed
+		}
+		return
+	}
+
+	// 1. 为当前任务创建可取消上下文，并登记取消函数。
+	taskCtx, cancel := context.WithCancel(ctx)
+	m.setActiveCancel(task.ID, cancel)
+	defer func() {
+		cancel()
+		m.clearActiveCancel(task.ID)
+	}()
+
+	// 2. 后台刷新租约心跳，避免长任务被误判为失联。
+	go m.heartbeatLoop(taskCtx, task.ID)
+
+	// 3. 调用注册执行器，并把任务运行时交给上层逻辑使用。
+	runtime := newRuntime(m, task.ID)
+	result, err := executor(taskCtx, task, runtime)
+
+	var events []TaskEvent
+	// 4. 根据执行结果写入最终状态。
+	switch {
+	case errors.Is(err, context.Canceled) || errors.Is(taskCtx.Err(), context.Canceled):
+		_, events, err = m.store.MarkCancelled(context.Background(), task.ID, map[string]any{"message": "task cancelled"})
+	case err != nil:
+		_, events, err = m.store.MarkFailed(context.Background(), task.ID, map[string]any{"message": err.Error()})
+	default:
+		_, events, err = m.store.MarkSucceeded(context.Background(), task.ID, result)
+	}
+	if err == nil {
+		m.publish(events...)
+	}
+}
+
+// heartbeatLoop 在任务运行期间定期刷新租约信息。
+func (m *Manager) heartbeatLoop(ctx context.Context, taskID string) {
+	ticker := time.NewTicker(m.heartbeatInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			_, _ = m.store.UpdateHeartbeat(context.Background(), taskID, m.runnerID, m.leaseDuration)
+		}
+	}
+}
+
+// publish 将事件推送给所有实时订阅者。
+func (m *Manager) publish(events ...TaskEvent) {
+	m.hub.Publish(events...)
+}
+
+// executor 读取指定任务类型对应的执行器。
+func (m *Manager) executor(taskType string) (Executor, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	executor, ok := m.executors[taskType]
+	return executor, ok
+}
+
+// setActiveCancel 记录当前正在执行任务的取消函数。
+func (m *Manager) setActiveCancel(taskID string, cancel context.CancelFunc) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.activeCancel[taskID] = cancel
+}
+
+// lookupCancel 查询已登记的任务取消函数。
+func (m *Manager) lookupCancel(taskID string) context.CancelFunc {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.activeCancel[taskID]
+}
+
+// clearActiveCancel 清理已完成任务的取消函数引用。
+func (m *Manager) clearActiveCancel(taskID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.activeCancel, taskID)
+}

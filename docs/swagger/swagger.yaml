@@ -1,0 +1,259 @@
+basePath: /api/v1
+definitions:
+  app_handlers.CreateTaskRequest:
+    properties:
+      config:
+        additionalProperties: {}
+        type: object
+      created_by:
+        type: string
+      idempotency_key:
+        type: string
+      input:
+        additionalProperties: {}
+        type: object
+      metadata:
+        additionalProperties: {}
+        type: object
+      task_type:
+        type: string
+    type: object
+  github_com_EquentR_agent_runtime_core_tasks.ExecutionMode:
+    enum:
+    - serial
+    type: string
+    x-enum-varnames:
+    - ExecutionModeSerial
+  github_com_EquentR_agent_runtime_core_tasks.Status:
+    enum:
+    - queued
+    - running
+    - cancel_requested
+    - cancelled
+    - succeeded
+    - failed
+    type: string
+    x-enum-varnames:
+    - StatusQueued
+    - StatusRunning
+    - StatusCancelRequested
+    - StatusCancelled
+    - StatusSucceeded
+    - StatusFailed
+  github_com_EquentR_agent_runtime_core_tasks.Task:
+    properties:
+      cancel_requested_at:
+        type: string
+      child_index:
+        type: integer
+      config:
+        items:
+          type: integer
+        type: array
+      created_at:
+        type: string
+      created_by:
+        type: string
+      current_step_key:
+        type: string
+      current_step_title:
+        type: string
+      error:
+        items:
+          type: integer
+        type: array
+      execution_mode:
+        $ref: '#/definitions/github_com_EquentR_agent_runtime_core_tasks.ExecutionMode'
+      finished_at:
+        type: string
+      heartbeat_at:
+        type: string
+      id:
+        type: string
+      idempotency_key:
+        type: string
+      input:
+        items:
+          type: integer
+        type: array
+      lease_expires_at:
+        type: string
+      metadata:
+        items:
+          type: integer
+        type: array
+      parent_task_id:
+        type: string
+      result:
+        items:
+          type: integer
+        type: array
+      retry_of_task_id:
+        type: string
+      root_task_id:
+        type: string
+      runner_id:
+        type: string
+      started_at:
+        type: string
+      status:
+        $ref: '#/definitions/github_com_EquentR_agent_runtime_core_tasks.Status'
+      step_seq:
+        type: integer
+      suspend_reason:
+        type: string
+      task_type:
+        type: string
+      updated_at:
+        type: string
+      waiting_on_task_id:
+        type: string
+    type: object
+  github_com_EquentR_agent_runtime_pkg_rest.Result:
+    properties:
+      code:
+        type: integer
+      data: {}
+      message:
+        type: string
+      ok:
+        type: boolean
+      time:
+        type: string
+    type: object
+info:
+  contact: {}
+  description: Agent Runtime 示例应用 API 文档。
+  title: Agent Runtime API
+  version: 0.0.1
+paths:
+  /hello/say:
+    get:
+      description: 返回一个简单的问候语，用于确认 HTTP 服务已经启动。
+      parameters:
+      - description: 名称
+        in: query
+        name: name
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/github_com_EquentR_agent_runtime_pkg_rest.Result'
+            - properties:
+                data:
+                  type: string
+              type: object
+      summary: 示例问候接口
+      tags:
+      - example
+  /tasks:
+    post:
+      consumes:
+      - application/json
+      description: 创建一个新的后台任务，并立即返回任务快照。
+      parameters:
+      - description: 创建任务请求
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/app_handlers.CreateTaskRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/github_com_EquentR_agent_runtime_pkg_rest.Result'
+      summary: 创建任务
+      tags:
+      - tasks
+  /tasks/{id}:
+    get:
+      description: 根据任务 id 返回当前任务快照。
+      parameters:
+      - description: 任务 ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/github_com_EquentR_agent_runtime_pkg_rest.Result'
+      summary: 获取任务详情
+      tags:
+      - tasks
+  /tasks/{id}/cancel:
+    post:
+      description: 发起任务取消请求；若任务尚未执行，会直接进入 cancelled。
+      parameters:
+      - description: 任务 ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/github_com_EquentR_agent_runtime_pkg_rest.Result'
+      summary: 取消任务
+      tags:
+      - tasks
+  /tasks/{id}/events:
+    get:
+      description: 先补发 after_seq 之后的历史事件，再持续推送实时事件。
+      parameters:
+      - description: 任务 ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: 仅返回该序号之后的事件
+        in: query
+        name: after_seq
+        type: integer
+      produces:
+      - text/event-stream
+      responses:
+        "200":
+          description: SSE event stream
+          schema:
+            type: string
+        "404":
+          description: task not found
+          schema:
+            type: string
+      summary: 订阅任务事件
+      tags:
+      - tasks
+  /tasks/{id}/retry:
+    post:
+      description: 基于一个已存在任务创建新的重试任务，并返回新的任务快照。
+      parameters:
+      - description: 任务 ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/github_com_EquentR_agent_runtime_pkg_rest.Result'
+      summary: 重试任务
+      tags:
+      - tasks
+swagger: "2.0"
