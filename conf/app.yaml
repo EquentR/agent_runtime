@@ -1,0 +1,27 @@
+server:
+  host: "0.0.0.0"
+  port: 18080
+  apiBasePath: /api/v1
+  staticPath:
+    - path: /
+      dir: static/web
+
+sqlite:
+  name: app
+  autoCreate: true
+  inMemory: false
+  dbDir: data/
+  logLevel: debug # 默认的sql日志打印级别，不是日志系统的级别，日志系统的级别由log.level控制
+  params:
+    - _pragma=journal_mode(WAL)
+    - _pragma=busy_timeout(30000)
+    - _txlock=exclusive
+
+log:
+  level: info
+  file: logs/app.log
+  rotation: true
+  maxSize: 100
+  maxAge: 30
+  maxBackups: 7
+  compress: true

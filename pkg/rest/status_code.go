@@ -1,4 +1,4 @@
-package resp
+package rest
 
 //	       SUCCESS(200,"成功"),
 //		   CREATED(201,"数据创建成功"),

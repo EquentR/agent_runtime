@@ -1,4 +1,4 @@
-package config
+package mcp_config
 
 import (
 	"context"

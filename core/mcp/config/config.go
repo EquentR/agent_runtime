@@ -1,4 +1,4 @@
-package config
+package mcp_config
 
 import (
 	"fmt"
@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	coremcp "github.com/EquentR/agent_runtime/core/mcp"
+	"github.com/EquentR/agent_runtime/core/mcp"
 	mark3labs "github.com/EquentR/agent_runtime/core/mcp/mark3labs"
 	coretools "github.com/EquentR/agent_runtime/core/tools"
 	mark3transport "github.com/mark3labs/mcp-go/client/transport"
@@ -39,7 +39,7 @@ type MCPServerConfig struct {
 	PromptPrefix  string            `yaml:"promptPrefix"`
 }
 
-func (c MCPServerConfig) NewClient() (coremcp.Client, error) {
+func (c MCPServerConfig) NewClient() (mcp.Client, error) {
 	transport := strings.TrimSpace(c.Transport)
 	switch transport {
 	case TransportStdio:
