@@ -119,12 +119,15 @@ func normalizeFinishReason(reason genai.FinishReason) string {
 type genAIStream struct {
 	ctx       context.Context
 	cancel    context.CancelFunc
-	ch        <-chan string
+	events    <-chan model.StreamEvent
 	stats     *model.StreamStats
 	startTime time.Time
 	firstTok  sync.Once
 	toolCalls []types.ToolCall
 	reasoning string
+	finalMu   sync.RWMutex
+	finalMsg  model.Message
+	completed bool
 
 	errMu sync.RWMutex
 	err   error
@@ -154,29 +157,59 @@ func (s *genAIStream) streamError() error {
 // - ("", nil) 表示流结束
 // - 非 nil error 表示上下文取消/超时
 func (s *genAIStream) Recv() (string, error) {
+	for {
+		event, err := s.RecvEvent()
+		if err != nil {
+			return "", err
+		}
+		if event.Type == "" {
+			return "", nil
+		}
+		if event.Type == model.StreamEventTextDelta {
+			return event.Text, nil
+		}
+	}
+}
+
+func (s *genAIStream) RecvEvent() (model.StreamEvent, error) {
 	select {
 	case <-s.ctx.Done():
 		if err := s.streamError(); err != nil {
-			return "", err
+			return model.StreamEvent{}, err
 		}
-		return "", s.ctx.Err()
-	case msg, ok := <-s.ch:
+		return model.StreamEvent{}, s.ctx.Err()
+	case event, ok := <-s.events:
 		if !ok {
 			if err := s.streamError(); err != nil {
 				if errors.Is(err, io.EOF) {
-					return "", nil
+					return model.StreamEvent{}, nil
 				}
-				return "", err
+				return model.StreamEvent{}, err
 			}
-			return "", nil
+			return model.StreamEvent{}, nil
 		}
-		return msg, nil
+		return event, nil
 	}
+}
+
+func (s *genAIStream) FinalMessage() (model.Message, error) {
+	if err := s.streamError(); err != nil && !s.isCompleted() {
+		return model.Message{}, err
+	}
+	if err := s.ctx.Err(); err != nil && !s.isCompleted() {
+		return model.Message{}, err
+	}
+	if !s.isCompleted() {
+		return model.Message{}, errors.New("stream did not complete normally")
+	}
+	return s.final(), nil
 }
 
 func (s *genAIStream) Close() error {
 	// Close 为协作式关闭：取消上下文，触发生产协程自然退出。
-	s.cancel()
+	if !s.isCompleted() {
+		s.cancel()
+	}
 	return nil
 }
 
@@ -198,3 +231,91 @@ func (s *genAIStream) ResponseType() model.StreamResponseType { return s.stats.R
 func (s *genAIStream) FinishReason() string { return s.stats.FinishReason }
 
 func (s *genAIStream) Reasoning() string { return s.reasoning }
+
+func emitStreamEvent(ctx context.Context, events chan<- model.StreamEvent, event model.StreamEvent) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case events <- event:
+		return true
+	}
+}
+
+func (s *genAIStream) setFinalMessage(msg model.Message) {
+	s.finalMu.Lock()
+	defer s.finalMu.Unlock()
+	s.finalMsg = cloneModelMessage(msg)
+	s.completed = true
+}
+
+func (s *genAIStream) final() model.Message {
+	s.finalMu.RLock()
+	defer s.finalMu.RUnlock()
+	return cloneModelMessage(s.finalMsg)
+}
+
+func (s *genAIStream) isCompleted() bool {
+	s.finalMu.RLock()
+	defer s.finalMu.RUnlock()
+	return s.completed
+}
+
+func cloneGenAIPart(part *genai.Part) *genai.Part {
+	if part == nil {
+		return nil
+	}
+	cloned := *part
+	if part.ThoughtSignature != nil {
+		cloned.ThoughtSignature = append([]byte(nil), part.ThoughtSignature...)
+	}
+	if part.FunctionCall != nil {
+		functionCall := *part.FunctionCall
+		if part.FunctionCall.Args != nil {
+			args := make(map[string]any, len(part.FunctionCall.Args))
+			for key, value := range part.FunctionCall.Args {
+				args[key] = value
+			}
+			functionCall.Args = args
+		}
+		cloned.FunctionCall = &functionCall
+	}
+	if part.FunctionResponse != nil {
+		functionResponse := *part.FunctionResponse
+		if part.FunctionResponse.Response != nil {
+			response := make(map[string]any, len(part.FunctionResponse.Response))
+			for key, value := range part.FunctionResponse.Response {
+				response[key] = value
+			}
+			functionResponse.Response = response
+		}
+		cloned.FunctionResponse = &functionResponse
+	}
+	if part.InlineData != nil {
+		blob := *part.InlineData
+		if part.InlineData.Data != nil {
+			blob.Data = append([]byte(nil), part.InlineData.Data...)
+		}
+		cloned.InlineData = &blob
+	}
+	if part.FileData != nil {
+		fileData := *part.FileData
+		cloned.FileData = &fileData
+	}
+	if part.ExecutableCode != nil {
+		executableCode := *part.ExecutableCode
+		cloned.ExecutableCode = &executableCode
+	}
+	if part.CodeExecutionResult != nil {
+		result := *part.CodeExecutionResult
+		cloned.CodeExecutionResult = &result
+	}
+	if part.VideoMetadata != nil {
+		metadata := *part.VideoMetadata
+		cloned.VideoMetadata = &metadata
+	}
+	if part.MediaResolution != nil {
+		resolution := *part.MediaResolution
+		cloned.MediaResolution = &resolution
+	}
+	return &cloned
+}

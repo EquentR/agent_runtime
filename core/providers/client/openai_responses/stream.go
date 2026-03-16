@@ -1,6 +1,7 @@
 package openai_official
 
 import (
+	"encoding/json"
 	"errors"
 	"sort"
 	"strings"
@@ -17,6 +18,18 @@ type streamToolCallAccumulator struct {
 	byCallID     map[string]types.ToolCall
 	order        []string
 	itemIDToCall map[string]string
+}
+
+func (a *streamToolCallAccumulator) ToolCallByItemID(itemID string) (types.ToolCall, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	callID := a.itemIDToCall[itemID]
+	if callID == "" {
+		return types.ToolCall{}, false
+	}
+	call, ok := a.byCallID[callID]
+	return call, ok
 }
 
 func newStreamToolCallAccumulator() *streamToolCallAccumulator {
@@ -138,6 +151,8 @@ func resolveStreamResponseType(finishReason string, toolCalls []types.ToolCall) 
 func applyStreamEvent(
 	event responses.ResponseStreamEventUnion,
 	acc *streamToolCallAccumulator,
+	outputItems *[]responses.ResponseOutputItemUnion,
+	reasoningItems map[int64]model.ReasoningItem,
 	stats *model.StreamStats,
 	firstTok *sync.Once,
 	start time.Time,
@@ -145,29 +160,50 @@ func applyStreamEvent(
 	reasoning *strings.Builder,
 	observeRaw func(string),
 	emitText func(string),
+	emitEvent func(model.StreamEvent),
 	setErr func(error),
 ) {
 	switch event.Type {
 	case "response.output_item.added":
+		setOutputItem(outputItems, event.OutputIndex, event.Item)
 		if event.Item.Type == "reasoning" {
+			setReasoningItem(reasoningItems, event.OutputIndex, responseReasoningItemToModel(event.Item))
 			for _, summary := range event.Item.Summary {
 				reasoning.WriteString(summary.Text)
+				emitEvent(model.StreamEvent{Type: model.StreamEventReasoningDelta, Reasoning: summary.Text})
 			}
 		}
 		acc.AddOutputItem(event.Item)
+		if event.Item.Type == "function_call" {
+			if call, ok := acc.ToolCallByItemID(event.Item.ID); ok {
+				emitEvent(model.StreamEvent{Type: model.StreamEventToolCallDelta, ToolCall: call})
+			}
+		}
 	case "response.function_call_arguments.delta":
 		acc.AppendArgumentsDeltaByItemID(event.ItemID, event.Delta.OfString)
+		appendOutputItemFunctionArgumentsDelta(outputItems, event.ItemID, event.Delta.OfString)
+		if call, ok := acc.ToolCallByItemID(event.ItemID); ok {
+			emitEvent(model.StreamEvent{Type: model.StreamEventToolCallDelta, ToolCall: call})
+		}
 	case "response.function_call_arguments.done":
 		acc.SetArgumentsByItemID(event.ItemID, event.Arguments)
+		setOutputItemFunctionArguments(outputItems, event.ItemID, event.Arguments)
+		if call, ok := acc.ToolCallByItemID(event.ItemID); ok {
+			emitEvent(model.StreamEvent{Type: model.StreamEventToolCallDelta, ToolCall: call})
+		}
 	case "response.reasoning_summary_text.delta", "response.reasoning_summary.delta":
 		observeRaw(event.Delta.OfString)
 		reasoning.WriteString(event.Delta.OfString)
+		appendOutputItemReasoningDelta(outputItems, event.OutputIndex, event.Delta.OfString)
+		appendReasoningItemDelta(reasoningItems, event.OutputIndex, event.Delta.OfString)
+		emitEvent(model.StreamEvent{Type: model.StreamEventReasoningDelta, Reasoning: event.Delta.OfString})
 	case "response.output_text.delta":
 		delta := event.Delta.OfString
 		if delta == "" {
 			return
 		}
 		observeRaw(delta)
+		appendOutputItemTextDelta(outputItems, event.OutputIndex, event.ContentIndex, delta)
 		firstTok.Do(func() {
 			stats.TTFT = time.Since(start)
 		})
@@ -177,12 +213,15 @@ func applyStreamEvent(
 	case "response.completed":
 		stats.Usage = toModelUsage(event.Response.Usage)
 		stats.FinishReason = streamFinishReasonFromResponse(event.Response, acc.ToolCalls())
+		emitEvent(model.StreamEvent{Type: model.StreamEventUsage, Usage: stats.Usage})
 	case "response.incomplete":
 		stats.Usage = toModelUsage(event.Response.Usage)
 		stats.FinishReason = streamFinishReasonFromResponse(event.Response, acc.ToolCalls())
+		emitEvent(model.StreamEvent{Type: model.StreamEventUsage, Usage: stats.Usage})
 	case "response.failed":
 		stats.Usage = toModelUsage(event.Response.Usage)
 		stats.FinishReason = streamFinishReasonFromResponse(event.Response, acc.ToolCalls())
+		emitEvent(model.StreamEvent{Type: model.StreamEventUsage, Usage: stats.Usage})
 		if event.Response.Error.Message != "" {
 			setErr(errors.New(event.Response.Error.Message))
 			return
@@ -194,6 +233,128 @@ func applyStreamEvent(
 			return
 		}
 		setErr(errors.New("openai responses stream error"))
+	}
+}
+
+func setOutputItem(items *[]responses.ResponseOutputItemUnion, outputIndex int64, item responses.ResponseOutputItemUnion) {
+	slot := ensureOutputItemSlot(items, outputIndex)
+	if slot == nil {
+		return
+	}
+	*slot = cloneOutputItem(item)
+}
+
+func setReasoningItem(items map[int64]model.ReasoningItem, outputIndex int64, item model.ReasoningItem) {
+	if items == nil || outputIndex < 0 {
+		return
+	}
+	items[outputIndex] = item
+}
+
+func appendReasoningItemDelta(items map[int64]model.ReasoningItem, outputIndex int64, delta string) {
+	if items == nil || delta == "" || outputIndex < 0 {
+		return
+	}
+	item := items[outputIndex]
+	if len(item.Summary) == 0 {
+		item.Summary = append(item.Summary, model.ReasoningSummary{})
+	}
+	item.Summary[len(item.Summary)-1].Text += delta
+	items[outputIndex] = item
+}
+
+func compactReasoningItemsByOutputIndex(items map[int64]model.ReasoningItem) []model.ReasoningItem {
+	if len(items) == 0 {
+		return nil
+	}
+	indexes := make([]int, 0, len(items))
+	for index := range items {
+		indexes = append(indexes, int(index))
+	}
+	sort.Ints(indexes)
+	out := make([]model.ReasoningItem, 0, len(indexes))
+	for _, index := range indexes {
+		out = append(out, items[int64(index)])
+	}
+	return out
+}
+
+func cloneOutputItem(item responses.ResponseOutputItemUnion) responses.ResponseOutputItemUnion {
+	cloned := responses.ResponseOutputItemUnion{}
+	if raw, err := json.Marshal(item); err == nil {
+		if err := json.Unmarshal(raw, &cloned); err == nil {
+			return cloned
+		}
+	}
+	return item
+}
+
+func ensureOutputItemSlot(items *[]responses.ResponseOutputItemUnion, outputIndex int64) *responses.ResponseOutputItemUnion {
+	if items == nil || outputIndex < 0 {
+		return nil
+	}
+	for int(outputIndex) >= len(*items) {
+		*items = append(*items, responses.ResponseOutputItemUnion{})
+	}
+	return &(*items)[outputIndex]
+}
+
+func appendOutputItemTextDelta(items *[]responses.ResponseOutputItemUnion, outputIndex, contentIndex int64, delta string) {
+	if items == nil || delta == "" || outputIndex < 0 {
+		return
+	}
+	if int(outputIndex) >= len(*items) {
+		return
+	}
+	item := &(*items)[outputIndex]
+	if item.Type != "message" || contentIndex < 0 {
+		return
+	}
+	for int(contentIndex) >= len(item.Content) {
+		item.Content = append(item.Content, responses.ResponseOutputMessageContentUnion{Type: "output_text"})
+	}
+	item.Content[contentIndex].Type = "output_text"
+	item.Content[contentIndex].Text += delta
+}
+
+func appendOutputItemReasoningDelta(items *[]responses.ResponseOutputItemUnion, outputIndex int64, delta string) {
+	if items == nil || delta == "" || outputIndex < 0 {
+		return
+	}
+	if int(outputIndex) >= len(*items) {
+		return
+	}
+	item := &(*items)[outputIndex]
+	if item.Type != "reasoning" {
+		return
+	}
+	if len(item.Summary) == 0 {
+		item.Summary = append(item.Summary, responses.ResponseReasoningItemSummary{})
+	}
+	item.Summary[len(item.Summary)-1].Text += delta
+}
+
+func appendOutputItemFunctionArgumentsDelta(items *[]responses.ResponseOutputItemUnion, itemID, delta string) {
+	if items == nil || itemID == "" || delta == "" {
+		return
+	}
+	for i := range *items {
+		if (*items)[i].ID == itemID && (*items)[i].Type == "function_call" {
+			(*items)[i].Arguments += delta
+			return
+		}
+	}
+}
+
+func setOutputItemFunctionArguments(items *[]responses.ResponseOutputItemUnion, itemID, args string) {
+	if items == nil || itemID == "" {
+		return
+	}
+	for i := range *items {
+		if (*items)[i].ID == itemID && (*items)[i].Type == "function_call" {
+			(*items)[i].Arguments = args
+			return
+		}
 	}
 }
 

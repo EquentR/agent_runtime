@@ -2,6 +2,8 @@ package openai
 
 import (
 	"context"
+	"errors"
+	"io"
 	"strings"
 	"time"
 
@@ -31,8 +33,10 @@ func (c *Client) Chat(ctx context.Context, req model.ChatRequest) (model.ChatRes
 		return model.ChatResponse{}, err
 	}
 	defer stream.Close()
+	return chatResponseFromStream(start, stream)
+}
 
-	var contentBuilder strings.Builder
+func chatResponseFromStream(start time.Time, stream model.Stream) (model.ChatResponse, error) {
 	for {
 		chunk, err := stream.Recv()
 		if err != nil {
@@ -41,22 +45,34 @@ func (c *Client) Chat(ctx context.Context, req model.ChatRequest) (model.ChatRes
 		if chunk == "" {
 			break
 		}
-		contentBuilder.WriteString(chunk)
 	}
 
+	message, err := stream.FinalMessage()
+	if err != nil {
+		return model.ChatResponse{}, err
+	}
 	stats := stream.Stats()
 	latency := stats.TotalLatency
 	if latency == 0 {
 		latency = time.Since(start)
 	}
 
-	return model.ChatResponse{
-		Content:   contentBuilder.String(),
-		Reasoning: stream.Reasoning(),
-		ToolCalls: stream.ToolCalls(),
-		Usage:     stats.Usage,
-		Latency:   latency,
-	}, nil
+	resp := model.ChatResponse{
+		Message: message,
+		Usage:   stats.Usage,
+		Latency: latency,
+	}
+	resp.SyncFieldsFromMessage()
+	return resp, nil
+}
+
+func emitStreamEvent(ctx context.Context, events chan<- model.StreamEvent, event model.StreamEvent) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case events <- event:
+		return true
+	}
 }
 
 func (c *Client) ChatStream(ctx context.Context, req model.ChatRequest) (model.Stream, error) {
@@ -74,12 +90,12 @@ func (c *Client) ChatStream(ctx context.Context, req model.ChatRequest) (model.S
 		cancel()
 		return nil, err
 	}
-	ch := make(chan string)
+	events := make(chan model.StreamEvent)
 
 	s := &openAIStream{
 		ctx:       streamCtx,
 		cancel:    cancel,
-		ch:        ch,
+		events:    events,
 		stats:     &model.StreamStats{ResponseType: model.StreamResponseUnknown},
 		startTime: start,
 	}
@@ -96,17 +112,25 @@ func (c *Client) ChatStream(ctx context.Context, req model.ChatRequest) (model.S
 	asyncCounter.SetPromptCount(int64(promptTokens))
 
 	go func() {
-		defer close(ch)
+		defer close(events)
 		defer resp.Close()
 
 		toolCallAccumulator := newStreamToolCallAccumulator()
+		nativeToolCallAccumulator := newOpenAIToolCallAccumulator()
 		splitter := model.NewLeadingThinkStreamSplitter()
+		var contentBuilder strings.Builder
+		var rawContentBuilder strings.Builder
+		var refusalBuilder strings.Builder
+		nativeMessage := openai.ChatCompletionMessage{Role: model.RoleAssistant}
 		// 新版兼容接口可能把 reasoning content 与正文分开下发，
 		// 这里单独累积，避免只依赖 <think> 切分导致信息丢失。
 		var reasoningBuilder strings.Builder
 		defer func() {
-			if pending := splitter.Finalize(); pending != "" {
-				ch <- pending
+			if pending := splitter.Finalize(); pending != "" && streamCtx.Err() == nil && s.streamError() == nil {
+				contentBuilder.WriteString(pending)
+				if !emitStreamEvent(streamCtx, events, model.StreamEvent{Type: model.StreamEventTextDelta, Text: pending}) {
+					return
+				}
 			}
 			reasoning := strings.TrimSpace(reasoningBuilder.String())
 			if reasoning == "" {
@@ -115,6 +139,19 @@ func (c *Client) ChatStream(ctx context.Context, req model.ChatRequest) (model.S
 			s.reasoning = reasoning
 			s.toolCalls = toolCallAccumulator.ToolCalls()
 			s.stats.ResponseType = resolveStreamResponseType(s.stats.FinishReason, s.toolCalls)
+			if streamCtx.Err() == nil && s.streamError() == nil {
+				nativeMessage.Content = rawContentBuilder.String()
+				nativeMessage.Refusal = refusalBuilder.String()
+				nativeMessage.ReasoningContent = strings.TrimSpace(reasoningBuilder.String())
+				nativeMessage.ToolCalls = nativeToolCallAccumulator.ToolCalls()
+				final, err := finalAssistantMessageFromNativeMessage(nativeMessage)
+				if err != nil {
+					s.setStreamError(err)
+					return
+				}
+				s.setFinalMessage(final)
+				emitStreamEvent(streamCtx, events, model.StreamEvent{Type: model.StreamEventCompleted, Message: final})
+			}
 		}()
 
 		for {
@@ -134,6 +171,9 @@ func (c *Client) ChatStream(ctx context.Context, req model.ChatRequest) (model.S
 			default:
 				chunk, err := resp.Recv()
 				if err != nil {
+					if !errors.Is(err, io.EOF) {
+						s.setStreamError(err)
+					}
 					// stream 结束，进行最终计数
 					s.stats.TotalLatency = time.Since(s.startTime)
 					if s.asyncTokenCounter != nil {
@@ -151,6 +191,9 @@ func (c *Client) ChatStream(ctx context.Context, req model.ChatRequest) (model.S
 				// 记录首token延迟
 				if len(chunk.Choices) > 0 {
 					choice := chunk.Choices[0]
+					if choice.Delta.Role != "" {
+						nativeMessage.Role = choice.Delta.Role
+					}
 					if choice.FinishReason != "" && choice.FinishReason != openai.FinishReasonNull {
 						s.stats.FinishReason = string(choice.FinishReason)
 					}
@@ -164,10 +207,30 @@ func (c *Client) ChatStream(ctx context.Context, req model.ChatRequest) (model.S
 							s.asyncTokenCounter.Append(reasoningDelta)
 						}
 						reasoningBuilder.WriteString(reasoningDelta)
+						if !emitStreamEvent(streamCtx, events, model.StreamEvent{Type: model.StreamEventReasoningDelta, Reasoning: reasoningDelta}) {
+							return
+						}
 					}
+
+					if choice.Delta.Refusal != "" {
+						refusalBuilder.WriteString(choice.Delta.Refusal)
+					}
+
+					nativeMessage.FunctionCall = appendFunctionCall(nativeMessage.FunctionCall, choice.Delta.FunctionCall)
 
 					if len(choice.Delta.ToolCalls) > 0 {
 						toolCallAccumulator.Append(choice.Delta.ToolCalls)
+						nativeToolCallAccumulator.Append(choice.Delta.ToolCalls)
+						for _, tc := range choice.Delta.ToolCalls {
+							assembled := newStreamToolCallAccumulator()
+							assembled.Append([]openai.ToolCall{tc})
+							calls := assembled.ToolCalls()
+							if len(calls) > 0 {
+								if !emitStreamEvent(streamCtx, events, model.StreamEvent{Type: model.StreamEventToolCallDelta, ToolCall: calls[0]}) {
+									return
+								}
+							}
+						}
 					}
 
 					delta := choice.Delta.Content
@@ -178,8 +241,12 @@ func (c *Client) ChatStream(ctx context.Context, req model.ChatRequest) (model.S
 						if s.asyncTokenCounter != nil {
 							s.asyncTokenCounter.Append(delta)
 						}
+						rawContentBuilder.WriteString(delta)
 						if emit := splitter.Consume(delta); emit != "" {
-							ch <- emit
+							contentBuilder.WriteString(emit)
+							if !emitStreamEvent(streamCtx, events, model.StreamEvent{Type: model.StreamEventTextDelta, Text: emit}) {
+								return
+							}
 						}
 					}
 				}
@@ -190,6 +257,9 @@ func (c *Client) ChatStream(ctx context.Context, req model.ChatRequest) (model.S
 					s.stats.Usage.CachedPromptTokens = cachedPromptTokens(*chunk.Usage)
 					s.stats.Usage.CompletionTokens = int64(chunk.Usage.CompletionTokens)
 					s.stats.Usage.TotalTokens = int64(chunk.Usage.TotalTokens)
+					if !emitStreamEvent(streamCtx, events, model.StreamEvent{Type: model.StreamEventUsage, Usage: s.stats.Usage}) {
+						return
+					}
 				}
 			}
 		}

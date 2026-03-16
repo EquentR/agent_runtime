@@ -58,6 +58,14 @@ func buildResponseInput(messages []model.Message) (responses.ResponseInputParam,
 		case model.RoleSystem, model.RoleUser:
 			input = append(input, responses.ResponseInputItemParamOfMessage(m.Content, toResponseRole(m.Role)))
 		case model.RoleAssistant:
+			replayed, ok, err := outputItemsFromProviderState(m.ProviderState)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				input = append(input, replayed...)
+				continue
+			}
 			// Responses API 要求 assistant 之前产生的 reasoning item 单独回放，
 			// 否则下一轮 tool call 之后可能丢失推理上下文。
 			for _, item := range m.ReasoningItems {
@@ -210,13 +218,16 @@ func extractChatResponse(resp *responses.Response) (model.ChatResponse, error) {
 	if reasoning == "" {
 		reasoning = extractedReasoning
 	}
-	return model.ChatResponse{
-		Content:        answer,
-		Reasoning:      reasoning,
-		ReasoningItems: reasoningItems,
-		ToolCalls:      toolCalls,
-		Usage:          toModelUsage(resp.Usage),
-	}, nil
+	state, err := providerStateFromOutputItems(resp.Output)
+	if err != nil {
+		return model.ChatResponse{}, err
+	}
+	out := model.ChatResponse{
+		Message: finalAssistantMessageFromResponse(answer, reasoning, reasoningItems, toolCalls, state),
+		Usage:   toModelUsage(resp.Usage),
+	}
+	out.SyncFieldsFromMessage()
+	return out, nil
 }
 
 func modelReasoningItemToResponse(item model.ReasoningItem) responses.ResponseInputItemUnionParam {

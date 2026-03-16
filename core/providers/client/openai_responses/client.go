@@ -2,6 +2,7 @@ package openai_official
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"strings"
@@ -40,22 +41,12 @@ func NewOpenAiResponsesClient(apiKey, baseURL string, requestTimeout time.Durati
 
 func (c *Client) Chat(ctx context.Context, req model.ChatRequest) (model.ChatResponse, error) {
 	start := time.Now()
-	params, err := buildResponseRequestParams(req)
+	stream, err := c.ChatStream(ctx, req)
 	if err != nil {
 		return model.ChatResponse{}, err
 	}
-
-	resp, err := c.api.New(ctx, params)
-	if err != nil {
-		return model.ChatResponse{}, err
-	}
-
-	out, err := extractChatResponse(resp)
-	if err != nil {
-		return model.ChatResponse{}, err
-	}
-	out.Latency = time.Since(start)
-	return out, nil
+	defer stream.Close()
+	return chatResponseFromStream(start, stream)
 }
 
 func (c *Client) ChatStream(ctx context.Context, req model.ChatRequest) (model.Stream, error) {
@@ -74,12 +65,12 @@ func (c *Client) ChatStream(ctx context.Context, req model.ChatRequest) (model.S
 		return nil, errors.New("openai responses stream is nil")
 	}
 
-	ch := make(chan string)
+	events := make(chan model.StreamEvent)
 	s := &responseStream{
 		ctx:       streamCtx,
 		cancel:    cancel,
 		remote:    remote,
-		ch:        ch,
+		events:    events,
 		stats:     &model.StreamStats{ResponseType: model.StreamResponseUnknown},
 		startTime: start,
 	}
@@ -97,15 +88,19 @@ func (c *Client) ChatStream(ctx context.Context, req model.ChatRequest) (model.S
 	}
 
 	go func() {
-		defer close(ch)
+		defer close(events)
 		defer remote.Close()
 
 		acc := newStreamToolCallAccumulator()
 		splitter := model.NewLeadingThinkStreamSplitter()
+		outputItems := make([]responses.ResponseOutputItemUnion, 0)
 		var reasoningBuilder strings.Builder
+		var contentBuilder strings.Builder
+		reasoningItemsByOutputIndex := make(map[int64]model.ReasoningItem)
 		defer func() {
 			if pending := splitter.Finalize(); pending != "" {
-				ch <- pending
+				contentBuilder.WriteString(pending)
+				events <- model.StreamEvent{Type: model.StreamEventTextDelta, Text: pending}
 			}
 			reasoning := strings.TrimSpace(reasoningBuilder.String())
 			if reasoning == "" {
@@ -125,6 +120,22 @@ func (c *Client) ChatStream(ctx context.Context, req model.ChatRequest) (model.S
 				s.stats.Usage.TotalTokens = s.asyncTokenCounter.GetTotalCount()
 			}
 			s.statsMu.Unlock()
+			if streamCtx.Err() == nil && s.streamError() == nil {
+				state, err := providerStateFromOutputItems(outputItems)
+				if err != nil {
+					s.setStreamError(err)
+					return
+				}
+				final := finalAssistantMessageFromResponse(
+					contentBuilder.String(),
+					reasoning,
+					compactReasoningItemsByOutputIndex(reasoningItemsByOutputIndex),
+					s.ToolCalls(),
+					state,
+				)
+				s.setFinalMessage(final)
+				events <- model.StreamEvent{Type: model.StreamEventCompleted, Message: final}
+			}
 			s.asyncTokenCounter.Close()
 		}()
 
@@ -137,6 +148,8 @@ func (c *Client) ChatStream(ctx context.Context, req model.ChatRequest) (model.S
 			applyStreamEvent(
 				event,
 				acc,
+				&outputItems,
+				reasoningItemsByOutputIndex,
 				s.stats,
 				&s.firstTok,
 				s.startTime,
@@ -144,7 +157,11 @@ func (c *Client) ChatStream(ctx context.Context, req model.ChatRequest) (model.S
 				&reasoningBuilder,
 				s.asyncTokenCounter.Append,
 				func(delta string) {
-					ch <- delta
+					contentBuilder.WriteString(delta)
+					events <- model.StreamEvent{Type: model.StreamEventTextDelta, Text: delta}
+				},
+				func(event model.StreamEvent) {
+					events <- event
 				},
 				s.setStreamError,
 			)
@@ -159,6 +176,50 @@ func (c *Client) ChatStream(ctx context.Context, req model.ChatRequest) (model.S
 	}()
 
 	return s, nil
+}
+
+func chatResponseFromStream(start time.Time, stream model.Stream) (model.ChatResponse, error) {
+	for {
+		chunk, err := stream.Recv()
+		if err != nil {
+			return model.ChatResponse{}, err
+		}
+		if chunk == "" {
+			break
+		}
+	}
+
+	message, err := stream.FinalMessage()
+	if err != nil {
+		return model.ChatResponse{}, err
+	}
+	stats := stream.Stats()
+	latency := stats.TotalLatency
+	if latency == 0 {
+		latency = time.Since(start)
+	}
+
+	resp := model.ChatResponse{
+		Message: message,
+		Usage:   stats.Usage,
+		Latency: latency,
+	}
+	resp.SyncFieldsFromMessage()
+	return resp, nil
+}
+
+func appendOutputItem(items *[]responses.ResponseOutputItemUnion, item responses.ResponseOutputItemUnion) {
+	if items == nil || item.Type == "" {
+		return
+	}
+	cloned := responses.ResponseOutputItemUnion{}
+	if raw, err := json.Marshal(item); err == nil {
+		if err := json.Unmarshal(raw, &cloned); err == nil {
+			*items = append(*items, cloned)
+			return
+		}
+	}
+	*items = append(*items, item)
 }
 
 func buildOpenAIOfficialPromptMessages(messages []model.Message) ([]responses.ResponseInputParam, []string, error) {
@@ -177,7 +238,7 @@ type responseStream struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	remote *ssestream.Stream[responses.ResponseStreamEventUnion]
-	ch     <-chan string
+	events <-chan model.StreamEvent
 
 	statsMu           sync.RWMutex
 	stats             *model.StreamStats
@@ -191,6 +252,10 @@ type responseStream struct {
 
 	errMu sync.RWMutex
 	err   error
+
+	finalMu      sync.RWMutex
+	finalMessage model.Message
+	completed    bool
 }
 
 func (s *responseStream) setStreamError(err error) {
@@ -212,25 +277,55 @@ func (s *responseStream) streamError() error {
 }
 
 func (s *responseStream) Recv() (string, error) {
-	select {
-	case <-s.ctx.Done():
-		if err := s.streamError(); err != nil {
+	for {
+		event, err := s.RecvEvent()
+		if err != nil {
 			return "", err
 		}
-		return "", s.ctx.Err()
-	case msg, ok := <-s.ch:
-		if !ok {
-			if err := s.streamError(); err != nil {
-				return "", err
-			}
+		if event.Type == "" {
 			return "", nil
 		}
-		return msg, nil
+		if event.Type == model.StreamEventTextDelta {
+			return event.Text, nil
+		}
 	}
 }
 
+func (s *responseStream) RecvEvent() (model.StreamEvent, error) {
+	select {
+	case <-s.ctx.Done():
+		if err := s.streamError(); err != nil {
+			return model.StreamEvent{}, err
+		}
+		return model.StreamEvent{}, s.ctx.Err()
+	case event, ok := <-s.events:
+		if !ok {
+			if err := s.streamError(); err != nil {
+				return model.StreamEvent{}, err
+			}
+			return model.StreamEvent{}, nil
+		}
+		return event, nil
+	}
+}
+
+func (s *responseStream) FinalMessage() (model.Message, error) {
+	if err := s.streamError(); err != nil && !s.isCompleted() {
+		return model.Message{}, err
+	}
+	if err := s.ctx.Err(); err != nil && !s.isCompleted() {
+		return model.Message{}, err
+	}
+	if !s.isCompleted() {
+		return model.Message{}, errors.New("stream did not complete normally")
+	}
+	return s.final(), nil
+}
+
 func (s *responseStream) Close() error {
-	s.cancel()
+	if !s.isCompleted() {
+		s.cancel()
+	}
 	if s.remote != nil {
 		_ = s.remote.Close()
 	}
@@ -305,4 +400,23 @@ func (s *responseStream) setReasoning(reasoning string) {
 	s.reasoningMu.Lock()
 	defer s.reasoningMu.Unlock()
 	s.reasoning = reasoning
+}
+
+func (s *responseStream) setFinalMessage(msg model.Message) {
+	s.finalMu.Lock()
+	defer s.finalMu.Unlock()
+	s.finalMessage = msg
+	s.completed = true
+}
+
+func (s *responseStream) final() model.Message {
+	s.finalMu.RLock()
+	defer s.finalMu.RUnlock()
+	return s.finalMessage
+}
+
+func (s *responseStream) isCompleted() bool {
+	s.finalMu.RLock()
+	defer s.finalMu.RUnlock()
+	return s.completed
 }

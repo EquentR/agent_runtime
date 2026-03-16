@@ -87,6 +87,33 @@ func buildGenAIMessages(messages []model.Message) ([]*genai.Content, *genai.Cont
 			contents = append(contents, &genai.Content{Role: genai.RoleUser, Parts: parts})
 			promptMessages = append(promptMessages, promptText)
 		case model.RoleAssistant:
+			if replayed, ok, err := contentFromProviderState(m.ProviderState); err != nil {
+				return nil, nil, nil, err
+			} else if ok {
+				promptParts := make([]string, 0, len(replayed.Parts))
+				for _, part := range replayed.Parts {
+					if part == nil {
+						continue
+					}
+					if part.FunctionCall != nil {
+						if part.FunctionCall.ID != "" {
+							toolCallNames[part.FunctionCall.ID] = part.FunctionCall.Name
+						}
+						args, err := json.Marshal(part.FunctionCall.Args)
+						if err != nil {
+							return nil, nil, nil, err
+						}
+						promptParts = append(promptParts, part.FunctionCall.Name+"("+string(args)+")")
+						continue
+					}
+					if part.Text != "" && !part.Thought {
+						promptParts = append(promptParts, part.Text)
+					}
+				}
+				contents = append(contents, replayed)
+				promptMessages = append(promptMessages, strings.Join(promptParts, "\n"))
+				continue
+			}
 			parts, promptText, err := buildAssistantMessageParts(m)
 			if err != nil {
 				return nil, nil, nil, err
@@ -357,13 +384,18 @@ func extractChatResponse(resp *genai.GenerateContentResponse) (model.ChatRespons
 	}
 
 	usage := toModelUsage(resp.UsageMetadata)
+	state, err := providerStateFromContent(first.Content)
+	if err != nil {
+		return model.ChatResponse{}, err
+	}
+	message := finalAssistantMessageFromContent(content, reasoning, toolCalls, state)
 
-	return model.ChatResponse{
-		Content:   content,
-		Reasoning: reasoning,
-		ToolCalls: toolCalls,
-		Usage:     usage,
-	}, nil
+	chatResp := model.ChatResponse{
+		Message: message,
+		Usage:   usage,
+	}
+	chatResp.SyncFieldsFromMessage()
+	return chatResp, nil
 }
 
 func extractContentAndToolCalls(content *genai.Content) (string, string, []types.ToolCall, error) {

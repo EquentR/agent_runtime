@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"encoding/json"
 	"testing"
 
 	model "github.com/EquentR/agent_runtime/core/providers/types"
@@ -116,6 +117,98 @@ func TestExtractChatResponse_StripsLeadingThinkBlockIntoReasoning(t *testing.T) 
 	}
 	if resp.Content != "Final answer" {
 		t.Fatalf("content = %q, want %q", resp.Content, "Final answer")
+	}
+}
+
+func TestExtractChatResponse_PopulatesMessageProviderState(t *testing.T) {
+	oaiResp := goopenai.ChatCompletionResponse{
+		Choices: []goopenai.ChatCompletionChoice{{
+			Message: goopenai.ChatCompletionMessage{
+				Role:             model.RoleAssistant,
+				Content:          "Final answer",
+				ReasoningContent: "plan first",
+				ToolCalls: []goopenai.ToolCall{{
+					ID:   "call_1",
+					Type: goopenai.ToolTypeFunction,
+					Function: goopenai.FunctionCall{
+						Name:      "lookup_weather",
+						Arguments: `{"city":"Beijing"}`,
+					},
+				}},
+			},
+		}},
+	}
+
+	resp, err := extractChatResponse(oaiResp)
+	if err != nil {
+		t.Fatalf("extractChatResponse() error = %v", err)
+	}
+	if resp.Message.Role != model.RoleAssistant {
+		t.Fatalf("resp.Message.Role = %q, want %q", resp.Message.Role, model.RoleAssistant)
+	}
+	if resp.Message.Content != "Final answer" || resp.Content != "Final answer" {
+		t.Fatalf("response content/message = %#v", resp)
+	}
+	if resp.Message.Reasoning != "plan first" || resp.Reasoning != "plan first" {
+		t.Fatalf("response reasoning/message = %#v", resp)
+	}
+	if len(resp.Message.ToolCalls) != 1 || len(resp.ToolCalls) != 1 {
+		t.Fatalf("response tool calls = %#v", resp)
+	}
+	if resp.Message.ProviderState == nil {
+		t.Fatal("resp.Message.ProviderState = nil, want provider state")
+	}
+	if resp.Message.ProviderState.Provider != "openai_completions" {
+		t.Fatalf("resp.Message.ProviderState.Provider = %q, want %q", resp.Message.ProviderState.Provider, "openai_completions")
+	}
+	if resp.Message.ProviderState.Format != "openai_chat_message.v1" {
+		t.Fatalf("resp.Message.ProviderState.Format = %q, want %q", resp.Message.ProviderState.Format, "openai_chat_message.v1")
+	}
+	if resp.Message.ProviderState.Version != "v1" {
+		t.Fatalf("resp.Message.ProviderState.Version = %q, want %q", resp.Message.ProviderState.Version, "v1")
+	}
+	var replayed goopenai.ChatCompletionMessage
+	if err := json.Unmarshal(resp.Message.ProviderState.Payload, &replayed); err != nil {
+		t.Fatalf("unmarshal provider state payload: %v", err)
+	}
+	if replayed.Content != "Final answer" || replayed.ReasoningContent != "plan first" {
+		t.Fatalf("replayed payload = %#v", replayed)
+	}
+}
+
+func TestExtractChatResponse_FallsBackToLegacyFunctionCall(t *testing.T) {
+	oaiResp := goopenai.ChatCompletionResponse{
+		Choices: []goopenai.ChatCompletionChoice{{
+			Message: goopenai.ChatCompletionMessage{
+				Role:    model.RoleAssistant,
+				Content: "",
+				FunctionCall: &goopenai.FunctionCall{
+					Name:      "lookup_weather",
+					Arguments: `{"city":"Beijing"}`,
+				},
+			},
+		}},
+	}
+
+	resp, err := extractChatResponse(oaiResp)
+	if err != nil {
+		t.Fatalf("extractChatResponse() error = %v", err)
+	}
+	if len(resp.ToolCalls) != 1 {
+		t.Fatalf("len(resp.ToolCalls) = %d, want 1", len(resp.ToolCalls))
+	}
+	if resp.ToolCalls[0].Name != "lookup_weather" || resp.ToolCalls[0].Arguments != `{"city":"Beijing"}` {
+		t.Fatalf("resp.ToolCalls[0] = %#v", resp.ToolCalls[0])
+	}
+	if len(resp.Message.ToolCalls) != 1 {
+		t.Fatalf("len(resp.Message.ToolCalls) = %d, want 1", len(resp.Message.ToolCalls))
+	}
+	var replayed goopenai.ChatCompletionMessage
+	if err := json.Unmarshal(resp.Message.ProviderState.Payload, &replayed); err != nil {
+		t.Fatalf("unmarshal provider state payload: %v", err)
+	}
+	if replayed.FunctionCall == nil || replayed.FunctionCall.Name != "lookup_weather" {
+		t.Fatalf("replayed.FunctionCall = %#v", replayed.FunctionCall)
 	}
 }
 

@@ -45,8 +45,10 @@ func (c *Client) Chat(ctx context.Context, req model.ChatRequest) (model.ChatRes
 		return model.ChatResponse{}, err
 	}
 	defer stream.Close()
+	return chatResponseFromStream(start, stream)
+}
 
-	var contentBuilder strings.Builder
+func chatResponseFromStream(start time.Time, stream model.Stream) (model.ChatResponse, error) {
 	for {
 		chunk, err := stream.Recv()
 		if err != nil {
@@ -55,22 +57,25 @@ func (c *Client) Chat(ctx context.Context, req model.ChatRequest) (model.ChatRes
 		if chunk == "" {
 			break
 		}
-		contentBuilder.WriteString(chunk)
 	}
 
+	message, err := stream.FinalMessage()
+	if err != nil {
+		return model.ChatResponse{}, err
+	}
 	stats := stream.Stats()
 	latency := stats.TotalLatency
 	if latency == 0 {
 		latency = time.Since(start)
 	}
 
-	return model.ChatResponse{
-		Content:   contentBuilder.String(),
-		Reasoning: stream.Reasoning(),
-		ToolCalls: stream.ToolCalls(),
-		Usage:     stats.Usage,
-		Latency:   latency,
-	}, nil
+	resp := model.ChatResponse{
+		Message: cloneModelMessage(message),
+		Usage:   stats.Usage,
+		Latency: latency,
+	}
+	resp.SyncFieldsFromMessage()
+	return resp, nil
 }
 
 // ChatStream 将统一 ChatRequest 转换为 GenAI GenerateContentStream 调用，
@@ -93,11 +98,11 @@ func (c *Client) ChatStream(ctx context.Context, req model.ChatRequest) (model.S
 	// SDK 流式迭代器；每次迭代返回一个 provider 分片。
 	seq := c.client.Models.GenerateContentStream(streamCtx, req.Model, contents, cfg)
 
-	ch := make(chan string)
+	events := make(chan model.StreamEvent)
 	s := &genAIStream{
 		ctx:       streamCtx,
 		cancel:    cancel,
-		ch:        ch,
+		events:    events,
 		stats:     &model.StreamStats{ResponseType: model.StreamResponseUnknown},
 		startTime: start,
 	}
@@ -112,14 +117,19 @@ func (c *Client) ChatStream(ctx context.Context, req model.ChatRequest) (model.S
 	asyncCounter.SetPromptCount(int64(promptTokens))
 
 	go func() {
-		defer close(ch)
+		defer close(events)
 
 		toolCallAccumulator := newStreamToolCallAccumulator()
 		splitter := model.NewLeadingThinkStreamSplitter()
 		var reasoningBuilder strings.Builder
+		var contentBuilder strings.Builder
+		finalContent := &genai.Content{Role: genai.RoleModel}
 		defer func() {
 			if pending := splitter.Finalize(); pending != "" {
-				ch <- pending
+				contentBuilder.WriteString(pending)
+				if !emitStreamEvent(streamCtx, events, model.StreamEvent{Type: model.StreamEventTextDelta, Text: pending}) {
+					return
+				}
 			}
 			s.reasoning = strings.TrimSpace(reasoningBuilder.String())
 			if s.reasoning == "" {
@@ -127,6 +137,15 @@ func (c *Client) ChatStream(ctx context.Context, req model.ChatRequest) (model.S
 			}
 			s.toolCalls = toolCallAccumulator.ToolCalls()
 			s.stats.ResponseType = resolveStreamResponseType(s.stats.FinishReason, s.toolCalls)
+			if streamCtx.Err() == nil && s.streamError() == nil {
+				final, err := finalAssistantMessageFromObservedContent(finalContent)
+				if err != nil {
+					s.setStreamError(err)
+					return
+				}
+				s.setFinalMessage(final)
+				emitStreamEvent(streamCtx, events, model.StreamEvent{Type: model.StreamEventCompleted, Message: final})
+			}
 		}()
 
 		for chunk, err := range seq {
@@ -162,15 +181,24 @@ func (c *Client) ChatStream(ctx context.Context, req model.ChatRequest) (model.S
 					if part == nil {
 						continue
 					}
+					accumulateObservedStreamPart(finalContent, toolCallAccumulator, part)
 					if part.Text != "" && part.Thought {
 						asyncCounter.Append(part.Text)
 						reasoningBuilder.WriteString(part.Text)
+						if !emitStreamEvent(streamCtx, events, model.StreamEvent{Type: model.StreamEventReasoningDelta, Reasoning: part.Text}) {
+							return
+						}
 						continue
 					}
 					// GenAI 的函数调用通过结构化 part 返回。
 					// 这里先累积，最终通过 Stream.ToolCalls() 暴露。
 					if part.FunctionCall != nil {
-						toolCallAccumulator.Append([]*genai.Part{part})
+						calls := toolCallAccumulator.ToolCalls()
+						if len(calls) > 0 {
+							if !emitStreamEvent(streamCtx, events, model.StreamEvent{Type: model.StreamEventToolCallDelta, ToolCall: calls[len(calls)-1]}) {
+								return
+							}
+						}
 					}
 					// 文本可能分散在多个 part/chunk，逐段转发到消费通道。
 					if part.Text != "" {
@@ -179,7 +207,10 @@ func (c *Client) ChatStream(ctx context.Context, req model.ChatRequest) (model.S
 						})
 						asyncCounter.Append(part.Text)
 						if emit := splitter.Consume(part.Text); emit != "" {
-							ch <- emit
+							contentBuilder.WriteString(emit)
+							if !emitStreamEvent(streamCtx, events, model.StreamEvent{Type: model.StreamEventTextDelta, Text: emit}) {
+								return
+							}
 						}
 					}
 				}
@@ -193,6 +224,7 @@ func (c *Client) ChatStream(ctx context.Context, req model.ChatRequest) (model.S
 			s.stats.Usage.CompletionTokens = s.stats.LocalTokenCount
 			s.stats.Usage.TotalTokens = asyncCounter.GetTotalCount()
 		}
+		emitStreamEvent(streamCtx, events, model.StreamEvent{Type: model.StreamEventUsage, Usage: s.stats.Usage})
 		asyncCounter.Close()
 	}()
 

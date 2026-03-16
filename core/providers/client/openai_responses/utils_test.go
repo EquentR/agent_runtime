@@ -209,6 +209,139 @@ func TestBuildResponseRequestParams_ReplaysAssistantReasoningItems(t *testing.T)
 	}
 }
 
+func TestBuildResponseRequestParams_ReplaysProviderStateOutputItems(t *testing.T) {
+	params, err := buildResponseRequestParams(model.ChatRequest{
+		Model: "gpt-5.4",
+		Messages: []model.Message{{
+			Role: model.RoleAssistant,
+			ProviderState: &model.ProviderState{
+				Provider: "openai_responses",
+				Format:   "openai_response_output_items.v1",
+				Version:  "v1",
+				Payload: json.RawMessage(`[
+					{"type":"reasoning","id":"rs_1","summary":[{"text":"raw plan"}]},
+					{"type":"function_call","call_id":"call_1","name":"lookup_weather","arguments":"{}"}
+				]`),
+			},
+			Content:   "normalized text",
+			Reasoning: "normalized reasoning",
+			ToolCalls: []types.ToolCall{{ID: "call_norm", Name: "normalized_tool", Arguments: `{"city":"Shanghai"}`}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("buildResponseRequestParams() error = %v", err)
+	}
+
+	var payload map[string]any
+	data, err := json.Marshal(params)
+	if err != nil {
+		t.Fatalf("json.Marshal(params) error = %v", err)
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("json.Unmarshal(payload) error = %v", err)
+	}
+
+	input, ok := payload["input"].([]any)
+	if !ok {
+		t.Fatalf("input type = %T, want []any", payload["input"])
+	}
+	if len(input) != 2 {
+		t.Fatalf("len(input) = %d, want 2", len(input))
+	}
+
+	first, _ := input[0].(map[string]any)
+	if first["type"] != "reasoning" || first["id"] != "rs_1" {
+		t.Fatalf("first replayed item = %#v", first)
+	}
+	summary, ok := first["summary"].([]any)
+	if !ok || len(summary) != 1 {
+		t.Fatalf("first replayed summary = %#v", first["summary"])
+	}
+	summaryPart, _ := summary[0].(map[string]any)
+	if summaryPart["text"] != "raw plan" {
+		t.Fatalf("summary text = %v, want raw plan", summaryPart["text"])
+	}
+
+	second, _ := input[1].(map[string]any)
+	if second["type"] != "function_call" || second["call_id"] != "call_1" || second["name"] != "lookup_weather" {
+		t.Fatalf("second replayed item = %#v", second)
+	}
+	if second["arguments"] != "{}" {
+		t.Fatalf("second replayed arguments = %v, want {}", second["arguments"])
+	}
+}
+
+func TestBuildResponseRequestParams_ReplaysProviderStateMessageOutputItem(t *testing.T) {
+	params, err := buildResponseRequestParams(model.ChatRequest{
+		Model: "gpt-5.4",
+		Messages: []model.Message{{
+			Role: model.RoleAssistant,
+			ProviderState: &model.ProviderState{
+				Provider: "openai_responses",
+				Format:   "openai_response_output_items.v1",
+				Version:  "v1",
+				Payload: json.RawMessage(`[
+					{"type":"message","id":"msg_1","status":"completed","content":[{"type":"output_text","text":"raw text"}]},
+					{"type":"function_call","id":"fc_1","call_id":"call_1","name":"lookup_weather","arguments":"{}"}
+				]`),
+			},
+			Content:   "normalized text",
+			Reasoning: "normalized reasoning",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("buildResponseRequestParams() error = %v", err)
+	}
+
+	var payload map[string]any
+	data, err := json.Marshal(params)
+	if err != nil {
+		t.Fatalf("json.Marshal(params) error = %v", err)
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("json.Unmarshal(payload) error = %v", err)
+	}
+
+	input, ok := payload["input"].([]any)
+	if !ok {
+		t.Fatalf("input type = %T, want []any", payload["input"])
+	}
+	if len(input) != 2 {
+		t.Fatalf("len(input) = %d, want 2", len(input))
+	}
+
+	message, _ := input[0].(map[string]any)
+	if message["type"] != "message" || message["id"] != "msg_1" {
+		t.Fatalf("replayed message item = %#v", message)
+	}
+	content, ok := message["content"].([]any)
+	if !ok || len(content) != 1 {
+		t.Fatalf("replayed message content = %#v", message["content"])
+	}
+	contentPart, _ := content[0].(map[string]any)
+	if contentPart["type"] != "output_text" || contentPart["text"] != "raw text" {
+		t.Fatalf("replayed message content part = %#v", contentPart)
+	}
+}
+
+func TestBuildResponseRequestParams_RejectsUnsupportedProviderStateVersion(t *testing.T) {
+	_, err := buildResponseRequestParams(model.ChatRequest{
+		Model: "gpt-5.4",
+		Messages: []model.Message{{
+			Role: model.RoleAssistant,
+			ProviderState: &model.ProviderState{
+				Provider: "openai_responses",
+				Format:   "openai_response_output_items.v1",
+				Version:  "v2",
+				Payload:  json.RawMessage(`[]`),
+			},
+		}},
+	})
+	if err == nil {
+		t.Fatal("expected error for unsupported provider state version")
+	}
+}
+
 func TestModelToolChoiceToResponseVariants(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -473,5 +606,73 @@ func TestExtractChatResponse_PreservesReasoningItems(t *testing.T) {
 	}
 	if len(got.ReasoningItems[0].Summary) != 1 || got.ReasoningItems[0].Summary[0].Text != "plan first" {
 		t.Fatalf("reasoning item summary = %#v, want [plan first]", got.ReasoningItems[0].Summary)
+	}
+}
+
+func TestExtractChatResponse_PopulatesFinalMessageProviderState(t *testing.T) {
+	resp := &responses.Response{
+		Output: []responses.ResponseOutputItemUnion{
+			{
+				Type:             "reasoning",
+				ID:               "rs_1",
+				EncryptedContent: "enc_123",
+				Summary: []responses.ResponseReasoningItemSummary{{
+					Text: "plan first",
+				}},
+			},
+			{
+				Type:    "message",
+				ID:      "msg_1",
+				Content: []responses.ResponseOutputMessageContentUnion{{Type: "output_text", Text: "hello world"}},
+			},
+			{
+				Type:      "function_call",
+				ID:        "fc_1",
+				CallID:    "call_1",
+				Name:      "lookup_weather",
+				Arguments: `{"city":"Beijing"}`,
+			},
+		},
+		Usage: responses.ResponseUsage{InputTokens: 3, OutputTokens: 4, TotalTokens: 7},
+	}
+
+	got, err := extractChatResponse(resp)
+	if err != nil {
+		t.Fatalf("extractChatResponse() error = %v", err)
+	}
+	if got.Message.Role != model.RoleAssistant {
+		t.Fatalf("got.Message.Role = %q, want %q", got.Message.Role, model.RoleAssistant)
+	}
+	if got.Content != "hello world" || got.Message.Content != "hello world" {
+		t.Fatalf("response content/message = %#v", got)
+	}
+	if got.Reasoning != "plan first" || got.Message.Reasoning != "plan first" {
+		t.Fatalf("response reasoning/message = %#v", got)
+	}
+	if len(got.ToolCalls) != 1 || len(got.Message.ToolCalls) != 1 {
+		t.Fatalf("response tool calls = %#v", got)
+	}
+	if got.Message.ProviderState == nil {
+		t.Fatal("got.Message.ProviderState = nil, want provider state")
+	}
+	if got.Message.ProviderState.Provider != "openai_responses" {
+		t.Fatalf("provider = %q, want %q", got.Message.ProviderState.Provider, "openai_responses")
+	}
+	if got.Message.ProviderState.Format != "openai_response_output_items.v1" {
+		t.Fatalf("format = %q, want %q", got.Message.ProviderState.Format, "openai_response_output_items.v1")
+	}
+	if got.Message.ProviderState.Version != "v1" {
+		t.Fatalf("version = %q, want %q", got.Message.ProviderState.Version, "v1")
+	}
+
+	var replayed []responses.ResponseOutputItemUnion
+	if err := json.Unmarshal(got.Message.ProviderState.Payload, &replayed); err != nil {
+		t.Fatalf("unmarshal provider state payload: %v", err)
+	}
+	if len(replayed) != 3 {
+		t.Fatalf("len(replayed) = %d, want 3", len(replayed))
+	}
+	if replayed[0].Type != "reasoning" || replayed[1].Type != "message" || replayed[2].Type != "function_call" {
+		t.Fatalf("replayed output sequence = %#v", replayed)
 	}
 }

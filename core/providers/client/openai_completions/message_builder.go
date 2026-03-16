@@ -17,6 +17,18 @@ func buildOpenAIMessages(messages []model.Message) ([]openai.ChatCompletionMessa
 	promptMessages := make([]string, 0, len(messages))
 
 	for _, m := range messages {
+		if m.Role == model.RoleAssistant {
+			replayed, ok, err := messageFromProviderState(m.ProviderState)
+			if err != nil {
+				return nil, nil, err
+			}
+			if ok {
+				msgs = append(msgs, replayed)
+				promptMessages = append(promptMessages, promptMessageFromOpenAIMessage(replayed))
+				continue
+			}
+		}
+
 		toolCalls := modelToolCallsToOpenAI(m.ToolCalls)
 
 		if len(m.Attachments) == 0 {

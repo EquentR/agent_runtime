@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -145,6 +146,9 @@ func (m *Manager) ContextMessages(ctx context.Context) ([]model.Message, error) 
 			return nil, err
 		}
 	}
+	if err := m.validateContextBudgetLocked(); err != nil {
+		return nil, err
+	}
 
 	return m.contextMessagesLocked(), nil
 }
@@ -153,7 +157,11 @@ func (m *Manager) requiresCompressionLocked() bool {
 	if len(m.shortTerm) == 0 {
 		return false
 	}
-	return m.estimateShortTermTokensLocked() > m.shortTermLimitTokens
+	if m.estimateShortTermTokensLocked() <= m.shortTermLimitTokens {
+		return false
+	}
+	compressible, _ := splitMessagesForCompression(m.shortTerm)
+	return len(compressible) > 0
 }
 
 func (m *Manager) estimateShortTermTokensLocked() int64 {
@@ -175,9 +183,14 @@ func (m *Manager) estimateShortTermTokensLocked() int64 {
 }
 
 func (m *Manager) compressLocked(ctx context.Context) error {
+	compressible, preservedTail := splitMessagesForCompression(m.shortTerm)
+	if len(compressible) == 0 {
+		return nil
+	}
+
 	request := CompressionRequest{
 		PreviousSummary:  m.summary,
-		Messages:         cloneMessages(m.shortTerm),
+		Messages:         cloneMessages(compressible),
 		MaxSummaryTokens: m.summaryLimitTokens,
 	}
 	summary, err := m.compressor(ctx, request)
@@ -188,9 +201,44 @@ func (m *Manager) compressLocked(ctx context.Context) error {
 	if m.summaryLimitTokens > 0 && summary != "" && int64(m.counter.Count(summary)) > m.summaryLimitTokens {
 		summary = limitTextByTokens(summary, m.summaryLimitTokens, m.counter)
 	}
+	if err := validateShortTermBudget(m.counter, preservedTail, m.shortTermLimitTokens); err != nil {
+		return err
+	}
 
 	m.summary = summary
-	m.shortTerm = nil
+	m.shortTerm = cloneMessages(preservedTail)
+	return nil
+}
+
+func (m *Manager) validateContextBudgetLocked() error {
+	if err := validateShortTermBudget(m.counter, m.shortTerm, m.shortTermLimitTokens); err != nil {
+		return err
+	}
+	if m.summary != "" && m.summaryLimitTokens > 0 && int64(m.counter.Count(renderSummaryWithinBudget(m.summaryTemplate, m.summary, m.summaryLimitTokens, m.counter))) > m.summaryLimitTokens {
+		return errors.New("memory summary exceeds summary budget after rendering")
+	}
+	return nil
+}
+
+func validateShortTermBudget(counter TokenCounter, messages []model.Message, budget int64) error {
+	if budget <= 0 {
+		return nil
+	}
+	payloads := make([]string, 0, len(messages))
+	for _, message := range messages {
+		payload := budgetPayloadForMessage(message)
+		if payload == "" {
+			continue
+		}
+		payloads = append(payloads, payload)
+	}
+	if len(payloads) == 0 {
+		return nil
+	}
+	used := int64(counter.CountMessages(payloads))
+	if used > budget {
+		return fmt.Errorf("preserved replayable tail exceeds short-term budget: %d > %d", used, budget)
+	}
 	return nil
 }
 
@@ -311,7 +359,7 @@ func renderSummaryWithinBudget(template, summary string, budget int64, counter T
 }
 
 func budgetPayloadForMessage(message model.Message) string {
-	parts := make([]string, 0, 5)
+	parts := make([]string, 0, 6)
 	if message.Content != "" {
 		parts = append(parts, message.Content)
 	}
@@ -327,6 +375,9 @@ func budgetPayloadForMessage(message model.Message) string {
 	if attachments := attachmentBudgetPayload(message.Attachments); attachments != "" {
 		parts = append(parts, attachments)
 	}
+	if providerState := providerStateBudgetPayload(message.ProviderState); providerState != "" {
+		parts = append(parts, providerState)
+	}
 	if message.Role == model.RoleTool && message.ToolCallId != "" {
 		parts = append(parts, message.ToolCallId)
 	}
@@ -338,6 +389,39 @@ func budgetPayloadForMessage(message model.Message) string {
 		role = "message"
 	}
 	return role + ": " + strings.Join(parts, "\n")
+}
+
+func providerStateBudgetPayload(state *model.ProviderState) string {
+	if state == nil || len(state.Payload) == 0 {
+		return ""
+	}
+	parts := []string{"provider_state"}
+	if provider := compactWhitespace(state.Provider); provider != "" {
+		parts = append(parts, provider)
+	}
+	if format := compactWhitespace(state.Format); format != "" {
+		parts = append(parts, format)
+	}
+	if version := compactWhitespace(state.Version); version != "" {
+		parts = append(parts, version)
+	}
+	parts = append(parts, string(state.Payload))
+	return strings.Join(parts, ":")
+}
+
+func splitMessagesForCompression(messages []model.Message) ([]model.Message, []model.Message) {
+	if len(messages) == 0 {
+		return nil, nil
+	}
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == model.RoleAssistant && messages[i].ProviderState != nil {
+			if i == 0 {
+				return nil, cloneMessages(messages)
+			}
+			return cloneMessages(messages[:i]), cloneMessages(messages[i:])
+		}
+	}
+	return cloneMessages(messages), nil
 }
 
 func summarizeMessage(message model.Message) string {
@@ -555,6 +639,17 @@ func cloneMessage(message model.Message) model.Message {
 				clonedToolCall.ThoughtSignature = append([]byte(nil), toolCall.ThoughtSignature...)
 			}
 			cloned.ToolCalls = append(cloned.ToolCalls, clonedToolCall)
+		}
+	}
+
+	if message.ProviderState != nil {
+		cloned.ProviderState = &model.ProviderState{
+			Provider: message.ProviderState.Provider,
+			Format:   message.ProviderState.Format,
+			Version:  message.ProviderState.Version,
+		}
+		if len(message.ProviderState.Payload) > 0 {
+			cloned.ProviderState.Payload = append([]byte(nil), message.ProviderState.Payload...)
 		}
 	}
 

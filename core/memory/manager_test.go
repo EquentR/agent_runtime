@@ -181,6 +181,50 @@ func TestContextMessagesCountsTextAttachmentsTowardBudget(t *testing.T) {
 	}
 }
 
+func TestContextMessagesCountsProviderStateTowardBudget(t *testing.T) {
+	compressCalls := 0
+	mgr, err := NewManager(Options{
+		MaxContextTokens: 250,
+		Counter:          fakeTokenCounter{},
+		Compressor: func(_ context.Context, request CompressionRequest) (string, error) {
+			compressCalls++
+			return "compressed", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+
+	mgr.AddMessage(model.Message{Role: model.RoleUser, Content: "prefix"})
+	mgr.AddMessage(model.Message{
+		Role:    model.RoleAssistant,
+		Content: "ok",
+		ProviderState: &model.ProviderState{
+			Provider: "openai_completions",
+			Format:   "openai_chat_message.v1",
+			Version:  "v1",
+			Payload:  []byte(`{"role":"assistant","content":"` + strings.Repeat("x", 60) + `"}`),
+		},
+	})
+
+	got, err := mgr.ContextMessages(context.Background())
+	if err != nil {
+		t.Fatalf("ContextMessages() error = %v", err)
+	}
+	if compressCalls != 1 {
+		t.Fatalf("compressor called %d times, want 1 when provider state pushes context over budget", compressCalls)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len(ContextMessages()) = %d, want 2 summary+preserved assistant", len(got))
+	}
+	if !strings.Contains(got[0].Content, "compressed") {
+		t.Fatalf("summary message = %#v, want compressed summary", got[0])
+	}
+	if got[1].ProviderState == nil {
+		t.Fatal("got[1].ProviderState = nil, want replayable assistant preserved")
+	}
+}
+
 func TestContextMessagesPrependsSummaryBeforeNewShortTermMessages(t *testing.T) {
 	mgr, err := NewManager(Options{
 		MaxContextTokens: 100,
@@ -216,6 +260,143 @@ func TestContextMessagesPrependsSummaryBeforeNewShortTermMessages(t *testing.T) 
 	}
 }
 
+func TestContextMessagesCompressionPreservesReplayableTail(t *testing.T) {
+	var seen CompressionRequest
+	mgr, err := NewManager(Options{
+		MaxContextTokens: 260,
+		Counter:          fakeTokenCounter{},
+		Compressor: func(_ context.Context, request CompressionRequest) (string, error) {
+			seen = request
+			return "compressed history", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+
+	mgr.AddMessages([]model.Message{
+		{Role: model.RoleUser, Content: strings.Repeat("a", 60)},
+		{Role: model.RoleAssistant, Content: strings.Repeat("b", 60)},
+		{
+			Role:    model.RoleAssistant,
+			Content: "normalized text",
+			ProviderState: &model.ProviderState{
+				Provider: "openai_completions",
+				Format:   "openai_chat_message.v1",
+				Version:  "v1",
+				Payload:  []byte(`{"role":"assistant","content":"provider text"}`),
+			},
+		},
+		{Role: model.RoleTool, ToolCallId: "call_1", Content: `{"temp":23}`},
+		{Role: model.RoleUser, Content: "follow up"},
+	})
+
+	got, err := mgr.ContextMessages(context.Background())
+	if err != nil {
+		t.Fatalf("ContextMessages() error = %v", err)
+	}
+	if len(seen.Messages) != 2 {
+		t.Fatalf("len(CompressionRequest.Messages) = %d, want 2 compressible prefix messages", len(seen.Messages))
+	}
+	if len(got) != 4 {
+		t.Fatalf("len(ContextMessages()) = %d, want 4", len(got))
+	}
+	if got[0].Role != model.RoleSystem || !strings.Contains(got[0].Content, "compressed history") {
+		t.Fatalf("summary message = %#v, want compressed summary", got[0])
+	}
+	if got[1].ProviderState == nil {
+		t.Fatal("got[1].ProviderState = nil, want replayable assistant tail preserved")
+	}
+	if got[1].Role != model.RoleAssistant || got[2].Role != model.RoleTool || got[3].Role != model.RoleUser {
+		t.Fatalf("preserved tail roles = %#v, want assistant/tool/user suffix", []string{got[1].Role, got[2].Role, got[3].Role})
+	}
+	short := mgr.ShortTermMessages()
+	if len(short) != 3 {
+		t.Fatalf("len(ShortTermMessages()) = %d, want 3 preserved tail messages", len(short))
+	}
+	if short[0].ProviderState == nil {
+		t.Fatal("ShortTermMessages()[0].ProviderState = nil, want preserved provider state")
+	}
+	if string(short[0].ProviderState.Payload) != `{"role":"assistant","content":"provider text"}` {
+		t.Fatalf("preserved provider state payload = %q, want original payload", string(short[0].ProviderState.Payload))
+	}
+}
+
+func TestContextMessagesErrorsWhenReplayableTailAloneExceedsBudget(t *testing.T) {
+	mgr, err := NewManager(Options{
+		MaxContextTokens: 20,
+		Counter:          fakeTokenCounter{},
+	})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+
+	mgr.AddMessage(model.Message{
+		Role:    model.RoleAssistant,
+		Content: "ok",
+		ProviderState: &model.ProviderState{
+			Provider: "openai_completions",
+			Format:   "openai_chat_message.v1",
+			Version:  "v1",
+			Payload:  []byte(`{"role":"assistant","content":"` + strings.Repeat("x", 80) + `"}`),
+		},
+	})
+
+	_, err = mgr.ContextMessages(context.Background())
+	if err == nil {
+		t.Fatal("ContextMessages() error = nil, want budget validation error")
+	}
+	if !strings.Contains(err.Error(), "preserved replayable tail exceeds short-term budget") {
+		t.Fatalf("ContextMessages() error = %v, want replayable tail budget error", err)
+	}
+}
+
+func TestContextMessagesErrorsWhenCompressedResultStillExceedsBudget(t *testing.T) {
+	compressCalls := 0
+	mgr, err := NewManager(Options{
+		MaxContextTokens: 40,
+		Counter:          fakeTokenCounter{},
+		Compressor: func(_ context.Context, request CompressionRequest) (string, error) {
+			compressCalls++
+			return "sum", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+
+	mgr.AddMessages([]model.Message{
+		{Role: model.RoleUser, Content: "prefix"},
+		{
+			Role:    model.RoleAssistant,
+			Content: "ok",
+			ProviderState: &model.ProviderState{
+				Provider: "openai_completions",
+				Format:   "openai_chat_message.v1",
+				Version:  "v1",
+				Payload:  []byte(`{"role":"assistant","content":"` + strings.Repeat("x", 80) + `"}`),
+			},
+		},
+	})
+
+	_, err = mgr.ContextMessages(context.Background())
+	if err == nil {
+		t.Fatal("ContextMessages() error = nil, want budget validation error")
+	}
+	if compressCalls != 1 {
+		t.Fatalf("compressor called %d times, want 1", compressCalls)
+	}
+	if !strings.Contains(err.Error(), "preserved replayable tail exceeds short-term budget") {
+		t.Fatalf("ContextMessages() error = %v, want replayable tail budget error", err)
+	}
+	if mgr.Summary() != "" {
+		t.Fatalf("Summary() = %q, want unchanged empty summary on failed validation", mgr.Summary())
+	}
+	if short := mgr.ShortTermMessages(); len(short) != 2 {
+		t.Fatalf("len(ShortTermMessages()) = %d, want original messages retained on failure", len(short))
+	}
+}
+
 func TestShortTermMessagesReturnsDeepCopy(t *testing.T) {
 	mgr, err := NewManager(Options{Counter: fakeTokenCounter{}})
 	if err != nil {
@@ -239,12 +420,19 @@ func TestShortTermMessagesReturnsDeepCopy(t *testing.T) {
 			Arguments:        `{"q":"golang"}`,
 			ThoughtSignature: []byte("sig"),
 		}},
+		ProviderState: &model.ProviderState{
+			Provider: "openai_completions",
+			Format:   "openai_chat_message.v1",
+			Version:  "v1",
+			Payload:  []byte(`{"content":"hello"}`),
+		},
 	})
 
 	got := mgr.ShortTermMessages()
 	got[0].Attachments[0].Data[0] = 'x'
 	got[0].ReasoningItems[0].Summary[0].Text = "mutated"
 	got[0].ToolCalls[0].ThoughtSignature[0] = 'x'
+	got[0].ProviderState.Payload[2] = 'X'
 
 	again := mgr.ShortTermMessages()
 	if string(again[0].Attachments[0].Data) != "hello" {
@@ -255,6 +443,9 @@ func TestShortTermMessagesReturnsDeepCopy(t *testing.T) {
 	}
 	if string(again[0].ToolCalls[0].ThoughtSignature) != "sig" {
 		t.Fatalf("thought signature = %q, want sig", string(again[0].ToolCalls[0].ThoughtSignature))
+	}
+	if string(again[0].ProviderState.Payload) != `{"content":"hello"}` {
+		t.Fatalf("provider state payload = %q, want original payload", string(again[0].ProviderState.Payload))
 	}
 }
 

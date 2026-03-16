@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -156,6 +157,47 @@ func TestBuildOpenAIMessages_PreservesAssistantReasoningContent(t *testing.T) {
 	}
 	if msgs[0].ReasoningContent != "Need the weather tool." {
 		t.Fatalf("msgs[0].ReasoningContent = %q, want %q", msgs[0].ReasoningContent, "Need the weather tool.")
+	}
+}
+
+func TestBuildOpenAIMessages_UsesProviderStateReplay(t *testing.T) {
+	msgs, _, err := buildOpenAIMessages([]model.Message{{
+		Role: model.RoleAssistant,
+		ProviderState: &model.ProviderState{
+			Provider: "openai_completions",
+			Format:   "openai_chat_message.v1",
+			Version:  "v1",
+			Payload:  json.RawMessage(`{"role":"assistant","content":"raw text","reasoning_content":"raw reasoning"}`),
+		},
+		Content:   "normalized text",
+		Reasoning: "normalized reasoning",
+	}})
+	if err != nil {
+		t.Fatalf("buildOpenAIMessages() error = %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("len(msgs) = %d, want 1", len(msgs))
+	}
+	if msgs[0].Content != "raw text" {
+		t.Fatalf("msgs[0].Content = %q, want %q", msgs[0].Content, "raw text")
+	}
+	if msgs[0].ReasoningContent != "raw reasoning" {
+		t.Fatalf("msgs[0].ReasoningContent = %q, want %q", msgs[0].ReasoningContent, "raw reasoning")
+	}
+}
+
+func TestBuildOpenAIMessages_RejectsUnsupportedProviderStateVersion(t *testing.T) {
+	_, _, err := buildOpenAIMessages([]model.Message{{
+		Role: model.RoleAssistant,
+		ProviderState: &model.ProviderState{
+			Provider: "openai_completions",
+			Format:   "openai_chat_message.v1",
+			Version:  "v2",
+			Payload:  json.RawMessage(`{"role":"assistant","content":"raw text"}`),
+		},
+	}})
+	if err == nil {
+		t.Fatal("expected error for unsupported provider state version")
 	}
 }
 

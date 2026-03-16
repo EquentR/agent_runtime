@@ -72,35 +72,23 @@ func extractChatResponse(resp openai.ChatCompletionResponse) (model.ChatResponse
 		return model.ChatResponse{}, errors.New("openai chat completion returned no choices")
 	}
 
-	msg := resp.Choices[0].Message
-	toolCalls := make([]types.ToolCall, 0, len(msg.ToolCalls))
-	for _, tc := range msg.ToolCalls {
-		if tc.Type != "" && tc.Type != openai.ToolTypeFunction {
-			continue
-		}
-		toolCalls = append(toolCalls, types.ToolCall{
-			ID:        tc.ID,
-			Name:      tc.Function.Name,
-			Arguments: tc.Function.Arguments,
-		})
+	oaiMsg := resp.Choices[0].Message
+	finalMessage, err := finalAssistantMessageFromNativeMessage(oaiMsg)
+	if err != nil {
+		return model.ChatResponse{}, err
 	}
 
-	reasoning, answer := model.SplitLeadingThinkBlock(msg.Content)
-	if msg.ReasoningContent != "" {
-		reasoning = msg.ReasoningContent
-	}
-
-	return model.ChatResponse{
-		Content:   answer,
-		Reasoning: reasoning,
-		ToolCalls: toolCalls,
+	response := model.ChatResponse{
+		Message: finalMessage,
 		Usage: model.TokenUsage{
 			PromptTokens:       int64(resp.Usage.PromptTokens),
 			CachedPromptTokens: cachedPromptTokens(resp.Usage),
 			CompletionTokens:   int64(resp.Usage.CompletionTokens),
 			TotalTokens:        int64(resp.Usage.TotalTokens),
 		},
-	}, nil
+	}
+	response.SyncFieldsFromMessage()
+	return response, nil
 }
 
 func cachedPromptTokens(usage openai.Usage) int64 {
