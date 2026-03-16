@@ -1,6 +1,83 @@
 basePath: /api/v1
 definitions:
-  app_handlers.CreateTaskRequest:
+  handlers.ConversationDetailSwaggerResponse:
+    properties:
+      code:
+        type: integer
+      data:
+        $ref: '#/definitions/handlers.ConversationSwaggerDoc'
+      message:
+        type: string
+      ok:
+        type: boolean
+      time:
+        type: string
+    type: object
+  handlers.ConversationListSwaggerResponse:
+    properties:
+      code:
+        type: integer
+      data:
+        items:
+          $ref: '#/definitions/handlers.ConversationSwaggerDoc'
+        type: array
+      message:
+        type: string
+      ok:
+        type: boolean
+      time:
+        type: string
+    type: object
+  handlers.ConversationMessageDoc:
+    properties:
+      content:
+        type: string
+      reasoning:
+        type: string
+      role:
+        type: string
+      tool_call_id:
+        type: string
+    type: object
+  handlers.ConversationMessagesSwaggerResponse:
+    properties:
+      code:
+        type: integer
+      data:
+        items:
+          $ref: '#/definitions/handlers.ConversationMessageDoc'
+        type: array
+      message:
+        type: string
+      ok:
+        type: boolean
+      time:
+        type: string
+    type: object
+  handlers.ConversationSwaggerDoc:
+    properties:
+      created_at:
+        type: string
+      created_by:
+        type: string
+      id:
+        type: string
+      last_message:
+        type: string
+      last_message_at:
+        type: string
+      message_count:
+        type: integer
+      model_id:
+        type: string
+      provider_id:
+        type: string
+      title:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  handlers.CreateTaskRequest:
     properties:
       config:
         additionalProperties: {}
@@ -18,38 +95,33 @@ definitions:
       task_type:
         type: string
     type: object
-  github_com_EquentR_agent_runtime_core_tasks.ExecutionMode:
-    enum:
-    - serial
-    type: string
-    x-enum-varnames:
-    - ExecutionModeSerial
-  github_com_EquentR_agent_runtime_core_tasks.Status:
-    enum:
-    - queued
-    - running
-    - cancel_requested
-    - cancelled
-    - succeeded
-    - failed
-    type: string
-    x-enum-varnames:
-    - StatusQueued
-    - StatusRunning
-    - StatusCancelRequested
-    - StatusCancelled
-    - StatusSucceeded
-    - StatusFailed
-  github_com_EquentR_agent_runtime_core_tasks.Task:
+  handlers.ErrorSwaggerResponse:
     properties:
-      cancel_requested_at:
-        type: string
-      child_index:
+      code:
         type: integer
-      config:
-        items:
-          type: integer
-        type: array
+      data: {}
+      message:
+        type: string
+      ok:
+        type: boolean
+      time:
+        type: string
+    type: object
+  handlers.ExampleSayHelloSwaggerResponse:
+    properties:
+      code:
+        type: integer
+      data:
+        type: string
+      message:
+        type: string
+      ok:
+        type: boolean
+      time:
+        type: string
+    type: object
+  handlers.TaskSwaggerDoc:
+    properties:
       created_at:
         type: string
       created_by:
@@ -58,62 +130,23 @@ definitions:
         type: string
       current_step_title:
         type: string
-      error:
-        items:
-          type: integer
-        type: array
-      execution_mode:
-        $ref: '#/definitions/github_com_EquentR_agent_runtime_core_tasks.ExecutionMode'
-      finished_at:
-        type: string
-      heartbeat_at:
-        type: string
       id:
         type: string
-      idempotency_key:
-        type: string
-      input:
-        items:
-          type: integer
-        type: array
-      lease_expires_at:
-        type: string
-      metadata:
-        items:
-          type: integer
-        type: array
-      parent_task_id:
-        type: string
-      result:
-        items:
-          type: integer
-        type: array
       retry_of_task_id:
         type: string
-      root_task_id:
-        type: string
-      runner_id:
-        type: string
-      started_at:
-        type: string
       status:
-        $ref: '#/definitions/github_com_EquentR_agent_runtime_core_tasks.Status'
-      step_seq:
-        type: integer
-      suspend_reason:
         type: string
       task_type:
         type: string
       updated_at:
         type: string
-      waiting_on_task_id:
-        type: string
     type: object
-  github_com_EquentR_agent_runtime_pkg_rest.Result:
+  handlers.TaskSwaggerResponse:
     properties:
       code:
         type: integer
-      data: {}
+      data:
+        $ref: '#/definitions/handlers.TaskSwaggerDoc'
       message:
         type: string
       ok:
@@ -127,6 +160,69 @@ info:
   title: Agent Runtime API
   version: 0.0.1
 paths:
+  /conversations:
+    get:
+      description: 返回按最近活跃时间倒序排列的 conversation 列表，包含标题、最后一条消息摘要和消息数等轻量展示字段。
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.ConversationListSwaggerResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+      summary: 获取会话列表
+      tags:
+      - conversations
+  /conversations/{id}:
+    get:
+      description: 根据 conversation id 返回会话元数据，包括 provider、model、标题、最近消息摘要与消息数。
+      parameters:
+      - description: 会话 ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.ConversationDetailSwaggerResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+      summary: 获取会话详情
+      tags:
+      - conversations
+  /conversations/{id}/messages:
+    get:
+      description: 根据 conversation id 返回按写入顺序排列的历史消息列表，供 UI 恢复聊天内容。
+      parameters:
+      - description: 会话 ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.ConversationMessagesSwaggerResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+      summary: 获取会话消息历史
+      tags:
+      - conversations
   /hello/say:
     get:
       description: 返回一个简单的问候语，用于确认 HTTP 服务已经启动。
@@ -141,15 +237,62 @@ paths:
         "200":
           description: OK
           schema:
-            allOf:
-            - $ref: '#/definitions/github_com_EquentR_agent_runtime_pkg_rest.Result'
-            - properties:
-                data:
-                  type: string
-              type: object
+            $ref: '#/definitions/handlers.ExampleSayHelloSwaggerResponse'
       summary: 示例问候接口
       tags:
       - example
+  /swagger:
+    get:
+      description: 将 `/swagger` 与 `/swagger/` 重定向到可直接访问的 Swagger UI 页面。
+      produces:
+      - text/html
+      responses:
+        "302":
+          description: redirect to /swagger/index.html
+          schema:
+            type: string
+      summary: Swagger UI 重定向
+      tags:
+      - swagger
+  /swagger/index.html:
+    get:
+      description: 返回内嵌的 Swagger UI HTML 页面，便于在浏览器中查看和调试 API。
+      produces:
+      - text/html
+      responses:
+        "200":
+          description: Swagger UI HTML
+          schema:
+            type: string
+      summary: 获取 Swagger UI 页面
+      tags:
+      - swagger
+  /swagger/swagger.json:
+    get:
+      description: 返回当前服务使用的 Swagger JSON 文档。
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: swagger json
+          schema:
+            type: string
+      summary: 获取 Swagger JSON 文档
+      tags:
+      - swagger
+  /swagger/swagger.yaml:
+    get:
+      description: 返回当前服务使用的 Swagger YAML 文档。
+      produces:
+      - text/plain
+      responses:
+        "200":
+          description: swagger yaml
+          schema:
+            type: string
+      summary: 获取 Swagger YAML 文档
+      tags:
+      - swagger
   /tasks:
     post:
       consumes:
@@ -161,14 +304,18 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/app_handlers.CreateTaskRequest'
+          $ref: '#/definitions/handlers.CreateTaskRequest'
       produces:
       - application/json
       responses:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/github_com_EquentR_agent_runtime_pkg_rest.Result'
+            $ref: '#/definitions/handlers.TaskSwaggerResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
       summary: 创建任务
       tags:
       - tasks
@@ -187,7 +334,11 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/github_com_EquentR_agent_runtime_pkg_rest.Result'
+            $ref: '#/definitions/handlers.TaskSwaggerResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
       summary: 获取任务详情
       tags:
       - tasks
@@ -206,7 +357,11 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/github_com_EquentR_agent_runtime_pkg_rest.Result'
+            $ref: '#/definitions/handlers.TaskSwaggerResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
       summary: 取消任务
       tags:
       - tasks
@@ -252,7 +407,11 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/github_com_EquentR_agent_runtime_pkg_rest.Result'
+            $ref: '#/definitions/handlers.TaskSwaggerResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
       summary: 重试任务
       tags:
       - tasks

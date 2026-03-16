@@ -34,7 +34,7 @@ func (h *ExampleHandler) Register(rg *gin.RouterGroup) {
 // @Tags example
 // @Produce json
 // @Param name query string false "名称"
-// @Success 200 {object} resp.Result{data=string}
+// @Success 200 {object} ExampleSayHelloSwaggerResponse
 // @Router /hello/say [get]
 func (h *ExampleHandler) handleSayHello() (method, relativePath string, wrapper resp.JsonResultWrapper, opts []resp.WrapperOption) {
 	return http.MethodGet, "say", func(c *gin.Context) (any, error) {

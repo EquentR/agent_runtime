@@ -25,3 +25,22 @@ type CostBreakdown struct {
 	OutputCostUSD        float64 `json:"output_cost_usd"`
 	TotalCostUSD         float64 `json:"total_cost_usd"`
 }
+
+func (p TokenPrice) CostForTokens(tokens int64) float64 {
+	if tokens <= 0 || p.PerTokens <= 0 {
+		return 0
+	}
+	return float64(tokens) * p.AmountUSD / float64(p.PerTokens)
+}
+
+func (b CostBreakdown) Add(other CostBreakdown) CostBreakdown {
+	return CostBreakdown{
+		UncachedPromptTokens: b.UncachedPromptTokens + other.UncachedPromptTokens,
+		CachedPromptTokens:   b.CachedPromptTokens + other.CachedPromptTokens,
+		CompletionTokens:     b.CompletionTokens + other.CompletionTokens,
+		InputCostUSD:         b.InputCostUSD + other.InputCostUSD,
+		CachedInputCostUSD:   b.CachedInputCostUSD + other.CachedInputCostUSD,
+		OutputCostUSD:        b.OutputCostUSD + other.OutputCostUSD,
+		TotalCostUSD:         b.TotalCostUSD + other.TotalCostUSD,
+	}
+}

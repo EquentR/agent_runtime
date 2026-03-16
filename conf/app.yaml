@@ -25,3 +25,55 @@ log:
   maxAge: 30
   maxBackups: 7
   compress: true
+
+llmProviders:
+  # UI 侧会通过 provider_id + model_id 选择具体模型，
+  # 其中 provider_id 对应这里的 name，model_id 对应 models[].id。
+- name: openai
+  baseUrl: ${OPENAI_BASE_URL}
+  apiKey: ${OPENAI_API_KEY}
+  models:
+    - id: gpt-5.4
+      name: gpt-5.4
+      type: openai_responses
+      context:
+        max: 1050000
+        input: 922000
+        output: 128000
+      cost:
+        input: 0.438
+        cachedInput: 0.04375
+        output: 3.5
+
+
+#embeddingProvider:
+#  # 下面是 embedding / rerank 的占位示例；当前 app 还未实际装配。
+#  name: openai
+#  baseUrl: https://api.openai.com/v1
+#  apiKey: ${OPENAI_API_KEY}
+#  models:
+#    - id: text-embedding-3-small
+#      name: text-embedding-3-small
+#      dimension: 1536
+#      context:
+#        max: 8192
+#        input: 8192
+#        output: 0
+#      cost:
+#        input: 0.02
+#        output: 0
+#
+#rerankProvider:
+#  name: cohere
+#  baseUrl: https://api.cohere.com/v1
+#  apiKey: ${COHERE_API_KEY}
+#  models:
+#    - id: rerank-v3.5
+#      name: rerank-v3.5
+#      context:
+#        max: 4096
+#        input: 4096
+#        output: 0
+#      cost:
+#        input: 2
+#        output: 0

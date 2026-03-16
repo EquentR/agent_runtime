@@ -9,3 +9,13 @@ func objectSchema(required []string, properties map[string]types.SchemaProperty)
 		Required:   required,
 	}
 }
+
+func stringArrayProperty(description string) types.SchemaProperty {
+	return types.SchemaProperty{
+		Type:        "array",
+		Description: description,
+		Items: &types.SchemaProperty{
+			Type: "string",
+		},
+	}
+}

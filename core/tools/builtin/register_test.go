@@ -17,6 +17,7 @@ import (
 	"time"
 
 	coretools "github.com/EquentR/agent_runtime/core/tools"
+	coretypes "github.com/EquentR/agent_runtime/core/types"
 )
 
 func TestRegisterRegistersPlannedTools(t *testing.T) {
@@ -64,6 +65,38 @@ func TestRegisterRejectsInvalidWorkspace(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "workspace") {
 		t.Fatalf("Register() error = %q, want workspace message", err)
+	}
+}
+
+func TestRegisterArrayParametersDeclareItems(t *testing.T) {
+	registry := newBuiltinRegistry(t, Options{WorkspaceRoot: t.TempDir()})
+	definitions := registry.List()
+
+	toolByName := make(map[string]coretypes.Tool)
+	for _, definition := range definitions {
+		toolByName[definition.Name] = definition
+	}
+
+	checkCommand, ok := toolByName["check_command"]
+	if !ok {
+		t.Fatal("check_command tool missing")
+	}
+	if checkCommand.Parameters.Properties["version_args"].Items == nil {
+		t.Fatal("check_command.version_args items = nil, want string item schema")
+	}
+	if checkCommand.Parameters.Properties["version_args"].Items.Type != "string" {
+		t.Fatalf("check_command.version_args item type = %q, want string", checkCommand.Parameters.Properties["version_args"].Items.Type)
+	}
+
+	execCommand, ok := toolByName["exec_command"]
+	if !ok {
+		t.Fatal("exec_command tool missing")
+	}
+	if execCommand.Parameters.Properties["args"].Items == nil {
+		t.Fatal("exec_command.args items = nil, want string item schema")
+	}
+	if execCommand.Parameters.Properties["args"].Items.Type != "string" {
+		t.Fatalf("exec_command.args item type = %q, want string", execCommand.Parameters.Properties["args"].Items.Type)
 	}
 }
 

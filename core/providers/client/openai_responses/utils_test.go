@@ -442,6 +442,70 @@ func TestBuildResponseRequestParams_OptionalToolUsesNonStrictSchema(t *testing.T
 	}
 }
 
+func TestBuildResponseRequestParams_ArrayToolParameterIncludesItems(t *testing.T) {
+	req := model.ChatRequest{
+		Model: "gpt-5.4",
+		Messages: []model.Message{{
+			Role:    model.RoleUser,
+			Content: "Check command version",
+		}},
+		Tools: []types.Tool{{
+			Name:        "check_command",
+			Description: "Check command existence",
+			Parameters: types.JSONSchema{
+				Type: "object",
+				Properties: map[string]types.SchemaProperty{
+					"name": {Type: "string"},
+					"version_args": {
+						Type:  "array",
+						Items: &types.SchemaProperty{Type: "string"},
+					},
+				},
+				Required: []string{"name"},
+			},
+		}},
+	}
+
+	params, err := buildResponseRequestParams(req)
+	if err != nil {
+		t.Fatalf("buildResponseRequestParams() error = %v", err)
+	}
+
+	var payload map[string]any
+	data, err := json.Marshal(params)
+	if err != nil {
+		t.Fatalf("json.Marshal(params) error = %v", err)
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("json.Unmarshal(payload) error = %v", err)
+	}
+
+	tools, ok := payload["tools"].([]any)
+	if !ok || len(tools) != 1 {
+		t.Fatalf("tools = %#v, want length 1", payload["tools"])
+	}
+	tool0 := tools[0].(map[string]any)
+	paramsObj, ok := tool0["parameters"].(map[string]any)
+	if !ok {
+		t.Fatalf("tool.parameters type = %T, want map[string]any", tool0["parameters"])
+	}
+	properties, ok := paramsObj["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("tool.parameters.properties type = %T, want map[string]any", paramsObj["properties"])
+	}
+	versionArgs, ok := properties["version_args"].(map[string]any)
+	if !ok {
+		t.Fatalf("version_args schema type = %T, want map[string]any", properties["version_args"])
+	}
+	items, ok := versionArgs["items"].(map[string]any)
+	if !ok {
+		t.Fatalf("version_args.items type = %T, want map[string]any", versionArgs["items"])
+	}
+	if items["type"] != "string" {
+		t.Fatalf("version_args.items.type = %v, want string", items["type"])
+	}
+}
+
 func TestBuildResponseRequestParams_NoArgToolNormalizesEmptySchema(t *testing.T) {
 	req := model.ChatRequest{
 		Model: "gpt-5.4",

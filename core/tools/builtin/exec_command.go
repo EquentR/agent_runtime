@@ -20,7 +20,7 @@ func newExecCommandTool(env runtimeEnv) coretools.Tool {
 		Source:      "builtin",
 		Parameters: objectSchema([]string{"command"}, map[string]types.SchemaProperty{
 			"command":           {Type: "string", Description: "Command to execute"},
-			"args":              {Type: "array", Description: "Optional command arguments"},
+			"args":              stringArrayProperty("Optional command arguments"),
 			"use_shell":         {Type: "boolean", Description: "Execute through the system shell"},
 			"working_directory": {Type: "string", Description: "Working directory relative to workspace"},
 			"timeout_seconds":   {Type: "integer", Description: "Per-call timeout in seconds"},

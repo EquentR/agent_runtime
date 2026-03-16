@@ -13,7 +13,10 @@ import (
 	"testing"
 	"time"
 
+	coreagent "github.com/EquentR/agent_runtime/core/agent"
+	model "github.com/EquentR/agent_runtime/core/providers/types"
 	coretasks "github.com/EquentR/agent_runtime/core/tasks"
+	coretypes "github.com/EquentR/agent_runtime/core/types"
 	"github.com/EquentR/agent_runtime/pkg/rest"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
@@ -133,6 +136,55 @@ func TestTaskHandlerEventsStreamsHistoricalAndLiveEvents(t *testing.T) {
 	}
 }
 
+func TestTaskHandlerCreateAgentRunTaskWithConversationInput(t *testing.T) {
+	_, server := newTaskHandlerTestServer(t, nil, false)
+	created := createTaskViaHTTP(t, server.URL, map[string]any{
+		"task_type": "agent.run",
+		"input": map[string]any{
+			"conversation_id": "conv_1",
+			"provider_id":     "openai",
+			"model_id":        "gpt-5.4",
+			"message":         "hello",
+		},
+	})
+	if created.Status != coretasks.StatusQueued {
+		t.Fatalf("status = %q, want queued", created.Status)
+	}
+}
+
+func TestTaskHandlerAgentRunEndToEndAppendsConversationHistory(t *testing.T) {
+	manager, server := newAgentRunTaskTestServer(t)
+	first := createTaskViaHTTP(t, server.URL, map[string]any{
+		"task_type": "agent.run",
+		"input": map[string]any{
+			"conversation_id": "conv_1",
+			"provider_id":     "openai",
+			"model_id":        "gpt-5.4",
+			"message":         "first",
+		},
+	})
+	firstDone := waitForTaskState(t, manager, first.ID, coretasks.StatusSucceeded)
+	firstResult := decodeJSONRaw(t, firstDone.ResultJSON)
+	if firstResult["conversation_id"] != "conv_1" {
+		t.Fatalf("conversation_id = %#v, want conv_1", firstResult["conversation_id"])
+	}
+
+	second := createTaskViaHTTP(t, server.URL, map[string]any{
+		"task_type": "agent.run",
+		"input": map[string]any{
+			"conversation_id": "conv_1",
+			"provider_id":     "openai",
+			"model_id":        "gpt-5.4",
+			"message":         "second",
+		},
+	})
+	secondDone := waitForTaskState(t, manager, second.ID, coretasks.StatusSucceeded)
+	secondResult := decodeJSONRaw(t, secondDone.ResultJSON)
+	if secondResult["messages_appended"] != float64(2) {
+		t.Fatalf("messages_appended = %#v, want 2", secondResult["messages_appended"])
+	}
+}
+
 // newTaskHandlerTestServer 构造带任务路由的测试 HTTP 服务。
 func newTaskHandlerTestServer(t *testing.T, executor coretasks.Executor, startManager bool) (*coretasks.Manager, *httptest.Server) {
 	t.Helper()
@@ -228,6 +280,15 @@ func decodeTaskResponse(t *testing.T, body io.Reader) coretasks.Task {
 	return task
 }
 
+func decodeJSONRaw(t *testing.T, raw json.RawMessage) map[string]any {
+	t.Helper()
+	var got map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	return got
+}
+
 // waitForTaskState 轮询等待任务进入目标状态。
 func waitForTaskState(t *testing.T, manager *coretasks.Manager, taskID string, want coretasks.Status) coretasks.Task {
 	t.Helper()
@@ -262,3 +323,85 @@ func waitForLine(t *testing.T, lines <-chan string, want string, timeout time.Du
 		}
 	}
 }
+
+func newAgentRunTaskTestServer(t *testing.T) (*coretasks.Manager, *httptest.Server) {
+	t.Helper()
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	store := coretasks.NewStore(db)
+	if err := store.AutoMigrate(); err != nil {
+		t.Fatalf("AutoMigrate() error = %v", err)
+	}
+	conversationStore := coreagent.NewConversationStore(db)
+	if err := conversationStore.AutoMigrate(); err != nil {
+		t.Fatalf("conversation AutoMigrate() error = %v", err)
+	}
+	manager := coretasks.NewManager(store, coretasks.ManagerOptions{
+		RunnerID:          "handler-test",
+		PollInterval:      5 * time.Millisecond,
+		LeaseDuration:     100 * time.Millisecond,
+		HeartbeatInterval: 20 * time.Millisecond,
+	})
+	resolver := &coreagent.ModelResolver{Provider: &coretypes.LLMProvider{
+		BaseProvider: coretypes.BaseProvider{Name: "openai"},
+		Models:       []coretypes.LLMModel{{BaseModel: coretypes.BaseModel{ID: "gpt-5.4", Name: "GPT 5.4"}, Type: coretypes.LLMTypeOpenAIResponses}},
+	}}
+	responses := []string{"first answer", "second answer"}
+	if err := manager.RegisterExecutor("agent.run", coreagent.NewTaskExecutor(coreagent.ExecutorDependencies{
+		Resolver:          resolver,
+		ConversationStore: conversationStore,
+		ClientFactory: func(*coretypes.LLMModel) (model.LlmClient, error) {
+			answer := responses[0]
+			responses = responses[1:]
+			return &stubAgentClient{answer: answer}, nil
+		},
+	})); err != nil {
+		t.Fatalf("RegisterExecutor() error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	manager.Start(ctx)
+	t.Cleanup(cancel)
+	engine := rest.Init()
+	handler := NewTaskHandler(manager)
+	handler.Register(engine.Group("/api/v1"))
+	server := httptest.NewServer(engine)
+	t.Cleanup(server.Close)
+	return manager, server
+}
+
+type stubAgentClient struct{ answer string }
+
+func (s *stubAgentClient) Chat(context.Context, model.ChatRequest) (model.ChatResponse, error) {
+	panic("unexpected Chat call")
+}
+
+func (s *stubAgentClient) ChatStream(context.Context, model.ChatRequest) (model.Stream, error) {
+	return &stubHandlerStream{answer: s.answer}, nil
+}
+
+type stubHandlerStream struct{ answer string }
+
+func (s *stubHandlerStream) Recv() (string, error) { return "", nil }
+func (s *stubHandlerStream) RecvEvent() (model.StreamEvent, error) {
+	if s.answer == "" {
+		return model.StreamEvent{}, nil
+	}
+	answer := s.answer
+	s.answer = ""
+	return model.StreamEvent{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: answer}}, nil
+}
+func (s *stubHandlerStream) FinalMessage() (model.Message, error) {
+	return model.Message{Role: model.RoleAssistant, Content: "done"}, nil
+}
+func (s *stubHandlerStream) Close() error                    { return nil }
+func (s *stubHandlerStream) Context() context.Context        { return context.Background() }
+func (s *stubHandlerStream) Stats() *model.StreamStats       { return &model.StreamStats{} }
+func (s *stubHandlerStream) ToolCalls() []coretypes.ToolCall { return nil }
+func (s *stubHandlerStream) ResponseType() model.StreamResponseType {
+	return model.StreamResponseUnknown
+}
+func (s *stubHandlerStream) FinishReason() string { return "stop" }
+func (s *stubHandlerStream) Reasoning() string    { return "" }

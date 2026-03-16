@@ -7,7 +7,7 @@
 - 已落地的核心能力集中在 `core/providers`、`core/tools`、`core/mcp`、`core/memory`、`core/tasks`、`core/types` 与 `pkg/*`
 - 当前唯一命令行入口是 `cmd/example_agent`
 - 示例应用会读取 `conf/app.yaml`，展开环境变量后启动 HTTP 服务、SQLite、migration、后台 task manager 与 Swagger UI 路由
-- `core/agent`、`core/rag` 目前尚未落地，不应按 README 旧规划假定它们已经存在
+- `core/agent` 已提供 MVP 级单线程 agent loop；`core/rag` 当前仍未落地
 
 ## 已实现能力
 
@@ -15,6 +15,8 @@
 - **Tool System**：本地工具注册表、内建文件/命令/HTTP/web search 工具、MCP tool 与 prompt 包装
 - **MCP**：`core/mcp` 抽象层与 `mark3labs` adapter，支持远端 tools / prompts 集成
 - **Memory**：会话压缩记忆、token budget 分配、summary 注入
+- **Agent MVP**：`core/agent` 提供 stream-first 单线程 agent loop，支持 tool calling、short-term memory、run-level usage/cost 聚合、conversation 持久化与 `agent.run` task 桥接
+- **Conversation APIs**：支持会话列表、会话详情和消息历史读取；新会话在首轮 `agent.run` 时隐式创建，并自动生成轻量 title/summary
 - **Task Manager**：`core/tasks` 提供持久化任务快照、事件流、后台串行 runner、取消、重试与 SSE 观测基础能力
 - **Infrastructure**：SQLite、migration、Gin REST、Zap 日志等基础设施
 - **Example App**：`app/*` 下提供最小可运行的服务装配、任务 API、Swagger UI、handler、logic 与 migration 示例
@@ -32,6 +34,7 @@ agent_runtime
 │   ├── migration            # 应用级 migration 注册
 │   └── router               # 路由装配
 ├── core                     # runtime 核心能力
+│   ├── agent                # 单线程 agent loop MVP
 │   ├── mcp                  # MCP 抽象与 adapter
 │   ├── memory               # 会话压缩记忆
 │   ├── providers            # LLM 抽象与 provider client

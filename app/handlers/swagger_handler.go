@@ -28,22 +28,50 @@ func (h *SwaggerHandler) Register(rg *gin.RouterGroup) {
 }
 
 // handleIndexRedirect 将根路径重定向到可直接访问的 Swagger UI 页面。暂时
+//
+// @Summary Swagger UI 重定向
+// @Description 将 `/swagger` 与 `/swagger/` 重定向到可直接访问的 Swagger UI 页面。
+// @Tags swagger
+// @Produce html
+// @Success 302 {string} string "redirect to /swagger/index.html"
+// @Router /swagger [get]
 func (h *SwaggerHandler) handleIndexRedirect(c *gin.Context) {
 	path := strings.TrimSuffix(c.Request.URL.Path, "/")
 	c.Redirect(http.StatusFound, path+"/index.html")
 }
 
 // handleIndexHTML 输出嵌入式 Swagger UI HTML 页面。
+//
+// @Summary 获取 Swagger UI 页面
+// @Description 返回内嵌的 Swagger UI HTML 页面，便于在浏览器中查看和调试 API。
+// @Tags swagger
+// @Produce html
+// @Success 200 {string} string "Swagger UI HTML"
+// @Router /swagger/index.html [get]
 func (h *SwaggerHandler) handleIndexHTML(c *gin.Context) {
 	serveSwaggerAsset(c, "index.html", "text/html; charset=utf-8")
 }
 
 // handleSwaggerJSON 输出生成后的 Swagger JSON 文档。
+//
+// @Summary 获取 Swagger JSON 文档
+// @Description 返回当前服务使用的 Swagger JSON 文档。
+// @Tags swagger
+// @Produce json
+// @Success 200 {string} string "swagger json"
+// @Router /swagger/swagger.json [get]
 func (h *SwaggerHandler) handleSwaggerJSON(c *gin.Context) {
 	serveSwaggerAsset(c, "swagger.json", "application/json; charset=utf-8")
 }
 
 // handleSwaggerYAML 输出生成后的 Swagger YAML 文档。
+//
+// @Summary 获取 Swagger YAML 文档
+// @Description 返回当前服务使用的 Swagger YAML 文档。
+// @Tags swagger
+// @Produce plain
+// @Success 200 {string} string "swagger yaml"
+// @Router /swagger/swagger.yaml [get]
 func (h *SwaggerHandler) handleSwaggerYAML(c *gin.Context) {
 	serveSwaggerAsset(c, "swagger.yaml", "application/yaml; charset=utf-8")
 }

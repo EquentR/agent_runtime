@@ -3,6 +3,7 @@ package migration
 import (
 	"testing"
 
+	"github.com/EquentR/agent_runtime/core/agent"
 	"github.com/EquentR/agent_runtime/core/memory"
 	coretasks "github.com/EquentR/agent_runtime/core/tasks"
 	"github.com/EquentR/agent_runtime/pkg/db"
@@ -30,5 +31,11 @@ func TestBootstrapMigratesTaskTables(t *testing.T) {
 	}
 	if !db.DB().Migrator().HasTable(&memory.LongTermMemory{}) {
 		t.Fatal("long_term_memories table was not created")
+	}
+	if !db.DB().Migrator().HasTable(&agent.Conversation{}) {
+		t.Fatal("conversations table was not created")
+	}
+	if !db.DB().Migrator().HasTable(&agent.ConversationMessage{}) {
+		t.Fatal("conversation_messages table was not created")
 	}
 }

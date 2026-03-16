@@ -12,6 +12,7 @@ func Init(e *gin.Engine, baseUrl string, staticPath []rest.Static, deps Dependen
 	registers := []Register{
 		handlers.NewExampleHandler(),
 		handlers.NewTaskHandler(deps.TaskManager),
+		handlers.NewConversationHandler(deps.ConversationStore),
 		handlers.NewSwaggerHandler(),
 	}
 	InitRouter(e, registers, baseUrl, staticPath)

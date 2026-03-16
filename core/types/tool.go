@@ -13,9 +13,10 @@ type JSONSchema struct {
 }
 
 type SchemaProperty struct {
-	Type        string   `json:"type"`
-	Description string   `json:"description,omitempty"`
-	Enum        []string `json:"enum,omitempty"`
+	Type        string          `json:"type"`
+	Description string          `json:"description,omitempty"`
+	Enum        []string        `json:"enum,omitempty"`
+	Items       *SchemaProperty `json:"items,omitempty"`
 }
 
 type ToolCall struct {

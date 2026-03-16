@@ -1,6 +1,7 @@
 package migration
 
 import (
+	"github.com/EquentR/agent_runtime/core/agent"
 	"github.com/EquentR/agent_runtime/core/memory"
 	coretasks "github.com/EquentR/agent_runtime/core/tasks"
 	"github.com/EquentR/agent_runtime/pkg/migrate"
@@ -24,4 +25,9 @@ var to002 = migrate.NewMigration("0.0.2", func(tx *gorm.DB) error {
 // to003 创建长期记忆表，按 user_id 隔离一条用户摘要记录。
 var to003 = migrate.NewMigration("0.0.3", func(tx *gorm.DB) error {
 	return tx.AutoMigrate(&memory.LongTermMemory{})
+})
+
+// to004 创建 conversation/session 持久化表，为多轮 agent 对话提供历史重载。
+var to004 = migrate.NewMigration("0.0.4", func(tx *gorm.DB) error {
+	return tx.AutoMigrate(&agent.Conversation{}, &agent.ConversationMessage{})
 })

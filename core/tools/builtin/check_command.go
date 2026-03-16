@@ -18,7 +18,7 @@ func newCheckCommandTool(env runtimeEnv) coretools.Tool {
 		Source:      "builtin",
 		Parameters: objectSchema([]string{"name"}, map[string]types.SchemaProperty{
 			"name":         {Type: "string", Description: "Command name to look up"},
-			"version_args": {Type: "array", Description: "Optional version arguments"},
+			"version_args": stringArrayProperty("Optional version arguments"),
 		}),
 		Handler: func(ctx context.Context, arguments map[string]any) (string, error) {
 			name, err := requiredStringArg(arguments, "name")

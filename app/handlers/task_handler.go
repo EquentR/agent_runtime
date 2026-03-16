@@ -51,8 +51,8 @@ func (h *TaskHandler) Register(rg *gin.RouterGroup) {
 // @Accept json
 // @Produce json
 // @Param request body CreateTaskRequest true "创建任务请求"
-// @Success 200 {object} resp.Result{data=coretasks.Task}
-// @Failure 200 {object} resp.Result
+// @Success 200 {object} TaskSwaggerResponse
+// @Failure 400 {object} ErrorSwaggerResponse
 // @Router /tasks [post]
 func (h *TaskHandler) handleCreateTask() (method, relativePath string, wrapper resp.JsonResultWrapper, opts []resp.WrapperOption) {
 	return http.MethodPost, "", func(c *gin.Context) (any, error) {
@@ -88,8 +88,8 @@ func (h *TaskHandler) handleCreateTask() (method, relativePath string, wrapper r
 // @Tags tasks
 // @Produce json
 // @Param id path string true "任务 ID"
-// @Success 200 {object} resp.Result{data=coretasks.Task}
-// @Failure 200 {object} resp.Result
+// @Success 200 {object} TaskSwaggerResponse
+// @Failure 404 {object} ErrorSwaggerResponse
 // @Router /tasks/{id} [get]
 func (h *TaskHandler) handleGetTask() (method, relativePath string, wrapper resp.JsonResultWrapper, opts []resp.WrapperOption) {
 	return http.MethodGet, "/:id", func(c *gin.Context) (any, error) {
@@ -107,8 +107,8 @@ func (h *TaskHandler) handleGetTask() (method, relativePath string, wrapper resp
 // @Tags tasks
 // @Produce json
 // @Param id path string true "任务 ID"
-// @Success 200 {object} resp.Result{data=coretasks.Task}
-// @Failure 200 {object} resp.Result
+// @Success 200 {object} TaskSwaggerResponse
+// @Failure 404 {object} ErrorSwaggerResponse
 // @Router /tasks/{id}/cancel [post]
 func (h *TaskHandler) handleCancelTask() (method, relativePath string, wrapper resp.JsonResultWrapper, opts []resp.WrapperOption) {
 	return http.MethodPost, "/:id/cancel", func(c *gin.Context) (any, error) {
@@ -126,8 +126,8 @@ func (h *TaskHandler) handleCancelTask() (method, relativePath string, wrapper r
 // @Tags tasks
 // @Produce json
 // @Param id path string true "任务 ID"
-// @Success 200 {object} resp.Result{data=coretasks.Task}
-// @Failure 200 {object} resp.Result
+// @Success 200 {object} TaskSwaggerResponse
+// @Failure 404 {object} ErrorSwaggerResponse
 // @Router /tasks/{id}/retry [post]
 func (h *TaskHandler) handleRetryTask() (method, relativePath string, wrapper resp.JsonResultWrapper, opts []resp.WrapperOption) {
 	return http.MethodPost, "/:id/retry", func(c *gin.Context) (any, error) {
