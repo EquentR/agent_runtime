@@ -17,10 +17,14 @@ import (
 const (
 	DefaultMaxContextTokens int64 = 100_000
 
-	shortTermBudgetNumerator     int64 = 70
-	contextBudgetDenominator     int64 = 100
-	defaultSummaryPromptTemplate       = "以下为当前会话的压缩记忆，仅在相关时参考：\n%s"
-	truncationMarker                   = "..."
+	shortTermBudgetNumerator      int64 = 70
+	contextBudgetDenominator      int64 = 100
+	summaryTargetBudgetNumerator  int64 = 80
+	defaultSummaryPromptTemplate        = "以下为当前会话的压缩记忆，仅在相关时参考：\n%s"
+	defaultCompressionInstruction       = "你负责将当前会话的短期上下文压缩成一段供后续对话继续使用的工作记忆。请保留仍然有效的用户目标、约束、重要事实、已完成进展、未完成事项，以及后续推理需要依赖的关键信息；删除寒暄、逐字复述、冗长过程、临时噪声和不必要的细节。输出精炼中文摘要，直接给未来模型阅读，不要写解释，不要使用代码块。"
+	defaultTargetSummaryTokens    int64 = 8_000
+	defaultMaxSummaryTokens       int64 = 9_000
+	truncationMarker                    = "..."
 )
 
 type TokenCounter interface {
@@ -29,31 +33,39 @@ type TokenCounter interface {
 }
 
 type CompressionRequest struct {
-	PreviousSummary  string
-	Messages         []model.Message
-	MaxSummaryTokens int64
+	PreviousSummary     string
+	Messages            []model.Message
+	Instruction         string
+	TargetSummaryTokens int64
+	MaxSummaryTokens    int64
 }
 
 type Compressor func(ctx context.Context, request CompressionRequest) (string, error)
 
 type Options struct {
-	Model            *coretypes.LLMModel
-	MaxContextTokens int64
-	Counter          TokenCounter
-	Compressor       Compressor
-	SummaryTemplate  string
+	Model                  *coretypes.LLMModel
+	MaxContextTokens       int64
+	Counter                TokenCounter
+	Compressor             Compressor
+	SummaryTemplate        string
+	CompressionInstruction string
+	TargetSummaryTokens    int64
+	MaxSummaryTokens       int64
 }
 
 type Manager struct {
-	mu                   sync.RWMutex
-	summary              string
-	shortTerm            []model.Message
-	maxContextTokens     int64
-	shortTermLimitTokens int64
-	summaryLimitTokens   int64
-	counter              TokenCounter
-	compressor           Compressor
-	summaryTemplate      string
+	mu                     sync.RWMutex
+	summary                string
+	shortTerm              []model.Message
+	maxContextTokens       int64
+	shortTermLimitTokens   int64
+	summaryLimitTokens     int64
+	targetSummaryTokens    int64
+	maxSummaryTokens       int64
+	counter                TokenCounter
+	compressor             Compressor
+	summaryTemplate        string
+	compressionInstruction string
 }
 
 func NewManager(options Options) (*Manager, error) {
@@ -78,13 +90,23 @@ func NewManager(options Options) (*Manager, error) {
 		summaryTemplate = defaultSummaryPromptTemplate
 	}
 
+	compressionInstruction := strings.TrimSpace(options.CompressionInstruction)
+	if compressionInstruction == "" {
+		compressionInstruction = defaultCompressionInstruction
+	}
+
+	targetSummaryTokens, maxSummaryTokens := resolveSummaryCompressionBudgets(summaryLimitTokens, options.TargetSummaryTokens, options.MaxSummaryTokens)
+
 	return &Manager{
-		maxContextTokens:     maxContextTokens,
-		shortTermLimitTokens: shortTermLimitTokens,
-		summaryLimitTokens:   summaryLimitTokens,
-		counter:              counter,
-		compressor:           compressor,
-		summaryTemplate:      summaryTemplate,
+		maxContextTokens:       maxContextTokens,
+		shortTermLimitTokens:   shortTermLimitTokens,
+		summaryLimitTokens:     summaryLimitTokens,
+		targetSummaryTokens:    targetSummaryTokens,
+		maxSummaryTokens:       maxSummaryTokens,
+		counter:                counter,
+		compressor:             compressor,
+		summaryTemplate:        summaryTemplate,
+		compressionInstruction: compressionInstruction,
 	}, nil
 }
 
@@ -189,17 +211,19 @@ func (m *Manager) compressLocked(ctx context.Context) error {
 	}
 
 	request := CompressionRequest{
-		PreviousSummary:  m.summary,
-		Messages:         cloneMessages(compressible),
-		MaxSummaryTokens: m.summaryLimitTokens,
+		PreviousSummary:     m.summary,
+		Messages:            cloneMessages(compressible),
+		Instruction:         m.compressionInstruction,
+		TargetSummaryTokens: m.targetSummaryTokens,
+		MaxSummaryTokens:    m.maxSummaryTokens,
 	}
 	summary, err := m.compressor(ctx, request)
 	if err != nil {
 		return err
 	}
 	summary = strings.TrimSpace(summary)
-	if m.summaryLimitTokens > 0 && summary != "" && int64(m.counter.Count(summary)) > m.summaryLimitTokens {
-		summary = limitTextByTokens(summary, m.summaryLimitTokens, m.counter)
+	if m.maxSummaryTokens > 0 && summary != "" && int64(m.counter.Count(summary)) > m.maxSummaryTokens {
+		summary = limitTextByTokens(summary, m.maxSummaryTokens, m.counter)
 	}
 	if err := validateShortTermBudget(m.counter, preservedTail, m.shortTermLimitTokens); err != nil {
 		return err
@@ -285,6 +309,45 @@ func splitContextBudget(maxContextTokens int64) (int64, int64) {
 	return shortTermLimitTokens, summaryLimitTokens
 }
 
+func resolveSummaryCompressionBudgets(summaryLimitTokens, explicitTarget, explicitMax int64) (int64, int64) {
+	if summaryLimitTokens <= 0 {
+		return 0, 0
+	}
+
+	maxSummaryTokens := explicitMax
+	if maxSummaryTokens <= 0 {
+		maxSummaryTokens = summaryLimitTokens
+		if maxSummaryTokens > defaultMaxSummaryTokens {
+			maxSummaryTokens = defaultMaxSummaryTokens
+		}
+	}
+	if maxSummaryTokens > summaryLimitTokens {
+		maxSummaryTokens = summaryLimitTokens
+	}
+	if maxSummaryTokens <= 0 {
+		maxSummaryTokens = summaryLimitTokens
+	}
+
+	targetSummaryTokens := explicitTarget
+	if targetSummaryTokens <= 0 {
+		targetSummaryTokens = summaryLimitTokens * summaryTargetBudgetNumerator / contextBudgetDenominator
+		if targetSummaryTokens <= 0 {
+			targetSummaryTokens = maxSummaryTokens
+		}
+		if targetSummaryTokens > defaultTargetSummaryTokens {
+			targetSummaryTokens = defaultTargetSummaryTokens
+		}
+	}
+	if targetSummaryTokens > maxSummaryTokens {
+		targetSummaryTokens = maxSummaryTokens
+	}
+	if targetSummaryTokens <= 0 {
+		targetSummaryTokens = maxSummaryTokens
+	}
+
+	return targetSummaryTokens, maxSummaryTokens
+}
+
 func newDefaultTokenCounter(llmModel *coretypes.LLMModel) TokenCounter {
 	if llmModel != nil {
 		modelName := strings.TrimSpace(llmModel.ModelName())
@@ -324,6 +387,9 @@ func newDefaultCompressor(counter TokenCounter) Compressor {
 		}
 
 		joined := strings.Join(parts, "\n")
+		if request.TargetSummaryTokens > 0 {
+			joined = limitTextByTokens(joined, request.TargetSummaryTokens, counter)
+		}
 		if request.MaxSummaryTokens > 0 {
 			joined = limitTextByTokens(joined, request.MaxSummaryTokens, counter)
 		}

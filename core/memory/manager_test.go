@@ -123,6 +123,12 @@ func TestContextMessagesCompressesShortTermWhenThresholdExceeded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ContextMessages() error = %v", err)
 	}
+	if seen.Instruction == "" {
+		t.Fatal("CompressionRequest.Instruction = empty, want default instruction")
+	}
+	if seen.TargetSummaryTokens != 24 {
+		t.Fatalf("CompressionRequest.TargetSummaryTokens = %d, want 24", seen.TargetSummaryTokens)
+	}
 	if seen.MaxSummaryTokens != 30 {
 		t.Fatalf("CompressionRequest.MaxSummaryTokens = %d, want 30", seen.MaxSummaryTokens)
 	}
@@ -143,6 +149,89 @@ func TestContextMessagesCompressesShortTermWhenThresholdExceeded(t *testing.T) {
 	}
 	if !strings.Contains(got[0].Content, "compressed memory") {
 		t.Fatalf("summary content = %q, want to include compressed memory", got[0].Content)
+	}
+}
+
+func TestContextMessagesCompressionUsesRollingPreviousSummary(t *testing.T) {
+	var seen []CompressionRequest
+	mgr, err := NewManager(Options{
+		MaxContextTokens: 100,
+		Counter:          fakeTokenCounter{},
+		Compressor: func(_ context.Context, request CompressionRequest) (string, error) {
+			seen = append(seen, request)
+			if request.PreviousSummary == "" {
+				return "first summary", nil
+			}
+			return "second summary", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+
+	mgr.AddMessages([]model.Message{
+		{Role: model.RoleUser, Content: strings.Repeat("a", 60)},
+		{Role: model.RoleAssistant, Content: strings.Repeat("b", 60)},
+	})
+	if _, err := mgr.ContextMessages(context.Background()); err != nil {
+		t.Fatalf("first ContextMessages() error = %v", err)
+	}
+
+	mgr.AddMessages([]model.Message{
+		{Role: model.RoleUser, Content: strings.Repeat("c", 60)},
+		{Role: model.RoleAssistant, Content: strings.Repeat("d", 60)},
+	})
+	if _, err := mgr.ContextMessages(context.Background()); err != nil {
+		t.Fatalf("second ContextMessages() error = %v", err)
+	}
+
+	if len(seen) != 2 {
+		t.Fatalf("compressor call count = %d, want 2", len(seen))
+	}
+	if seen[0].PreviousSummary != "" {
+		t.Fatalf("first PreviousSummary = %q, want empty", seen[0].PreviousSummary)
+	}
+	if seen[1].PreviousSummary != "first summary" {
+		t.Fatalf("second PreviousSummary = %q, want first summary", seen[1].PreviousSummary)
+	}
+	if mgr.Summary() != "second summary" {
+		t.Fatalf("Summary() = %q, want second summary", mgr.Summary())
+	}
+}
+
+func TestContextMessagesKeepsOriginalStateWhenCompressorFails(t *testing.T) {
+	original := []model.Message{
+		{Role: model.RoleUser, Content: strings.Repeat("a", 60)},
+		{Role: model.RoleAssistant, Content: strings.Repeat("b", 60)},
+	}
+	mgr, err := NewManager(Options{
+		MaxContextTokens: 100,
+		Counter:          fakeTokenCounter{},
+		Compressor: func(_ context.Context, request CompressionRequest) (string, error) {
+			return "", context.DeadlineExceeded
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+
+	mgr.AddMessages(original)
+
+	_, err = mgr.ContextMessages(context.Background())
+	if err == nil {
+		t.Fatal("ContextMessages() error = nil, want compressor failure")
+	}
+	if mgr.Summary() != "" {
+		t.Fatalf("Summary() = %q, want empty after failed compression", mgr.Summary())
+	}
+	short := mgr.ShortTermMessages()
+	if len(short) != len(original) {
+		t.Fatalf("len(ShortTermMessages()) = %d, want %d", len(short), len(original))
+	}
+	for i := range original {
+		if short[i].Role != original[i].Role || short[i].Content != original[i].Content {
+			t.Fatalf("ShortTermMessages()[%d] = %#v, want %#v", i, short[i], original[i])
+		}
 	}
 }
 
