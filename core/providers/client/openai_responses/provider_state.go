@@ -11,22 +11,21 @@ import (
 )
 
 const (
-	providerName      = "openai_responses"
-	outputItemsFormat = "openai_response_output_items.v1"
-	messageVersion    = "v1"
+	providerName        = "openai_responses"
+	responseStateFormat = "openai_response_state.v1"
+	outputItemsFormat   = "openai_response_output_items.v1"
+	messageVersion      = "v1"
 )
 
-func outputItemsFromProviderState(state *model.ProviderState) ([]responses.ResponseInputItemUnionParam, bool, error) {
-	if state == nil || state.Provider != providerName || state.Format != outputItemsFormat {
-		return nil, false, nil
-	}
-	if state.Version != messageVersion {
-		return nil, true, fmt.Errorf("unsupported provider state version: %s", state.Version)
-	}
+type persistedResponseState struct {
+	ResponseID string                              `json:"response_id,omitempty"`
+	Output     []responses.ResponseOutputItemUnion `json:"output"`
+}
 
-	var items []responses.ResponseOutputItemUnion
-	if err := json.Unmarshal(state.Payload, &items); err != nil {
-		return nil, true, err
+func outputItemsFromProviderState(state *model.ProviderState) ([]responses.ResponseInputItemUnionParam, bool, error) {
+	items, ok, err := outputArchiveFromProviderState(state)
+	if err != nil || !ok {
+		return nil, ok, err
 	}
 	params := make([]responses.ResponseInputItemUnionParam, 0, len(items))
 	for _, item := range items {
@@ -39,16 +38,43 @@ func outputItemsFromProviderState(state *model.ProviderState) ([]responses.Respo
 	return params, true, nil
 }
 
+func outputArchiveFromProviderState(state *model.ProviderState) ([]responses.ResponseOutputItemUnion, bool, error) {
+	if state == nil || state.Provider != providerName {
+		return nil, false, nil
+	}
+	if state.Version != messageVersion {
+		return nil, true, fmt.Errorf("unsupported provider state version: %s", state.Version)
+	}
+
+	switch state.Format {
+	case responseStateFormat:
+		var persisted persistedResponseState
+		if err := json.Unmarshal(state.Payload, &persisted); err != nil {
+			return nil, true, err
+		}
+		return persisted.Output, true, nil
+	case outputItemsFormat:
+		var items []responses.ResponseOutputItemUnion
+		if err := json.Unmarshal(state.Payload, &items); err != nil {
+			return nil, true, err
+		}
+		return items, true, nil
+	default:
+		return nil, false, nil
+	}
+}
+
 func providerStateFromOutputItems(responseID string, items []responses.ResponseOutputItemUnion) (*model.ProviderState, error) {
-	payload, err := json.Marshal(items)
+	payload, err := json.Marshal(persistedResponseState{ResponseID: strings.TrimSpace(responseID), Output: items})
 	if err != nil {
 		return nil, err
 	}
 	return &model.ProviderState{
-		Provider: providerName,
-		Format:   outputItemsFormat,
-		Version:  messageVersion,
-		Payload:  payload,
+		Provider:   providerName,
+		Format:     responseStateFormat,
+		Version:    messageVersion,
+		ResponseID: strings.TrimSpace(responseID),
+		Payload:    payload,
 	}, nil
 }
 

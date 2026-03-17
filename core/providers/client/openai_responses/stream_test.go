@@ -298,16 +298,25 @@ func TestResponseStreamFinalMessage_PreservesProviderStateOutputSequence(t *test
 	if msg.ProviderState.Provider != "openai_responses" {
 		t.Fatalf("provider = %q, want %q", msg.ProviderState.Provider, "openai_responses")
 	}
+	if msg.ProviderState.Format != "openai_response_state.v1" {
+		t.Fatalf("format = %q, want %q", msg.ProviderState.Format, "openai_response_state.v1")
+	}
 
-	var replayed []responses.ResponseOutputItemUnion
+	var replayed struct {
+		ResponseID string                              `json:"response_id"`
+		Output     []responses.ResponseOutputItemUnion `json:"output"`
+	}
 	if err := json.Unmarshal(msg.ProviderState.Payload, &replayed); err != nil {
 		t.Fatalf("unmarshal provider state payload: %v", err)
 	}
-	if len(replayed) != 3 {
-		t.Fatalf("len(replayed) = %d, want 3", len(replayed))
+	if replayed.ResponseID != "resp_1" {
+		t.Fatalf("response_id = %q, want resp_1", replayed.ResponseID)
 	}
-	if replayed[0].Type != "reasoning" || replayed[1].Type != "message" || replayed[2].Type != "function_call" {
-		t.Fatalf("replayed output sequence = %#v", replayed)
+	if len(replayed.Output) != 3 {
+		t.Fatalf("len(replayed.output) = %d, want 3", len(replayed.Output))
+	}
+	if replayed.Output[0].Type != "reasoning" || replayed.Output[1].Type != "message" || replayed.Output[2].Type != "function_call" {
+		t.Fatalf("replayed output sequence = %#v", replayed.Output)
 	}
 	if len(msg.ToolCalls) != 1 || msg.ToolCalls[0].ID != "call_1" {
 		t.Fatalf("FinalMessage().ToolCalls = %#v", msg.ToolCalls)

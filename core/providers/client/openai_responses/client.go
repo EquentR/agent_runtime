@@ -229,7 +229,7 @@ func appendOutputItem(items *[]responses.ResponseOutputItemUnion, item responses
 }
 
 func buildOpenAIOfficialPromptMessages(messages []model.Message) ([]responses.ResponseInputParam, []string, error) {
-	input, _, err := buildResponseInput(messages, requestBuildOptions{SupportsPreviousResponseID: true})
+	input, _, err := buildResponseInput(messages)
 	if err != nil {
 		return nil, nil, err
 	}

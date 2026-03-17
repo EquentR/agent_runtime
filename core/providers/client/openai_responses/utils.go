@@ -12,16 +12,8 @@ import (
 	"github.com/openai/openai-go/shared"
 )
 
-type requestBuildOptions struct {
-	SupportsPreviousResponseID bool
-}
-
 func buildResponseRequestParams(req model.ChatRequest) (responses.ResponseNewParams, error) {
-	return buildResponseRequestParamsWithOptions(req, requestBuildOptions{SupportsPreviousResponseID: true})
-}
-
-func buildResponseRequestParamsWithOptions(req model.ChatRequest, opts requestBuildOptions) (responses.ResponseNewParams, error) {
-	input, previousResponseID, err := buildResponseInput(req.Messages, opts)
+	input, previousResponseID, err := buildResponseInput(req.Messages)
 	if err != nil {
 		return responses.ResponseNewParams{}, err
 	}
@@ -61,8 +53,8 @@ func buildResponseRequestParamsWithOptions(req model.ChatRequest, opts requestBu
 	return params, nil
 }
 
-func buildResponseInput(messages []model.Message, opts requestBuildOptions) (responses.ResponseInputParam, string, error) {
-	if continuationInput, previousResponseID, ok, err := buildToolContinuationInput(messages, opts); ok || err != nil {
+func buildResponseInput(messages []model.Message) (responses.ResponseInputParam, string, error) {
+	if continuationInput, previousResponseID, ok, err := buildNativeContinuationInput(messages); ok || err != nil {
 		return continuationInput, previousResponseID, err
 	}
 
@@ -105,44 +97,50 @@ func buildResponseInput(messages []model.Message, opts requestBuildOptions) (res
 	return input, "", nil
 }
 
-func buildToolContinuationInput(messages []model.Message, opts requestBuildOptions) (responses.ResponseInputParam, string, bool, error) {
-	if len(messages) < 2 {
+func buildNativeContinuationInput(messages []model.Message) (responses.ResponseInputParam, string, bool, error) {
+	stateIndex, previousResponseID, ok := lastNativeResponseStateIndex(messages)
+	if !ok {
 		return nil, "", false, nil
 	}
-
-	firstToolIndex := len(messages)
-	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role != model.RoleTool {
-			break
-		}
-		firstToolIndex = i
-	}
-	if firstToolIndex == len(messages) {
+	if stateIndex == len(messages)-1 {
 		return nil, "", false, nil
 	}
-	assistantIndex := firstToolIndex - 1
-	if assistantIndex < 0 || messages[assistantIndex].Role != model.RoleAssistant {
-		return nil, "", false, nil
-	}
-	state := messages[assistantIndex].ProviderState
-	if state == nil || state.Provider != providerName || state.Format != outputItemsFormat || strings.TrimSpace(state.ResponseID) == "" {
-		return nil, "", false, nil
-	}
-	if !opts.SupportsPreviousResponseID {
-		return nil, "", false, nil
-	}
-
-	input := make(responses.ResponseInputParam, 0, len(messages)-firstToolIndex)
-	for _, message := range messages[firstToolIndex:] {
-		if message.Role != model.RoleTool {
+	input := make(responses.ResponseInputParam, 0, len(messages)-stateIndex-1)
+	for _, message := range messages[stateIndex+1:] {
+		switch message.Role {
+		case model.RoleSystem, model.RoleUser:
+			input = append(input, responses.ResponseInputItemParamOfMessage(message.Content, toResponseRole(message.Role)))
+		case model.RoleTool:
+			if strings.TrimSpace(message.ToolCallId) == "" {
+				return nil, "", false, errors.New("tool message missing ToolCallId")
+			}
+			input = append(input, responses.ResponseInputItemParamOfFunctionCallOutput(message.ToolCallId, message.Content))
+		default:
 			return nil, "", false, nil
 		}
-		if strings.TrimSpace(message.ToolCallId) == "" {
-			return nil, "", false, errors.New("tool message missing ToolCallId")
-		}
-		input = append(input, responses.ResponseInputItemParamOfFunctionCallOutput(message.ToolCallId, message.Content))
 	}
-	return input, strings.TrimSpace(state.ResponseID), true, nil
+	if len(input) == 0 {
+		return nil, "", false, nil
+	}
+	return input, previousResponseID, true, nil
+}
+
+func lastNativeResponseStateIndex(messages []model.Message) (int, string, bool) {
+	for i := len(messages) - 1; i >= 0; i-- {
+		message := messages[i]
+		if message.Role != model.RoleAssistant || message.ProviderState == nil {
+			continue
+		}
+		state := message.ProviderState
+		if state.Provider != providerName || state.Format != responseStateFormat || strings.TrimSpace(state.ResponseID) == "" {
+			continue
+		}
+		if _, ok, err := outputArchiveFromProviderState(state); err != nil || !ok {
+			continue
+		}
+		return i, strings.TrimSpace(state.ResponseID), true
+	}
+	return 0, "", false
 }
 
 func toResponseRole(role string) responses.EasyInputMessageRole {
