@@ -180,3 +180,32 @@ func TestStoreListEventsReturnsOnlyEventsAfterSequence(t *testing.T) {
 		t.Fatalf("event seqs = %#v, want [2 3]", []int64{events[0].Seq, events[1].Seq})
 	}
 }
+
+func TestStoreMarkFailedIncludesErrorInFinishedEventPayload(t *testing.T) {
+	store := newTestStore(t)
+	created, _, err := store.CreateTask(context.Background(), CreateTaskInput{TaskType: "agent.run"})
+	if err != nil {
+		t.Fatalf("CreateTask() error = %v", err)
+	}
+	if _, _, err := store.ClaimNextTask(context.Background(), "runner-1", 30*time.Second); err != nil {
+		t.Fatalf("ClaimNextTask() error = %v", err)
+	}
+	_, events, err := store.MarkFailed(context.Background(), created.ID, map[string]any{"message": "boom"})
+	if err != nil {
+		t.Fatalf("MarkFailed() error = %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("len(events) = %d, want 1", len(events))
+	}
+	payload := decodeJSONRaw(t, events[0].PayloadJSON)
+	if payload["status"] != string(StatusFailed) {
+		t.Fatalf("status = %#v, want %q", payload["status"], StatusFailed)
+	}
+	errPayload, ok := payload["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("error payload = %#v, want object", payload["error"])
+	}
+	if errPayload["message"] != "boom" {
+		t.Fatalf("error.message = %#v, want boom", errPayload["message"])
+	}
+}

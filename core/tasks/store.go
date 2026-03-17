@@ -363,6 +363,7 @@ func (s *Store) finishTask(ctx context.Context, id string, status Status, result
 		// 3. 追加 task.finished 事件，形成快照与事件流的一致提交。
 		event, err = appendEventTx(tx, loaded.ID, EventTaskFinished, "info", map[string]any{
 			"status": status,
+			"error":  reason,
 		})
 		if err != nil {
 			return err

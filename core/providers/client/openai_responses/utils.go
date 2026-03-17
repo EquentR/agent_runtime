@@ -12,8 +12,16 @@ import (
 	"github.com/openai/openai-go/shared"
 )
 
+type requestBuildOptions struct {
+	SupportsPreviousResponseID bool
+}
+
 func buildResponseRequestParams(req model.ChatRequest) (responses.ResponseNewParams, error) {
-	input, err := buildResponseInput(req.Messages)
+	return buildResponseRequestParamsWithOptions(req, requestBuildOptions{SupportsPreviousResponseID: true})
+}
+
+func buildResponseRequestParamsWithOptions(req model.ChatRequest, opts requestBuildOptions) (responses.ResponseNewParams, error) {
+	input, previousResponseID, err := buildResponseInput(req.Messages, opts)
 	if err != nil {
 		return responses.ResponseNewParams{}, err
 	}
@@ -27,6 +35,9 @@ func buildResponseRequestParams(req model.ChatRequest) (responses.ResponseNewPar
 			Effort:  shared.ReasoningEffortMedium,
 			Summary: shared.ReasoningSummaryAuto,
 		},
+	}
+	if previousResponseID != "" {
+		params.PreviousResponseID = openai.String(previousResponseID)
 	}
 
 	if req.MaxTokens > 0 {
@@ -50,7 +61,11 @@ func buildResponseRequestParams(req model.ChatRequest) (responses.ResponseNewPar
 	return params, nil
 }
 
-func buildResponseInput(messages []model.Message) (responses.ResponseInputParam, error) {
+func buildResponseInput(messages []model.Message, opts requestBuildOptions) (responses.ResponseInputParam, string, error) {
+	if continuationInput, previousResponseID, ok, err := buildToolContinuationInput(messages, opts); ok || err != nil {
+		return continuationInput, previousResponseID, err
+	}
+
 	input := make(responses.ResponseInputParam, 0, len(messages))
 
 	for _, m := range messages {
@@ -60,7 +75,7 @@ func buildResponseInput(messages []model.Message) (responses.ResponseInputParam,
 		case model.RoleAssistant:
 			replayed, ok, err := outputItemsFromProviderState(m.ProviderState)
 			if err != nil {
-				return nil, err
+				return nil, "", err
 			}
 			if ok {
 				input = append(input, replayed...)
@@ -79,15 +94,55 @@ func buildResponseInput(messages []model.Message) (responses.ResponseInputParam,
 			}
 		case model.RoleTool:
 			if strings.TrimSpace(m.ToolCallId) == "" {
-				return nil, errors.New("tool message missing ToolCallId")
+				return nil, "", errors.New("tool message missing ToolCallId")
 			}
 			input = append(input, responses.ResponseInputItemParamOfFunctionCallOutput(m.ToolCallId, m.Content))
 		default:
-			return nil, fmt.Errorf("unsupported message role: %s", m.Role)
+			return nil, "", fmt.Errorf("unsupported message role: %s", m.Role)
 		}
 	}
 
-	return input, nil
+	return input, "", nil
+}
+
+func buildToolContinuationInput(messages []model.Message, opts requestBuildOptions) (responses.ResponseInputParam, string, bool, error) {
+	if len(messages) < 2 {
+		return nil, "", false, nil
+	}
+
+	firstToolIndex := len(messages)
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role != model.RoleTool {
+			break
+		}
+		firstToolIndex = i
+	}
+	if firstToolIndex == len(messages) {
+		return nil, "", false, nil
+	}
+	assistantIndex := firstToolIndex - 1
+	if assistantIndex < 0 || messages[assistantIndex].Role != model.RoleAssistant {
+		return nil, "", false, nil
+	}
+	state := messages[assistantIndex].ProviderState
+	if state == nil || state.Provider != providerName || state.Format != outputItemsFormat || strings.TrimSpace(state.ResponseID) == "" {
+		return nil, "", false, nil
+	}
+	if !opts.SupportsPreviousResponseID {
+		return nil, "", false, nil
+	}
+
+	input := make(responses.ResponseInputParam, 0, len(messages)-firstToolIndex)
+	for _, message := range messages[firstToolIndex:] {
+		if message.Role != model.RoleTool {
+			return nil, "", false, nil
+		}
+		if strings.TrimSpace(message.ToolCallId) == "" {
+			return nil, "", false, errors.New("tool message missing ToolCallId")
+		}
+		input = append(input, responses.ResponseInputItemParamOfFunctionCallOutput(message.ToolCallId, message.Content))
+	}
+	return input, strings.TrimSpace(state.ResponseID), true, nil
 }
 
 func toResponseRole(role string) responses.EasyInputMessageRole {
@@ -218,7 +273,7 @@ func extractChatResponse(resp *responses.Response) (model.ChatResponse, error) {
 	if reasoning == "" {
 		reasoning = extractedReasoning
 	}
-	state, err := providerStateFromOutputItems(resp.Output)
+	state, err := providerStateFromOutputItems(resp.ID, resp.Output)
 	if err != nil {
 		return model.ChatResponse{}, err
 	}

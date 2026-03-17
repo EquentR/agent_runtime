@@ -158,3 +158,50 @@ func TestAgentExecutorUsesTaskRuntimeSink(t *testing.T) {
 		t.Fatal("started events = empty, want task runtime sink activity")
 	}
 }
+
+func TestAgentExecutorPersistsPartialMessagesWhenLaterStepFails(t *testing.T) {
+	store := newConversationStoreForTest(t)
+	resolver := &ModelResolver{Provider: &coretypes.LLMProvider{
+		BaseProvider: coretypes.BaseProvider{Name: "openai"},
+		Models:       []coretypes.LLMModel{{BaseModel: coretypes.BaseModel{ID: "gpt-5.4", Name: "GPT 5.4"}, Type: coretypes.LLMTypeOpenAIResponses}},
+	}}
+	client := &stubClient{streams: []model.Stream{
+		newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "lookup_weather", Arguments: `{"city":"Shanghai"}`}}}}},
+			model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "lookup_weather", Arguments: `{"city":"Shanghai"}`}}},
+			nil,
+		),
+	}, streamErrs: []error{nil, context.DeadlineExceeded}}
+	registry := newTestRegistry(t, map[string]func(context.Context, map[string]interface{}) (string, error){
+		"lookup_weather": func(context.Context, map[string]interface{}) (string, error) {
+			return "sunny", nil
+		},
+	})
+	executor := NewTaskExecutor(ExecutorDependencies{
+		Resolver:          resolver,
+		ConversationStore: store,
+		Registry:          registry,
+		ClientFactory:     func(*coretypes.LLMModel) (model.LlmClient, error) { return client, nil },
+	})
+	payload, _ := json.Marshal(RunTaskInput{ConversationID: "conv_1", ProviderID: "openai", ModelID: "gpt-5.4", Message: "weather?"})
+	task := &coretasks.Task{ID: "task_1", TaskType: "agent.run", InputJSON: payload}
+
+	_, err := executor(context.Background(), task, nil)
+	if err == nil {
+		t.Fatal("executor() error = nil, want step-two failure")
+	}
+
+	got, listErr := store.ListMessages(context.Background(), "conv_1")
+	if listErr != nil {
+		t.Fatalf("ListMessages() error = %v", listErr)
+	}
+	if len(got) != 4 {
+		t.Fatalf("len(messages) = %d, want 4", len(got))
+	}
+	if got[0].Role != model.RoleUser || got[1].Role != model.RoleAssistant || got[2].Role != model.RoleTool || got[3].Role != model.RoleSystem {
+		t.Fatalf("messages = %#v, want persisted user/assistant/tool/error partial turn", got)
+	}
+	if got[3].Content == "" {
+		t.Fatalf("failure message = %#v, want non-empty error content", got[3])
+	}
+}

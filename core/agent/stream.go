@@ -77,9 +77,22 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 		var totalUsage model.TokenUsage
 		var totalCost coretypes.CostBreakdown
 		pricing := pricingFromOptions(r.options)
+		snapshotResult := func(stepsExecuted int) {
+			result = RunResult{
+				Messages:      append([]model.Message(nil), produced...),
+				StepsExecuted: stepsExecuted,
+				ToolCalls:     toolCalls,
+				Usage:         totalUsage,
+			}
+			if pricing != nil {
+				cost := totalCost
+				result.Cost = &cost
+			}
+		}
 
 		for step := 1; step <= r.options.MaxSteps; step++ {
 			if err := ctx.Err(); err != nil {
+				snapshotResult(step - 1)
 				runErr = err
 				return
 			}
@@ -96,6 +109,7 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 			})
 			if err != nil {
 				r.emitStepFinish(ctx, step, title, map[string]any{"error": err.Error()})
+				snapshotResult(step - 1)
 				runErr = err
 				return
 			}
@@ -107,6 +121,7 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 				event, err := stream.RecvEvent()
 				if err != nil {
 					r.emitStepFinish(ctx, step, title, map[string]any{"error": err.Error()})
+					snapshotResult(step - 1)
 					runErr = err
 					return
 				}
@@ -149,6 +164,7 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 			assistant, err := stream.FinalMessage()
 			if err != nil {
 				r.emitStepFinish(ctx, step, title, map[string]any{"error": err.Error()})
+				snapshotResult(step - 1)
 				runErr = err
 				return
 			}
@@ -178,6 +194,7 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 
 			for _, call := range assistant.ToolCalls {
 				if err := ctx.Err(); err != nil {
+					snapshotResult(step)
 					runErr = err
 					return
 				}
@@ -189,6 +206,7 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 						wrapped := fmt.Errorf("decode tool arguments for %q: %w", call.Name, err)
 						r.emitToolFinish(ctx, step, call, "", wrapped)
 						r.emitStepFinish(ctx, step, title, map[string]any{"error": wrapped.Error()})
+						snapshotResult(step)
 						runErr = wrapped
 						return
 					}
@@ -198,6 +216,7 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 					wrapped := fmt.Errorf("execute tool %q: %w", call.Name, err)
 					r.emitToolFinish(ctx, step, call, "", wrapped)
 					r.emitStepFinish(ctx, step, title, map[string]any{"error": wrapped.Error()})
+					snapshotResult(step)
 					runErr = wrapped
 					return
 				}

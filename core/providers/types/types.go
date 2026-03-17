@@ -35,10 +35,11 @@ type Message struct {
 }
 
 type ProviderState struct {
-	Provider string
-	Format   string
-	Version  string
-	Payload  json.RawMessage
+	Provider   string
+	Format     string
+	Version    string
+	ResponseID string
+	Payload    json.RawMessage
 }
 
 type Attachment struct {

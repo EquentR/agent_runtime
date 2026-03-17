@@ -161,6 +161,7 @@ func applyStreamEvent(
 	observeRaw func(string),
 	emitText func(string),
 	emitEvent func(model.StreamEvent),
+	setResponseID func(string),
 	setErr func(error),
 ) {
 	switch event.Type {
@@ -211,14 +212,23 @@ func applyStreamEvent(
 			emitText(emit)
 		}
 	case "response.completed":
+		if setResponseID != nil {
+			setResponseID(event.Response.ID)
+		}
 		stats.Usage = toModelUsage(event.Response.Usage)
 		stats.FinishReason = streamFinishReasonFromResponse(event.Response, acc.ToolCalls())
 		emitEvent(model.StreamEvent{Type: model.StreamEventUsage, Usage: stats.Usage})
 	case "response.incomplete":
+		if setResponseID != nil {
+			setResponseID(event.Response.ID)
+		}
 		stats.Usage = toModelUsage(event.Response.Usage)
 		stats.FinishReason = streamFinishReasonFromResponse(event.Response, acc.ToolCalls())
 		emitEvent(model.StreamEvent{Type: model.StreamEventUsage, Usage: stats.Usage})
 	case "response.failed":
+		if setResponseID != nil {
+			setResponseID(event.Response.ID)
+		}
 		stats.Usage = toModelUsage(event.Response.Usage)
 		stats.FinishReason = streamFinishReasonFromResponse(event.Response, acc.ToolCalls())
 		emitEvent(model.StreamEvent{Type: model.StreamEventUsage, Usage: stats.Usage})

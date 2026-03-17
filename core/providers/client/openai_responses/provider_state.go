@@ -39,7 +39,7 @@ func outputItemsFromProviderState(state *model.ProviderState) ([]responses.Respo
 	return params, true, nil
 }
 
-func providerStateFromOutputItems(items []responses.ResponseOutputItemUnion) (*model.ProviderState, error) {
+func providerStateFromOutputItems(responseID string, items []responses.ResponseOutputItemUnion) (*model.ProviderState, error) {
 	payload, err := json.Marshal(items)
 	if err != nil {
 		return nil, err

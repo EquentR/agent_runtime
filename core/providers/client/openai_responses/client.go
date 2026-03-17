@@ -94,6 +94,7 @@ func (c *Client) ChatStream(ctx context.Context, req model.ChatRequest) (model.S
 		acc := newStreamToolCallAccumulator()
 		splitter := model.NewLeadingThinkStreamSplitter()
 		outputItems := make([]responses.ResponseOutputItemUnion, 0)
+		responseID := ""
 		var reasoningBuilder strings.Builder
 		var contentBuilder strings.Builder
 		reasoningItemsByOutputIndex := make(map[int64]model.ReasoningItem)
@@ -121,7 +122,7 @@ func (c *Client) ChatStream(ctx context.Context, req model.ChatRequest) (model.S
 			}
 			s.statsMu.Unlock()
 			if streamCtx.Err() == nil && s.streamError() == nil {
-				state, err := providerStateFromOutputItems(outputItems)
+				state, err := providerStateFromOutputItems(responseID, outputItems)
 				if err != nil {
 					s.setStreamError(err)
 					return
@@ -162,6 +163,11 @@ func (c *Client) ChatStream(ctx context.Context, req model.ChatRequest) (model.S
 				},
 				func(event model.StreamEvent) {
 					events <- event
+				},
+				func(id string) {
+					if strings.TrimSpace(id) != "" {
+						responseID = strings.TrimSpace(id)
+					}
 				},
 				s.setStreamError,
 			)
@@ -223,7 +229,7 @@ func appendOutputItem(items *[]responses.ResponseOutputItemUnion, item responses
 }
 
 func buildOpenAIOfficialPromptMessages(messages []model.Message) ([]responses.ResponseInputParam, []string, error) {
-	input, err := buildResponseInput(messages)
+	input, _, err := buildResponseInput(messages, requestBuildOptions{SupportsPreviousResponseID: true})
 	if err != nil {
 		return nil, nil, err
 	}

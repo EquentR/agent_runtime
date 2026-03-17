@@ -215,9 +215,10 @@ func TestBuildResponseRequestParams_ReplaysProviderStateOutputItems(t *testing.T
 		Messages: []model.Message{{
 			Role: model.RoleAssistant,
 			ProviderState: &model.ProviderState{
-				Provider: "openai_responses",
-				Format:   "openai_response_output_items.v1",
-				Version:  "v1",
+				Provider:   "openai_responses",
+				Format:     "openai_response_output_items.v1",
+				Version:    "v1",
+				ResponseID: "resp_1",
 				Payload: json.RawMessage(`[
 					{"type":"reasoning","id":"rs_1","summary":[{"text":"raw plan"}]},
 					{"type":"function_call","call_id":"call_1","name":"lookup_weather","arguments":"{}"}
@@ -248,7 +249,6 @@ func TestBuildResponseRequestParams_ReplaysProviderStateOutputItems(t *testing.T
 	if len(input) != 2 {
 		t.Fatalf("len(input) = %d, want 2", len(input))
 	}
-
 	first, _ := input[0].(map[string]any)
 	if first["type"] != "reasoning" || first["id"] != "rs_1" {
 		t.Fatalf("first replayed item = %#v", first)
@@ -268,6 +268,113 @@ func TestBuildResponseRequestParams_ReplaysProviderStateOutputItems(t *testing.T
 	}
 	if second["arguments"] != "{}" {
 		t.Fatalf("second replayed arguments = %v, want {}", second["arguments"])
+	}
+}
+
+func TestBuildResponseRequestParams_UsesPreviousResponseIDForToolContinuation(t *testing.T) {
+	params, err := buildResponseRequestParams(model.ChatRequest{
+		Model: "gpt-5.4",
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: "list core/rag"},
+			{
+				Role: model.RoleAssistant,
+				ProviderState: &model.ProviderState{
+					Provider:   "openai_responses",
+					Format:     "openai_response_output_items.v1",
+					Version:    "v1",
+					ResponseID: "resp_tool_1",
+					Payload: json.RawMessage(`[
+						{"type":"reasoning","id":"rs_1","summary":[{"text":"plan"}]},
+						{"type":"function_call","call_id":"call_1","name":"list_files","arguments":"{\"path\":\"core/rag\"}"}
+					]`),
+				},
+				ToolCalls: []types.ToolCall{{ID: "call_1", Name: "list_files", Arguments: `{"path":"core/rag"}`}},
+			},
+			{Role: model.RoleTool, ToolCallId: "call_1", Content: `{"entries":[{"path":"core/rag/README.md","type":"file"}]}`},
+		},
+	})
+	if err != nil {
+		t.Fatalf("buildResponseRequestParams() error = %v", err)
+	}
+
+	var payload map[string]any
+	data, err := json.Marshal(params)
+	if err != nil {
+		t.Fatalf("json.Marshal(params) error = %v", err)
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("json.Unmarshal(payload) error = %v", err)
+	}
+
+	if got, _ := payload["previous_response_id"].(string); got != "resp_tool_1" {
+		t.Fatalf("previous_response_id = %q, want %q", got, "resp_tool_1")
+	}
+	input, ok := payload["input"].([]any)
+	if !ok {
+		t.Fatalf("input type = %T, want []any", payload["input"])
+	}
+	if len(input) != 1 {
+		t.Fatalf("len(input) = %d, want 1", len(input))
+	}
+	item, _ := input[0].(map[string]any)
+	if item["type"] != "function_call_output" {
+		t.Fatalf("input item = %#v, want function_call_output", item)
+	}
+	if item["call_id"] != "call_1" {
+		t.Fatalf("call_id = %v, want call_1", item["call_id"])
+	}
+}
+
+func TestBuildResponseRequestParams_ReplaysFullHistoryWhenPreviousResponseIDDisabled(t *testing.T) {
+	params, err := buildResponseRequestParamsWithOptions(model.ChatRequest{
+		Model: "gpt-5.4",
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: "list core/rag"},
+			{
+				Role: model.RoleAssistant,
+				ProviderState: &model.ProviderState{
+					Provider:   "openai_responses",
+					Format:     "openai_response_output_items.v1",
+					Version:    "v1",
+					ResponseID: "resp_tool_1",
+					Payload: json.RawMessage(`[
+						{"type":"reasoning","id":"rs_1","summary":[{"text":"plan"}]},
+						{"type":"function_call","call_id":"call_1","name":"list_files","arguments":"{\"path\":\"core/rag\"}"}
+					]`),
+				},
+				ToolCalls: []types.ToolCall{{ID: "call_1", Name: "list_files", Arguments: `{"path":"core/rag"}`}},
+			},
+			{Role: model.RoleTool, ToolCallId: "call_1", Content: `{"entries":[{"path":"core/rag/README.md","type":"file"}]}`},
+		},
+	}, requestBuildOptions{SupportsPreviousResponseID: false})
+	if err != nil {
+		t.Fatalf("buildResponseRequestParamsWithOptions() error = %v", err)
+	}
+
+	var payload map[string]any
+	data, err := json.Marshal(params)
+	if err != nil {
+		t.Fatalf("json.Marshal(params) error = %v", err)
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("json.Unmarshal(payload) error = %v", err)
+	}
+
+	if _, exists := payload["previous_response_id"]; exists {
+		t.Fatalf("previous_response_id should be omitted, got %#v", payload["previous_response_id"])
+	}
+	input, ok := payload["input"].([]any)
+	if !ok {
+		t.Fatalf("input type = %T, want []any", payload["input"])
+	}
+	if len(input) != 4 {
+		t.Fatalf("len(input) = %d, want 4", len(input))
+	}
+	if item, _ := input[2].(map[string]any); item["type"] != "function_call" {
+		t.Fatalf("input[2] = %#v, want function_call", item)
+	}
+	if item, _ := input[3].(map[string]any); item["type"] != "function_call_output" {
+		t.Fatalf("input[3] = %#v, want function_call_output", item)
 	}
 }
 

@@ -413,6 +413,7 @@ func TestTaskRuntimeSinkMapsRunStreamEventsToLogMessages(t *testing.T) {
 type stubClient struct {
 	responses      []model.ChatResponse
 	streams        []model.Stream
+	streamErrs     []error
 	err            error
 	requests       []model.ChatRequest
 	streamRequests []model.ChatRequest
@@ -437,6 +438,13 @@ func (s *stubClient) ChatStream(_ context.Context, req model.ChatRequest) (model
 }
 
 func (s *stubClient) nextStream() (model.Stream, error) {
+	if len(s.streamErrs) > 0 {
+		err := s.streamErrs[0]
+		s.streamErrs = s.streamErrs[1:]
+		if err != nil {
+			return nil, err
+		}
+	}
 	if s.err != nil {
 		return nil, s.err
 	}

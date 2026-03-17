@@ -127,13 +127,24 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 			return nil, err
 		}
 		userMessage := model.Message{Role: model.RoleUser, Content: input.Message}
+		if err := deps.ConversationStore.AppendMessages(ctx, conversation.ID, task.ID, []model.Message{userMessage}); err != nil {
+			return nil, err
+		}
 		messages := append(cloneMessages(history), userMessage)
 		result, err := runner.Run(ctx, RunInput{Messages: messages})
 		if err != nil {
+			if len(result.Messages) > 0 {
+				if appendErr := deps.ConversationStore.AppendMessages(ctx, conversation.ID, task.ID, result.Messages); appendErr != nil {
+					return nil, appendErr
+				}
+			}
+			failureMessage := model.Message{Role: model.RoleSystem, Content: fmt.Sprintf("Run failed: %s", err.Error())}
+			if appendErr := deps.ConversationStore.AppendMessages(ctx, conversation.ID, task.ID, []model.Message{failureMessage}); appendErr != nil {
+				return nil, appendErr
+			}
 			return nil, err
 		}
-		toAppend := append([]model.Message{userMessage}, result.Messages...)
-		if err := deps.ConversationStore.AppendMessages(ctx, conversation.ID, task.ID, toAppend); err != nil {
+		if err := deps.ConversationStore.AppendMessages(ctx, conversation.ID, task.ID, result.Messages); err != nil {
 			return nil, err
 		}
 		return RunTaskResult{
@@ -143,7 +154,7 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 			FinalMessage:     result.FinalMessage,
 			Usage:            result.Usage,
 			Cost:             result.Cost,
-			MessagesAppended: len(toAppend),
+			MessagesAppended: 1 + len(result.Messages),
 		}, nil
 	}
 }
