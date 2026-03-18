@@ -1,4 +1,4 @@
-package openai_official
+package openai_responses
 
 import (
 	"encoding/json"
@@ -13,8 +13,48 @@ import (
 	"github.com/openai/openai-go/v3/shared"
 )
 
+type responsesModelConfig struct {
+	isReasoningModel       bool
+	systemMessageMode      string
+	requiredAutoTruncation bool
+}
+
+func getResponsesModelConfig(modelID string) responsesModelConfig {
+	defaults := responsesModelConfig{
+		systemMessageMode:      "system",
+		requiredAutoTruncation: false,
+	}
+
+	if strings.Contains(modelID, "gpt-5-chat") {
+		return defaults
+	}
+
+	if strings.HasPrefix(modelID, "o1") || strings.Contains(modelID, "-o1") ||
+		strings.HasPrefix(modelID, "o3") || strings.Contains(modelID, "-o3") ||
+		strings.HasPrefix(modelID, "o4") || strings.Contains(modelID, "-o4") ||
+		strings.HasPrefix(modelID, "oss") || strings.Contains(modelID, "-oss") ||
+		strings.Contains(modelID, "gpt-5") || strings.Contains(modelID, "codex-") ||
+		strings.Contains(modelID, "computer-use") {
+		if strings.Contains(modelID, "o1-mini") || strings.Contains(modelID, "o1-preview") {
+			return responsesModelConfig{
+				isReasoningModel:       true,
+				systemMessageMode:      "remove",
+				requiredAutoTruncation: defaults.requiredAutoTruncation,
+			}
+		}
+		return responsesModelConfig{
+			isReasoningModel:       true,
+			systemMessageMode:      "developer",
+			requiredAutoTruncation: defaults.requiredAutoTruncation,
+		}
+	}
+
+	return defaults
+}
+
 func buildResponseRequestParams(req model.ChatRequest) (responses.ResponseNewParams, error) {
-	input, _, err := buildResponseInput(req.Messages)
+	modelConfig := getResponsesModelConfig(req.Model)
+	input, _, err := buildResponseInput(req.Messages, modelConfig.systemMessageMode)
 	if err != nil {
 		return responses.ResponseNewParams{}, err
 	}
@@ -22,12 +62,14 @@ func buildResponseRequestParams(req model.ChatRequest) (responses.ResponseNewPar
 	params := responses.ResponseNewParams{
 		Model: req.Model,
 		Input: responses.ResponseNewParamsInputUnion{OfInputItemList: input},
-		Reasoning: shared.ReasoningParam{
-			Summary: shared.ReasoningSummaryAuto,
-			Effort:  shared.ReasoningEffortMedium,
-		},
 		Store: openai.Bool(false),
 		Tools: modelToolsToResponse(req.Tools),
+	}
+	if modelConfig.isReasoningModel {
+		params.Reasoning = shared.ReasoningParam{
+			Summary: shared.ReasoningSummaryAuto,
+			Effort:  shared.ReasoningEffortMedium,
+		}
 	}
 	if strings.TrimSpace(req.PromptCacheKey) != "" {
 		params.PromptCacheKey = openai.String(strings.TrimSpace(req.PromptCacheKey))
@@ -36,10 +78,10 @@ func buildResponseRequestParams(req model.ChatRequest) (responses.ResponseNewPar
 	if req.MaxTokens > 0 {
 		params.MaxOutputTokens = openai.Int(req.MaxTokens)
 	}
-	if req.Sampling.Temperature != nil {
+	if req.Sampling.Temperature != nil && !modelConfig.isReasoningModel {
 		params.Temperature = openai.Float(float64(*req.Sampling.Temperature))
 	}
-	if req.Sampling.TopP != nil {
+	if req.Sampling.TopP != nil && !modelConfig.isReasoningModel {
 		params.TopP = openai.Float(float64(*req.Sampling.TopP))
 	}
 
@@ -49,6 +91,13 @@ func buildResponseRequestParams(req model.ChatRequest) (responses.ResponseNewPar
 	}
 	if toolChoice != nil {
 		params.ToolChoice = *toolChoice
+	}
+
+	if requestEndsWithToolContinuation(req.Messages) {
+		params.Tools = nil
+	}
+	if modelConfig.requiredAutoTruncation {
+		params.Truncation = responses.ResponseNewParamsTruncationAuto
 	}
 
 	return params, nil
@@ -68,14 +117,50 @@ func responseInputHasToolOutput(input responses.ResponseInputParam) bool {
 	return false
 }
 
-func buildResponseInput(messages []model.Message) (responses.ResponseInputParam, string, error) {
+func requestEndsWithToolContinuation(messages []model.Message) bool {
+	if len(messages) == 0 {
+		return false
+	}
+	hasTrailingTool := false
+	for i := len(messages) - 1; i >= 0; i-- {
+		switch messages[i].Role {
+		case model.RoleTool:
+			hasTrailingTool = true
+		case model.RoleAssistant:
+			return hasTrailingTool
+		case model.RoleSystem, model.RoleUser:
+			if hasTrailingTool {
+				return false
+			}
+		default:
+			if hasTrailingTool {
+				return false
+			}
+		}
+	}
+	return false
+}
+
+func buildResponseInput(messages []model.Message, systemMessageMode string) (responses.ResponseInputParam, string, error) {
 	input := make(responses.ResponseInputParam, 0, len(messages))
 
 	for i, m := range messages {
 		toolContinuation := hasFollowingToolOutput(messages, i)
 		switch m.Role {
-		case model.RoleSystem, model.RoleUser:
-			input = append(input, responses.ResponseInputItemParamOfMessage(m.Content, toResponseRole(m.Role)))
+		case model.RoleSystem:
+			if strings.TrimSpace(m.Content) == "" {
+				continue
+			}
+			switch systemMessageMode {
+			case "developer":
+				input = append(input, responses.ResponseInputItemParamOfMessage(m.Content, responses.EasyInputMessageRoleDeveloper))
+			case "remove":
+				continue
+			default:
+				input = append(input, responses.ResponseInputItemParamOfMessage(m.Content, responses.EasyInputMessageRoleSystem))
+			}
+		case model.RoleUser:
+			input = append(input, responses.ResponseInputItemParamOfMessage(m.Content, responses.EasyInputMessageRoleUser))
 		case model.RoleAssistant:
 			if rawItems, _, ok, err := rawOutputItemsFromProviderData(m.ProviderData); err != nil {
 				return nil, "", err
@@ -89,12 +174,6 @@ func buildResponseInput(messages []model.Message) (responses.ResponseInputParam,
 				}
 				continue
 			}
-			if itemRefs, ok, err := providerStateItemReferences(m.ProviderState); err != nil {
-				return nil, "", err
-			} else if ok {
-				input = append(input, filterReplayInputItems(itemRefs, toolContinuation)...)
-				continue
-			}
 			replayed, ok, err := outputItemsFromProviderState(m.ProviderState)
 			if err != nil {
 				return nil, "", err
@@ -103,13 +182,17 @@ func buildResponseInput(messages []model.Message) (responses.ResponseInputParam,
 				input = append(input, filterReplayInputItems(replayed, toolContinuation)...)
 				continue
 			}
-			// Responses API 要求 assistant 之前产生的 reasoning item 单独回放，
-			// 否则下一轮 tool call 之后可能丢失推理上下文。
+			if itemRefs, ok, err := providerStateItemReferences(m.ProviderState); err != nil {
+				return nil, "", err
+			} else if ok {
+				input = append(input, filterReplayInputItems(itemRefs, toolContinuation)...)
+				continue
+			}
 			for _, item := range m.ReasoningItems {
 				input = append(input, modelReasoningItemToResponse(item))
 			}
 			if strings.TrimSpace(m.Content) != "" || len(m.ToolCalls) == 0 {
-				input = append(input, responses.ResponseInputItemParamOfMessage(m.Content, toResponseRole(m.Role)))
+				input = append(input, responses.ResponseInputItemParamOfMessage(m.Content, responses.EasyInputMessageRoleAssistant))
 			}
 			for _, tc := range m.ToolCalls {
 				input = append(input, responses.ResponseInputItemParamOfFunctionCall(tc.Arguments, tc.ID, tc.Name))
@@ -174,17 +257,6 @@ func filterReplayInputItems(items []responses.ResponseInputItemUnionParam, toolC
 		}
 	}
 	return filtered
-}
-
-func toResponseRole(role string) responses.EasyInputMessageRole {
-	switch role {
-	case model.RoleSystem:
-		return responses.EasyInputMessageRoleSystem
-	case model.RoleAssistant:
-		return responses.EasyInputMessageRoleAssistant
-	default:
-		return responses.EasyInputMessageRoleUser
-	}
 }
 
 func modelToolsToResponse(tools []types.Tool) []responses.ToolUnionParam {
@@ -277,7 +349,6 @@ func extractChatResponse(resp *responses.Response) (model.ChatResponse, error) {
 	reasoningItems := make([]model.ReasoningItem, 0)
 	for _, item := range resp.Output {
 		if item.Type == "reasoning" {
-			// 同时保留摘要文本与结构化 item：前者方便展示，后者用于后续原样回放。
 			reasoningItems = append(reasoningItems, responseReasoningItemToModel(item))
 			for _, summary := range item.Summary {
 				reasoningParts = append(reasoningParts, summary.Text)

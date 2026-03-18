@@ -1,4 +1,4 @@
-package openai_official
+package openai_responses
 
 import (
 	"context"
@@ -230,7 +230,7 @@ func appendOutputItem(items *[]responses.ResponseOutputItemUnion, item responses
 }
 
 func buildOpenAIOfficialPromptMessages(messages []model.Message) ([]responses.ResponseInputParam, []string, error) {
-	input, _, err := buildResponseInput(messages)
+	input, _, err := buildResponseInput(messages, "system")
 	if err != nil {
 		return nil, nil, err
 	}

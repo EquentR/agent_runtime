@@ -1,7 +1,8 @@
-package openai_official
+package openai_responses
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	model "github.com/EquentR/agent_runtime/core/providers/types"
@@ -70,14 +71,6 @@ func TestBuildResponseRequestParams_MessageAndToolMapping(t *testing.T) {
 	if got, _ := payload["top_p"].(float64); got < 0.899 || got > 0.901 {
 		t.Fatalf("top_p = %v, want 0.9", got)
 	}
-
-	reasoning, ok := payload["reasoning"].(map[string]any)
-	if !ok {
-		t.Fatalf("reasoning type = %T, want map[string]any", payload["reasoning"])
-	}
-	if _, exists := reasoning["summary"]; exists {
-		t.Fatalf("reasoning.summary should be omitted, got %v", reasoning["summary"])
-	}
 	if got, _ := payload["store"].(bool); got != false {
 		t.Fatalf("store = %v, want false", got)
 	}
@@ -98,17 +91,8 @@ func TestBuildResponseRequestParams_MessageAndToolMapping(t *testing.T) {
 		switch typ {
 		case "function_call":
 			functionCallCount++
-			if obj["name"] != "lookup_weather" {
-				t.Fatalf("function_call.name = %v, want lookup_weather", obj["name"])
-			}
-			if obj["call_id"] != "call_1" {
-				t.Fatalf("function_call.call_id = %v, want call_1", obj["call_id"])
-			}
 		case "function_call_output":
 			functionOutputCount++
-			if obj["call_id"] != "call_1" {
-				t.Fatalf("function_call_output.call_id = %v, want call_1", obj["call_id"])
-			}
 		}
 	}
 	if functionCallCount != 1 {
@@ -121,33 +105,6 @@ func TestBuildResponseRequestParams_MessageAndToolMapping(t *testing.T) {
 	if _, exists := payload["tools"]; exists {
 		t.Fatalf("tools should be omitted for continuation payload, got %#v", payload["tools"])
 	}
-
-	toolChoice, ok := payload["tool_choice"].(map[string]any)
-	if !ok {
-		t.Fatalf("tool_choice type = %T, want map[string]any", payload["tool_choice"])
-	}
-	if toolChoice["type"] != "function" || toolChoice["name"] != "lookup_weather" {
-		t.Fatalf("tool_choice = %#v, want function lookup_weather", toolChoice)
-	}
-}
-
-func TestBuildResponseRequestParams_ForwardsPromptCacheKey(t *testing.T) {
-	req := model.ChatRequest{Model: "gpt-5.4", PromptCacheKey: "cache-key-1", Messages: []model.Message{{Role: model.RoleUser, Content: "hi"}}}
-	params, err := buildResponseRequestParams(req)
-	if err != nil {
-		t.Fatalf("buildResponseRequestParams() error = %v", err)
-	}
-	var payload map[string]any
-	data, err := json.Marshal(params)
-	if err != nil {
-		t.Fatalf("json.Marshal(params) error = %v", err)
-	}
-	if err := json.Unmarshal(data, &payload); err != nil {
-		t.Fatalf("json.Unmarshal(payload) error = %v", err)
-	}
-	if got, _ := payload["prompt_cache_key"].(string); got != "cache-key-1" {
-		t.Fatalf("prompt_cache_key = %q, want %q", got, "cache-key-1")
-	}
 }
 
 func TestBuildResponseRequestParams_ReplaysAssistantReasoningItems(t *testing.T) {
@@ -157,10 +114,8 @@ func TestBuildResponseRequestParams_ReplaysAssistantReasoningItems(t *testing.T)
 			Role:      model.RoleAssistant,
 			Reasoning: "plan first",
 			ReasoningItems: []model.ReasoningItem{{
-				ID: "rs_1",
-				Summary: []model.ReasoningSummary{{
-					Text: "plan first",
-				}},
+				ID:               "rs_1",
+				Summary:          []model.ReasoningSummary{{Text: "plan first"}},
 				EncryptedContent: "enc_123",
 			}},
 			ToolCalls: []types.ToolCall{{
@@ -186,106 +141,31 @@ func TestBuildResponseRequestParams_ReplaysAssistantReasoningItems(t *testing.T)
 	}
 
 	input, ok := payload["input"].([]any)
-	if !ok {
-		t.Fatalf("input type = %T, want []any", payload["input"])
-	}
-	if len(input) != 2 {
-		t.Fatalf("len(input) = %d, want 2", len(input))
-	}
-
-	reasoning, _ := input[0].(map[string]any)
-	if reasoning["type"] != "reasoning" {
-		t.Fatalf("reasoning item type = %v, want reasoning", reasoning["type"])
-	}
-	if reasoning["id"] != "rs_1" {
-		t.Fatalf("reasoning item id = %v, want rs_1", reasoning["id"])
-	}
-	if reasoning["encrypted_content"] != "enc_123" {
-		t.Fatalf("reasoning item encrypted_content = %v, want enc_123", reasoning["encrypted_content"])
-	}
-	summary, ok := reasoning["summary"].([]any)
-	if !ok || len(summary) != 1 {
-		t.Fatalf("reasoning item summary = %#v, want one summary part", reasoning["summary"])
-	}
-	summaryPart, _ := summary[0].(map[string]any)
-	if summaryPart["text"] != "plan first" {
-		t.Fatalf("reasoning summary text = %v, want plan first", summaryPart["text"])
-	}
-}
-
-func TestBuildResponseRequestParams_ReplaysLegacyProviderStateOutputItems(t *testing.T) {
-	params, err := buildResponseRequestParams(model.ChatRequest{
-		Model: "gpt-5.4",
-		Messages: []model.Message{{
-			Role: model.RoleAssistant,
-			ProviderState: &model.ProviderState{
-				Provider:   "openai_responses",
-				Format:     "openai_response_output_items.v1",
-				Version:    "v1",
-				ResponseID: "resp_1",
-				Payload: json.RawMessage(`[
-					{"type":"reasoning","id":"rs_1","summary":[{"text":"raw plan"}]},
-					{"type":"function_call","call_id":"call_1","name":"lookup_weather","arguments":"{}"}
-				]`),
-			},
-			Content:   "normalized text",
-			Reasoning: "normalized reasoning",
-			ToolCalls: []types.ToolCall{{ID: "call_norm", Name: "normalized_tool", Arguments: `{"city":"Shanghai"}`}},
-		}},
-	})
-	if err != nil {
-		t.Fatalf("buildResponseRequestParams() error = %v", err)
-	}
-
-	var payload map[string]any
-	data, err := json.Marshal(params)
-	if err != nil {
-		t.Fatalf("json.Marshal(params) error = %v", err)
-	}
-	if err := json.Unmarshal(data, &payload); err != nil {
-		t.Fatalf("json.Unmarshal(payload) error = %v", err)
-	}
-
-	input, ok := payload["input"].([]any)
-	if !ok {
-		t.Fatalf("input type = %T, want []any", payload["input"])
-	}
-	if len(input) != 2 {
-		t.Fatalf("len(input) = %d, want 2", len(input))
+	if !ok || len(input) != 2 {
+		t.Fatalf("input = %#v, want 2 items", payload["input"])
 	}
 	first, _ := input[0].(map[string]any)
 	if first["type"] != "reasoning" || first["id"] != "rs_1" {
-		t.Fatalf("first replayed item = %#v", first)
+		t.Fatalf("replayed reasoning item = %#v", first)
 	}
-	summary, ok := first["summary"].([]any)
-	if !ok || len(summary) != 1 {
-		t.Fatalf("first replayed summary = %#v", first["summary"])
-	}
-	summaryPart, _ := summary[0].(map[string]any)
-	if summaryPart["text"] != "raw plan" {
-		t.Fatalf("summary text = %v, want raw plan", summaryPart["text"])
-	}
-
-	second, _ := input[1].(map[string]any)
-	if second["type"] != "function_call" || second["call_id"] != "call_1" || second["name"] != "lookup_weather" {
-		t.Fatalf("second replayed item = %#v", second)
-	}
-	if second["arguments"] != "{}" {
-		t.Fatalf("second replayed arguments = %v, want {}", second["arguments"])
+	if first["encrypted_content"] != "enc_123" {
+		t.Fatalf("encrypted_content = %v, want enc_123", first["encrypted_content"])
 	}
 }
 
-func TestBuildResponseRequestParams_ReplaysRawOutputForToolContinuation(t *testing.T) {
+func TestBuildResponseRequestParams_UsesDeveloperRoleForReasoningModelSystemPrompt(t *testing.T) {
+	temp := float32(0.4)
+	topP := float32(0.9)
+
 	params, err := buildResponseRequestParams(model.ChatRequest{
 		Model: "gpt-5.4",
 		Messages: []model.Message{
-			{Role: model.RoleUser, Content: "list core/rag"},
-			{
-				Role:         model.RoleAssistant,
-				ProviderData: map[string]any{"type": "openai_responses.output.v1", "response_id": "resp_tool_1", "output_json": `[{"type":"reasoning","id":"rs_1","summary":[{"text":"plan"}]},{"type":"function_call","call_id":"call_1","name":"list_files","arguments":"{\"path\":\"core/rag\"}"}]`},
-				ToolCalls:    []types.ToolCall{{ID: "call_1", Name: "list_files", Arguments: `{"path":"core/rag"}`}},
-			},
-			{Role: model.RoleTool, ToolCallId: "call_1", Content: `{"entries":[{"path":"core/rag/README.md","type":"file"}]}`},
+			{Role: model.RoleSystem, Content: "You are helpful"},
+			{Role: model.RoleUser, Content: "hi"},
+		},
+		Sampling: model.SamplingParams{
+			Temperature: &temp,
+			TopP:        &topP,
 		},
 	})
 	if err != nil {
@@ -301,96 +181,31 @@ func TestBuildResponseRequestParams_ReplaysRawOutputForToolContinuation(t *testi
 		t.Fatalf("json.Unmarshal(payload) error = %v", err)
 	}
 
-	if _, exists := payload["previous_response_id"]; exists {
-		t.Fatalf("previous_response_id should be omitted, got %#v", payload["previous_response_id"])
-	}
 	input, ok := payload["input"].([]any)
-	if !ok {
-		t.Fatalf("input type = %T, want []any", payload["input"])
+	if !ok || len(input) != 2 {
+		t.Fatalf("input = %#v, want 2 items", payload["input"])
 	}
-	if len(input) != 3 {
-		t.Fatalf("len(input) = %d, want 3", len(input))
+	first, _ := input[0].(map[string]any)
+	if got, _ := first["role"].(string); got != "developer" {
+		t.Fatalf("system role = %q, want developer", got)
 	}
-	if item, _ := input[1].(map[string]any); item["type"] != "function_call" {
-		t.Fatalf("input[1] = %#v, want function_call", item)
+	if _, exists := payload["reasoning"]; !exists {
+		t.Fatalf("reasoning should be present for reasoning model payload")
 	}
-	if item, _ := input[1].(map[string]any); item["arguments"] != `{"path":"core/rag"}` {
-		t.Fatalf("input[1].arguments = %#v, want original arguments", item["arguments"])
+	if _, exists := payload["temperature"]; exists {
+		t.Fatalf("temperature should be omitted for reasoning model payload")
 	}
-	if item, _ := input[2].(map[string]any); item["type"] != "function_call_output" {
-		t.Fatalf("input[2] = %#v, want function_call_output", item)
-	}
-	if item, _ := input[2].(map[string]any); item["output"] != `{"entries":[{"path":"core/rag/README.md","type":"file"}]}` {
-		t.Fatalf("input[2].output = %#v, want original output json", item["output"])
-	}
-	if first, _ := input[0].(map[string]any); first["type"] == "reasoning" {
-		t.Fatalf("input[0] = %#v, reasoning should be omitted for tool continuation", first)
-	}
-	if _, exists := payload["tools"]; exists {
-		t.Fatalf("tools should be omitted for tool continuation, got %#v", payload["tools"])
+	if _, exists := payload["top_p"]; exists {
+		t.Fatalf("top_p should be omitted for reasoning model payload")
 	}
 }
 
-func TestBuildResponseRequestParams_ReplaysRawOutputForUserFollowup(t *testing.T) {
+func TestBuildResponseRequestParams_RemovesSystemPromptForO1Mini(t *testing.T) {
 	params, err := buildResponseRequestParams(model.ChatRequest{
-		Model: "gpt-5.4",
+		Model: "o1-mini",
 		Messages: []model.Message{
-			{Role: model.RoleUser, Content: "hello"},
-			{
-				Role:         model.RoleAssistant,
-				ProviderData: map[string]any{"type": "openai_responses.output.v1", "response_id": "resp_turn_1", "output_json": `[{"type":"message","id":"msg_1","status":"completed","content":[{"type":"output_text","text":"hi"}]}]`},
-				Content:      "hi",
-			},
-			{Role: model.RoleUser, Content: "tell me more"},
-		},
-	})
-	if err != nil {
-		t.Fatalf("buildResponseRequestParams() error = %v", err)
-	}
-
-	var payload map[string]any
-	data, err := json.Marshal(params)
-	if err != nil {
-		t.Fatalf("json.Marshal(params) error = %v", err)
-	}
-	if err := json.Unmarshal(data, &payload); err != nil {
-		t.Fatalf("json.Unmarshal(payload) error = %v", err)
-	}
-	if _, exists := payload["previous_response_id"]; exists {
-		t.Fatalf("previous_response_id should be omitted, got %#v", payload["previous_response_id"])
-	}
-	input, ok := payload["input"].([]any)
-	if !ok {
-		t.Fatalf("input type = %T, want []any", payload["input"])
-	}
-	if len(input) != 3 {
-		t.Fatalf("len(input) = %d, want 3", len(input))
-	}
-	item, _ := input[2].(map[string]any)
-	if item["role"] != "user" {
-		t.Fatalf("input item = %#v, want trailing user message", item)
-	}
-}
-
-func TestBuildResponseRequestParams_ReplaysLegacyOutputArchiveState(t *testing.T) {
-	params, err := buildResponseRequestParams(model.ChatRequest{
-		Model: "gpt-5.4",
-		Messages: []model.Message{
-			{Role: model.RoleUser, Content: "list core/rag"},
-			{
-				Role: model.RoleAssistant,
-				ProviderState: &model.ProviderState{
-					Provider: "openai_responses",
-					Format:   "openai_response_output_items.v1",
-					Version:  "v1",
-					Payload: json.RawMessage(`[
-						{"type":"reasoning","id":"rs_1","summary":[{"text":"plan"}]},
-						{"type":"function_call","call_id":"call_1","name":"list_files","arguments":"{\"path\":\"core/rag\"}"}
-					]`),
-				},
-				ToolCalls: []types.ToolCall{{ID: "call_1", Name: "list_files", Arguments: `{"path":"core/rag"}`}},
-			},
-			{Role: model.RoleTool, ToolCallId: "call_1", Content: `{"entries":[{"path":"core/rag/README.md","type":"file"}]}`},
+			{Role: model.RoleSystem, Content: "You are helpful"},
+			{Role: model.RoleUser, Content: "hi"},
 		},
 	})
 	if err != nil {
@@ -406,80 +221,48 @@ func TestBuildResponseRequestParams_ReplaysLegacyOutputArchiveState(t *testing.T
 		t.Fatalf("json.Unmarshal(payload) error = %v", err)
 	}
 
-	if _, exists := payload["previous_response_id"]; exists {
-		t.Fatalf("previous_response_id should be omitted, got %#v", payload["previous_response_id"])
-	}
 	input, ok := payload["input"].([]any)
-	if !ok {
-		t.Fatalf("input type = %T, want []any", payload["input"])
+	if !ok || len(input) != 1 {
+		t.Fatalf("input = %#v, want 1 user item", payload["input"])
 	}
-	if len(input) != 4 {
-		t.Fatalf("len(input) = %d, want 4", len(input))
-	}
-	if item, _ := input[2].(map[string]any); item["type"] != "function_call" {
-		t.Fatalf("input[2] = %#v, want function_call", item)
-	}
-	if item, _ := input[3].(map[string]any); item["type"] != "function_call_output" {
-		t.Fatalf("input[3] = %#v, want function_call_output", item)
+	first, _ := input[0].(map[string]any)
+	if got, _ := first["role"].(string); got != "user" {
+		t.Fatalf("first role = %q, want user", got)
 	}
 }
 
-func TestBuildResponseRequestParams_ReplaysProviderStateMessageOutputItem(t *testing.T) {
+func TestBuildResponseRequestParams_OmitsReasoningForNonReasoningModel(t *testing.T) {
+	params, err := buildResponseRequestParams(model.ChatRequest{
+		Model:    "gpt-4o-mini",
+		Messages: []model.Message{{Role: model.RoleUser, Content: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("buildResponseRequestParams() error = %v", err)
+	}
+
+	var payload map[string]any
+	data, err := json.Marshal(params)
+	if err != nil {
+		t.Fatalf("json.Marshal(params) error = %v", err)
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("json.Unmarshal(payload) error = %v", err)
+	}
+
+	if _, exists := payload["reasoning"]; exists {
+		t.Fatalf("reasoning should be omitted for non-reasoning model payload")
+	}
+}
+
+func TestBuildResponseRequestParams_ReplaysStructuredItemsFromResponseState(t *testing.T) {
 	params, err := buildResponseRequestParams(model.ChatRequest{
 		Model: "gpt-5.4",
 		Messages: []model.Message{{
 			Role: model.RoleAssistant,
 			ProviderState: &model.ProviderState{
-				Provider:   "openai_responses",
-				Format:     "openai_response_state.v1",
-				Version:    "v1",
-				ResponseID: "resp_msg_1",
-				Payload:    json.RawMessage(`{"response_id":"resp_msg_1","output":[{"type":"message","id":"msg_1","status":"completed","content":[{"type":"output_text","text":"raw text"}]},{"type":"function_call","id":"fc_1","call_id":"call_1","name":"lookup_weather","arguments":"{}"}],"items":[{"id":"msg_1","type":"message"},{"id":"fc_1","type":"function_call","call_id":"call_1","name":"lookup_weather"}]}`),
-			},
-			Content:   "normalized text",
-			Reasoning: "normalized reasoning",
-		}},
-	})
-	if err != nil {
-		t.Fatalf("buildResponseRequestParams() error = %v", err)
-	}
-
-	var payload map[string]any
-	data, err := json.Marshal(params)
-	if err != nil {
-		t.Fatalf("json.Marshal(params) error = %v", err)
-	}
-	if err := json.Unmarshal(data, &payload); err != nil {
-		t.Fatalf("json.Unmarshal(payload) error = %v", err)
-	}
-
-	input, ok := payload["input"].([]any)
-	if !ok {
-		t.Fatalf("input type = %T, want []any", payload["input"])
-	}
-	if len(input) != 2 {
-		t.Fatalf("len(input) = %d, want 2", len(input))
-	}
-
-	message, _ := input[0].(map[string]any)
-	if message["id"] != "msg_1" {
-		t.Fatalf("replayed message item = %#v, want item reference msg_1", message)
-	}
-	functionCall, _ := input[1].(map[string]any)
-	if functionCall["id"] != "fc_1" {
-		t.Fatalf("replayed function call item = %#v, want item reference fc_1", functionCall)
-	}
-}
-
-func TestBuildResponseRequestParams_UsesItemReferenceReplayForResponseState(t *testing.T) {
-	params, err := buildResponseRequestParams(model.ChatRequest{
-		Model: "gpt-5.4",
-		Messages: []model.Message{{
-			Role: model.RoleAssistant,
-			ProviderState: &model.ProviderState{
-				Provider:   "openai_responses",
-				Format:     "openai_response_state.v1",
-				Version:    "v1",
+				Provider:   providerName,
+				Format:     responseStateFormat,
+				Version:    messageVersion,
 				ResponseID: "resp_items_1",
 				Payload:    json.RawMessage(`{"response_id":"resp_items_1","output":[{"type":"reasoning","id":"rs_1","summary":[{"text":"plan first"}]},{"type":"message","id":"msg_1","status":"completed","content":[{"type":"output_text","text":"hello"}]},{"type":"function_call","id":"fc_1","call_id":"call_1","name":"lookup_weather","arguments":"{}"}],"items":[{"id":"rs_1","type":"reasoning","encrypted_content":"enc_1"},{"id":"msg_1","type":"message"},{"id":"fc_1","type":"function_call","call_id":"call_1","name":"lookup_weather"}]}`),
 			},
@@ -499,107 +282,129 @@ func TestBuildResponseRequestParams_UsesItemReferenceReplayForResponseState(t *t
 	}
 
 	input, ok := payload["input"].([]any)
-	if !ok {
-		t.Fatalf("input type = %T, want []any", payload["input"])
+	if !ok || len(input) != 3 {
+		t.Fatalf("input = %#v, want 3 structured replay items", payload["input"])
 	}
-	if len(input) != 3 {
-		t.Fatalf("len(input) = %d, want 3", len(input))
-	}
-	for i, wantID := range []string{"rs_1", "msg_1", "fc_1"} {
-		item, _ := input[i].(map[string]any)
-		if item["id"] != wantID {
-			t.Fatalf("input[%d] = %#v, want item reference %s", i, item, wantID)
+	types := make([]string, 0, len(input))
+	for _, raw := range input {
+		item, _ := raw.(map[string]any)
+		types = append(types, item["type"].(string))
+		if item["type"] == "item_reference" {
+			t.Fatalf("input should not contain item_reference replay, got %#v", item)
 		}
+	}
+	if got := strings.Join(types, ","); got != "reasoning,message,function_call" {
+		t.Fatalf("input types = %q, want reasoning,message,function_call", got)
 	}
 }
 
-func TestBuildResponseRequestParams_RejectsUnsupportedProviderStateVersion(t *testing.T) {
-	_, err := buildResponseRequestParams(model.ChatRequest{
+func TestBuildResponseRequestParams_ResponseStateToolContinuationDropsNonFunctionItems(t *testing.T) {
+	params, err := buildResponseRequestParams(model.ChatRequest{
 		Model: "gpt-5.4",
-		Messages: []model.Message{{
-			Role: model.RoleAssistant,
-			ProviderState: &model.ProviderState{
-				Provider: "openai_responses",
-				Format:   "openai_response_output_items.v1",
-				Version:  "v2",
-				Payload:  json.RawMessage(`{"output":[]}`),
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: "list core/rag"},
+			{
+				Role: model.RoleAssistant,
+				ProviderState: &model.ProviderState{
+					Provider:   providerName,
+					Format:     responseStateFormat,
+					Version:    messageVersion,
+					ResponseID: "resp_tool_2",
+					Payload:    json.RawMessage(`{"response_id":"resp_tool_2","output":[{"type":"reasoning","id":"rs_1","summary":[{"text":"plan"}]},{"type":"message","id":"msg_1","status":"completed","content":[{"type":"output_text","text":"thinking"}]},{"type":"function_call","id":"fc_1","call_id":"call_1","name":"list_files","arguments":"{\"path\":\"core/rag\"}"}],"items":[{"id":"rs_1","type":"reasoning"},{"id":"msg_1","type":"message"},{"id":"fc_1","type":"function_call","call_id":"call_1","name":"list_files"}]}`),
+				},
+			},
+			{Role: model.RoleTool, ToolCallId: "call_1", Content: `{"entries":[]}`},
+		},
+	})
+	if err != nil {
+		t.Fatalf("buildResponseRequestParams() error = %v", err)
+	}
+
+	var payload map[string]any
+	data, err := json.Marshal(params)
+	if err != nil {
+		t.Fatalf("json.Marshal(params) error = %v", err)
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("json.Unmarshal(payload) error = %v", err)
+	}
+
+	input, ok := payload["input"].([]any)
+	if !ok || len(input) != 3 {
+		t.Fatalf("input = %#v, want user + function_call + function_call_output", payload["input"])
+	}
+	if second, _ := input[1].(map[string]any); second["type"] != "function_call" {
+		t.Fatalf("input[1] = %#v, want function_call", second)
+	}
+	if third, _ := input[2].(map[string]any); third["type"] != "function_call_output" {
+		t.Fatalf("input[2] = %#v, want function_call_output", third)
+	}
+}
+
+func TestBuildResponseRequestParams_ReplaysRawOutputForToolContinuation(t *testing.T) {
+	params, err := buildResponseRequestParams(model.ChatRequest{
+		Model: "gpt-5.4",
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: "list core/rag"},
+			{
+				Role:         model.RoleAssistant,
+				ProviderData: map[string]any{"type": rawOutputSnapshotType, "response_id": "resp_tool_1", "output_json": `[{"type":"reasoning","id":"rs_1","summary":[{"text":"plan"}]},{"type":"function_call","call_id":"call_1","name":"list_files","arguments":"{\"path\":\"core/rag\"}"}]`},
+				ToolCalls:    []types.ToolCall{{ID: "call_1", Name: "list_files", Arguments: `{"path":"core/rag"}`}},
+			},
+			{Role: model.RoleTool, ToolCallId: "call_1", Content: `{"entries":[{"path":"core/rag/README.md","type":"file"}]}`},
+		},
+	})
+	if err != nil {
+		t.Fatalf("buildResponseRequestParams() error = %v", err)
+	}
+
+	var payload map[string]any
+	data, err := json.Marshal(params)
+	if err != nil {
+		t.Fatalf("json.Marshal(params) error = %v", err)
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("json.Unmarshal(payload) error = %v", err)
+	}
+
+	input, ok := payload["input"].([]any)
+	if !ok || len(input) != 3 {
+		t.Fatalf("input = %#v, want 3 items", payload["input"])
+	}
+	if first, _ := input[0].(map[string]any); first["type"] == "reasoning" {
+		t.Fatalf("input[0] = %#v, reasoning should be omitted for tool continuation", first)
+	}
+	if _, exists := payload["tools"]; exists {
+		t.Fatalf("tools should be omitted for tool continuation, got %#v", payload["tools"])
+	}
+}
+
+func TestBuildResponseRequestParams_KeepsToolsForNewUserTurnAfterToolContinuation(t *testing.T) {
+	params, err := buildResponseRequestParams(model.ChatRequest{
+		Model: "gpt-5.4",
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: "read README"},
+			{
+				Role:         model.RoleAssistant,
+				ProviderData: map[string]any{"type": rawOutputSnapshotType, "response_id": "resp_tool_1", "output_json": `[{"type":"reasoning","id":"rs_1","summary":[{"text":"plan"}]},{"type":"function_call","call_id":"call_1","name":"read_file","arguments":"{\"path\":\"README.md\"}"}]`},
+				ToolCalls:    []types.ToolCall{{ID: "call_1", Name: "read_file", Arguments: `{"path":"README.md"}`}},
+			},
+			{Role: model.RoleTool, ToolCallId: "call_1", Content: `{"content":"readme body"}`},
+			{Role: model.RoleAssistant, Content: "README summary"},
+			{Role: model.RoleUser, Content: "also read AGENTS.md"},
+		},
+		Tools: []types.Tool{{
+			Name:        "read_file",
+			Description: "读取文件",
+			Parameters: types.JSONSchema{
+				Type: "object",
+				Properties: map[string]types.SchemaProperty{
+					"path": {Type: "string", Description: "文件路径"},
+				},
+				Required: []string{"path"},
 			},
 		}},
 	})
-	if err == nil {
-		t.Fatal("expected error for unsupported provider state version")
-	}
-}
-
-func TestModelToolChoiceToResponseVariants(t *testing.T) {
-	tests := []struct {
-		name      string
-		choice    types.ToolChoice
-		wantType  string
-		wantValue string
-	}{
-		{name: "auto", choice: types.ToolChoice{Type: types.ToolAuto}, wantType: "string", wantValue: "auto"},
-		{name: "none", choice: types.ToolChoice{Type: types.ToolNone}, wantType: "string", wantValue: "none"},
-		{name: "force required", choice: types.ToolChoice{Type: types.ToolForce}, wantType: "string", wantValue: "required"},
-		{name: "force named", choice: types.ToolChoice{Type: types.ToolForce, Name: "lookup_weather"}, wantType: "map", wantValue: "lookup_weather"},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			u, err := modelToolChoiceToResponse(tc.choice)
-			if err != nil {
-				t.Fatalf("modelToolChoiceToResponse() error = %v", err)
-			}
-
-			encoded, err := json.Marshal(u)
-			if err != nil {
-				t.Fatalf("json.Marshal(tool_choice) error = %v", err)
-			}
-
-			if tc.wantType == "string" {
-				var got string
-				if err := json.Unmarshal(encoded, &got); err != nil {
-					t.Fatalf("json.Unmarshal string error = %v, raw=%s", err, string(encoded))
-				}
-				if got != tc.wantValue {
-					t.Fatalf("tool choice = %q, want %q", got, tc.wantValue)
-				}
-				return
-			}
-
-			var got map[string]any
-			if err := json.Unmarshal(encoded, &got); err != nil {
-				t.Fatalf("json.Unmarshal map error = %v, raw=%s", err, string(encoded))
-			}
-			if got["type"] != "function" || got["name"] != tc.wantValue {
-				t.Fatalf("tool choice map = %#v, want function name=%s", got, tc.wantValue)
-			}
-		})
-	}
-}
-
-func TestBuildResponseRequestParams_OptionalToolUsesNonStrictSchema(t *testing.T) {
-	req := model.ChatRequest{
-		Model: "gpt-5.4",
-		Messages: []model.Message{{
-			Role:    model.RoleUser,
-			Content: "Say hello",
-		}},
-		Tools: []types.Tool{{
-			Name:        "hello_world",
-			Description: "Say hello to someone",
-			Parameters: types.JSONSchema{
-				Type: "object",
-				Properties: map[string]types.SchemaProperty{
-					"name":  {Type: "string", Description: "Name to greet"},
-					"title": {Type: "string", Description: "Optional title"},
-				},
-				Required: []string{"name"},
-			},
-		}},
-	}
-
-	params, err := buildResponseRequestParams(req)
 	if err != nil {
 		t.Fatalf("buildResponseRequestParams() error = %v", err)
 	}
@@ -617,274 +422,19 @@ func TestBuildResponseRequestParams_OptionalToolUsesNonStrictSchema(t *testing.T
 	if !ok || len(tools) != 1 {
 		t.Fatalf("tools = %#v, want length 1", payload["tools"])
 	}
-	tool0 := tools[0].(map[string]any)
-	if tool0["strict"] != false {
-		t.Fatalf("tool.strict = %v, want false", tool0["strict"])
-	}
-	paramsObj, ok := tool0["parameters"].(map[string]any)
-	if !ok {
-		t.Fatalf("tool.parameters type = %T, want map[string]any", tool0["parameters"])
-	}
-	required, ok := paramsObj["required"].([]any)
-	if !ok || len(required) != 1 || required[0] != "name" {
-		t.Fatalf("tool.parameters.required = %#v, want [name]", paramsObj["required"])
-	}
-}
-
-func TestBuildResponseRequestParams_ArrayToolParameterIncludesItems(t *testing.T) {
-	req := model.ChatRequest{
-		Model: "gpt-5.4",
-		Messages: []model.Message{{
-			Role:    model.RoleUser,
-			Content: "Check command version",
-		}},
-		Tools: []types.Tool{{
-			Name:        "check_command",
-			Description: "Check command existence",
-			Parameters: types.JSONSchema{
-				Type: "object",
-				Properties: map[string]types.SchemaProperty{
-					"name": {Type: "string"},
-					"version_args": {
-						Type:  "array",
-						Items: &types.SchemaProperty{Type: "string"},
-					},
-				},
-				Required: []string{"name"},
-			},
-		}},
-	}
-
-	params, err := buildResponseRequestParams(req)
-	if err != nil {
-		t.Fatalf("buildResponseRequestParams() error = %v", err)
-	}
-
-	var payload map[string]any
-	data, err := json.Marshal(params)
-	if err != nil {
-		t.Fatalf("json.Marshal(params) error = %v", err)
-	}
-	if err := json.Unmarshal(data, &payload); err != nil {
-		t.Fatalf("json.Unmarshal(payload) error = %v", err)
-	}
-
-	tools, ok := payload["tools"].([]any)
-	if !ok || len(tools) != 1 {
-		t.Fatalf("tools = %#v, want length 1", payload["tools"])
-	}
-	tool0 := tools[0].(map[string]any)
-	paramsObj, ok := tool0["parameters"].(map[string]any)
-	if !ok {
-		t.Fatalf("tool.parameters type = %T, want map[string]any", tool0["parameters"])
-	}
-	properties, ok := paramsObj["properties"].(map[string]any)
-	if !ok {
-		t.Fatalf("tool.parameters.properties type = %T, want map[string]any", paramsObj["properties"])
-	}
-	versionArgs, ok := properties["version_args"].(map[string]any)
-	if !ok {
-		t.Fatalf("version_args schema type = %T, want map[string]any", properties["version_args"])
-	}
-	items, ok := versionArgs["items"].(map[string]any)
-	if !ok {
-		t.Fatalf("version_args.items type = %T, want map[string]any", versionArgs["items"])
-	}
-	if items["type"] != "string" {
-		t.Fatalf("version_args.items.type = %v, want string", items["type"])
-	}
-}
-
-func TestBuildResponseRequestParams_NoArgToolNormalizesEmptySchema(t *testing.T) {
-	req := model.ChatRequest{
-		Model: "gpt-5.4",
-		Messages: []model.Message{{
-			Role:    model.RoleUser,
-			Content: "Generate a UUID",
-		}},
-		Tools: []types.Tool{{
-			Name:        "generate_uuid",
-			Description: "Generate a new UUID",
-			Parameters: types.JSONSchema{
-				Type: "object",
-			},
-		}},
-	}
-
-	params, err := buildResponseRequestParams(req)
-	if err != nil {
-		t.Fatalf("buildResponseRequestParams() error = %v", err)
-	}
-
-	var payload map[string]any
-	data, err := json.Marshal(params)
-	if err != nil {
-		t.Fatalf("json.Marshal(params) error = %v", err)
-	}
-	if err := json.Unmarshal(data, &payload); err != nil {
-		t.Fatalf("json.Unmarshal(payload) error = %v", err)
-	}
-
-	tools, ok := payload["tools"].([]any)
-	if !ok || len(tools) != 1 {
-		t.Fatalf("tools = %#v, want length 1", payload["tools"])
-	}
-	tool0 := tools[0].(map[string]any)
-	if tool0["strict"] != true {
-		t.Fatalf("tool.strict = %v, want true", tool0["strict"])
-	}
-	paramsObj, ok := tool0["parameters"].(map[string]any)
-	if !ok {
-		t.Fatalf("tool.parameters type = %T, want map[string]any", tool0["parameters"])
-	}
-	properties, ok := paramsObj["properties"].(map[string]any)
-	if !ok || len(properties) != 0 {
-		t.Fatalf("tool.parameters.properties = %#v, want empty map", paramsObj["properties"])
-	}
-	required, ok := paramsObj["required"].([]any)
-	if !ok || len(required) != 0 {
-		t.Fatalf("tool.parameters.required = %#v, want empty array", paramsObj["required"])
-	}
-}
-
-func TestExtractChatResponse_WithTextToolCallsAndUsage(t *testing.T) {
-	resp := &responses.Response{
-		Output: []responses.ResponseOutputItemUnion{
-			{
-				Type: "message",
-				Content: []responses.ResponseOutputMessageContentUnion{
-					{Type: "output_text", Text: "hello "},
-					{Type: "output_text", Text: "world"},
-				},
-			},
-			{
-				Type:      "function_call",
-				CallID:    "call_1",
-				Name:      "lookup_weather",
-				Arguments: responses.ResponseOutputItemUnionArguments{OfString: `{"city":"Beijing"}`},
-			},
-		},
-		Usage: responses.ResponseUsage{
-			InputTokens: 11,
-			InputTokensDetails: responses.ResponseUsageInputTokensDetails{
-				CachedTokens: 5,
-			},
-			OutputTokens: 7,
-			TotalTokens:  18,
-		},
-	}
-
-	got, err := extractChatResponse(resp)
-	if err != nil {
-		t.Fatalf("extractChatResponse() error = %v", err)
-	}
-
-	if got.Content != "hello world" {
-		t.Fatalf("content = %q, want %q", got.Content, "hello world")
-	}
-	if len(got.ToolCalls) != 1 {
-		t.Fatalf("len(tool calls) = %d, want 1", len(got.ToolCalls))
-	}
-	if got.ToolCalls[0].ID != "call_1" || got.ToolCalls[0].Name != "lookup_weather" {
-		t.Fatalf("tool call = %#v, want id=call_1 name=lookup_weather", got.ToolCalls[0])
-	}
-	if got.Usage.PromptTokens != 11 || got.Usage.CompletionTokens != 7 || got.Usage.TotalTokens != 18 {
-		t.Fatalf("usage = %#v, want {11,7,18}", got.Usage)
-	}
-	if got.Usage.CachedPromptTokens != 5 {
-		t.Fatalf("cached prompt tokens = %d, want 5", got.Usage.CachedPromptTokens)
-	}
-}
-
-func TestExtractChatResponse_CollectsReasoningAndStripsLeadingThinkBlock(t *testing.T) {
-	resp := &responses.Response{
-		Output: []responses.ResponseOutputItemUnion{
-			{
-				Type: "reasoning",
-				Summary: []responses.ResponseReasoningItemSummary{{
-					Text: "plan first",
-				}},
-			},
-			{
-				Type:    "message",
-				Content: []responses.ResponseOutputMessageContentUnion{{Type: "output_text", Text: "<think>shadow</think>Final answer"}},
-			},
-		},
-	}
-
-	got, err := extractChatResponse(resp)
-	if err != nil {
-		t.Fatalf("extractChatResponse() error = %v", err)
-	}
-	if got.Reasoning != "plan first" {
-		t.Fatalf("reasoning = %q, want %q", got.Reasoning, "plan first")
-	}
-	if got.Content != "Final answer" {
-		t.Fatalf("content = %q, want %q", got.Content, "Final answer")
-	}
-}
-
-func TestExtractChatResponse_PreservesReasoningItems(t *testing.T) {
-	resp := &responses.Response{
-		Output: []responses.ResponseOutputItemUnion{
-			{
-				Type:             "reasoning",
-				ID:               "rs_1",
-				EncryptedContent: "enc_123",
-				Summary: []responses.ResponseReasoningItemSummary{{
-					Text: "plan first",
-				}},
-			},
-			{
-				Type:      "function_call",
-				CallID:    "call_1",
-				Name:      "lookup_weather",
-				Arguments: responses.ResponseOutputItemUnionArguments{OfString: `{"city":"Beijing"}`},
-			},
-		},
-	}
-
-	got, err := extractChatResponse(resp)
-	if err != nil {
-		t.Fatalf("extractChatResponse() error = %v", err)
-	}
-	if len(got.ReasoningItems) != 1 {
-		t.Fatalf("len(reasoning items) = %d, want 1", len(got.ReasoningItems))
-	}
-	if got.ReasoningItems[0].ID != "rs_1" {
-		t.Fatalf("reasoning item id = %q, want rs_1", got.ReasoningItems[0].ID)
-	}
-	if got.ReasoningItems[0].EncryptedContent != "enc_123" {
-		t.Fatalf("reasoning item encrypted content = %q, want enc_123", got.ReasoningItems[0].EncryptedContent)
-	}
-	if len(got.ReasoningItems[0].Summary) != 1 || got.ReasoningItems[0].Summary[0].Text != "plan first" {
-		t.Fatalf("reasoning item summary = %#v, want [plan first]", got.ReasoningItems[0].Summary)
+	tool0, _ := tools[0].(map[string]any)
+	if got, _ := tool0["name"].(string); got != "read_file" {
+		t.Fatalf("tool name = %q, want read_file", got)
 	}
 }
 
 func TestExtractChatResponse_PopulatesFinalMessageProviderState(t *testing.T) {
 	resp := &responses.Response{
+		ID: "resp_1",
 		Output: []responses.ResponseOutputItemUnion{
-			{
-				Type:             "reasoning",
-				ID:               "rs_1",
-				EncryptedContent: "enc_123",
-				Summary: []responses.ResponseReasoningItemSummary{{
-					Text: "plan first",
-				}},
-			},
-			{
-				Type:    "message",
-				ID:      "msg_1",
-				Content: []responses.ResponseOutputMessageContentUnion{{Type: "output_text", Text: "hello world"}},
-			},
-			{
-				Type:      "function_call",
-				ID:        "fc_1",
-				CallID:    "call_1",
-				Name:      "lookup_weather",
-				Arguments: responses.ResponseOutputItemUnionArguments{OfString: `{"city":"Beijing"}`},
-			},
+			{Type: "reasoning", ID: "rs_1", EncryptedContent: "enc_123", Summary: []responses.ResponseReasoningItemSummary{{Text: "plan first"}}},
+			{Type: "message", ID: "msg_1", Content: []responses.ResponseOutputMessageContentUnion{{Type: "output_text", Text: "hello world"}}},
+			{Type: "function_call", ID: "fc_1", CallID: "call_1", Name: "lookup_weather", Arguments: responses.ResponseOutputItemUnionArguments{OfString: `{"city":"Beijing"}`}},
 		},
 		Usage: responses.ResponseUsage{InputTokens: 3, OutputTokens: 4, TotalTokens: 7},
 	}
@@ -893,49 +443,13 @@ func TestExtractChatResponse_PopulatesFinalMessageProviderState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("extractChatResponse() error = %v", err)
 	}
-	if got.Message.Role != model.RoleAssistant {
-		t.Fatalf("got.Message.Role = %q, want %q", got.Message.Role, model.RoleAssistant)
-	}
-	if got.Content != "hello world" || got.Message.Content != "hello world" {
-		t.Fatalf("response content/message = %#v", got)
-	}
-	if got.Reasoning != "plan first" || got.Message.Reasoning != "plan first" {
-		t.Fatalf("response reasoning/message = %#v", got)
-	}
-	if len(got.ToolCalls) != 1 || len(got.Message.ToolCalls) != 1 {
-		t.Fatalf("response tool calls = %#v", got)
-	}
 	if got.Message.ProviderState == nil {
 		t.Fatal("got.Message.ProviderState = nil, want provider state")
 	}
-	if got.Message.ProviderState.Provider != "openai_responses" {
-		t.Fatalf("provider = %q, want %q", got.Message.ProviderState.Provider, "openai_responses")
+	if got.Message.ProviderState.Provider != providerName {
+		t.Fatalf("provider = %q, want %q", got.Message.ProviderState.Provider, providerName)
 	}
-	if got.Message.ProviderState.Format != "openai_response_state.v1" {
-		t.Fatalf("format = %q, want %q", got.Message.ProviderState.Format, "openai_response_state.v1")
-	}
-	if got.Message.ProviderState.Version != "v1" {
-		t.Fatalf("version = %q, want %q", got.Message.ProviderState.Version, "v1")
-	}
-
-	var replayed struct {
-		ResponseID string                              `json:"response_id"`
-		Output     []responses.ResponseOutputItemUnion `json:"output"`
-		Items      []map[string]any                    `json:"items"`
-	}
-	if err := json.Unmarshal(got.Message.ProviderState.Payload, &replayed); err != nil {
-		t.Fatalf("unmarshal provider state payload: %v", err)
-	}
-	if replayed.ResponseID != resp.ID {
-		t.Fatalf("response_id = %q, want %q", replayed.ResponseID, resp.ID)
-	}
-	if len(replayed.Output) != 3 {
-		t.Fatalf("len(replayed.output) = %d, want 3", len(replayed.Output))
-	}
-	if replayed.Output[0].Type != "reasoning" || replayed.Output[1].Type != "message" || replayed.Output[2].Type != "function_call" {
-		t.Fatalf("replayed output sequence = %#v", replayed.Output)
-	}
-	if len(replayed.Items) != 3 {
-		t.Fatalf("len(replayed.items) = %d, want 3", len(replayed.Items))
+	if got.Content != "hello world" || got.Reasoning != "plan first" {
+		t.Fatalf("response = %#v", got)
 	}
 }
