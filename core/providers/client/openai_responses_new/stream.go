@@ -1,4 +1,4 @@
-package openai_official
+package openai_responses_new
 
 import (
 	"encoding/json"

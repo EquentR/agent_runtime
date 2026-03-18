@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -710,14 +711,34 @@ func cloneMessage(message model.Message) model.Message {
 
 	if message.ProviderState != nil {
 		cloned.ProviderState = &model.ProviderState{
-			Provider: message.ProviderState.Provider,
-			Format:   message.ProviderState.Format,
-			Version:  message.ProviderState.Version,
+			Provider:   message.ProviderState.Provider,
+			Format:     message.ProviderState.Format,
+			Version:    message.ProviderState.Version,
+			ResponseID: message.ProviderState.ResponseID,
 		}
 		if len(message.ProviderState.Payload) > 0 {
 			cloned.ProviderState.Payload = append([]byte(nil), message.ProviderState.Payload...)
 		}
 	}
 
+	if message.ProviderData != nil {
+		cloned.ProviderData = cloneProviderData(message.ProviderData)
+	}
+
+	return cloned
+}
+
+func cloneProviderData(value any) any {
+	if value == nil {
+		return nil
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return value
+	}
+	var cloned any
+	if err := json.Unmarshal(raw, &cloned); err != nil {
+		return value
+	}
 	return cloned
 }

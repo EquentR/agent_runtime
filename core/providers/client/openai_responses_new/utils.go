@@ -1,4 +1,4 @@
-package openai_official
+package openai_responses_new
 
 import (
 	"encoding/json"
@@ -49,6 +49,10 @@ func buildResponseRequestParams(req model.ChatRequest) (responses.ResponseNewPar
 	}
 	if toolChoice != nil {
 		params.ToolChoice = *toolChoice
+	}
+
+	if responseInputHasToolOutput(input) {
+		params.Tools = nil
 	}
 
 	return params, nil
@@ -103,8 +107,6 @@ func buildResponseInput(messages []model.Message) (responses.ResponseInputParam,
 				input = append(input, filterReplayInputItems(replayed, toolContinuation)...)
 				continue
 			}
-			// Responses API 要求 assistant 之前产生的 reasoning item 单独回放，
-			// 否则下一轮 tool call 之后可能丢失推理上下文。
 			for _, item := range m.ReasoningItems {
 				input = append(input, modelReasoningItemToResponse(item))
 			}
@@ -277,7 +279,6 @@ func extractChatResponse(resp *responses.Response) (model.ChatResponse, error) {
 	reasoningItems := make([]model.ReasoningItem, 0)
 	for _, item := range resp.Output {
 		if item.Type == "reasoning" {
-			// 同时保留摘要文本与结构化 item：前者方便展示，后者用于后续原样回放。
 			reasoningItems = append(reasoningItems, responseReasoningItemToModel(item))
 			for _, summary := range item.Summary {
 				reasoningParts = append(reasoningParts, summary.Text)

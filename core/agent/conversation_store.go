@@ -44,6 +44,13 @@ type ConversationMessage struct {
 	CreatedAt      time.Time       `json:"created_at"`
 }
 
+const persistedConversationMessageVersion = "v1"
+
+type persistedConversationMessage struct {
+	Version string        `json:"version"`
+	Message model.Message `json:"message"`
+}
+
 func (ConversationMessage) TableName() string {
 	return "conversation_messages"
 }
@@ -162,6 +169,12 @@ func (s *ConversationStore) AppendMessages(ctx context.Context, conversationID s
 			}
 			conversation.MessageCount++
 			raw, err := json.Marshal(cloneMessage(message))
+			if err == nil {
+				raw, err = json.Marshal(persistedConversationMessage{
+					Version: persistedConversationMessageVersion,
+					Message: cloneMessage(message),
+				})
+			}
 			if err != nil {
 				return err
 			}
@@ -189,13 +202,26 @@ func (s *ConversationStore) ListMessages(ctx context.Context, conversationID str
 	}
 	messages := make([]model.Message, 0, len(records))
 	for _, record := range records {
-		var message model.Message
-		if err := json.Unmarshal(record.MessageJSON, &message); err != nil {
+		message, err := decodePersistedConversationMessage(record.MessageJSON)
+		if err != nil {
 			return nil, err
 		}
 		messages = append(messages, cloneMessage(message))
 	}
 	return messages, nil
+}
+
+func decodePersistedConversationMessage(raw json.RawMessage) (model.Message, error) {
+	var envelope persistedConversationMessage
+	if err := json.Unmarshal(raw, &envelope); err == nil && envelope.Version != "" {
+		return cloneMessage(envelope.Message), nil
+	}
+
+	var legacy model.Message
+	if err := json.Unmarshal(raw, &legacy); err != nil {
+		return model.Message{}, err
+	}
+	return cloneMessage(legacy), nil
 }
 
 func (s *ConversationStore) getConversationTx(tx *gorm.DB, id string) (*Conversation, error) {

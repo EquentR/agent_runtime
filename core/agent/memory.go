@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 
 	model "github.com/EquentR/agent_runtime/core/providers/types"
 	coretypes "github.com/EquentR/agent_runtime/core/types"
@@ -48,6 +49,7 @@ func cloneMessage(message model.Message) model.Message {
 	message.Attachments = cloneAttachments(message.Attachments)
 	message.ToolCalls = cloneToolCalls(message.ToolCalls)
 	message.ProviderState = cloneProviderState(message.ProviderState)
+	message.ProviderData = cloneProviderData(message.ProviderData)
 	return message
 }
 
@@ -102,6 +104,21 @@ func cloneProviderState(state *model.ProviderState) *model.ProviderState {
 		cloned.Payload = append([]byte(nil), state.Payload...)
 	}
 	return &cloned
+}
+
+func cloneProviderData(value any) any {
+	if value == nil {
+		return nil
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return value
+	}
+	var cloned any
+	if err := json.Unmarshal(raw, &cloned); err != nil {
+		return value
+	}
+	return cloned
 }
 
 func normalizeAssistantMessage(resp model.ChatResponse) model.Message {

@@ -32,6 +32,8 @@ type Message struct {
 	ToolCallId string
 	// ProviderState 保存 provider 原生消息载荷，供后续同 provider 无损回放。
 	ProviderState *ProviderState
+	// ProviderData 保存 provider 私有但与具体 API 解耦的原始状态快照。
+	ProviderData any `json:"provider_data,omitempty"`
 }
 
 type ProviderState struct {
@@ -59,9 +61,12 @@ type ReasoningSummary struct {
 }
 
 type ChatRequest struct {
-	Model     string
-	Messages  []Message
-	MaxTokens int64
+	Model                string
+	Messages             []Message
+	MaxTokens            int64
+	ConversationID       string
+	PromptCacheKey       string
+	PromptCacheRetention string
 
 	Sampling SamplingParams
 
@@ -152,7 +157,23 @@ func cloneMessage(message Message) Message {
 	message.Attachments = cloneAttachments(message.Attachments)
 	message.ToolCalls = cloneToolCalls(message.ToolCalls)
 	message.ProviderState = cloneProviderState(message.ProviderState)
+	message.ProviderData = cloneProviderData(message.ProviderData)
 	return message
+}
+
+func cloneProviderData(value any) any {
+	if value == nil {
+		return nil
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return value
+	}
+	var cloned any
+	if err := json.Unmarshal(raw, &cloned); err != nil {
+		return value
+	}
+	return cloned
 }
 
 func cloneReasoningItems(items []ReasoningItem) []ReasoningItem {

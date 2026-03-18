@@ -141,6 +141,28 @@ func TestNewRunnerPassesLLMModelToMemoryBudgeting(t *testing.T) {
 	}
 }
 
+func TestCloneMessagePreservesProviderData(t *testing.T) {
+	message := model.Message{
+		Role: model.RoleAssistant,
+		ProviderData: map[string]any{
+			"type":        "openai_responses_new.output.v1",
+			"response_id": "resp_1",
+			"output_json": "[]",
+		},
+	}
+
+	cloned := cloneMessage(message)
+	if cloned.ProviderData == nil {
+		t.Fatal("cloneMessage().ProviderData = nil, want cloned provider data")
+	}
+	clonedMap := cloned.ProviderData.(map[string]any)
+	clonedMap["type"] = "changed"
+	originalMap := message.ProviderData.(map[string]any)
+	if originalMap["type"] != "openai_responses_new.output.v1" {
+		t.Fatalf("original provider data mutated = %#v", originalMap)
+	}
+}
+
 type fakeTokenCounter struct{}
 
 func (fakeTokenCounter) Count(text string) int {

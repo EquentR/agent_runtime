@@ -11,7 +11,7 @@ import (
 
 	model "github.com/EquentR/agent_runtime/core/providers/types"
 	"github.com/EquentR/agent_runtime/core/types"
-	"github.com/openai/openai-go/responses"
+	"github.com/openai/openai-go/v3/responses"
 )
 
 func TestStreamToolCallAccumulator_AppendAndAssemble(t *testing.T) {
@@ -29,7 +29,7 @@ func TestStreamToolCallAccumulator_AppendAndAssemble(t *testing.T) {
 		Type:      "function_call",
 		CallID:    "call_2",
 		Name:      "lookup_time",
-		Arguments: `{"city":"Beijing"}`,
+		Arguments: responses.ResponseOutputItemUnionArguments{OfString: `{"city":"Beijing"}`},
 	})
 
 	got := acc.ToolCalls()
@@ -85,10 +85,10 @@ func TestApplyStreamEvent_DeltaToolAndCompletion(t *testing.T) {
 	applyStreamEvent(responses.ResponseStreamEventUnion{Type: "response.output_item.added", OutputIndex: 0, Item: responses.ResponseOutputItemUnion{Type: "function_call", ID: "item_1", CallID: "call_1", Name: "lookup_weather"}}, acc, &outputItems, reasoningItems, stats, &once, start, splitter, &reasoning, func(string) {}, emit, func(model.StreamEvent) {}, func(string) {}, setErr)
 	applyStreamEvent(responses.ResponseStreamEventUnion{Type: "response.output_item.added", OutputIndex: 1, Item: responses.ResponseOutputItemUnion{Type: "reasoning", ID: "rs_1"}}, acc, &outputItems, reasoningItems, stats, &once, start, splitter, &reasoning, func(string) {}, emit, func(model.StreamEvent) {}, func(string) {}, setErr)
 	applyStreamEvent(responses.ResponseStreamEventUnion{Type: "response.output_item.added", OutputIndex: 2, Item: responses.ResponseOutputItemUnion{Type: "message", ID: "msg_1"}}, acc, &outputItems, reasoningItems, stats, &once, start, splitter, &reasoning, func(string) {}, emit, func(model.StreamEvent) {}, func(string) {}, setErr)
-	applyStreamEvent(responses.ResponseStreamEventUnion{Type: "response.function_call_arguments.delta", ItemID: "item_1", Delta: responses.ResponseStreamEventUnionDelta{OfString: "{\"city\":"}}, acc, &outputItems, reasoningItems, stats, &once, start, splitter, &reasoning, func(string) {}, emit, func(model.StreamEvent) {}, func(string) {}, setErr)
-	applyStreamEvent(responses.ResponseStreamEventUnion{Type: "response.function_call_arguments.delta", ItemID: "item_1", Delta: responses.ResponseStreamEventUnionDelta{OfString: "\"Beijing\"}"}}, acc, &outputItems, reasoningItems, stats, &once, start, splitter, &reasoning, func(string) {}, emit, func(model.StreamEvent) {}, func(string) {}, setErr)
-	applyStreamEvent(responses.ResponseStreamEventUnion{Type: "response.reasoning_summary_text.delta", OutputIndex: 1, Delta: responses.ResponseStreamEventUnionDelta{OfString: "plan first"}}, acc, &outputItems, reasoningItems, stats, &once, start, splitter, &reasoning, func(string) {}, emit, func(model.StreamEvent) {}, func(string) {}, setErr)
-	applyStreamEvent(responses.ResponseStreamEventUnion{Type: "response.output_text.delta", OutputIndex: 2, ContentIndex: 0, Delta: responses.ResponseStreamEventUnionDelta{OfString: "<think>shadow</think>hello"}}, acc, &outputItems, reasoningItems, stats, &once, start, splitter, &reasoning, func(string) {}, emit, func(model.StreamEvent) {}, func(string) {}, setErr)
+	applyStreamEvent(responses.ResponseStreamEventUnion{Type: "response.function_call_arguments.delta", ItemID: "item_1", Delta: "{\"city\":"}, acc, &outputItems, reasoningItems, stats, &once, start, splitter, &reasoning, func(string) {}, emit, func(model.StreamEvent) {}, func(string) {}, setErr)
+	applyStreamEvent(responses.ResponseStreamEventUnion{Type: "response.function_call_arguments.delta", ItemID: "item_1", Delta: "\"Beijing\"}"}, acc, &outputItems, reasoningItems, stats, &once, start, splitter, &reasoning, func(string) {}, emit, func(model.StreamEvent) {}, func(string) {}, setErr)
+	applyStreamEvent(responses.ResponseStreamEventUnion{Type: "response.reasoning_summary_text.delta", OutputIndex: 1, Delta: "plan first"}, acc, &outputItems, reasoningItems, stats, &once, start, splitter, &reasoning, func(string) {}, emit, func(model.StreamEvent) {}, func(string) {}, setErr)
+	applyStreamEvent(responses.ResponseStreamEventUnion{Type: "response.output_text.delta", OutputIndex: 2, ContentIndex: 0, Delta: "<think>shadow</think>hello"}, acc, &outputItems, reasoningItems, stats, &once, start, splitter, &reasoning, func(string) {}, emit, func(model.StreamEvent) {}, func(string) {}, setErr)
 	applyStreamEvent(responses.ResponseStreamEventUnion{Type: "response.completed", Response: responses.Response{Status: "completed", Usage: responses.ResponseUsage{InputTokens: 3, OutputTokens: 4, TotalTokens: 7}}}, acc, &outputItems, reasoningItems, stats, &once, start, splitter, &reasoning, func(string) {}, emit, func(model.StreamEvent) {}, func(string) {}, setErr)
 
 	if len(chunks) != 1 || chunks[0] != "hello" {
@@ -160,8 +160,8 @@ func TestApplyStreamEvent_EmitsUpdatedToolCallForMatchingEvent(t *testing.T) {
 
 	applyStreamEvent(responses.ResponseStreamEventUnion{Type: "response.output_item.added", OutputIndex: 0, Item: responses.ResponseOutputItemUnion{Type: "function_call", ID: "item_1", CallID: "call_1", Name: "lookup_weather"}}, acc, &outputItems, reasoningItems, stats, &once, time.Now(), model.NewLeadingThinkStreamSplitter(), &strings.Builder{}, func(string) {}, func(string) {}, emitEvent, func(string) {}, func(error) {})
 	applyStreamEvent(responses.ResponseStreamEventUnion{Type: "response.output_item.added", OutputIndex: 1, Item: responses.ResponseOutputItemUnion{Type: "function_call", ID: "item_2", CallID: "call_2", Name: "lookup_time"}}, acc, &outputItems, reasoningItems, stats, &once, time.Now(), model.NewLeadingThinkStreamSplitter(), &strings.Builder{}, func(string) {}, func(string) {}, emitEvent, func(string) {}, func(error) {})
-	applyStreamEvent(responses.ResponseStreamEventUnion{Type: "response.function_call_arguments.delta", ItemID: "item_1", Delta: responses.ResponseStreamEventUnionDelta{OfString: "{\"city\":"}}, acc, &outputItems, reasoningItems, stats, &once, time.Now(), model.NewLeadingThinkStreamSplitter(), &strings.Builder{}, func(string) {}, func(string) {}, emitEvent, func(string) {}, func(error) {})
-	applyStreamEvent(responses.ResponseStreamEventUnion{Type: "response.function_call_arguments.delta", ItemID: "item_2", Delta: responses.ResponseStreamEventUnionDelta{OfString: "{\"zone\":"}}, acc, &outputItems, reasoningItems, stats, &once, time.Now(), model.NewLeadingThinkStreamSplitter(), &strings.Builder{}, func(string) {}, func(string) {}, emitEvent, func(string) {}, func(error) {})
+	applyStreamEvent(responses.ResponseStreamEventUnion{Type: "response.function_call_arguments.delta", ItemID: "item_1", Delta: "{\"city\":"}, acc, &outputItems, reasoningItems, stats, &once, time.Now(), model.NewLeadingThinkStreamSplitter(), &strings.Builder{}, func(string) {}, func(string) {}, emitEvent, func(string) {}, func(error) {})
+	applyStreamEvent(responses.ResponseStreamEventUnion{Type: "response.function_call_arguments.delta", ItemID: "item_2", Delta: "{\"zone\":"}, acc, &outputItems, reasoningItems, stats, &once, time.Now(), model.NewLeadingThinkStreamSplitter(), &strings.Builder{}, func(string) {}, func(string) {}, emitEvent, func(string) {}, func(error) {})
 
 	if len(emitted) < 4 {
 		t.Fatalf("len(emitted) = %d, want at least 4", len(emitted))
@@ -210,7 +210,7 @@ func TestApplyStreamEvent_ReasoningItemsRemainCompactForNonZeroOutputIndex(t *te
 		responses.ResponseStreamEventUnion{
 			Type:        "response.reasoning_summary_text.delta",
 			OutputIndex: 2,
-			Delta:       responses.ResponseStreamEventUnionDelta{OfString: "plan later"},
+			Delta:       "plan later",
 		},
 		acc,
 		&outputItems,
@@ -262,7 +262,7 @@ func TestResponseStreamFinalMessage_PreservesProviderStateOutputSequence(t *test
 			ID:        "fc_1",
 			CallID:    "call_1",
 			Name:      "lookup_weather",
-			Arguments: `{"city":"Beijing"}`,
+			Arguments: responses.ResponseOutputItemUnionArguments{OfString: `{"city":"Beijing"}`},
 		},
 	})
 	if err != nil {

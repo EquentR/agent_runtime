@@ -29,6 +29,23 @@ func TestMessageClonePreservesProviderState(t *testing.T) {
 	}
 }
 
+func TestMessageClonePreservesProviderData(t *testing.T) {
+	msg := Message{
+		Role:         RoleAssistant,
+		Content:      "hello",
+		ProviderData: map[string]any{"type": "openai_responses.output.v1", "output_json": `[{"type":"message","id":"msg_1"}]`},
+	}
+
+	cloned := cloneMessage(msg)
+	clonedData := cloned.ProviderData.(map[string]any)
+	clonedData["type"] = "changed"
+
+	originalData := msg.ProviderData.(map[string]any)
+	if originalData["type"] != "openai_responses.output.v1" {
+		t.Fatalf("provider data mutated = %#v", originalData)
+	}
+}
+
 func TestChatResponseSyncFieldsFromMessage(t *testing.T) {
 	resp := ChatResponse{
 		Message: Message{

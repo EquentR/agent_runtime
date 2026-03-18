@@ -6,7 +6,7 @@ import (
 
 	model "github.com/EquentR/agent_runtime/core/providers/types"
 	"github.com/EquentR/agent_runtime/core/types"
-	"github.com/openai/openai-go/responses"
+	"github.com/openai/openai-go/v3/responses"
 )
 
 func TestBuildResponseRequestParams_MessageAndToolMapping(t *testing.T) {
@@ -75,8 +75,11 @@ func TestBuildResponseRequestParams_MessageAndToolMapping(t *testing.T) {
 	if !ok {
 		t.Fatalf("reasoning type = %T, want map[string]any", payload["reasoning"])
 	}
-	if reasoning["summary"] != "auto" {
-		t.Fatalf("reasoning.summary = %v, want auto", reasoning["summary"])
+	if _, exists := reasoning["summary"]; exists {
+		t.Fatalf("reasoning.summary should be omitted, got %v", reasoning["summary"])
+	}
+	if got, _ := payload["store"].(bool); got != false {
+		t.Fatalf("store = %v, want false", got)
 	}
 
 	input, ok := payload["input"].([]any)
@@ -115,26 +118,8 @@ func TestBuildResponseRequestParams_MessageAndToolMapping(t *testing.T) {
 		t.Fatalf("function_call_output item count = %d, want 1", functionOutputCount)
 	}
 
-	tools, ok := payload["tools"].([]any)
-	if !ok || len(tools) != 1 {
-		t.Fatalf("tools = %#v, want length 1", payload["tools"])
-	}
-	tool0 := tools[0].(map[string]any)
-	if tool0["type"] != "function" {
-		t.Fatalf("tool.type = %v, want function", tool0["type"])
-	}
-	if tool0["name"] != "lookup_weather" {
-		t.Fatalf("tool.name = %v, want lookup_weather", tool0["name"])
-	}
-	if tool0["strict"] != true {
-		t.Fatalf("tool.strict = %v, want true", tool0["strict"])
-	}
-	paramsObj, ok := tool0["parameters"].(map[string]any)
-	if !ok {
-		t.Fatalf("tool.parameters type = %T, want map[string]any", tool0["parameters"])
-	}
-	if paramsObj["additionalProperties"] != false {
-		t.Fatalf("tool.parameters.additionalProperties = %v, want false", paramsObj["additionalProperties"])
+	if _, exists := payload["tools"]; exists {
+		t.Fatalf("tools should be omitted for continuation payload, got %#v", payload["tools"])
 	}
 
 	toolChoice, ok := payload["tool_choice"].(map[string]any)
@@ -143,6 +128,25 @@ func TestBuildResponseRequestParams_MessageAndToolMapping(t *testing.T) {
 	}
 	if toolChoice["type"] != "function" || toolChoice["name"] != "lookup_weather" {
 		t.Fatalf("tool_choice = %#v, want function lookup_weather", toolChoice)
+	}
+}
+
+func TestBuildResponseRequestParams_ForwardsPromptCacheKey(t *testing.T) {
+	req := model.ChatRequest{Model: "gpt-5.4", PromptCacheKey: "cache-key-1", Messages: []model.Message{{Role: model.RoleUser, Content: "hi"}}}
+	params, err := buildResponseRequestParams(req)
+	if err != nil {
+		t.Fatalf("buildResponseRequestParams() error = %v", err)
+	}
+	var payload map[string]any
+	data, err := json.Marshal(params)
+	if err != nil {
+		t.Fatalf("json.Marshal(params) error = %v", err)
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("json.Unmarshal(payload) error = %v", err)
+	}
+	if got, _ := payload["prompt_cache_key"].(string); got != "cache-key-1" {
+		t.Fatalf("prompt_cache_key = %q, want %q", got, "cache-key-1")
 	}
 }
 
@@ -209,7 +213,7 @@ func TestBuildResponseRequestParams_ReplaysAssistantReasoningItems(t *testing.T)
 	}
 }
 
-func TestBuildResponseRequestParams_ReplaysProviderStateOutputItems(t *testing.T) {
+func TestBuildResponseRequestParams_ReplaysLegacyProviderStateOutputItems(t *testing.T) {
 	params, err := buildResponseRequestParams(model.ChatRequest{
 		Model: "gpt-5.4",
 		Messages: []model.Message{{
@@ -271,21 +275,15 @@ func TestBuildResponseRequestParams_ReplaysProviderStateOutputItems(t *testing.T
 	}
 }
 
-func TestBuildResponseRequestParams_UsesPreviousResponseIDForToolContinuation(t *testing.T) {
+func TestBuildResponseRequestParams_ReplaysRawOutputForToolContinuation(t *testing.T) {
 	params, err := buildResponseRequestParams(model.ChatRequest{
 		Model: "gpt-5.4",
 		Messages: []model.Message{
 			{Role: model.RoleUser, Content: "list core/rag"},
 			{
-				Role: model.RoleAssistant,
-				ProviderState: &model.ProviderState{
-					Provider:   "openai_responses",
-					Format:     "openai_response_state.v1",
-					Version:    "v1",
-					ResponseID: "resp_tool_1",
-					Payload:    json.RawMessage(`{"response_id":"resp_tool_1","output":[{"type":"reasoning","id":"rs_1","summary":[{"text":"plan"}]},{"type":"function_call","call_id":"call_1","name":"list_files","arguments":"{\"path\":\"core/rag\"}"}]}`),
-				},
-				ToolCalls: []types.ToolCall{{ID: "call_1", Name: "list_files", Arguments: `{"path":"core/rag"}`}},
+				Role:         model.RoleAssistant,
+				ProviderData: map[string]any{"type": "openai_responses.output.v1", "response_id": "resp_tool_1", "output_json": `[{"type":"reasoning","id":"rs_1","summary":[{"text":"plan"}]},{"type":"function_call","call_id":"call_1","name":"list_files","arguments":"{\"path\":\"core/rag\"}"}]`},
+				ToolCalls:    []types.ToolCall{{ID: "call_1", Name: "list_files", Arguments: `{"path":"core/rag"}`}},
 			},
 			{Role: model.RoleTool, ToolCallId: "call_1", Content: `{"entries":[{"path":"core/rag/README.md","type":"file"}]}`},
 		},
@@ -303,40 +301,45 @@ func TestBuildResponseRequestParams_UsesPreviousResponseIDForToolContinuation(t 
 		t.Fatalf("json.Unmarshal(payload) error = %v", err)
 	}
 
-	if got, _ := payload["previous_response_id"].(string); got != "resp_tool_1" {
-		t.Fatalf("previous_response_id = %q, want %q", got, "resp_tool_1")
+	if _, exists := payload["previous_response_id"]; exists {
+		t.Fatalf("previous_response_id should be omitted, got %#v", payload["previous_response_id"])
 	}
 	input, ok := payload["input"].([]any)
 	if !ok {
 		t.Fatalf("input type = %T, want []any", payload["input"])
 	}
-	if len(input) != 1 {
-		t.Fatalf("len(input) = %d, want 1", len(input))
+	if len(input) != 3 {
+		t.Fatalf("len(input) = %d, want 3", len(input))
 	}
-	item, _ := input[0].(map[string]any)
-	if item["type"] != "function_call_output" {
-		t.Fatalf("input item = %#v, want function_call_output", item)
+	if item, _ := input[1].(map[string]any); item["type"] != "function_call" {
+		t.Fatalf("input[1] = %#v, want function_call", item)
 	}
-	if item["call_id"] != "call_1" {
-		t.Fatalf("call_id = %v, want call_1", item["call_id"])
+	if item, _ := input[1].(map[string]any); item["arguments"] != `{"path":"core/rag"}` {
+		t.Fatalf("input[1].arguments = %#v, want original arguments", item["arguments"])
+	}
+	if item, _ := input[2].(map[string]any); item["type"] != "function_call_output" {
+		t.Fatalf("input[2] = %#v, want function_call_output", item)
+	}
+	if item, _ := input[2].(map[string]any); item["output"] != `{"entries":[{"path":"core/rag/README.md","type":"file"}]}` {
+		t.Fatalf("input[2].output = %#v, want original output json", item["output"])
+	}
+	if first, _ := input[0].(map[string]any); first["type"] == "reasoning" {
+		t.Fatalf("input[0] = %#v, reasoning should be omitted for tool continuation", first)
+	}
+	if _, exists := payload["tools"]; exists {
+		t.Fatalf("tools should be omitted for tool continuation, got %#v", payload["tools"])
 	}
 }
 
-func TestBuildResponseRequestParams_UsesPreviousResponseIDForUserFollowup(t *testing.T) {
+func TestBuildResponseRequestParams_ReplaysRawOutputForUserFollowup(t *testing.T) {
 	params, err := buildResponseRequestParams(model.ChatRequest{
 		Model: "gpt-5.4",
 		Messages: []model.Message{
 			{Role: model.RoleUser, Content: "hello"},
 			{
-				Role: model.RoleAssistant,
-				ProviderState: &model.ProviderState{
-					Provider:   "openai_responses",
-					Format:     "openai_response_state.v1",
-					Version:    "v1",
-					ResponseID: "resp_turn_1",
-					Payload:    json.RawMessage(`{"response_id":"resp_turn_1","output":[{"type":"message","id":"msg_1","status":"completed","content":[{"type":"output_text","text":"hi"}]}]}`),
-				},
-				Content: "hi",
+				Role:         model.RoleAssistant,
+				ProviderData: map[string]any{"type": "openai_responses.output.v1", "response_id": "resp_turn_1", "output_json": `[{"type":"message","id":"msg_1","status":"completed","content":[{"type":"output_text","text":"hi"}]}]`},
+				Content:      "hi",
 			},
 			{Role: model.RoleUser, Content: "tell me more"},
 		},
@@ -353,19 +356,19 @@ func TestBuildResponseRequestParams_UsesPreviousResponseIDForUserFollowup(t *tes
 	if err := json.Unmarshal(data, &payload); err != nil {
 		t.Fatalf("json.Unmarshal(payload) error = %v", err)
 	}
-	if got, _ := payload["previous_response_id"].(string); got != "resp_turn_1" {
-		t.Fatalf("previous_response_id = %q, want %q", got, "resp_turn_1")
+	if _, exists := payload["previous_response_id"]; exists {
+		t.Fatalf("previous_response_id should be omitted, got %#v", payload["previous_response_id"])
 	}
 	input, ok := payload["input"].([]any)
 	if !ok {
 		t.Fatalf("input type = %T, want []any", payload["input"])
 	}
-	if len(input) != 1 {
-		t.Fatalf("len(input) = %d, want 1", len(input))
+	if len(input) != 3 {
+		t.Fatalf("len(input) = %d, want 3", len(input))
 	}
-	item, _ := input[0].(map[string]any)
+	item, _ := input[2].(map[string]any)
 	if item["role"] != "user" {
-		t.Fatalf("input item = %#v, want user message", item)
+		t.Fatalf("input item = %#v, want trailing user message", item)
 	}
 }
 
@@ -427,10 +430,11 @@ func TestBuildResponseRequestParams_ReplaysProviderStateMessageOutputItem(t *tes
 		Messages: []model.Message{{
 			Role: model.RoleAssistant,
 			ProviderState: &model.ProviderState{
-				Provider: "openai_responses",
-				Format:   "openai_response_state.v1",
-				Version:  "v1",
-				Payload:  json.RawMessage(`{"response_id":"resp_msg_1","output":[{"type":"message","id":"msg_1","status":"completed","content":[{"type":"output_text","text":"raw text"}]},{"type":"function_call","id":"fc_1","call_id":"call_1","name":"lookup_weather","arguments":"{}"}]}`),
+				Provider:   "openai_responses",
+				Format:     "openai_response_state.v1",
+				Version:    "v1",
+				ResponseID: "resp_msg_1",
+				Payload:    json.RawMessage(`{"response_id":"resp_msg_1","output":[{"type":"message","id":"msg_1","status":"completed","content":[{"type":"output_text","text":"raw text"}]},{"type":"function_call","id":"fc_1","call_id":"call_1","name":"lookup_weather","arguments":"{}"}],"items":[{"id":"msg_1","type":"message"},{"id":"fc_1","type":"function_call","call_id":"call_1","name":"lookup_weather"}]}`),
 			},
 			Content:   "normalized text",
 			Reasoning: "normalized reasoning",
@@ -458,16 +462,54 @@ func TestBuildResponseRequestParams_ReplaysProviderStateMessageOutputItem(t *tes
 	}
 
 	message, _ := input[0].(map[string]any)
-	if message["type"] != "message" || message["id"] != "msg_1" {
-		t.Fatalf("replayed message item = %#v", message)
+	if message["id"] != "msg_1" {
+		t.Fatalf("replayed message item = %#v, want item reference msg_1", message)
 	}
-	content, ok := message["content"].([]any)
-	if !ok || len(content) != 1 {
-		t.Fatalf("replayed message content = %#v", message["content"])
+	functionCall, _ := input[1].(map[string]any)
+	if functionCall["id"] != "fc_1" {
+		t.Fatalf("replayed function call item = %#v, want item reference fc_1", functionCall)
 	}
-	contentPart, _ := content[0].(map[string]any)
-	if contentPart["type"] != "output_text" || contentPart["text"] != "raw text" {
-		t.Fatalf("replayed message content part = %#v", contentPart)
+}
+
+func TestBuildResponseRequestParams_UsesItemReferenceReplayForResponseState(t *testing.T) {
+	params, err := buildResponseRequestParams(model.ChatRequest{
+		Model: "gpt-5.4",
+		Messages: []model.Message{{
+			Role: model.RoleAssistant,
+			ProviderState: &model.ProviderState{
+				Provider:   "openai_responses",
+				Format:     "openai_response_state.v1",
+				Version:    "v1",
+				ResponseID: "resp_items_1",
+				Payload:    json.RawMessage(`{"response_id":"resp_items_1","output":[{"type":"reasoning","id":"rs_1","summary":[{"text":"plan first"}]},{"type":"message","id":"msg_1","status":"completed","content":[{"type":"output_text","text":"hello"}]},{"type":"function_call","id":"fc_1","call_id":"call_1","name":"lookup_weather","arguments":"{}"}],"items":[{"id":"rs_1","type":"reasoning","encrypted_content":"enc_1"},{"id":"msg_1","type":"message"},{"id":"fc_1","type":"function_call","call_id":"call_1","name":"lookup_weather"}]}`),
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("buildResponseRequestParams() error = %v", err)
+	}
+
+	var payload map[string]any
+	data, err := json.Marshal(params)
+	if err != nil {
+		t.Fatalf("json.Marshal(params) error = %v", err)
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("json.Unmarshal(payload) error = %v", err)
+	}
+
+	input, ok := payload["input"].([]any)
+	if !ok {
+		t.Fatalf("input type = %T, want []any", payload["input"])
+	}
+	if len(input) != 3 {
+		t.Fatalf("len(input) = %d, want 3", len(input))
+	}
+	for i, wantID := range []string{"rs_1", "msg_1", "fc_1"} {
+		item, _ := input[i].(map[string]any)
+		if item["id"] != wantID {
+			t.Fatalf("input[%d] = %#v, want item reference %s", i, item, wantID)
+		}
 	}
 }
 
@@ -719,7 +761,7 @@ func TestExtractChatResponse_WithTextToolCallsAndUsage(t *testing.T) {
 				Type:      "function_call",
 				CallID:    "call_1",
 				Name:      "lookup_weather",
-				Arguments: `{"city":"Beijing"}`,
+				Arguments: responses.ResponseOutputItemUnionArguments{OfString: `{"city":"Beijing"}`},
 			},
 		},
 		Usage: responses.ResponseUsage{
@@ -797,7 +839,7 @@ func TestExtractChatResponse_PreservesReasoningItems(t *testing.T) {
 				Type:      "function_call",
 				CallID:    "call_1",
 				Name:      "lookup_weather",
-				Arguments: `{"city":"Beijing"}`,
+				Arguments: responses.ResponseOutputItemUnionArguments{OfString: `{"city":"Beijing"}`},
 			},
 		},
 	}
@@ -841,7 +883,7 @@ func TestExtractChatResponse_PopulatesFinalMessageProviderState(t *testing.T) {
 				ID:        "fc_1",
 				CallID:    "call_1",
 				Name:      "lookup_weather",
-				Arguments: `{"city":"Beijing"}`,
+				Arguments: responses.ResponseOutputItemUnionArguments{OfString: `{"city":"Beijing"}`},
 			},
 		},
 		Usage: responses.ResponseUsage{InputTokens: 3, OutputTokens: 4, TotalTokens: 7},
@@ -879,6 +921,7 @@ func TestExtractChatResponse_PopulatesFinalMessageProviderState(t *testing.T) {
 	var replayed struct {
 		ResponseID string                              `json:"response_id"`
 		Output     []responses.ResponseOutputItemUnion `json:"output"`
+		Items      []map[string]any                    `json:"items"`
 	}
 	if err := json.Unmarshal(got.Message.ProviderState.Payload, &replayed); err != nil {
 		t.Fatalf("unmarshal provider state payload: %v", err)
@@ -891,5 +934,8 @@ func TestExtractChatResponse_PopulatesFinalMessageProviderState(t *testing.T) {
 	}
 	if replayed.Output[0].Type != "reasoning" || replayed.Output[1].Type != "message" || replayed.Output[2].Type != "function_call" {
 		t.Fatalf("replayed output sequence = %#v", replayed.Output)
+	}
+	if len(replayed.Items) != 3 {
+		t.Fatalf("len(replayed.items) = %d, want 3", len(replayed.Items))
 	}
 }

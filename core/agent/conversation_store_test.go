@@ -2,11 +2,13 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
 
 	model "github.com/EquentR/agent_runtime/core/providers/types"
+	coretypes "github.com/EquentR/agent_runtime/core/types"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 )
@@ -53,6 +55,118 @@ func TestConversationStoreAppendAndListMessages(t *testing.T) {
 	}
 	if got[0].Role != model.RoleUser || got[1].Role != model.RoleAssistant {
 		t.Fatalf("messages = %#v, want user/assistant order", got)
+	}
+}
+
+func TestConversationStoreListMessagesPreservesReplayableAssistantState(t *testing.T) {
+	store := newConversationStoreForTest(t)
+	_, err := store.CreateConversation(context.Background(), CreateConversationInput{
+		ID:         "conv_1",
+		ProviderID: "openai",
+		ModelID:    "gpt-5.4",
+	})
+	if err != nil {
+		t.Fatalf("CreateConversation() error = %v", err)
+	}
+
+	want := model.Message{
+		Role:      model.RoleAssistant,
+		Content:   "hello",
+		Reasoning: "plan first",
+		ReasoningItems: []model.ReasoningItem{{
+			ID:               "rs_1",
+			EncryptedContent: "enc_1",
+			Summary:          []model.ReasoningSummary{{Text: "plan first"}},
+		}},
+		ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "lookup_weather", Arguments: `{"city":"Beijing"}`}},
+		ProviderState: &model.ProviderState{
+			Provider:   "openai_responses",
+			Format:     "openai_response_state.v1",
+			Version:    "v1",
+			ResponseID: "resp_1",
+			Payload:    json.RawMessage(`{"response_id":"resp_1","output":[{"type":"message","id":"msg_1"}]}`),
+		},
+		ProviderData: map[string]any{
+			"type":        "openai_responses.output.v1",
+			"response_id": "resp_1",
+			"output_json": `[{"type":"message","id":"msg_1"}]`,
+		},
+	}
+
+	err = store.AppendMessages(context.Background(), "conv_1", "task_1", []model.Message{want})
+	if err != nil {
+		t.Fatalf("AppendMessages() error = %v", err)
+	}
+
+	got, err := store.ListMessages(context.Background(), "conv_1")
+	if err != nil {
+		t.Fatalf("ListMessages() error = %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len(messages) = %d, want 1", len(got))
+	}
+	if got[0].ProviderState == nil {
+		t.Fatal("ProviderState = nil, want persisted replay state")
+	}
+	if got[0].ProviderState.ResponseID != "resp_1" {
+		t.Fatalf("ProviderState.ResponseID = %q, want resp_1", got[0].ProviderState.ResponseID)
+	}
+	if string(got[0].ProviderState.Payload) != string(want.ProviderState.Payload) {
+		t.Fatalf("ProviderState.Payload = %s, want %s", string(got[0].ProviderState.Payload), string(want.ProviderState.Payload))
+	}
+	if got[0].ProviderData == nil {
+		t.Fatal("ProviderData = nil, want persisted replay snapshot")
+	}
+	providerData, ok := got[0].ProviderData.(map[string]any)
+	if !ok {
+		t.Fatalf("ProviderData type = %T, want map[string]any", got[0].ProviderData)
+	}
+	if providerData["response_id"] != "resp_1" {
+		t.Fatalf("ProviderData.response_id = %#v, want resp_1", providerData["response_id"])
+	}
+}
+
+func TestConversationStoreListMessagesReadsVersionedEnvelope(t *testing.T) {
+	store := newConversationStoreForTest(t)
+	_, err := store.CreateConversation(context.Background(), CreateConversationInput{
+		ID:         "conv_1",
+		ProviderID: "openai",
+		ModelID:    "gpt-5.4",
+	})
+	if err != nil {
+		t.Fatalf("CreateConversation() error = %v", err)
+	}
+
+	envelopeRaw, err := json.Marshal(persistedConversationMessage{
+		Version: persistedConversationMessageVersion,
+		Message: model.Message{
+			Role:    model.RoleAssistant,
+			Content: "hello",
+			ProviderState: &model.ProviderState{
+				Provider:   "openai_responses",
+				Format:     "openai_response_state.v1",
+				Version:    "v1",
+				ResponseID: "resp_1",
+				Payload:    json.RawMessage(`{"response_id":"resp_1"}`),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal(envelope) error = %v", err)
+	}
+	if err := store.db.Create(&ConversationMessage{ConversationID: "conv_1", Seq: 1, Role: model.RoleAssistant, Content: "hello", MessageJSON: envelopeRaw}).Error; err != nil {
+		t.Fatalf("insert envelope message error = %v", err)
+	}
+
+	got, err := store.ListMessages(context.Background(), "conv_1")
+	if err != nil {
+		t.Fatalf("ListMessages() error = %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len(messages) = %d, want 1", len(got))
+	}
+	if got[0].ProviderState == nil || got[0].ProviderState.ResponseID != "resp_1" {
+		t.Fatalf("got[0].ProviderState = %#v, want ResponseID resp_1", got[0].ProviderState)
 	}
 }
 

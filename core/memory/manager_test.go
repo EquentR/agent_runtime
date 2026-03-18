@@ -510,10 +510,16 @@ func TestShortTermMessagesReturnsDeepCopy(t *testing.T) {
 			ThoughtSignature: []byte("sig"),
 		}},
 		ProviderState: &model.ProviderState{
-			Provider: "openai_completions",
-			Format:   "openai_chat_message.v1",
-			Version:  "v1",
-			Payload:  []byte(`{"content":"hello"}`),
+			Provider:   "openai_completions",
+			Format:     "openai_chat_message.v1",
+			Version:    "v1",
+			ResponseID: "resp_1",
+			Payload:    []byte(`{"content":"hello"}`),
+		},
+		ProviderData: map[string]any{
+			"type":        "openai_responses.output.v1",
+			"response_id": "resp_1",
+			"output_json": `[]`,
 		},
 	})
 
@@ -522,6 +528,9 @@ func TestShortTermMessagesReturnsDeepCopy(t *testing.T) {
 	got[0].ReasoningItems[0].Summary[0].Text = "mutated"
 	got[0].ToolCalls[0].ThoughtSignature[0] = 'x'
 	got[0].ProviderState.Payload[2] = 'X'
+	got[0].ProviderState.ResponseID = "changed"
+	providerData := got[0].ProviderData.(map[string]any)
+	providerData["response_id"] = "changed"
 
 	again := mgr.ShortTermMessages()
 	if string(again[0].Attachments[0].Data) != "hello" {
@@ -535,6 +544,16 @@ func TestShortTermMessagesReturnsDeepCopy(t *testing.T) {
 	}
 	if string(again[0].ProviderState.Payload) != `{"content":"hello"}` {
 		t.Fatalf("provider state payload = %q, want original payload", string(again[0].ProviderState.Payload))
+	}
+	if again[0].ProviderState.ResponseID != "resp_1" {
+		t.Fatalf("provider state response id = %q, want resp_1", again[0].ProviderState.ResponseID)
+	}
+	if again[0].ProviderData == nil {
+		t.Fatal("provider data = nil, want preserved provider data")
+	}
+	againProviderData := again[0].ProviderData.(map[string]any)
+	if againProviderData["response_id"] != "resp_1" {
+		t.Fatalf("provider data response_id = %#v, want resp_1", againProviderData["response_id"])
 	}
 }
 
