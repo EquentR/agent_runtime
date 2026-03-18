@@ -229,6 +229,55 @@ func TestBuildResponseRequestParams_ReplaysRawOutputForToolContinuation(t *testi
 	}
 }
 
+func TestBuildResponseRequestParams_KeepsToolsForNewUserTurnAfterToolContinuation(t *testing.T) {
+	params, err := buildResponseRequestParams(model.ChatRequest{
+		Model: "gpt-5.4",
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: "read README"},
+			{
+				Role:         model.RoleAssistant,
+				ProviderData: map[string]any{"type": rawOutputSnapshotType, "response_id": "resp_tool_1", "output_json": `[{"type":"reasoning","id":"rs_1","summary":[{"text":"plan"}]},{"type":"function_call","call_id":"call_1","name":"read_file","arguments":"{\"path\":\"README.md\"}"}]`},
+				ToolCalls:    []types.ToolCall{{ID: "call_1", Name: "read_file", Arguments: `{"path":"README.md"}`}},
+			},
+			{Role: model.RoleTool, ToolCallId: "call_1", Content: `{"content":"readme body"}`},
+			{Role: model.RoleAssistant, Content: "README summary"},
+			{Role: model.RoleUser, Content: "also read AGENTS.md"},
+		},
+		Tools: []types.Tool{{
+			Name:        "read_file",
+			Description: "读取文件",
+			Parameters: types.JSONSchema{
+				Type: "object",
+				Properties: map[string]types.SchemaProperty{
+					"path": {Type: "string", Description: "文件路径"},
+				},
+				Required: []string{"path"},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("buildResponseRequestParams() error = %v", err)
+	}
+
+	var payload map[string]any
+	data, err := json.Marshal(params)
+	if err != nil {
+		t.Fatalf("json.Marshal(params) error = %v", err)
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("json.Unmarshal(payload) error = %v", err)
+	}
+
+	tools, ok := payload["tools"].([]any)
+	if !ok || len(tools) != 1 {
+		t.Fatalf("tools = %#v, want length 1", payload["tools"])
+	}
+	tool0, _ := tools[0].(map[string]any)
+	if got, _ := tool0["name"].(string); got != "read_file" {
+		t.Fatalf("tool name = %q, want read_file", got)
+	}
+}
+
 func TestExtractChatResponse_PopulatesFinalMessageProviderState(t *testing.T) {
 	resp := &responses.Response{
 		ID: "resp_1",

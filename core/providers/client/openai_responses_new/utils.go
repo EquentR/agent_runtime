@@ -51,7 +51,7 @@ func buildResponseRequestParams(req model.ChatRequest) (responses.ResponseNewPar
 		params.ToolChoice = *toolChoice
 	}
 
-	if responseInputHasToolOutput(input) {
+	if requestEndsWithToolContinuation(req.Messages) {
 		params.Tools = nil
 	}
 
@@ -66,6 +66,30 @@ func responseInputHasToolOutput(input responses.ResponseInputParam) bool {
 				if obj["type"] == "function_call_output" {
 					return true
 				}
+			}
+		}
+	}
+	return false
+}
+
+func requestEndsWithToolContinuation(messages []model.Message) bool {
+	if len(messages) == 0 {
+		return false
+	}
+	hasTrailingTool := false
+	for i := len(messages) - 1; i >= 0; i-- {
+		switch messages[i].Role {
+		case model.RoleTool:
+			hasTrailingTool = true
+		case model.RoleAssistant:
+			return hasTrailingTool
+		case model.RoleSystem, model.RoleUser:
+			if hasTrailingTool {
+				return false
+			}
+		default:
+			if hasTrailingTool {
+				return false
 			}
 		}
 	}
