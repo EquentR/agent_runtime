@@ -106,6 +106,30 @@ func (s *ConversationStore) ListConversations(ctx context.Context) ([]Conversati
 	return conversations, nil
 }
 
+func (s *ConversationStore) DeleteConversation(ctx context.Context, id string) error {
+	conversationID := strings.TrimSpace(id)
+	if conversationID == "" {
+		return ErrConversationNotFound
+	}
+
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if _, err := s.getConversationTx(tx, conversationID); err != nil {
+			return err
+		}
+		if err := tx.Where("conversation_id = ?", conversationID).Delete(&ConversationMessage{}).Error; err != nil {
+			return err
+		}
+		result := tx.Delete(&Conversation{}, "id = ?", conversationID)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return ErrConversationNotFound
+		}
+		return nil
+	})
+}
+
 func (s *ConversationStore) CreateConversation(ctx context.Context, input CreateConversationInput) (*Conversation, error) {
 	conversationID := strings.TrimSpace(input.ID)
 	if conversationID == "" {

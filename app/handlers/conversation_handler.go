@@ -19,7 +19,7 @@ func NewConversationHandler(store *coreagent.ConversationStore) *ConversationHan
 	return &ConversationHandler{store: store}
 }
 
-// Register 注册 conversation 只读接口路由。
+// Register 注册 conversation 查询与删除接口路由。
 func (h *ConversationHandler) Register(rg *gin.RouterGroup) {
 	if h.store == nil {
 		return
@@ -28,6 +28,7 @@ func (h *ConversationHandler) Register(rg *gin.RouterGroup) {
 		resp.NewJsonOptionsHandler(h.handleListConversations),
 		resp.NewJsonOptionsHandler(h.handleGetConversation),
 		resp.NewJsonOptionsHandler(h.handleGetConversationMessages),
+		resp.NewJsonOptionsHandler(h.handleDeleteConversation),
 	})
 }
 
@@ -95,5 +96,29 @@ func (h *ConversationHandler) handleGetConversationMessages() (method, relativeP
 		}
 		messages, err := h.store.ListMessages(c.Request.Context(), c.Param("id"))
 		return messages, nil, err
+	}, nil
+}
+
+// handleDeleteConversation 返回删除指定会话接口的路由定义。
+//
+// @Summary 删除会话
+// @Description 根据 conversation id 删除会话及其历史消息，供 UI 删除会话项。
+// @Tags conversations
+// @Produce json
+// @Param id path string true "会话 ID"
+// @Success 200 {object} JsonEnvelope
+// @Failure 404 {object} ErrorSwaggerResponse
+// @Router /conversations/{id} [delete]
+func (h *ConversationHandler) handleDeleteConversation() (method, relativePath string, wrapper resp.JsonOptionsResultWrapper, opts []resp.WrapperOption) {
+	return http.MethodDelete, "/:id", func(c *gin.Context) (any, []resp.ResOpt, error) {
+		if h.store == nil {
+			return nil, nil, fmt.Errorf("conversation store is not configured")
+		}
+		if err := h.store.DeleteConversation(c.Request.Context(), c.Param("id")); errors.Is(err, coreagent.ErrConversationNotFound) {
+			return gin.H{"deleted": false}, []resp.ResOpt{resp.WithCode(resp.NotFound)}, err
+		} else if err != nil {
+			return nil, nil, err
+		}
+		return gin.H{"deleted": true}, nil, nil
 	}, nil
 }

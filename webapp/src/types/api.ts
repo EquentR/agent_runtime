@@ -61,9 +61,24 @@ export interface TranscriptEntry {
   kind: 'user' | 'reasoning' | 'tool' | 'reply' | 'error'
   title: string
   content?: string
-  summary?: string
+  details?: TranscriptEntryDetail[]
   status?: 'running' | 'done' | 'error'
-  tool_call_id?: string
+  group_key?: string
+}
+
+export interface TranscriptEntryDetail {
+  key?: string
+  label: string
+  preview?: string
+  collapsed?: boolean
+  loading?: boolean
+  blocks?: TranscriptEntryDetailBlock[]
+}
+
+export interface TranscriptEntryDetailBlock {
+  label: string
+  value: string
+  loading?: boolean
 }
 
 export interface RunTaskRequest {

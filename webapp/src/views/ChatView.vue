@@ -1,12 +1,14 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import { Close, Menu } from '@element-plus/icons-vue'
 
 import ConversationSidebar from '../components/ConversationSidebar.vue'
 import MessageComposer from '../components/MessageComposer.vue'
 import MessageList from '../components/MessageList.vue'
 import {
   createRunTask,
+  deleteConversation,
   fetchConversationMessages,
   fetchConversations,
   streamRunTask,
@@ -22,11 +24,27 @@ const router = useRouter()
 const messagesLoading = ref(false)
 const sending = ref(false)
 const sidebarLoading = ref(false)
+const sidebarCollapsed = ref(false)
+const sidebarMobile = ref(false)
+const sidebarDrawerOpen = ref(false)
 const username = ref(getSessionName())
 const activeConversationId = ref('')
 const conversations = ref<Conversation[]>([])
 const entries = ref<TranscriptEntry[]>([])
 const errorMessage = ref('')
+
+const chatShellClass = computed(() => ({
+  'sidebar-collapsed': !sidebarMobile.value && sidebarCollapsed.value,
+  'sidebar-mobile': sidebarMobile.value,
+  'sidebar-open': sidebarMobile.value && sidebarDrawerOpen.value,
+}))
+
+const topbarStatusLabel = computed(() => (messagesLoading.value || sending.value ? 'Syncing' : 'Ready'))
+const topbarStatusClass = computed(() => ({
+  'status-pill': true,
+  idle: !messagesLoading.value && !sending.value,
+  loading: messagesLoading.value || sending.value,
+}))
 
 function activeConversationTitle() {
   const current = conversations.value.find((conversation) => conversation.id === activeConversationId.value)
@@ -36,7 +54,7 @@ function activeConversationTitle() {
   if (activeConversationId.value) {
     return 'Untitled conversation'
   }
-  return 'New conversation'
+  return '新对话'
 }
 
 function syncChatState() {
@@ -48,27 +66,25 @@ function syncChatState() {
 
 watch([activeConversationId, entries], syncChatState, { deep: true })
 
-async function loadConversations(selectFirst = false) {
+async function loadConversations(preferredConversationId = '') {
   sidebarLoading.value = true
 
   try {
     conversations.value = await fetchConversations()
 
-    if (selectFirst) {
-      if (activeConversationId.value) {
-        const exists = conversations.value.some((conversation) => conversation.id === activeConversationId.value)
-        if (exists) {
-          await selectConversation(activeConversationId.value)
-          return
-        }
-      }
-
-      if (!activeConversationId.value && entries.value.length > 0) {
+    if (preferredConversationId) {
+      activeConversationId.value = preferredConversationId
+      const exists = conversations.value.some((conversation) => conversation.id === preferredConversationId)
+      if (exists) {
         return
       }
+    }
 
-      if (!activeConversationId.value && conversations.value.length > 0) {
-        await selectConversation(conversations.value[0].id)
+    if (activeConversationId.value) {
+      const exists = conversations.value.some((conversation) => conversation.id === activeConversationId.value)
+      if (exists) {
+        await selectConversation(activeConversationId.value)
+        return
       }
     }
   } finally {
@@ -78,6 +94,7 @@ async function loadConversations(selectFirst = false) {
 
 async function selectConversation(conversationId: string) {
   activeConversationId.value = conversationId
+  sidebarDrawerOpen.value = false
   messagesLoading.value = true
   errorMessage.value = ''
 
@@ -95,6 +112,43 @@ function startNewConversation() {
   activeConversationId.value = ''
   entries.value = []
   errorMessage.value = ''
+  sidebarDrawerOpen.value = false
+}
+
+function toggleSidebarCollapsed() {
+  if (sidebarMobile.value) {
+    sidebarDrawerOpen.value = !sidebarDrawerOpen.value
+    return
+  }
+
+  sidebarCollapsed.value = !sidebarCollapsed.value
+}
+
+function closeSidebarDrawer() {
+  sidebarDrawerOpen.value = false
+}
+
+function syncSidebarViewport() {
+  const mobile = window.innerWidth <= 960
+  sidebarMobile.value = mobile
+
+  if (!mobile) {
+    sidebarDrawerOpen.value = false
+  }
+}
+
+async function handleDeleteConversation(conversationId: string) {
+  errorMessage.value = ''
+
+  try {
+    await deleteConversation(conversationId)
+    if (activeConversationId.value === conversationId) {
+      startNewConversation()
+    }
+    await loadConversations()
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : 'Failed to delete conversation'
+  }
 }
 
 function applyStreamEvent(event: TaskStreamEvent) {
@@ -124,7 +178,7 @@ async function handleSend(message: string) {
     activeConversationId.value = result.conversation_id
     const messages = await fetchConversationMessages(result.conversation_id)
     entries.value = buildTranscriptEntries(messages)
-    await loadConversations()
+    await loadConversations(result.conversation_id)
   } catch (error) {
     const taskError = error instanceof Error ? error.message : 'Failed to send message'
     errorMessage.value = taskError
@@ -144,39 +198,67 @@ async function handleLogout() {
 }
 
 onMounted(async () => {
+  syncSidebarViewport()
+  window.addEventListener('resize', syncSidebarViewport)
+
   const saved = loadChatState()
   activeConversationId.value = saved.activeConversationId
   entries.value = saved.entries
-  await loadConversations(true)
+  await loadConversations()
 
   if (!activeConversationId.value && entries.value.length > 0) {
     return
   }
 })
+
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', syncSidebarViewport)
+})
 </script>
 
 <template>
-  <main class="chat-shell">
+  <main class="chat-shell" :class="chatShellClass">
+    <button
+      v-if="sidebarMobile && sidebarDrawerOpen"
+      class="sidebar-backdrop"
+      type="button"
+      aria-label="Close conversations drawer"
+      @click="closeSidebarDrawer"
+    ></button>
+
     <ConversationSidebar
       :active-conversation-id="activeConversationId"
+      :collapsed="sidebarCollapsed"
       :conversations="conversations"
       :loading="sidebarLoading"
+      :mobile="sidebarMobile"
+      :open="sidebarDrawerOpen"
+      :username="username"
       @create="startNewConversation"
+      @close="closeSidebarDrawer"
+      @delete="handleDeleteConversation"
+      @logout="handleLogout"
       @select="selectConversation"
+      @toggle-collapse="toggleSidebarCollapsed"
     />
 
     <section class="chat-stage">
       <header class="topbar">
+        <button
+          v-if="sidebarMobile"
+          class="ghost-button icon-button topbar-sidebar-toggle"
+          type="button"
+          aria-label="Open conversations"
+          @click="toggleSidebarCollapsed"
+        >
+          <component :is="sidebarDrawerOpen ? Close : Menu" />
+        </button>
         <div class="topbar-title-block">
-          <p class="eyebrow">Conversation</p>
           <strong class="topbar-conversation-title" :title="activeConversationTitle()">
             {{ activeConversationTitle() }}
           </strong>
         </div>
-        <div class="topbar-actions">
-          <span class="topbar-user">Signed in as {{ username }}</span>
-          <button class="ghost-button" type="button" @click="handleLogout">Log out</button>
-        </div>
+        <span :class="topbarStatusClass">{{ topbarStatusLabel }}</span>
       </header>
 
       <p v-if="errorMessage" class="error-banner">{{ errorMessage }}</p>

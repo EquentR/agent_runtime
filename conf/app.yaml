@@ -33,9 +33,9 @@ llmProviders:
   baseUrl: ${OPENAI_BASE_URL}
   apiKey: ${OPENAI_API_KEY}
   models:
-    - id: gpt-5.4
-      name: gpt-5.4
-      type: openai_responses
+    - id: glm-5
+      name: glm-5
+      type: openai_completions
       context:
         max: 1050000
         input: 922000

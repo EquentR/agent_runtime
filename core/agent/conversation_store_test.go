@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -228,6 +229,39 @@ func TestConversationStoreListConversationsReturnsMostRecentFirst(t *testing.T) 
 	}
 	if conversations[0].ID != "conv_new" {
 		t.Fatalf("first conversation = %q, want conv_new", conversations[0].ID)
+	}
+}
+
+func TestConversationStoreDeleteConversationRemovesMessages(t *testing.T) {
+	store := newConversationStoreForTest(t)
+	_, err := store.CreateConversation(context.Background(), CreateConversationInput{
+		ID:         "conv_1",
+		ProviderID: "openai",
+		ModelID:    "gpt-5.4",
+	})
+	if err != nil {
+		t.Fatalf("CreateConversation() error = %v", err)
+	}
+	if err := store.AppendMessages(context.Background(), "conv_1", "task_1", []model.Message{{Role: model.RoleUser, Content: "hello"}}); err != nil {
+		t.Fatalf("AppendMessages() error = %v", err)
+	}
+
+	err = store.DeleteConversation(context.Background(), "conv_1")
+	if err != nil {
+		t.Fatalf("DeleteConversation() error = %v", err)
+	}
+
+	_, err = store.GetConversation(context.Background(), "conv_1")
+	if err == nil || !errors.Is(err, ErrConversationNotFound) {
+		t.Fatalf("GetConversation() error = %v, want ErrConversationNotFound", err)
+	}
+
+	messages, err := store.ListMessages(context.Background(), "conv_1")
+	if err != nil {
+		t.Fatalf("ListMessages() error = %v", err)
+	}
+	if len(messages) != 0 {
+		t.Fatalf("len(messages) = %d, want 0 after delete", len(messages))
 	}
 }
 

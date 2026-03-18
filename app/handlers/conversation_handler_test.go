@@ -116,6 +116,41 @@ func TestConversationHandlerListConversations(t *testing.T) {
 	}
 }
 
+func TestConversationHandlerDeleteConversation(t *testing.T) {
+	store, server := newConversationHandlerTestServer(t)
+	_, err := store.CreateConversation(context.Background(), coreagent.CreateConversationInput{ID: "conv_1", ProviderID: "openai", ModelID: "gpt-5.4"})
+	if err != nil {
+		t.Fatalf("CreateConversation() error = %v", err)
+	}
+	if err := store.AppendMessages(context.Background(), "conv_1", "task_1", []model.Message{{Role: model.RoleUser, Content: "hello"}}); err != nil {
+		t.Fatalf("AppendMessages() error = %v", err)
+	}
+
+	req, err := http.NewRequest(http.MethodDelete, server.URL+"/api/v1/conversations/conv_1", nil)
+	if err != nil {
+		t.Fatalf("http.NewRequest() error = %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Do() error = %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	listResp, err := http.Get(server.URL + "/api/v1/conversations")
+	if err != nil {
+		t.Fatalf("http.Get(list) error = %v", err)
+	}
+	defer listResp.Body.Close()
+	got := decodeConversationListResponse(t, listResp.Body)
+	if len(got) != 0 {
+		t.Fatalf("len(conversations) = %d, want 0 after delete", len(got))
+	}
+}
+
 func newConversationHandlerTestServer(t *testing.T) (*coreagent.ConversationStore, *httptest.Server) {
 	t.Helper()
 	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())

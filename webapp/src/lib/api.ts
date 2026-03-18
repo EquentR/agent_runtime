@@ -51,15 +51,18 @@ export function normalizeConversationMessage(
     Content?: string
     Reasoning?: string
     ToolCallId?: string
+    ToolCallID?: string
+    toolCallId?: string
     ReasoningItems?: Array<{ Summary?: Array<{ Text?: string }> }>
-    ToolCalls?: Array<{ ID?: string; Name?: string; Arguments?: string }>
+    ToolCalls?: Array<{ ID?: string; Name?: string; Arguments?: string; id?: string; name?: string; arguments?: string }>
+    toolCalls?: Array<{ ID?: string; Name?: string; Arguments?: string; id?: string; name?: string; arguments?: string }>
   },
 ): ConversationMessage {
   return {
     role: (message.role ?? message.Role ?? 'assistant') as ConversationMessage['role'],
     content: message.content ?? message.Content ?? '',
     reasoning: message.reasoning ?? message.Reasoning,
-    tool_call_id: message.tool_call_id ?? message.ToolCallId,
+    tool_call_id: message.tool_call_id ?? message.ToolCallId ?? message.ToolCallID ?? message.toolCallId,
     reasoning_items:
       message.reasoning_items ??
       message.ReasoningItems?.flatMap((item) =>
@@ -67,10 +70,15 @@ export function normalizeConversationMessage(
       ),
     tool_calls:
       message.tool_calls ??
+      message.toolCalls?.map((toolCall) => ({
+        id: toolCall.id ?? toolCall.ID ?? '',
+        name: toolCall.name ?? toolCall.Name ?? '',
+        arguments: toolCall.arguments ?? toolCall.Arguments ?? '',
+      })) ??
       message.ToolCalls?.map((toolCall) => ({
-        id: toolCall.ID ?? '',
-        name: toolCall.Name ?? '',
-        arguments: toolCall.Arguments ?? '',
+        id: toolCall.id ?? toolCall.ID ?? '',
+        name: toolCall.name ?? toolCall.Name ?? '',
+        arguments: toolCall.arguments ?? toolCall.Arguments ?? '',
       })),
   }
 }
@@ -146,6 +154,12 @@ export async function fetchConversationMessages(conversationId: string) {
     Array<Partial<ConversationMessage> & { Role?: string; Content?: string; Reasoning?: string; ToolCallId?: string }>
   >(`/conversations/${conversationId}/messages`)
   return messages.map((message) => normalizeConversationMessage(message))
+}
+
+export async function deleteConversation(conversationId: string) {
+	return request<{ deleted: boolean }>(`/conversations/${conversationId}`, {
+		method: 'DELETE',
+	})
 }
 
 export async function createRunTask(input: {

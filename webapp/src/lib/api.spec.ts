@@ -79,6 +79,22 @@ describe('normalizeConversationMessage', () => {
       tool_calls: [{ id: 'call_1', name: 'read_file', arguments: '{}' }],
     })
   })
+
+  it('normalizes camelCase tool fields so static replay can merge with SSE cards', () => {
+    expect(
+      normalizeConversationMessage({
+        role: 'tool',
+        content: 'README line 3',
+        toolCallId: 'call_1',
+        toolCalls: [{ id: 'call_1', name: 'read_file', arguments: '{}' }],
+      }),
+    ).toEqual({
+      role: 'tool',
+      content: 'README line 3',
+      tool_call_id: 'call_1',
+      tool_calls: [{ id: 'call_1', name: 'read_file', arguments: '{}' }],
+    })
+  })
 })
 
 describe('normalizeRunTaskResult', () => {

@@ -11,7 +11,7 @@ import (
 	coreagent "github.com/EquentR/agent_runtime/core/agent"
 	googleclient "github.com/EquentR/agent_runtime/core/providers/client/google"
 	openaicompletions "github.com/EquentR/agent_runtime/core/providers/client/openai_completions"
-	openairesponsesnew "github.com/EquentR/agent_runtime/core/providers/client/openai_responses_new"
+	openairesponses "github.com/EquentR/agent_runtime/core/providers/client/openai_responses"
 	model "github.com/EquentR/agent_runtime/core/providers/types"
 	coretasks "github.com/EquentR/agent_runtime/core/tasks"
 	coretools "github.com/EquentR/agent_runtime/core/tools"
@@ -96,7 +96,7 @@ func buildLLMClientFactory(provider *coretypes.LLMProvider) coreagent.ClientFact
 		}
 		switch model.ModelType() {
 		case coretypes.LLMTypeOpenAIResponses:
-			return openairesponsesnew.NewOpenAiResponsesClient(provider.AuthKey(), provider.BaseURL(), 30*time.Second), nil
+			return openairesponses.NewOpenAiResponsesClient(provider.AuthKey(), provider.BaseURL(), 30*time.Second), nil
 		case coretypes.LLMTypeOpenAICompletions:
 			return openaicompletions.NewOpenAiCompletionsClient(provider.BaseURL(), provider.AuthKey()), nil
 		case coretypes.LLMTypeGoogle:
