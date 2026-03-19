@@ -135,15 +135,48 @@ p {
 }
 
 .login-card {
-  width: min(100%, 460px);
+  width: min(100%, 400px);
   display: grid;
-  gap: 1rem;
-  padding: 2rem;
-  border-radius: 28px;
+  gap: 0.8rem;
+  padding: 1.5rem;
+  border-radius: 22px;
   background: rgba(255, 255, 255, 0.82);
   border: 1px solid rgba(25, 50, 59, 0.1);
   box-shadow: 0 28px 60px rgba(39, 61, 68, 0.12);
   animation: rise-in 420ms ease;
+}
+
+.login-hero {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.auth-switch {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.45rem;
+  padding: 0.25rem;
+  border-radius: 999px;
+  background: rgba(240, 245, 246, 0.95);
+}
+
+.auth-switch-button {
+  border: 0;
+  border-radius: 999px;
+  padding: 0.55rem 0.8rem;
+  color: #587077;
+  background: transparent;
+}
+
+.auth-switch-button.active {
+  color: #fff7f2;
+  background: linear-gradient(135deg, #d8684b 0%, #be563e 100%);
+  box-shadow: 0 12px 24px rgba(196, 88, 63, 0.18);
+}
+
+.auth-error {
+  padding: 0.72rem 0.86rem;
+  border-radius: 12px;
 }
 
 .login-card h1,

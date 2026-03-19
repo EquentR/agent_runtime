@@ -2,6 +2,7 @@ import type {
   ApiEnvelope,
   Conversation,
   ConversationMessage,
+  TaskDetails,
   RunTaskRequest,
   RunTaskResult,
   TaskStreamEvent,
@@ -11,6 +12,7 @@ import type {
 const API_BASE = '/api/v1'
 const POLL_INTERVAL_MS = 1200
 const POLL_TIMEOUT_MS = 90000
+export const TASK_STREAM_ABORTED_MESSAGE = 'Task event stream aborted'
 
 export function unwrapEnvelope<T>(envelope: ApiEnvelope<T>) {
   if (!envelope.ok) {
@@ -94,6 +96,14 @@ export function normalizeRunTaskResult(
   }
 }
 
+export function normalizeTaskDetails(task: TaskDetails): TaskDetails {
+  return {
+    ...task,
+    result: task.result ? normalizeRunTaskResult(task.result) : undefined,
+    result_json: task.result_json ? normalizeRunTaskResult(task.result_json) : undefined,
+  }
+}
+
 export function extractStreamText(event: Partial<TaskStreamEvent>) {
   if (event.type !== 'log.message' || !event.payload) {
     return ''
@@ -134,6 +144,7 @@ export function formatTaskError(error: unknown, status?: string) {
 
 async function request<T>(path: string, init?: RequestInit) {
   const response = await fetch(`${API_BASE}${path}`, {
+    credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
       ...(init?.headers ?? {}),
@@ -157,9 +168,9 @@ export async function fetchConversationMessages(conversationId: string) {
 }
 
 export async function deleteConversation(conversationId: string) {
-	return request<{ deleted: boolean }>(`/conversations/${conversationId}`, {
-		method: 'DELETE',
-	})
+  return request<{ deleted: boolean }>(`/conversations/${conversationId}`, {
+    method: 'DELETE',
+  })
 }
 
 export async function createRunTask(input: {
@@ -180,14 +191,20 @@ export async function fetchTask(taskId: string) {
 }
 
 export async function fetchTaskDetails(taskId: string) {
-  return fetchTaskResult(taskId)
+  const task = await fetchTaskResult(taskId)
+  return normalizeTaskDetails(task)
+}
+
+export async function findRunningTaskByConversation(conversationId: string) {
+  const task = await request<TaskDetails | null>(`/tasks/running?conversation_id=${encodeURIComponent(conversationId)}`)
+  return task ? normalizeTaskDetails(task) : null
 }
 
 async function fetchTaskResult(taskId: string) {
-  const response = await fetch(`${API_BASE}/tasks/${taskId}`)
-  const payload = (await response.json()) as ApiEnvelope<
-    TaskSnapshot & { result?: RunTaskResult; result_json?: RunTaskResult; error?: unknown }
-  >
+  const response = await fetch(`${API_BASE}/tasks/${taskId}`, {
+    credentials: 'include',
+  })
+  const payload = (await response.json()) as ApiEnvelope<TaskDetails>
   return unwrapEnvelope(payload)
 }
 
@@ -208,9 +225,9 @@ export async function waitForRunTask(taskId: string) {
       throw new Error('Task succeeded but no result payload was returned')
     }
 
-	    if (task.status === 'failed' || task.status === 'cancelled') {
-	      throw new Error(formatTaskError(task.error, task.status))
-	    }
+    if (task.status === 'failed' || task.status === 'cancelled') {
+      throw new Error(formatTaskError(task.error, task.status))
+    }
 
     await new Promise((resolve) => window.setTimeout(resolve, POLL_INTERVAL_MS))
   }
@@ -222,17 +239,41 @@ export async function streamRunTask(
   taskId: string,
   onTextDelta: (chunk: string) => void,
   onEvent?: (event: TaskStreamEvent) => void,
+  options?: { signal?: AbortSignal },
 ) {
   return new Promise<RunTaskResult>((resolve, reject) => {
-    const stream = new EventSource(`${API_BASE}/tasks/${taskId}/events?after_seq=0`)
+    const stream = new EventSource(`${API_BASE}/tasks/${taskId}/events?after_seq=0`, { withCredentials: true })
     let settled = false
 
-    const close = () => {
-      if (!settled) {
-        settled = true
-        stream.close()
+    const cleanupAbort = () => {
+      if (options?.signal) {
+        options.signal.removeEventListener('abort', handleAbort)
       }
     }
+
+    const close = () => {
+      stream.close()
+      cleanupAbort()
+    }
+
+    const rejectOnce = (error: unknown) => {
+      if (settled) {
+        return
+      }
+      settled = true
+      close()
+      reject(error)
+    }
+
+    const handleAbort = () => {
+      rejectOnce(new Error(TASK_STREAM_ABORTED_MESSAGE))
+    }
+
+    if (options?.signal?.aborted) {
+      rejectOnce(new Error(TASK_STREAM_ABORTED_MESSAGE))
+      return
+    }
+    options?.signal?.addEventListener('abort', handleAbort, { once: true })
 
     const handleEvent = (message: MessageEvent<string>) => {
       try {
@@ -247,20 +288,23 @@ export async function streamRunTask(
           void finish()
         }
       } catch (error) {
-        close()
-        reject(error)
+        rejectOnce(error)
       }
     }
 
     const finish = async () => {
+      if (settled) {
+        return
+      }
+      settled = true
       close()
 
       try {
-	        const task = await fetchTaskResult(taskId)
-	        if (task.status === 'failed' || task.status === 'cancelled') {
-	          reject(new Error(formatTaskError(task.error, task.status)))
-	          return
-	        }
+        const task = await fetchTaskResult(taskId)
+        if (task.status === 'failed' || task.status === 'cancelled') {
+          reject(new Error(formatTaskError(task.error, task.status)))
+          return
+        }
         const result = await waitForRunTask(taskId)
         resolve(result)
       } catch (error) {
@@ -274,8 +318,7 @@ export async function streamRunTask(
     stream.addEventListener('task.finished', handleEvent)
   
     stream.onerror = () => {
-      close()
-      reject(new Error('Task event stream disconnected'))
+      rejectOnce(new Error('Task event stream disconnected'))
     }
   })
 }

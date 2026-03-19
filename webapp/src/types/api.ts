@@ -40,6 +40,21 @@ export interface TaskSnapshot {
   retry_of_task_id?: string
 }
 
+export interface TaskInput {
+  conversation_id?: string
+  provider_id?: string
+  model_id?: string
+  message?: string
+  created_by?: string
+}
+
+export interface TaskDetails extends TaskSnapshot {
+  input?: TaskInput
+  result?: RunTaskResult
+  result_json?: RunTaskResult
+  error?: unknown
+}
+
 export interface RunTaskResult {
   conversation_id: string
   provider_id: string

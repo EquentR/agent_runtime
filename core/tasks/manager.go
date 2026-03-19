@@ -109,6 +109,11 @@ func (m *Manager) GetTask(ctx context.Context, id string) (*Task, error) {
 	return m.store.GetTask(ctx, id)
 }
 
+// FindLatestActiveTaskByConversation 查询最近的非终态 conversation 任务。
+func (m *Manager) FindLatestActiveTaskByConversation(ctx context.Context, conversationID string) (*Task, error) {
+	return m.store.FindLatestActiveTaskByConversation(ctx, conversationID)
+}
+
 // ListEvents 查询任务事件流。
 func (m *Manager) ListEvents(ctx context.Context, taskID string, afterSeq int64, limit int) ([]TaskEvent, error) {
 	return m.store.ListEvents(ctx, taskID, afterSeq, limit)

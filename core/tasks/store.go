@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -67,6 +68,29 @@ func (s *Store) GetTask(ctx context.Context, id string) (*Task, error) {
 	err := s.db.WithContext(ctx).First(&task, "id = ?", id).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, fmt.Errorf("%w: %s", ErrTaskNotFound, id)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &task, nil
+}
+
+// FindLatestActiveTaskByConversation 根据 conversation id 查询最近的非终态任务。
+func (s *Store) FindLatestActiveTaskByConversation(ctx context.Context, conversationID string) (*Task, error) {
+	trimmedConversationID := strings.TrimSpace(conversationID)
+	if trimmedConversationID == "" {
+		return nil, nil
+	}
+
+	var task Task
+	err := s.db.WithContext(ctx).
+		Where("status IN ?", []Status{StatusQueued, StatusRunning, StatusCancelRequested}).
+		Where("json_extract(input_json, '$.conversation_id') = ? OR json_extract(result_json, '$.conversation_id') = ?", trimmedConversationID, trimmedConversationID).
+		Order("created_at desc").
+		Order("id desc").
+		Take(&task).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
 	}
 	if err != nil {
 		return nil, err

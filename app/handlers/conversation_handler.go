@@ -5,18 +5,21 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/EquentR/agent_runtime/app/models"
 	coreagent "github.com/EquentR/agent_runtime/core/agent"
 	resp "github.com/EquentR/agent_runtime/pkg/rest"
 	"github.com/gin-gonic/gin"
 )
 
 type ConversationHandler struct {
-	store *coreagent.ConversationStore
+	store        *coreagent.ConversationStore
+	middlewares  []gin.HandlerFunc
+	authRequired bool
 }
 
 // NewConversationHandler 创建会话查询接口处理器。
-func NewConversationHandler(store *coreagent.ConversationStore) *ConversationHandler {
-	return &ConversationHandler{store: store}
+func NewConversationHandler(store *coreagent.ConversationStore, middlewares ...gin.HandlerFunc) *ConversationHandler {
+	return &ConversationHandler{store: store, middlewares: middlewares, authRequired: len(middlewares) > 0}
 }
 
 // Register 注册 conversation 查询与删除接口路由。
@@ -24,12 +27,16 @@ func (h *ConversationHandler) Register(rg *gin.RouterGroup) {
 	if h.store == nil {
 		return
 	}
+	options := []resp.WrapperOption{}
+	if len(h.middlewares) > 0 {
+		options = append(options, resp.WithMiddlewares(h.middlewares...))
+	}
 	resp.HandlerWrapper(rg, "conversations", []*resp.Handler{
 		resp.NewJsonOptionsHandler(h.handleListConversations),
 		resp.NewJsonOptionsHandler(h.handleGetConversation),
 		resp.NewJsonOptionsHandler(h.handleGetConversationMessages),
 		resp.NewJsonOptionsHandler(h.handleDeleteConversation),
-	})
+	}, options...)
 }
 
 // handleListConversations 返回会话列表接口的路由定义。
@@ -47,7 +54,10 @@ func (h *ConversationHandler) handleListConversations() (method, relativePath st
 			return nil, nil, fmt.Errorf("conversation store is not configured")
 		}
 		conversations, err := h.store.ListConversations(c.Request.Context())
-		return conversations, nil, err
+		if err != nil {
+			return nil, nil, err
+		}
+		return h.filterConversations(c, conversations), nil, nil
 	}, nil
 }
 
@@ -70,7 +80,13 @@ func (h *ConversationHandler) handleGetConversation() (method, relativePath stri
 		if errors.Is(err, coreagent.ErrConversationNotFound) {
 			return nil, []resp.ResOpt{resp.WithCode(resp.NotFound)}, err
 		}
-		return conversation, nil, err
+		if err != nil {
+			return nil, nil, err
+		}
+		if err := h.ensureConversationAccess(c, conversation); err != nil {
+			return nil, []resp.ResOpt{resp.WithCode(http.StatusUnauthorized)}, err
+		}
+		return conversation, nil, nil
 	}, nil
 }
 
@@ -89,10 +105,15 @@ func (h *ConversationHandler) handleGetConversationMessages() (method, relativeP
 		if h.store == nil {
 			return nil, nil, fmt.Errorf("conversation store is not configured")
 		}
-		if _, err := h.store.GetConversation(c.Request.Context(), c.Param("id")); errors.Is(err, coreagent.ErrConversationNotFound) {
+		conversation, err := h.store.GetConversation(c.Request.Context(), c.Param("id"))
+		if errors.Is(err, coreagent.ErrConversationNotFound) {
 			return nil, []resp.ResOpt{resp.WithCode(resp.NotFound)}, err
-		} else if err != nil {
+		}
+		if err != nil {
 			return nil, nil, err
+		}
+		if err := h.ensureConversationAccess(c, conversation); err != nil {
+			return nil, []resp.ResOpt{resp.WithCode(http.StatusUnauthorized)}, err
 		}
 		messages, err := h.store.ListMessages(c.Request.Context(), c.Param("id"))
 		return messages, nil, err
@@ -114,6 +135,16 @@ func (h *ConversationHandler) handleDeleteConversation() (method, relativePath s
 		if h.store == nil {
 			return nil, nil, fmt.Errorf("conversation store is not configured")
 		}
+		conversation, err := h.store.GetConversation(c.Request.Context(), c.Param("id"))
+		if errors.Is(err, coreagent.ErrConversationNotFound) {
+			return gin.H{"deleted": false}, []resp.ResOpt{resp.WithCode(resp.NotFound)}, err
+		}
+		if err != nil {
+			return nil, nil, err
+		}
+		if err := h.ensureConversationAccess(c, conversation); err != nil {
+			return gin.H{"deleted": false}, []resp.ResOpt{resp.WithCode(http.StatusUnauthorized)}, err
+		}
 		if err := h.store.DeleteConversation(c.Request.Context(), c.Param("id")); errors.Is(err, coreagent.ErrConversationNotFound) {
 			return gin.H{"deleted": false}, []resp.ResOpt{resp.WithCode(resp.NotFound)}, err
 		} else if err != nil {
@@ -121,4 +152,48 @@ func (h *ConversationHandler) handleDeleteConversation() (method, relativePath s
 		}
 		return gin.H{"deleted": true}, nil, nil
 	}, nil
+}
+
+func (h *ConversationHandler) filterConversations(c *gin.Context, conversations []coreagent.Conversation) []coreagent.Conversation {
+	if !h.authRequired {
+		return conversations
+	}
+	user := currentAuthUser(c)
+	if user == nil {
+		return []coreagent.Conversation{}
+	}
+	filtered := make([]coreagent.Conversation, 0, len(conversations))
+	for _, conversation := range conversations {
+		if conversation.CreatedBy == user.Username {
+			filtered = append(filtered, conversation)
+		}
+	}
+	return filtered
+}
+
+func (h *ConversationHandler) ensureConversationAccess(c *gin.Context, conversation *coreagent.Conversation) error {
+	if !h.authRequired {
+		return nil
+	}
+	return ensureConversationOwnedByCurrentUser(c, conversation)
+}
+
+func ensureConversationOwnedByCurrentUser(c *gin.Context, conversation *coreagent.Conversation) error {
+	if conversation == nil {
+		return nil
+	}
+	user := currentAuthUser(c)
+	if user != nil && user.Username == conversation.CreatedBy {
+		return nil
+	}
+	return fmt.Errorf("无权访问该会话")
+}
+
+func currentAuthUser(c *gin.Context) *models.User {
+	if value, ok := c.Get(authUserContextKey); ok {
+		if user, ok := value.(*models.User); ok {
+			return user
+		}
+	}
+	return nil
 }

@@ -7,6 +7,7 @@ const api = vi.hoisted(() => ({
   deleteConversation: vi.fn(),
   fetchConversationMessages: vi.fn(),
   fetchConversations: vi.fn(),
+  findRunningTaskByConversation: vi.fn(),
   fetchTaskDetails: vi.fn(),
   streamRunTask: vi.fn(),
 }))
@@ -40,8 +41,60 @@ describe('ChatView', () => {
     api.fetchConversationMessages.mockReset()
     api.createRunTask.mockReset()
     api.deleteConversation.mockReset()
+    api.findRunningTaskByConversation.mockReset()
     api.fetchTaskDetails.mockReset()
     api.streamRunTask.mockReset()
+  })
+
+  it('resumes SSE for a running task after reopening the chat view', async () => {
+    localStorage.setItem(
+      'agent-runtime.chat-state',
+      JSON.stringify({
+        activeConversationId: 'conv_1',
+        activeTaskId: 'task_1',
+        entries: [{ id: 'reply-1', kind: 'reply', title: '', content: 'partial answer' }],
+      }),
+    )
+    api.fetchConversations.mockResolvedValue([
+      {
+        id: 'conv_1',
+        title: 'First chat',
+        last_message: 'hello',
+        message_count: 2,
+        provider_id: 'openai',
+        model_id: 'gpt-5.4',
+        created_by: 'demo-user',
+        created_at: '',
+        updated_at: '',
+      },
+    ])
+    api.fetchConversationMessages.mockResolvedValue([{ role: 'assistant', content: 'hello' }])
+    api.fetchTaskDetails.mockResolvedValue({
+      id: 'task_1',
+      status: 'running',
+      input: { conversation_id: 'conv_1' },
+    })
+    api.streamRunTask.mockResolvedValue({ conversation_id: 'conv_1' })
+
+    const router = makeRouter()
+    await router.push('/chat')
+    await router.isReady()
+
+    mount(ChatView, {
+      global: {
+        plugins: [router],
+      },
+    })
+
+    await flushPromises()
+
+    expect(api.fetchTaskDetails).toHaveBeenCalledWith('task_1')
+    expect(api.streamRunTask).toHaveBeenCalledWith(
+      'task_1',
+      expect.any(Function),
+      expect.any(Function),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    )
   })
 
   it('keeps composer enabled after loading an existing conversation', async () => {
@@ -76,8 +129,8 @@ describe('ChatView', () => {
     expect(wrapper.find('.composer-submit').attributes('aria-label')).toBe('发送')
     expect(wrapper.find('.composer-submit svg').exists()).toBe(true)
     expect(wrapper.text()).toContain('First chat')
-    expect(wrapper.text()).toContain('Signed in as')
-    expect(wrapper.find('.topbar .status-pill').text()).toContain('Ready')
+    expect(wrapper.text()).toContain('当前账号')
+    expect(wrapper.find('.topbar .status-pill').text()).toContain('就绪')
   })
 
   it('opens on a new conversation instead of auto-selecting an existing one after refresh', async () => {
@@ -178,6 +231,51 @@ describe('ChatView', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('second')
+  })
+
+  it('reconnects SSE when selecting a conversation with a running task', async () => {
+    api.fetchConversations.mockResolvedValue([
+      {
+        id: 'conv_1',
+        title: 'First chat',
+        last_message: 'hello',
+        message_count: 2,
+        provider_id: 'openai',
+        model_id: 'gpt-5.4',
+        created_by: 'demo-user',
+        created_at: '',
+        updated_at: '',
+      },
+    ])
+    api.fetchConversationMessages.mockResolvedValue([{ role: 'assistant', content: 'hello' }])
+    api.findRunningTaskByConversation.mockResolvedValue({
+      id: 'task_1',
+      status: 'running',
+      input: { conversation_id: 'conv_1' },
+    })
+    api.streamRunTask.mockResolvedValue({ conversation_id: 'conv_1' })
+
+    const router = makeRouter()
+    await router.push('/chat')
+    await router.isReady()
+
+    const wrapper = mount(ChatView, {
+      global: {
+        plugins: [router],
+      },
+    })
+
+    await flushPromises()
+    await wrapper.find('.conversation-card').trigger('click')
+    await flushPromises()
+
+    expect(api.findRunningTaskByConversation).toHaveBeenCalledWith('conv_1')
+    expect(api.streamRunTask).toHaveBeenCalledWith(
+      'task_1',
+      expect.any(Function),
+      expect.any(Function),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    )
   })
 
   it('restores saved error trace when reopening without a persisted conversation', async () => {
@@ -312,7 +410,7 @@ describe('ChatView', () => {
 
     const status = wrapper.find('.topbar .status-pill')
     expect(status.exists()).toBe(true)
-    expect(status.text()).toContain('Syncing')
+    expect(status.text()).toContain('同步中')
     expect(status.classes()).toContain('loading')
   })
 })

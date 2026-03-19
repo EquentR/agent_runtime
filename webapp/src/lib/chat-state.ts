@@ -4,11 +4,13 @@ const CHAT_STATE_KEY = 'agent-runtime.chat-state'
 
 interface ChatState {
   activeConversationId: string
+  activeTaskId: string
   entries: TranscriptEntry[]
 }
 
 const EMPTY_STATE: ChatState = {
   activeConversationId: '',
+  activeTaskId: '',
   entries: [],
 }
 
@@ -22,6 +24,7 @@ export function loadChatState(): ChatState {
     const parsed = JSON.parse(raw) as Partial<ChatState>
     return {
       activeConversationId: typeof parsed.activeConversationId === 'string' ? parsed.activeConversationId : '',
+      activeTaskId: typeof parsed.activeTaskId === 'string' ? parsed.activeTaskId : '',
       entries: Array.isArray(parsed.entries) ? parsed.entries : [],
     }
   } catch {

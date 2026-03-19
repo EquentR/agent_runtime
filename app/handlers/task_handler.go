@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	coreagent "github.com/EquentR/agent_runtime/core/agent"
 	coretasks "github.com/EquentR/agent_runtime/core/tasks"
 	resp "github.com/EquentR/agent_runtime/pkg/rest"
 	"github.com/gin-gonic/gin"
@@ -14,7 +15,10 @@ import (
 
 // TaskHandler 提供任务创建、查询、取消、重试与事件订阅接口。
 type TaskHandler struct {
-	manager *coretasks.Manager
+	manager       *coretasks.Manager
+	conversations *coreagent.ConversationStore
+	middlewares   []gin.HandlerFunc
+	authRequired  bool
 }
 
 // CreateTaskRequest 描述创建任务接口的请求体。
@@ -28,19 +32,24 @@ type CreateTaskRequest struct {
 }
 
 // NewTaskHandler 创建任务接口处理器。
-func NewTaskHandler(manager *coretasks.Manager) *TaskHandler {
-	return &TaskHandler{manager: manager}
+func NewTaskHandler(manager *coretasks.Manager, conversations *coreagent.ConversationStore, middlewares ...gin.HandlerFunc) *TaskHandler {
+	return &TaskHandler{manager: manager, conversations: conversations, middlewares: middlewares, authRequired: len(middlewares) > 0}
 }
 
 // Register 注册任务相关 REST 路由。
 func (h *TaskHandler) Register(rg *gin.RouterGroup) {
+	options := []resp.WrapperOption{}
+	if len(h.middlewares) > 0 {
+		options = append(options, resp.WithMiddlewares(h.middlewares...))
+	}
 	resp.HandlerWrapper(rg, "tasks", []*resp.Handler{
 		resp.NewJsonHandler(h.handleCreateTask),
+		resp.NewJsonHandler(h.handleFindRunningTask),
 		resp.NewJsonHandler(h.handleGetTask),
 		resp.NewJsonHandler(h.handleCancelTask),
 		resp.NewJsonHandler(h.handleRetryTask),
 		resp.NewHandler(http.MethodGet, "/:id/events", h.handleEvents),
-	})
+	}, options...)
 }
 
 // handleCreateTask 返回创建任务接口的路由定义。
@@ -64,8 +73,11 @@ func (h *TaskHandler) handleCreateTask() (method, relativePath string, wrapper r
 		if err := c.ShouldBindJSON(&request); err != nil {
 			return nil, err
 		}
+		request.CreatedBy = h.resolveCreatedBy(c, request.CreatedBy)
+		if err := h.ensureConversationOwnership(c, request.Input); err != nil {
+			return nil, err
+		}
 
-		// 将 HTTP 输入转换为任务域模型，交给后台管理器持久化。
 		task, err := h.manager.CreateTask(c.Request.Context(), coretasks.CreateTaskInput{
 			TaskType:       request.TaskType,
 			Input:          request.Input,
@@ -75,6 +87,56 @@ func (h *TaskHandler) handleCreateTask() (method, relativePath string, wrapper r
 			IdempotencyKey: request.IdempotencyKey,
 		})
 		if err != nil {
+			return nil, err
+		}
+		return task, nil
+	}, nil
+}
+
+func (h *TaskHandler) ensureConversationOwnership(c *gin.Context, input map[string]any) error {
+	if !h.authRequired || h.conversations == nil {
+		return nil
+	}
+	rawConversationID, ok := input["conversation_id"]
+	if !ok {
+		return nil
+	}
+	conversationID, ok := rawConversationID.(string)
+	if !ok || conversationID == "" {
+		return nil
+	}
+	conversation, err := h.conversations.GetConversation(c.Request.Context(), conversationID)
+	if err != nil {
+		return err
+	}
+	return ensureConversationOwnedByCurrentUser(c, conversation)
+}
+
+// handleFindRunningTask 返回按 conversation id 查询运行中任务接口的路由定义。
+//
+// @Summary 查询会话运行中任务
+// @Description 根据 conversation id 返回最近一个非终态任务；若不存在则返回 null。
+// @Tags tasks
+// @Produce json
+// @Param conversation_id query string true "会话 ID"
+// @Success 200 {object} TaskSwaggerResponse
+// @Router /tasks/running [get]
+func (h *TaskHandler) handleFindRunningTask() (method, relativePath string, wrapper resp.JsonResultWrapper, opts []resp.WrapperOption) {
+	return http.MethodGet, "/running", func(c *gin.Context) (any, error) {
+		if h.manager == nil {
+			return nil, fmt.Errorf("task manager is not configured")
+		}
+
+		conversationID := c.Query("conversation_id")
+		if conversationID == "" {
+			return nil, nil
+		}
+
+		task, err := h.manager.FindLatestActiveTaskByConversation(c.Request.Context(), conversationID)
+		if err != nil {
+			return nil, err
+		}
+		if err := h.ensureTaskAccess(c, task); err != nil {
 			return nil, err
 		}
 		return task, nil
@@ -96,7 +158,14 @@ func (h *TaskHandler) handleGetTask() (method, relativePath string, wrapper resp
 		if h.manager == nil {
 			return nil, fmt.Errorf("task manager is not configured")
 		}
-		return h.manager.GetTask(c.Request.Context(), c.Param("id"))
+		task, err := h.manager.GetTask(c.Request.Context(), c.Param("id"))
+		if err != nil {
+			return nil, err
+		}
+		if err := h.ensureTaskAccess(c, task); err != nil {
+			return nil, err
+		}
+		return task, nil
 	}, nil
 }
 
@@ -114,6 +183,13 @@ func (h *TaskHandler) handleCancelTask() (method, relativePath string, wrapper r
 	return http.MethodPost, "/:id/cancel", func(c *gin.Context) (any, error) {
 		if h.manager == nil {
 			return nil, fmt.Errorf("task manager is not configured")
+		}
+		task, err := h.manager.GetTask(c.Request.Context(), c.Param("id"))
+		if err != nil {
+			return nil, err
+		}
+		if err := h.ensureTaskAccess(c, task); err != nil {
+			return nil, err
 		}
 		return h.manager.CancelTask(c.Request.Context(), c.Param("id"))
 	}, nil
@@ -133,6 +209,13 @@ func (h *TaskHandler) handleRetryTask() (method, relativePath string, wrapper re
 	return http.MethodPost, "/:id/retry", func(c *gin.Context) (any, error) {
 		if h.manager == nil {
 			return nil, fmt.Errorf("task manager is not configured")
+		}
+		task, err := h.manager.GetTask(c.Request.Context(), c.Param("id"))
+		if err != nil {
+			return nil, err
+		}
+		if err := h.ensureTaskAccess(c, task); err != nil {
+			return nil, err
 		}
 		return h.manager.RetryTask(c.Request.Context(), c.Param("id"))
 	}, nil
@@ -155,10 +238,14 @@ func (h *TaskHandler) handleEvents(c *gin.Context) {
 		return
 	}
 
-	// 先校验任务是否存在，避免订阅无效流。
 	taskID := c.Param("id")
-	if _, err := h.manager.GetTask(c.Request.Context(), taskID); err != nil {
+	task, err := h.manager.GetTask(c.Request.Context(), taskID)
+	if err != nil {
 		c.String(http.StatusNotFound, err.Error())
+		return
+	}
+	if err := h.ensureTaskAccess(c, task); err != nil {
+		c.String(http.StatusUnauthorized, err.Error())
 		return
 	}
 
@@ -168,7 +255,6 @@ func (h *TaskHandler) handleEvents(c *gin.Context) {
 		return
 	}
 
-	// SSE 响应需要显式设置流式传输 header。
 	writer := c.Writer
 	flusher, ok := writer.(http.Flusher)
 	if !ok {
@@ -183,7 +269,6 @@ func (h *TaskHandler) handleEvents(c *gin.Context) {
 	ch, unsubscribe := h.manager.Subscribe(taskID)
 	defer unsubscribe()
 
-	// 先补发历史事件，确保前端重连后可以从指定序号继续消费。
 	history, err := h.manager.ListEvents(c.Request.Context(), taskID, afterSeq, 0)
 	if err != nil {
 		c.String(http.StatusInternalServerError, err.Error())
@@ -202,7 +287,6 @@ func (h *TaskHandler) handleEvents(c *gin.Context) {
 	keepAlive := time.NewTicker(15 * time.Second)
 	defer keepAlive.Stop()
 
-	// 持续输出实时事件，并用 keepalive 维持代理与浏览器连接。
 	for {
 		select {
 		case <-c.Request.Context().Done():
@@ -226,6 +310,23 @@ func (h *TaskHandler) handleEvents(c *gin.Context) {
 			flusher.Flush()
 		}
 	}
+}
+
+func (h *TaskHandler) resolveCreatedBy(c *gin.Context, fallback string) string {
+	if user := currentAuthUser(c); user != nil && user.Username != "" {
+		return user.Username
+	}
+	return fallback
+}
+
+func (h *TaskHandler) ensureTaskAccess(c *gin.Context, task *coretasks.Task) error {
+	if !h.authRequired || task == nil {
+		return nil
+	}
+	if user := currentAuthUser(c); user != nil && user.Username == task.CreatedBy {
+		return nil
+	}
+	return fmt.Errorf("无权访问该任务")
 }
 
 // writeSSEEvent 将单个任务事件编码成标准 SSE 帧。

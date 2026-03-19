@@ -66,25 +66,25 @@ function confirmLogout() {
           v-if="!mobile"
           class="ghost-button icon-button sidebar-toggle"
           type="button"
-          :aria-label="collapsed ? 'Expand workspace' : 'Collapse workspace'"
+          :aria-label="collapsed ? '展开侧栏' : '收起侧栏'"
           @click="emit('toggle-collapse')"
         >
           <Fold />
         </button>
-        <button class="ghost-button icon-button" type="button" aria-label="New chat" @click="emit('create')">
+        <button class="ghost-button icon-button" type="button" aria-label="新建对话" @click="emit('create')">
           <Plus />
         </button>
-        <button v-if="mobile" class="ghost-button icon-button" type="button" aria-label="Close sidebar" @click="emit('close')">
+        <button v-if="mobile" class="ghost-button icon-button" type="button" aria-label="关闭侧栏" @click="emit('close')">
           <Close />
         </button>
       </div>
     </div>
 
     <div class="sidebar-list">
-      <p v-if="loading" class="sidebar-empty">Loading conversations...</p>
+      <p v-if="loading" class="sidebar-empty">正在加载对话...</p>
 
       <div v-else-if="items.length === 0" class="sidebar-empty">
-        No conversations yet. Send the first message to create one.
+        还没有对话呢~。
       </div>
 
       <template v-for="conversation in items" :key="conversation.id">
@@ -98,18 +98,18 @@ function confirmLogout() {
           <span
             v-if="!collapsed"
             class="conversation-title truncate-text"
-            :title="formatConversationTitle(conversation.title, 'Untitled conversation')"
+            :title="formatConversationTitle(conversation.title, '未命名对话')"
           >
-            {{ formatConversationTitle(conversation.title, 'Untitled conversation') }}
+            {{ formatConversationTitle(conversation.title, '未命名对话') }}
           </span>
-          <span v-else class="conversation-compact-label" :title="formatConversationTitle(conversation.title, 'Untitled conversation')">
-            {{ formatConversationTitle(conversation.title, 'Untitled conversation').slice(0, 1).toUpperCase() }}
+          <span v-else class="conversation-compact-label" :title="formatConversationTitle(conversation.title, '未命名对话')">
+            {{ formatConversationTitle(conversation.title, '未命名对话').slice(0, 1).toUpperCase() }}
           </span>
           <button
             v-if="!collapsed"
             class="ghost-button icon-button conversation-delete-button"
             type="button"
-            aria-label="Delete conversation"
+            aria-label="删除对话"
             @click.stop="requestDelete(conversation.id)"
           >
             <Delete />
@@ -129,13 +129,13 @@ function confirmLogout() {
 
     <div class="sidebar-account" :class="{ collapsed: collapsed && !mobile }">
       <div v-if="!collapsed || mobile" class="sidebar-account-copy">
-        <span class="sidebar-account-label">Signed in as</span>
+        <span class="sidebar-account-label">当前账号</span>
         <strong class="sidebar-account-name">{{ username }}</strong>
       </div>
       <button
         class="ghost-button icon-button sidebar-account-logout"
         type="button"
-        aria-label="Log out"
+        aria-label="退出登录"
         @click="requestLogout"
       >
         <SwitchButton />

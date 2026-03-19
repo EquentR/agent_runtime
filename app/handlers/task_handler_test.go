@@ -24,9 +24,10 @@ import (
 
 // taskTestResponse 对应测试场景下的通用 REST 包装结构。
 type taskTestResponse struct {
-	Code int             `json:"code"`
-	OK   bool            `json:"ok"`
-	Data json.RawMessage `json:"data"`
+	Code    int             `json:"code"`
+	OK      bool            `json:"ok"`
+	Message string          `json:"message"`
+	Data    json.RawMessage `json:"data"`
 }
 
 // TestTaskHandlerCreateAndGetTask 验证任务创建与详情查询接口。
@@ -185,6 +186,45 @@ func TestTaskHandlerAgentRunEndToEndAppendsConversationHistory(t *testing.T) {
 	}
 }
 
+func TestTaskHandlerFindsRunningTaskByConversation(t *testing.T) {
+	_, server := newTaskHandlerTestServer(t, nil, false)
+
+	older := createTaskViaHTTP(t, server.URL, map[string]any{
+		"task_type": "agent.run",
+		"input": map[string]any{
+			"conversation_id": "conv_1",
+		},
+	})
+	_ = older
+	createTaskViaHTTP(t, server.URL, map[string]any{
+		"task_type": "agent.run",
+		"input": map[string]any{
+			"conversation_id": "conv_other",
+		},
+	})
+	newest := createTaskViaHTTP(t, server.URL, map[string]any{
+		"task_type": "agent.run",
+		"input": map[string]any{
+			"conversation_id": "conv_1",
+		},
+	})
+
+	request, err := http.NewRequest(http.MethodGet, server.URL+"/api/v1/tasks/running?conversation_id=conv_1", nil)
+	if err != nil {
+		t.Fatalf("NewRequest() error = %v", err)
+	}
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("Do() error = %v", err)
+	}
+	defer response.Body.Close()
+
+	got := decodeTaskResponse(t, response.Body)
+	if got.ID != newest.ID {
+		t.Fatalf("task id = %q, want %q", got.ID, newest.ID)
+	}
+}
+
 // newTaskHandlerTestServer 构造带任务路由的测试 HTTP 服务。
 func newTaskHandlerTestServer(t *testing.T, executor coretasks.Executor, startManager bool) (*coretasks.Manager, *httptest.Server) {
 	t.Helper()
@@ -217,7 +257,7 @@ func newTaskHandlerTestServer(t *testing.T, executor coretasks.Executor, startMa
 	}
 
 	engine := rest.Init()
-	handler := NewTaskHandler(manager)
+	handler := NewTaskHandler(manager, nil)
 	handler.Register(engine.Group("/api/v1"))
 
 	server := httptest.NewServer(engine)
@@ -365,7 +405,7 @@ func newAgentRunTaskTestServer(t *testing.T) (*coretasks.Manager, *httptest.Serv
 	manager.Start(ctx)
 	t.Cleanup(cancel)
 	engine := rest.Init()
-	handler := NewTaskHandler(manager)
+	handler := NewTaskHandler(manager, conversationStore)
 	handler.Register(engine.Group("/api/v1"))
 	server := httptest.NewServer(engine)
 	t.Cleanup(server.Close)

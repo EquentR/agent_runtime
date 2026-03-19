@@ -1,6 +1,6 @@
 import { createMemoryHistory, createRouter, createWebHistory } from 'vue-router'
 
-import { hasActiveSession } from '../lib/session'
+import { hasActiveSession, syncSession } from '../lib/session'
 import ChatView from '../views/ChatView.vue'
 import LoginView from '../views/LoginView.vue'
 
@@ -30,12 +30,15 @@ export function createAppRouter(memory = false) {
     routes,
   })
 
-  router.beforeEach((to) => {
-    if (to.meta.requiresSession && !hasActiveSession()) {
+  router.beforeEach(async (to) => {
+    const username = hasActiveSession() ? '' : await syncSession()
+    const active = hasActiveSession() || username.length > 0
+
+    if (to.meta.requiresSession && !active) {
       return { path: '/login' }
     }
 
-    if (to.path === '/login' && hasActiveSession()) {
+    if (to.path === '/login' && active) {
       return { path: '/chat' }
     }
 

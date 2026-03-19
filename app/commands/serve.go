@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/EquentR/agent_runtime/app/config"
+	"github.com/EquentR/agent_runtime/app/logics"
 	"github.com/EquentR/agent_runtime/app/migration"
 	"github.com/EquentR/agent_runtime/app/router"
 	coreagent "github.com/EquentR/agent_runtime/core/agent"
@@ -48,6 +49,10 @@ func Serve(c *config.Config, version, commit string) {
 	if err := conversationStore.AutoMigrate(); err != nil {
 		log.Panicf("Failed to migrate conversation store: %v", err)
 	}
+	authLogic, err := logics.NewAuthLogic(db.DB(), logics.AuthConfig{})
+	if err != nil {
+		log.Panicf("Failed to init auth logic: %v", err)
+	}
 	toolRegistry, err := newDefaultToolRegistry("")
 	if err != nil {
 		log.Panicf("Failed to register builtin tools: %v", err)
@@ -66,6 +71,7 @@ func Serve(c *config.Config, version, commit string) {
 	router.Init(engine, c.Server.ApiBasePath, c.Server.StaticPaths, router.Dependencies{
 		TaskManager:       taskManager,
 		ConversationStore: conversationStore,
+		AuthLogic:         authLogic,
 	})
 
 	addr := fmt.Sprintf("%s:%d", c.Server.Host, c.Server.Port)
