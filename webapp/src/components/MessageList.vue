@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import MarkdownIt from 'markdown-it'
+import { CircleCheckFilled, CopyDocument, WarningFilled } from '@element-plus/icons-vue'
 
 import { formatMessageContent } from '../lib/chat'
 import type { TranscriptEntry, TranscriptEntryDetail, TranscriptTokenUsage } from '../types/api'
@@ -11,8 +13,39 @@ const props = defineProps<{
 
 const normalizedEntries = computed(() => props.entries)
 const messagesBody = ref<HTMLDivElement | null>(null)
+const copyToastVisible = ref(false)
+const copyToastMessage = ref('')
+const copyToastVariant = ref<'success' | 'error'>('success')
+let copyToastTimer: ReturnType<typeof setTimeout> | null = null
 const bottomOffsetThreshold = 24
 const stickToBottom = ref(true)
+const markdown = new MarkdownIt({
+  html: false,
+  linkify: true,
+  breaks: true,
+})
+
+markdown.renderer.rules.fence = (tokens, index) => {
+  const token = tokens[index]
+  const language = token.info.trim().split(/\s+/)[0] ?? ''
+  const escapedLanguage = markdown.utils.escapeHtml(language)
+  const escapedCode = markdown.utils.escapeHtml(token.content)
+
+  return [
+    '<div class="markdown-code-block">',
+    '<div class="markdown-code-toolbar">',
+    `<span class="markdown-code-language">${escapedLanguage || 'code'}</span>`,
+    '<button class="markdown-code-copy icon-button compact-icon-button" type="button" aria-label="复制代码块">',
+    '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true">',
+    '<path d="M5.5 2.75h5.25A1.75 1.75 0 0 1 12.5 4.5v6.25a1.75 1.75 0 0 1-1.75 1.75H5.5a1.75 1.75 0 0 1-1.75-1.75V4.5A1.75 1.75 0 0 1 5.5 2.75Z" stroke="currentColor" stroke-width="1.25"/>',
+    '<path d="M4.75 5.5H4A1.5 1.5 0 0 0 2.5 7v5A1.5 1.5 0 0 0 4 13.5h5A1.5 1.5 0 0 0 10.5 12v-.75" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/>',
+    '</svg>',
+    '</button>',
+    '</div>',
+    `<pre><code class="language-${escapedLanguage}">${escapedCode}</code></pre>`,
+    '</div>',
+  ].join('')
+}
 
 function maxScrollTop(element: HTMLDivElement) {
   return Math.max(element.scrollHeight - element.clientHeight, 0)
@@ -80,6 +113,12 @@ onMounted(() => {
   void scrollToBottom(true)
 })
 
+onBeforeUnmount(() => {
+  if (copyToastTimer) {
+    clearTimeout(copyToastTimer)
+  }
+})
+
 watch(() => props.entries, (nextEntries, previousEntries) => {
   const forceScroll = shouldForceScroll(nextEntries, previousEntries)
 
@@ -130,6 +169,10 @@ function hasUsage(entry: TranscriptEntry) {
   return entry.kind === 'reply' && Boolean(entry.token_usage)
 }
 
+function canCopyReply(entry: TranscriptEntry) {
+  return entry.kind === 'reply' && Boolean(entry.content)
+}
+
 function formatUsageValue(value: number | undefined) {
   if (typeof value !== 'number') {
     return '--'
@@ -150,6 +193,63 @@ function replyUsageSummary(usage: TranscriptTokenUsage | undefined) {
     usage.cached_prompt_tokens ? `Cached ${formatUsageValue(usage.cached_prompt_tokens)}` : '',
   ].filter(Boolean).join(' · ')
 }
+
+function renderReplyContent(content: string) {
+  return markdown.render(formatMessageContent(content))
+}
+
+async function copyReply(entry: TranscriptEntry) {
+  if (!canCopyReply(entry) || !navigator.clipboard) {
+    showCopyToast('复制失败', 'error')
+    return
+  }
+
+  await copyText(formatMessageContent(entry.content ?? ''))
+}
+
+async function copyText(text: string) {
+  if (!navigator.clipboard) {
+    showCopyToast('复制失败', 'error')
+    return
+  }
+
+  try {
+    await navigator.clipboard.writeText(text)
+    showCopyToast('已复制', 'success')
+  } catch {
+    showCopyToast('复制失败', 'error')
+  }
+}
+
+async function handleMarkdownClick(event: MouseEvent) {
+  const target = event.target instanceof HTMLElement ? event.target.closest('.markdown-code-copy') : null
+  if (!(target instanceof HTMLButtonElement)) {
+    return
+  }
+
+  const code = target.closest('.markdown-code-block')?.querySelector('code')?.textContent
+  if (!code) {
+    showCopyToast('复制失败', 'error')
+    return
+  }
+
+  await copyText(code)
+}
+
+function showCopyToast(message: string, variant: 'success' | 'error') {
+  copyToastMessage.value = message
+  copyToastVariant.value = variant
+  copyToastVisible.value = true
+
+  if (copyToastTimer) {
+    clearTimeout(copyToastTimer)
+  }
+
+  copyToastTimer = setTimeout(() => {
+    copyToastVisible.value = false
+    copyToastTimer = null
+  }, 1800)
+}
 </script>
 
 <template>
@@ -167,6 +267,7 @@ function replyUsageSummary(usage: TranscriptTokenUsage | undefined) {
           :class="[
             entry.kind,
             {
+              'centered-trace': ['reply', 'reasoning', 'tool'].includes(entry.kind),
               compact: entry.kind !== 'reply',
               'bubble-right': entry.kind === 'user',
               'bubble-content': entry.kind === 'user',
@@ -177,12 +278,38 @@ function replyUsageSummary(usage: TranscriptTokenUsage | undefined) {
             <span class="message-role">{{ entry.title }}</span>
             <span v-if="statusLabel(entry)" class="trace-status">{{ statusLabel(entry) }}</span>
           </div>
-          <p v-if="entry.content && ['reply', 'error', 'user'].includes(entry.kind)" class="trace-content">
+          <div
+            v-if="entry.kind === 'reply' && entry.content"
+            class="trace-content markdown-content"
+            v-html="renderReplyContent(entry.content)"
+            @click="handleMarkdownClick"
+          ></div>
+          <p v-else-if="entry.content && ['error', 'user'].includes(entry.kind)" class="trace-content">
             {{ formatMessageContent(entry.content) }}
           </p>
-          <p v-if="hasUsage(entry)" class="trace-reply-usage">
-            {{ replyUsageSummary(entry.token_usage) }}
-          </p>
+          <div v-if="entry.kind === 'reply' && (canCopyReply(entry) || hasUsage(entry))" class="trace-reply-footer">
+            <button
+              v-if="canCopyReply(entry)"
+              class="trace-copy-button icon-button"
+              type="button"
+              aria-label="复制消息"
+              @click="copyReply(entry)"
+            >
+              <CopyDocument />
+              <span class="trace-copy-toast-anchor" aria-hidden="true">
+                <transition name="copy-toast-fade">
+                  <span v-if="copyToastVisible" class="trace-copy-toast" :class="copyToastVariant">
+                    <CircleCheckFilled v-if="copyToastVariant === 'success'" />
+                    <WarningFilled v-else />
+                    <span>{{ copyToastMessage }}</span>
+                  </span>
+                </transition>
+              </span>
+            </button>
+            <p v-if="hasUsage(entry)" class="trace-reply-usage">
+              {{ replyUsageSummary(entry.token_usage) }}
+            </p>
+          </div>
           <details v-if="isGroupedToolEntry(entry)" class="trace-tool-group">
             <summary class="trace-detail-summary trace-tool-group-summary">
               <span class="trace-detail-label" :class="{ 'loading-marquee': entry.status === 'running' }">{{ entry.title }}</span>

@@ -37,4 +37,32 @@ describe('MessageComposer', () => {
     expect(wrapper.emitted('send')).toHaveLength(1)
     expect((textarea.element as HTMLTextAreaElement).value).toBe('line one')
   })
+
+  it('starts at two rows and grows with content', async () => {
+    const wrapper = mount(MessageComposer, {
+      props: {
+        disabled: false,
+      },
+      attachTo: document.body,
+    })
+
+    const textarea = wrapper.find('textarea')
+    const element = textarea.element as HTMLTextAreaElement
+
+    Object.defineProperty(element, 'scrollHeight', {
+      configurable: true,
+      get: () => (element.value.includes('\n') ? 120 : 56),
+    })
+
+    await textarea.setValue('first line')
+    await textarea.trigger('input')
+
+    expect(textarea.attributes('rows')).toBe('2')
+    expect(element.style.height).toBe('56px')
+
+    await textarea.setValue('first line\nsecond line\nthird line')
+    await textarea.trigger('input')
+
+    expect(element.style.height).toBe('120px')
+  })
 })

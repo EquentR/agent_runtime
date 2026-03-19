@@ -1,10 +1,24 @@
 import { flushPromises, mount } from '@vue/test-utils'
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { nextTick } from 'vue'
 
 import MessageList from './MessageList.vue'
 
 describe('MessageList', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    Object.defineProperty(globalThis.navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: vi.fn().mockResolvedValue(undefined),
+      },
+    })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   it('does not render the old chat title heading', () => {
     const wrapper = mount(MessageList, {
       props: {
@@ -242,6 +256,9 @@ describe('MessageList', () => {
     expect(wrapper.find('.trace-block.reply .trace-loading').exists()).toBe(false)
     expect(wrapper.find('.trace-block.tool').classes()).not.toContain('compact-inline')
     expect(wrapper.find('.trace-block.reasoning').classes()).not.toContain('compact-inline')
+    expect(wrapper.find('.trace-block.reasoning').classes()).toContain('centered-trace')
+    expect(wrapper.find('.trace-block.tool').classes()).toContain('centered-trace')
+    expect(wrapper.find('.trace-block.reply').classes()).toContain('centered-trace')
     expect(wrapper.find('.trace-block.reasoning .trace-detail-label').classes()).toContain('loading-marquee')
     expect(wrapper.find('.trace-tool-group-summary .trace-detail-label').classes()).toContain('loading-marquee')
   })
@@ -272,6 +289,187 @@ describe('MessageList', () => {
     expect(usage.text()).toContain('123')
     expect(usage.text()).toContain('45')
     expect(usage.text()).toContain('168')
+  })
+
+  it('shows a copy button before reply token stats', async () => {
+    const wrapper = mount(MessageList, {
+      props: {
+        loading: false,
+        entries: [
+          {
+            id: 'reply-1',
+            kind: 'reply',
+            title: '',
+            content: 'Done.',
+            token_usage: {
+              prompt_tokens: 123,
+              completion_tokens: 45,
+              total_tokens: 168,
+            },
+          } as any,
+        ],
+      },
+    })
+
+    const footer = wrapper.find('.trace-reply-footer')
+    const copyButton = wrapper.find('.trace-copy-button')
+
+    expect(footer.exists()).toBe(true)
+    expect(copyButton.exists()).toBe(true)
+    expect(copyButton.attributes('aria-label')).toBe('复制消息')
+    expect(copyButton.text()).toBe('')
+    expect(copyButton.find('svg').exists()).toBe(true)
+    expect(copyButton.classes()).not.toContain('ghost-button')
+    expect(copyButton.find('.trace-copy-toast-anchor').exists()).toBe(true)
+    expect(footer.element.firstElementChild).toBe(copyButton.element)
+    expect(footer.text()).toContain('Token')
+
+    await copyButton.trigger('click')
+
+    expect(globalThis.navigator.clipboard.writeText).toHaveBeenCalledWith('Done.')
+  })
+
+  it('shows and auto-hides a subtle copy toast after copying', async () => {
+    const wrapper = mount(MessageList, {
+      props: {
+        loading: false,
+        entries: [
+          {
+            id: 'reply-1',
+            kind: 'reply',
+            title: '',
+            content: 'Done.',
+          } as any,
+        ],
+      },
+    })
+
+    expect(wrapper.find('.trace-copy-toast').exists()).toBe(false)
+
+    await wrapper.find('.trace-copy-button').trigger('click')
+    await flushPromises()
+
+    const toast = wrapper.find('.trace-copy-toast')
+    expect(toast.exists()).toBe(true)
+    expect(toast.text()).toContain('已复制')
+    expect(toast.classes()).toContain('success')
+    expect(toast.find('svg').exists()).toBe(true)
+    expect(wrapper.find('.trace-copy-button .trace-copy-toast-anchor .trace-copy-toast').exists()).toBe(true)
+
+    vi.advanceTimersByTime(1800)
+    await flushPromises()
+
+    expect(wrapper.find('.trace-copy-toast').exists()).toBe(false)
+  })
+
+  it('shows a failure toast when clipboard copy fails', async () => {
+    Object.defineProperty(globalThis.navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: vi.fn().mockRejectedValue(new Error('denied')),
+      },
+    })
+
+    const wrapper = mount(MessageList, {
+      props: {
+        loading: false,
+        entries: [
+          {
+            id: 'reply-1',
+            kind: 'reply',
+            title: '',
+            content: 'Done.',
+          } as any,
+        ],
+      },
+    })
+
+    await wrapper.find('.trace-copy-button').trigger('click')
+    await flushPromises()
+
+    const toast = wrapper.find('.trace-copy-toast')
+    expect(toast.exists()).toBe(true)
+    expect(toast.text()).toContain('复制失败')
+    expect(toast.classes()).toContain('error')
+    expect(toast.find('svg').exists()).toBe(true)
+
+    vi.advanceTimersByTime(1800)
+    await flushPromises()
+
+    expect(wrapper.find('.trace-copy-toast').exists()).toBe(false)
+  })
+
+  it('renders assistant replies as markdown content', () => {
+    const wrapper = mount(MessageList, {
+      props: {
+        loading: false,
+        entries: [
+          {
+            id: 'reply-markdown',
+            kind: 'reply',
+            title: '',
+            content: '## Plan\n\nUse **markdown** and `code`.',
+          },
+        ],
+      },
+    })
+
+    const content = wrapper.find('.trace-block.reply .trace-content.markdown-content')
+    expect(content.exists()).toBe(true)
+    expect(content.find('h2').text()).toBe('Plan')
+    expect(content.find('strong').text()).toBe('markdown')
+    expect(content.find('code').text()).toBe('code')
+  })
+
+  it('renders fenced code blocks with a copy button', async () => {
+    const wrapper = mount(MessageList, {
+      props: {
+        loading: false,
+        entries: [
+          {
+            id: 'reply-code',
+            kind: 'reply',
+            title: '',
+            content: '```ts\nconst total = 42\n```',
+          },
+        ],
+      },
+    })
+
+    const codeBlock = wrapper.find('.markdown-code-block')
+    const copyButton = wrapper.find('.markdown-code-copy')
+
+    expect(codeBlock.exists()).toBe(true)
+    expect(copyButton.exists()).toBe(true)
+    expect(copyButton.attributes('aria-label')).toBe('复制代码块')
+    expect(copyButton.text()).toBe('')
+    expect(copyButton.find('svg').exists()).toBe(true)
+    expect(copyButton.classes()).toContain('compact-icon-button')
+    expect(wrapper.find('.markdown-code-language').text()).toBe('ts')
+    expect(codeBlock.find('pre').exists()).toBe(true)
+
+    await copyButton.trigger('click')
+    await flushPromises()
+
+    expect(globalThis.navigator.clipboard.writeText).toHaveBeenCalledWith('const total = 42\n')
+  })
+
+  it('falls back to code when fenced block has no language label', () => {
+    const wrapper = mount(MessageList, {
+      props: {
+        loading: false,
+        entries: [
+          {
+            id: 'reply-code-fallback',
+            kind: 'reply',
+            title: '',
+            content: '```\nplain text\n```',
+          },
+        ],
+      },
+    })
+
+    expect(wrapper.find('.markdown-code-language').text()).toBe('code')
   })
 
   it('shows 单个工具调用标题 while preserving the tool name', () => {

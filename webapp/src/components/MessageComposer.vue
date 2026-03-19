@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { Promotion } from '@element-plus/icons-vue'
 
 const props = defineProps<{
@@ -11,8 +11,18 @@ const emit = defineEmits<{
 }>()
 
 const draft = ref('')
+const textareaRef = ref<HTMLTextAreaElement | null>(null)
 
 const canSend = computed(() => !props.disabled && draft.value.trim().length > 0)
+
+function syncTextareaHeight() {
+  if (!textareaRef.value) {
+    return
+  }
+
+  textareaRef.value.style.height = 'auto'
+  textareaRef.value.style.height = `${textareaRef.value.scrollHeight}px`
+}
 
 function handleKeydown(event: KeyboardEvent) {
   if (event.key !== 'Enter' || event.shiftKey) {
@@ -30,6 +40,11 @@ function submit() {
 
   emit('send', draft.value.trim())
   draft.value = ''
+  void nextTick(syncTextareaHeight)
+}
+
+function handleInput() {
+  syncTextareaHeight()
 }
 
 watch(
@@ -37,19 +52,26 @@ watch(
   (disabled) => {
     if (disabled) {
       draft.value = draft.value.trimStart()
+      void nextTick(syncTextareaHeight)
     }
   },
 )
+
+onMounted(() => {
+  syncTextareaHeight()
+})
 </script>
 
 <template>
   <form class="composer-panel" @submit.prevent="submit">
     <div class="composer-field">
       <textarea
+        ref="textareaRef"
         v-model="draft"
         class="composer-input"
-        rows="4"
+        rows="2"
         placeholder="输入消息..."
+        @input="handleInput"
         @keydown="handleKeydown"
       />
       <button class="composer-submit" type="submit" :disabled="!canSend" aria-label="发送">
