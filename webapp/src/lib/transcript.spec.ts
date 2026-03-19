@@ -46,6 +46,8 @@ describe('buildTranscriptEntries', () => {
       {
         role: 'assistant',
         content: 'Done.',
+        provider_id: 'openai',
+        model_id: 'gpt-5.4',
         usage: {
           prompt_tokens: 123,
           completion_tokens: 45,
@@ -58,6 +60,8 @@ describe('buildTranscriptEntries', () => {
     expect(entries[0]).toMatchObject({
       kind: 'reply',
       content: 'Done.',
+      provider_id: 'openai',
+      model_id: 'gpt-5.4',
       token_usage: {
         prompt_tokens: 123,
         completion_tokens: 45,
@@ -388,7 +392,7 @@ describe('updateTranscriptFromStreamEvent', () => {
     const entries = buildTranscriptEntries([{ role: 'system', content: 'Run failed: upstream 502' }])
 
     expect(entries).toEqual([
-      expect.objectContaining({ kind: 'error', title: 'Run failed', content: 'Run failed: upstream 502' }),
+      expect.objectContaining({ kind: 'error', title: '运行失败', content: 'Run failed: upstream 502' }),
     ])
   })
 

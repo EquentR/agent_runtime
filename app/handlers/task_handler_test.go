@@ -385,15 +385,15 @@ func newAgentRunTaskTestServer(t *testing.T) (*coretasks.Manager, *httptest.Serv
 		LeaseDuration:     100 * time.Millisecond,
 		HeartbeatInterval: 20 * time.Millisecond,
 	})
-	resolver := &coreagent.ModelResolver{Provider: &coretypes.LLMProvider{
+	resolver := &coreagent.ModelResolver{Providers: []coretypes.LLMProvider{{
 		BaseProvider: coretypes.BaseProvider{Name: "openai"},
 		Models:       []coretypes.LLMModel{{BaseModel: coretypes.BaseModel{ID: "gpt-5.4", Name: "GPT 5.4"}, Type: coretypes.LLMTypeOpenAIResponses}},
-	}}
+	}}}
 	responses := []string{"first answer", "second answer"}
 	if err := manager.RegisterExecutor("agent.run", coreagent.NewTaskExecutor(coreagent.ExecutorDependencies{
 		Resolver:          resolver,
 		ConversationStore: conversationStore,
-		ClientFactory: func(*coretypes.LLMModel) (model.LlmClient, error) {
+		ClientFactory: func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) {
 			answer := responses[0]
 			responses = responses[1:]
 			return &stubAgentClient{answer: answer}, nil

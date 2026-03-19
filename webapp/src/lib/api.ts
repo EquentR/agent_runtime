@@ -2,6 +2,7 @@ import type {
   ApiEnvelope,
   Conversation,
   ConversationMessage,
+  ModelCatalog,
   TaskDetails,
   RunTaskRequest,
   RunTaskResult,
@@ -48,15 +49,23 @@ export function buildRunTaskRequest(input: {
   return request
 }
 
+function normalizeStringValue(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
 export function normalizeConversationMessage(
   message: Partial<ConversationMessage> & {
     Role?: string
     Content?: string
+    ProviderID?: string
+    ModelID?: string
     Usage?: unknown
     Reasoning?: string
     ToolCallId?: string
     ToolCallID?: string
     toolCallId?: string
+    providerId?: string
+    modelId?: string
     usage?: unknown
     ReasoningItems?: Array<{ Summary?: Array<{ Text?: string }> }>
     ToolCalls?: Array<{ ID?: string; Name?: string; Arguments?: string; id?: string; name?: string; arguments?: string }>
@@ -66,6 +75,8 @@ export function normalizeConversationMessage(
   return {
     role: (message.role ?? message.Role ?? 'assistant') as ConversationMessage['role'],
     content: message.content ?? message.Content ?? '',
+    provider_id: normalizeStringValue(message.provider_id ?? message.providerId ?? message.ProviderID),
+    model_id: normalizeStringValue(message.model_id ?? message.modelId ?? message.ModelID),
     usage: normalizeTranscriptTokenUsage(message.usage ?? message.Usage),
     reasoning: message.reasoning ?? message.Reasoning,
     tool_call_id: message.tool_call_id ?? message.ToolCallId ?? message.ToolCallID ?? message.toolCallId,
@@ -91,7 +102,14 @@ export function normalizeConversationMessage(
 
 export function normalizeRunTaskResult(
   result: Omit<RunTaskResult, 'final_message'> & {
-    final_message: Partial<ConversationMessage> & { Role?: string; Content?: string }
+    final_message: Partial<ConversationMessage> & {
+      Role?: string
+      Content?: string
+      ProviderID?: string
+      ModelID?: string
+      providerId?: string
+      modelId?: string
+    }
   },
 ): RunTaskResult {
   return {
@@ -187,6 +205,10 @@ async function request<T>(path: string, init?: RequestInit) {
 
 export async function fetchConversations() {
   return request<Conversation[]>('/conversations')
+}
+
+export async function fetchModelCatalog() {
+  return request<ModelCatalog>('/models')
 }
 
 export async function fetchConversationMessages(conversationId: string) {

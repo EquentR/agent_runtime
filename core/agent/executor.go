@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/EquentR/agent_runtime/core/memory"
 	model "github.com/EquentR/agent_runtime/core/providers/types"
 	coretasks "github.com/EquentR/agent_runtime/core/tasks"
 	"github.com/EquentR/agent_runtime/core/tools"
@@ -13,7 +14,32 @@ import (
 )
 
 type ModelResolver struct {
+	Providers []coretypes.LLMProvider
+}
+
+type ResolvedModel struct {
 	Provider *coretypes.LLMProvider
+	Model    *coretypes.LLMModel
+}
+
+type ModelCatalog struct {
+	DefaultProviderID string                `json:"default_provider_id"`
+	DefaultModelID    string                `json:"default_model_id"`
+	Providers         []ModelProviderOption `json:"providers"`
+}
+
+type ModelProviderOption struct {
+	ID     string             `json:"id"`
+	Name   string             `json:"name"`
+	Models []ModelOptionEntry `json:"models"`
+}
+
+type ModelOptionEntry struct {
+	ID      string                     `json:"id"`
+	Name    string                     `json:"name"`
+	Type    string                     `json:"type"`
+	Context coretypes.LLMContextConfig `json:"context"`
+	Cost    *coretypes.ModelPricing    `json:"cost,omitempty"`
 }
 
 type RunTaskInput struct {
@@ -36,7 +62,9 @@ type RunTaskResult struct {
 	MessagesAppended int                      `json:"messages_appended"`
 }
 
-type ClientFactory func(model *coretypes.LLMModel) (model.LlmClient, error)
+type ClientFactory func(provider *coretypes.LLMProvider, llmModel *coretypes.LLMModel) (model.LlmClient, error)
+
+type MemoryFactory func(model *coretypes.LLMModel) (*memory.Manager, error)
 
 type EventSinkFactory func(runtime *coretasks.Runtime) EventSink
 
@@ -45,21 +73,81 @@ type ExecutorDependencies struct {
 	ConversationStore *ConversationStore
 	Registry          *tools.Registry
 	ClientFactory     ClientFactory
+	MemoryFactory     MemoryFactory
 	NewEventSink      EventSinkFactory
 }
 
-func (r *ModelResolver) Resolve(providerID, modelID string) (*coretypes.LLMModel, error) {
-	if r == nil || r.Provider == nil {
+func (r *ModelResolver) Resolve(providerID, modelID string) (*ResolvedModel, error) {
+	if r == nil || len(r.Providers) == 0 {
 		return nil, fmt.Errorf("llm provider is not configured")
 	}
-	if !strings.EqualFold(strings.TrimSpace(providerID), r.Provider.ProviderName()) {
+	provider := r.findProvider(providerID)
+	if provider == nil {
 		return nil, fmt.Errorf("llm provider %q is not configured", providerID)
 	}
-	model := r.Provider.FindModel(modelID)
-	if model == nil {
+	llmModel := provider.FindModel(modelID)
+	if llmModel == nil {
 		return nil, fmt.Errorf("llm model %q is not configured under provider %q", modelID, providerID)
 	}
-	return model, nil
+	return &ResolvedModel{Provider: provider, Model: llmModel}, nil
+}
+
+func (r *ModelResolver) Catalog() ModelCatalog {
+	providers := make([]ModelProviderOption, 0, len(r.Providers))
+	defaultProviderID, defaultModelID := r.DefaultSelection()
+	for i := range r.Providers {
+		provider := &r.Providers[i]
+		models := make([]ModelOptionEntry, 0, len(provider.Models))
+		for j := range provider.Models {
+			llmModel := &provider.Models[j]
+			models = append(models, ModelOptionEntry{
+				ID:      llmModel.ModelID(),
+				Name:    firstNonEmpty(llmModel.ModelName(), llmModel.ModelID()),
+				Type:    llmModel.ModelType(),
+				Context: llmModel.ContextWindow(),
+				Cost:    llmModel.Pricing(),
+			})
+		}
+		providers = append(providers, ModelProviderOption{
+			ID:     provider.ProviderName(),
+			Name:   provider.ProviderName(),
+			Models: models,
+		})
+	}
+	return ModelCatalog{
+		DefaultProviderID: defaultProviderID,
+		DefaultModelID:    defaultModelID,
+		Providers:         providers,
+	}
+}
+
+func (r *ModelResolver) DefaultSelection() (string, string) {
+	if r == nil {
+		return "", ""
+	}
+	for i := range r.Providers {
+		provider := &r.Providers[i]
+		for j := range provider.Models {
+			llmModel := &provider.Models[j]
+			if provider.ProviderName() != "" && llmModel.ModelID() != "" {
+				return provider.ProviderName(), llmModel.ModelID()
+			}
+		}
+	}
+	return "", ""
+}
+
+func (r *ModelResolver) findProvider(providerID string) *coretypes.LLMProvider {
+	target := strings.TrimSpace(providerID)
+	if r == nil || target == "" {
+		return nil
+	}
+	for i := range r.Providers {
+		if strings.EqualFold(r.Providers[i].ProviderName(), target) {
+			return &r.Providers[i]
+		}
+	}
+	return nil
 }
 
 func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
@@ -82,10 +170,12 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 			return nil, err
 		}
 
-		llmModel, err := deps.Resolver.Resolve(input.ProviderID, input.ModelID)
+		resolved, err := deps.Resolver.Resolve(input.ProviderID, input.ModelID)
 		if err != nil {
 			return nil, err
 		}
+		provider := resolved.Provider
+		llmModel := resolved.Model
 		conversation, err := deps.ConversationStore.EnsureConversation(ctx, EnsureConversationInput{
 			ID:         input.ConversationID,
 			ProviderID: input.ProviderID,
@@ -95,14 +185,15 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 		if err != nil {
 			return nil, err
 		}
-		if !strings.EqualFold(conversation.ProviderID, input.ProviderID) || !strings.EqualFold(conversation.ModelID, input.ModelID) {
-			return nil, fmt.Errorf("conversation %q provider/model mismatch", conversation.ID)
-		}
 		history, err := deps.ConversationStore.ListMessages(ctx, conversation.ID)
 		if err != nil {
 			return nil, err
 		}
-		client, err := deps.ClientFactory(llmModel)
+		client, err := deps.ClientFactory(provider, llmModel)
+		if err != nil {
+			return nil, err
+		}
+		memoryManager, err := buildMemoryManager(deps.MemoryFactory, llmModel)
 		if err != nil {
 			return nil, err
 		}
@@ -114,6 +205,7 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 		}
 		runner, err := NewRunner(client, deps.Registry, Options{
 			LLMModel:     llmModel,
+			Memory:       memoryManager,
 			SystemPrompt: input.SystemPrompt,
 			EventSink:    sink,
 			Actor:        "agent.run",
@@ -126,7 +218,7 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 		if err != nil {
 			return nil, err
 		}
-		userMessage := model.Message{Role: model.RoleUser, Content: input.Message}
+		userMessage := model.Message{Role: model.RoleUser, Content: input.Message, ProviderID: input.ProviderID, ModelID: input.ModelID}
 		if err := deps.ConversationStore.AppendMessages(ctx, conversation.ID, task.ID, []model.Message{userMessage}); err != nil {
 			return nil, err
 		}
@@ -144,7 +236,7 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 			}
 			return nil, err
 		}
-		result = attachUsageToPersistedAssistantReply(result)
+		result = attachUsageToPersistedAssistantReply(result, input.ProviderID, input.ModelID)
 		if err := deps.ConversationStore.AppendMessages(ctx, conversation.ID, task.ID, result.Messages); err != nil {
 			return nil, err
 		}
@@ -160,7 +252,22 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 	}
 }
 
-func attachUsageToPersistedAssistantReply(result RunResult) RunResult {
+func buildMemoryManager(factory MemoryFactory, llmModel *coretypes.LLMModel) (*memory.Manager, error) {
+	if factory != nil {
+		return factory(llmModel)
+	}
+	return memory.NewManager(memory.Options{Model: llmModel})
+}
+
+func attachUsageToPersistedAssistantReply(result RunResult, providerID string, modelID string) RunResult {
+	result.FinalMessage.ProviderID = providerID
+	result.FinalMessage.ModelID = modelID
+	for index := range result.Messages {
+		if result.Messages[index].Role == model.RoleAssistant {
+			result.Messages[index].ProviderID = providerID
+			result.Messages[index].ModelID = modelID
+		}
+	}
 	if !hasTokenUsage(result.Usage) {
 		return result
 	}

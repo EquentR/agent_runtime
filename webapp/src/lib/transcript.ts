@@ -47,7 +47,7 @@ function summarizeReasoning(message: ConversationMessage) {
 
 function normalizeStreamMessage(
   message: Record<string, unknown>,
-): Pick<ConversationMessage, 'role' | 'content' | 'reasoning' | 'tool_call_id' | 'tool_calls'> {
+): Pick<ConversationMessage, 'role' | 'content' | 'provider_id' | 'model_id' | 'reasoning' | 'tool_call_id' | 'tool_calls'> {
   const rawToolCalls = Array.isArray(message.tool_calls)
     ? message.tool_calls
     : Array.isArray(message.toolCalls)
@@ -64,6 +64,22 @@ function normalizeStreamMessage(
           ? (String(message.Role) as ConversationMessage['role'])
           : 'assistant',
     content: typeof message.content === 'string' ? message.content : typeof message.Content === 'string' ? String(message.Content) : '',
+    provider_id:
+      typeof message.provider_id === 'string'
+        ? message.provider_id
+        : typeof message.providerId === 'string'
+          ? message.providerId
+          : typeof message.ProviderID === 'string'
+            ? String(message.ProviderID)
+            : undefined,
+    model_id:
+      typeof message.model_id === 'string'
+        ? message.model_id
+        : typeof message.modelId === 'string'
+          ? message.modelId
+          : typeof message.ModelID === 'string'
+            ? String(message.ModelID)
+            : undefined,
     reasoning:
       typeof message.reasoning === 'string'
         ? message.reasoning
@@ -374,7 +390,7 @@ function applyConversationMessage(
 
   if (message.role === 'system') {
     if (message.content.trim()) {
-      next.push({ id: createEntryId('error'), kind: 'error', title: 'Run failed', content: message.content })
+      next.push({ id: createEntryId('error'), kind: 'error', title: '运行失败', content: message.content })
     }
     return next
   }
@@ -403,7 +419,11 @@ function applyConversationMessage(
 
   if (message.content.trim()) {
     next = appendReply(next, message.content)
-    next = attachTokenUsageToLatestReply(next, message.usage)
+    next = attachReplyMetaToLatestReply(next, {
+      provider_id: message.provider_id,
+      model_id: message.model_id,
+      token_usage: message.usage,
+    })
   }
 
   return next
@@ -430,7 +450,14 @@ function latestToolFailureMessage(entries: TranscriptEntry[]) {
 }
 
 export function attachTokenUsageToLatestReply(entries: TranscriptEntry[], usage: TranscriptTokenUsage | undefined) {
-  if (!usage) {
+  return attachReplyMetaToLatestReply(entries, { token_usage: usage })
+}
+
+export function attachReplyMetaToLatestReply(
+  entries: TranscriptEntry[],
+  meta: Pick<TranscriptEntry, 'provider_id' | 'model_id' | 'token_usage'>,
+) {
+  if (!meta.provider_id && !meta.model_id && !meta.token_usage) {
     return entries
   }
 
@@ -443,7 +470,9 @@ export function attachTokenUsageToLatestReply(entries: TranscriptEntry[], usage:
 
     next[index] = {
       ...entry,
-      token_usage: usage,
+      ...(meta.provider_id ? { provider_id: meta.provider_id } : {}),
+      ...(meta.model_id ? { model_id: meta.model_id } : {}),
+      ...(meta.token_usage ? { token_usage: meta.token_usage } : {}),
     }
     return next
   }
@@ -562,7 +591,7 @@ export function updateTranscriptFromStreamEvent(entries: TranscriptEntry[], even
     }
     return [
       ...settledEntries,
-      { id: createEntryId('error'), kind: 'error', title: 'Run failed', content: message },
+      { id: createEntryId('error'), kind: 'error', title: '运行失败', content: message },
     ]
   }
 
@@ -577,7 +606,7 @@ export function updateTranscriptFromStreamEvent(entries: TranscriptEntry[], even
       const nestedError = payload.error && typeof payload.error === 'object' ? String((payload.error as Record<string, unknown>).message ?? '') : ''
       return [
         ...settledEntries,
-        { id: createEntryId('error'), kind: 'error', title: 'Run failed', content: nestedError || String(payload.error ?? `Task ${status}`) },
+        { id: createEntryId('error'), kind: 'error', title: '运行失败', content: nestedError || String(payload.error ?? `Task ${status}`) },
       ]
     }
     return settledEntries

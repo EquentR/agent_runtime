@@ -58,7 +58,7 @@ describe('MessageComposer', () => {
     await textarea.trigger('input')
 
     expect(textarea.attributes('rows')).toBe('2')
-    expect(element.style.height).toBe('56px')
+    expect(element.style.height).toBe('64px')
 
     await textarea.setValue('first line\nsecond line\nthird line')
     await textarea.trigger('input')

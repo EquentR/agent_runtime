@@ -104,6 +104,10 @@ definitions:
     properties:
       content:
         type: string
+      model_id:
+        type: string
+      provider_id:
+        type: string
       reasoning:
         type: string
       role:
@@ -190,6 +194,50 @@ definitions:
       ok:
         type: boolean
       time:
+        type: string
+    type: object
+  handlers.ModelCatalogSwaggerDoc:
+    properties:
+      default_model_id:
+        type: string
+      default_provider_id:
+        type: string
+      providers:
+        items:
+          $ref: '#/definitions/handlers.ModelProviderSwaggerDoc'
+        type: array
+    type: object
+  handlers.ModelCatalogSwaggerResponse:
+    properties:
+      code:
+        type: integer
+      data:
+        $ref: '#/definitions/handlers.ModelCatalogSwaggerDoc'
+      message:
+        type: string
+      ok:
+        type: boolean
+      time:
+        type: string
+    type: object
+  handlers.ModelEntrySwaggerDoc:
+    properties:
+      id:
+        type: string
+      name:
+        type: string
+      type:
+        type: string
+    type: object
+  handlers.ModelProviderSwaggerDoc:
+    properties:
+      id:
+        type: string
+      models:
+        items:
+          $ref: '#/definitions/handlers.ModelEntrySwaggerDoc'
+        type: array
+      name:
         type: string
     type: object
   handlers.TaskSwaggerDoc:
@@ -431,6 +479,23 @@ paths:
       summary: 示例问候接口
       tags:
       - example
+  /models:
+    get:
+      description: 返回当前服务启动时注入的全部 LLM provider/model 配置，以及前端可直接使用的默认 provider/model。
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.ModelCatalogSwaggerResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+      summary: 获取模型目录
+      tags:
+      - models
   /swagger:
     get:
       description: 将 `/swagger` 与 `/swagger/` 重定向到可直接访问的 Swagger UI 页面。

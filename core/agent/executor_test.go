@@ -6,30 +6,34 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/EquentR/agent_runtime/core/memory"
 	model "github.com/EquentR/agent_runtime/core/providers/types"
 	coretasks "github.com/EquentR/agent_runtime/core/tasks"
 	coretypes "github.com/EquentR/agent_runtime/core/types"
 )
 
 func TestResolveConfiguredModelByProviderAndModelID(t *testing.T) {
-	resolver := &ModelResolver{Provider: &coretypes.LLMProvider{
+	resolver := &ModelResolver{Providers: []coretypes.LLMProvider{{
 		BaseProvider: coretypes.BaseProvider{Name: "openai"},
 		Models: []coretypes.LLMModel{{
 			BaseModel: coretypes.BaseModel{ID: "gpt-5.4", Name: "GPT 5.4"},
 			Type:      coretypes.LLMTypeOpenAIResponses,
 		}},
-	}}
-	model, err := resolver.Resolve("openai", "gpt-5.4")
+	}}}
+	resolved, err := resolver.Resolve("openai", "gpt-5.4")
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
-	if model == nil || model.ModelID() != "gpt-5.4" {
-		t.Fatalf("model = %#v, want gpt-5.4", model)
+	if resolved == nil || resolved.Model == nil || resolved.Model.ModelID() != "gpt-5.4" {
+		t.Fatalf("resolved = %#v, want gpt-5.4", resolved)
+	}
+	if resolved.Provider == nil || resolved.Provider.ProviderName() != "openai" {
+		t.Fatalf("resolved provider = %#v, want openai", resolved.Provider)
 	}
 }
 
 func TestResolveConfiguredModelRejectsUnknownProvider(t *testing.T) {
-	resolver := &ModelResolver{Provider: &coretypes.LLMProvider{BaseProvider: coretypes.BaseProvider{Name: "openai"}}}
+	resolver := &ModelResolver{Providers: []coretypes.LLMProvider{{BaseProvider: coretypes.BaseProvider{Name: "openai"}}}}
 	_, err := resolver.Resolve("google", "gpt-5.4")
 	if err == nil {
 		t.Fatal("Resolve() error = nil, want unknown provider error")
@@ -37,26 +41,56 @@ func TestResolveConfiguredModelRejectsUnknownProvider(t *testing.T) {
 }
 
 func TestResolveConfiguredModelRejectsUnknownModel(t *testing.T) {
-	resolver := &ModelResolver{Provider: &coretypes.LLMProvider{BaseProvider: coretypes.BaseProvider{Name: "openai"}}}
+	resolver := &ModelResolver{Providers: []coretypes.LLMProvider{{BaseProvider: coretypes.BaseProvider{Name: "openai"}}}}
 	_, err := resolver.Resolve("openai", "missing-model")
 	if err == nil {
 		t.Fatal("Resolve() error = nil, want unknown model error")
 	}
 }
 
+func TestResolveConfiguredModelSupportsMultipleProviders(t *testing.T) {
+	resolver := &ModelResolver{Providers: []coretypes.LLMProvider{
+		{
+			BaseProvider: coretypes.BaseProvider{Name: "openai"},
+			Models: []coretypes.LLMModel{{
+				BaseModel: coretypes.BaseModel{ID: "gpt-5.4", Name: "GPT 5.4"},
+				Type:      coretypes.LLMTypeOpenAIResponses,
+			}},
+		},
+		{
+			BaseProvider: coretypes.BaseProvider{Name: "google"},
+			Models: []coretypes.LLMModel{{
+				BaseModel: coretypes.BaseModel{ID: "gemini-2.5-flash", Name: "Gemini 2.5 Flash"},
+				Type:      coretypes.LLMTypeGoogle,
+			}},
+		},
+	}}
+
+	resolved, err := resolver.Resolve("google", "gemini-2.5-flash")
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if resolved == nil || resolved.Provider == nil || resolved.Provider.ProviderName() != "google" {
+		t.Fatalf("resolved provider = %#v, want google", resolved)
+	}
+	if resolved.Model == nil || resolved.Model.ModelID() != "gemini-2.5-flash" {
+		t.Fatalf("resolved model = %#v, want gemini-2.5-flash", resolved.Model)
+	}
+}
+
 func TestAgentExecutorCreatesConversationWhenMissing(t *testing.T) {
 	store := newConversationStoreForTest(t)
-	resolver := &ModelResolver{Provider: &coretypes.LLMProvider{
+	resolver := &ModelResolver{Providers: []coretypes.LLMProvider{{
 		BaseProvider: coretypes.BaseProvider{Name: "openai"},
 		Models: []coretypes.LLMModel{{
 			BaseModel: coretypes.BaseModel{ID: "gpt-5.4", Name: "GPT 5.4"},
 			Type:      coretypes.LLMTypeOpenAIResponses,
 		}},
-	}}
+	}}}
 	executor := NewTaskExecutor(ExecutorDependencies{
 		Resolver:          resolver,
 		ConversationStore: store,
-		ClientFactory: func(*coretypes.LLMModel) (model.LlmClient, error) {
+		ClientFactory: func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) {
 			return &stubClient{streams: []model.Stream{newStubStream(
 				[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "hello"}}},
 				model.Message{Role: model.RoleAssistant, Content: "hello"},
@@ -99,14 +133,14 @@ func TestAgentExecutorLoadsConversationHistoryAndAppendsNewTurn(t *testing.T) {
 		model.Message{Role: model.RoleAssistant, Content: "second answer"},
 		nil,
 	)}}
-	resolver := &ModelResolver{Provider: &coretypes.LLMProvider{
+	resolver := &ModelResolver{Providers: []coretypes.LLMProvider{{
 		BaseProvider: coretypes.BaseProvider{Name: "openai"},
 		Models:       []coretypes.LLMModel{{BaseModel: coretypes.BaseModel{ID: "gpt-5.4", Name: "GPT 5.4"}, Type: coretypes.LLMTypeOpenAIResponses}},
-	}}
+	}}}
 	executor := NewTaskExecutor(ExecutorDependencies{
 		Resolver:          resolver,
 		ConversationStore: store,
-		ClientFactory:     func(*coretypes.LLMModel) (model.LlmClient, error) { return client, nil },
+		ClientFactory:     func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return client, nil },
 	})
 	payload, _ := json.Marshal(RunTaskInput{ConversationID: "conv_1", ProviderID: "openai", ModelID: "gpt-5.4", Message: "second"})
 	task := &coretasks.Task{ID: "task_1", TaskType: "agent.run", InputJSON: payload}
@@ -132,17 +166,17 @@ func TestAgentExecutorLoadsConversationHistoryAndAppendsNewTurn(t *testing.T) {
 
 func TestAgentExecutorPersistsFinalAssistantUsageInConversationHistory(t *testing.T) {
 	store := newConversationStoreForTest(t)
-	resolver := &ModelResolver{Provider: &coretypes.LLMProvider{
+	resolver := &ModelResolver{Providers: []coretypes.LLMProvider{{
 		BaseProvider: coretypes.BaseProvider{Name: "openai"},
 		Models: []coretypes.LLMModel{{
 			BaseModel: coretypes.BaseModel{ID: "gpt-5.4", Name: "GPT 5.4"},
 			Type:      coretypes.LLMTypeOpenAIResponses,
 		}},
-	}}
+	}}}
 	executor := NewTaskExecutor(ExecutorDependencies{
 		Resolver:          resolver,
 		ConversationStore: store,
-		ClientFactory: func(*coretypes.LLMModel) (model.LlmClient, error) {
+		ClientFactory: func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) {
 			return &stubClient{streams: []model.Stream{newStubStream(
 				[]model.StreamEvent{
 					{Type: model.StreamEventUsage, Usage: model.TokenUsage{PromptTokens: 21, CompletionTokens: 13, TotalTokens: 34}},
@@ -177,17 +211,83 @@ func TestAgentExecutorPersistsFinalAssistantUsageInConversationHistory(t *testin
 	}
 }
 
+func TestAgentExecutorAllowsConversationModelSwitchAndUsesSelectedModelMemory(t *testing.T) {
+	store := newConversationStoreForTest(t)
+	_, err := store.CreateConversation(context.Background(), CreateConversationInput{ID: "conv_1", ProviderID: "openai", ModelID: "gpt-5.4"})
+	if err != nil {
+		t.Fatalf("CreateConversation() error = %v", err)
+	}
+	if err := store.AppendMessages(context.Background(), "conv_1", "task_0", []model.Message{{Role: model.RoleUser, Content: "first"}, {Role: model.RoleAssistant, Content: "answer", ProviderID: "openai", ModelID: "gpt-5.4"}}); err != nil {
+		t.Fatalf("AppendMessages() error = %v", err)
+	}
+
+	client := &stubClient{streams: []model.Stream{newStubStream(
+		[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "switched"}}},
+		model.Message{Role: model.RoleAssistant, Content: "switched"},
+		nil,
+	)}}
+	resolver := &ModelResolver{Providers: []coretypes.LLMProvider{{
+		BaseProvider: coretypes.BaseProvider{Name: "openai"},
+		Models: []coretypes.LLMModel{
+			{BaseModel: coretypes.BaseModel{ID: "gpt-5.4", Name: "GPT 5.4"}, Type: coretypes.LLMTypeOpenAIResponses, Context: coretypes.LLMContextConfig{Max: 128000, Output: 8000}},
+			{BaseModel: coretypes.BaseModel{ID: "gpt-4.1-mini", Name: "GPT 4.1 Mini"}, Type: coretypes.LLMTypeOpenAIResponses, Context: coretypes.LLMContextConfig{Max: 64000, Output: 2000}},
+		},
+	}}}
+	memoryModels := make([]string, 0, 1)
+	executor := NewTaskExecutor(ExecutorDependencies{
+		Resolver:          resolver,
+		ConversationStore: store,
+		ClientFactory:     func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return client, nil },
+		MemoryFactory: func(llmModel *coretypes.LLMModel) (*memory.Manager, error) {
+			memoryModels = append(memoryModels, llmModel.ModelID())
+			return memory.NewManager(memory.Options{Model: llmModel, Counter: fakeTokenCounter{}})
+		},
+	})
+
+	payload, _ := json.Marshal(RunTaskInput{ConversationID: "conv_1", ProviderID: "openai", ModelID: "gpt-4.1-mini", Message: "second"})
+	task := &coretasks.Task{ID: "task_1", TaskType: "agent.run", InputJSON: payload}
+	result, err := executor(context.Background(), task, nil)
+	if err != nil {
+		t.Fatalf("executor() error = %v", err)
+	}
+	runResult := result.(RunTaskResult)
+	if runResult.ModelID != "gpt-4.1-mini" {
+		t.Fatalf("runResult.ModelID = %q, want gpt-4.1-mini", runResult.ModelID)
+	}
+	if len(memoryModels) != 1 || memoryModels[0] != "gpt-4.1-mini" {
+		t.Fatalf("memoryModels = %#v, want gpt-4.1-mini", memoryModels)
+	}
+	if len(client.streamRequests) != 1 || client.streamRequests[0].MaxTokens != 2000 {
+		t.Fatalf("stream request = %#v, want MaxTokens=2000 from switched model", client.streamRequests)
+	}
+	conversation, err := store.GetConversation(context.Background(), "conv_1")
+	if err != nil {
+		t.Fatalf("GetConversation() error = %v", err)
+	}
+	if conversation.ModelID != "gpt-4.1-mini" {
+		t.Fatalf("conversation.ModelID = %q, want gpt-4.1-mini", conversation.ModelID)
+	}
+	messages, err := store.ListMessages(context.Background(), "conv_1")
+	if err != nil {
+		t.Fatalf("ListMessages() error = %v", err)
+	}
+	last := messages[len(messages)-1]
+	if last.ProviderID != "openai" || last.ModelID != "gpt-4.1-mini" {
+		t.Fatalf("last message = %#v, want persisted switched provider/model", last)
+	}
+}
+
 func TestAgentExecutorUsesTaskRuntimeSink(t *testing.T) {
 	store := newConversationStoreForTest(t)
-	resolver := &ModelResolver{Provider: &coretypes.LLMProvider{
+	resolver := &ModelResolver{Providers: []coretypes.LLMProvider{{
 		BaseProvider: coretypes.BaseProvider{Name: "openai"},
 		Models:       []coretypes.LLMModel{{BaseModel: coretypes.BaseModel{ID: "gpt-5.4", Name: "GPT 5.4"}, Type: coretypes.LLMTypeOpenAIResponses}},
-	}}
+	}}}
 	recorder := &recordingTaskRuntime{}
 	executor := NewTaskExecutor(ExecutorDependencies{
 		Resolver:          resolver,
 		ConversationStore: store,
-		ClientFactory: func(*coretypes.LLMModel) (model.LlmClient, error) {
+		ClientFactory: func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) {
 			return &stubClient{streams: []model.Stream{newStubStream(
 				[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "hello"}}},
 				model.Message{Role: model.RoleAssistant, Content: "hello"},
@@ -209,10 +309,10 @@ func TestAgentExecutorUsesTaskRuntimeSink(t *testing.T) {
 
 func TestAgentExecutorPersistsPartialMessagesWhenLaterStepFails(t *testing.T) {
 	store := newConversationStoreForTest(t)
-	resolver := &ModelResolver{Provider: &coretypes.LLMProvider{
+	resolver := &ModelResolver{Providers: []coretypes.LLMProvider{{
 		BaseProvider: coretypes.BaseProvider{Name: "openai"},
 		Models:       []coretypes.LLMModel{{BaseModel: coretypes.BaseModel{ID: "gpt-5.4", Name: "GPT 5.4"}, Type: coretypes.LLMTypeOpenAIResponses}},
-	}}
+	}}}
 	client := &stubClient{streams: []model.Stream{
 		newStubStream(
 			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "lookup_weather", Arguments: `{"city":"Shanghai"}`}}}}},
@@ -229,7 +329,7 @@ func TestAgentExecutorPersistsPartialMessagesWhenLaterStepFails(t *testing.T) {
 		Resolver:          resolver,
 		ConversationStore: store,
 		Registry:          registry,
-		ClientFactory:     func(*coretypes.LLMModel) (model.LlmClient, error) { return client, nil },
+		ClientFactory:     func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return client, nil },
 	})
 	payload, _ := json.Marshal(RunTaskInput{ConversationID: "conv_1", ProviderID: "openai", ModelID: "gpt-5.4", Message: "weather?"})
 	task := &coretasks.Task{ID: "task_1", TaskType: "agent.run", InputJSON: payload}

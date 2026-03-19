@@ -10,5 +10,6 @@ import (
 type Dependencies struct {
 	TaskManager       *coretasks.Manager
 	ConversationStore *coreagent.ConversationStore
+	ModelResolver     *coreagent.ModelResolver
 	AuthLogic         *logics.AuthLogic
 }

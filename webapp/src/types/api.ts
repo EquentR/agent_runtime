@@ -22,11 +22,31 @@ export interface Conversation {
 export interface ConversationMessage {
   role: 'user' | 'assistant' | 'tool' | 'system'
   content: string
+  provider_id?: string
+  model_id?: string
   usage?: TranscriptTokenUsage
   reasoning?: string
   tool_call_id?: string
   reasoning_items?: Array<{ text?: string }>
   tool_calls?: Array<{ id: string; name: string; arguments?: string }>
+}
+
+export interface ModelCatalog {
+  default_provider_id: string
+  default_model_id: string
+  providers: ModelCatalogProvider[]
+}
+
+export interface ModelCatalogProvider {
+  id: string
+  name: string
+  models: ModelCatalogEntry[]
+}
+
+export interface ModelCatalogEntry {
+  id: string
+  name: string
+  type: string
 }
 
 export interface TaskSnapshot {
@@ -78,6 +98,8 @@ export interface TranscriptEntry {
   kind: 'user' | 'reasoning' | 'tool' | 'reply' | 'error'
   title: string
   content?: string
+  provider_id?: string
+  model_id?: string
   details?: TranscriptEntryDetail[]
   status?: 'running' | 'done' | 'error'
   group_key?: string

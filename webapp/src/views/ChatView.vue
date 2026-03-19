@@ -11,16 +11,25 @@ import {
   deleteConversation,
   fetchConversationMessages,
   fetchConversations,
+  fetchModelCatalog,
   fetchTaskDetails,
   findRunningTaskByConversation,
   streamRunTask,
   TASK_STREAM_ABORTED_MESSAGE,
 } from '../lib/api'
 import { clearChatState, loadChatState, saveChatState } from '../lib/chat-state'
-import { DEFAULT_MODEL_ID, DEFAULT_PROVIDER_ID } from '../lib/chat'
 import { getSessionName, logout } from '../lib/session'
-import { attachTokenUsageToLatestReply, buildTranscriptEntries, updateTranscriptFromStreamEvent } from '../lib/transcript'
-import type { Conversation, TaskDetails, TaskStreamEvent, TranscriptEntry, TranscriptTokenUsage } from '../types/api'
+import { attachReplyMetaToLatestReply, buildTranscriptEntries, updateTranscriptFromStreamEvent } from '../lib/transcript'
+import type {
+  Conversation,
+  ModelCatalog,
+  ModelCatalogEntry,
+  ModelCatalogProvider,
+  TaskDetails,
+  TaskStreamEvent,
+  TranscriptEntry,
+  TranscriptTokenUsage,
+} from '../types/api'
 
 const router = useRouter()
 
@@ -36,6 +45,12 @@ const activeTaskId = ref('')
 const conversations = ref<Conversation[]>([])
 const entries = ref<TranscriptEntry[]>([])
 const errorMessage = ref('')
+const modelCatalog = ref<ModelCatalog | null>(null)
+const catalogLoading = ref(false)
+const selectedProviderId = ref('')
+const selectedModelId = ref('')
+const modelMenuOpen = ref(false)
+const modelMenuRef = ref<HTMLElement | null>(null)
 let activeStreamAbortController: AbortController | null = null
 let activeStreamingTaskId = ''
 
@@ -52,6 +67,17 @@ const topbarStatusClass = computed(() => ({
   loading: messagesLoading.value || sending.value,
 }))
 const sidebarDesktopHidden = computed(() => !sidebarMobile.value && sidebarCollapsed.value)
+const availableProviders = computed(() => modelCatalog.value?.providers ?? [])
+const selectedProvider = computed(
+  () => availableProviders.value.find((provider) => provider.id === selectedProviderId.value) ?? availableProviders.value[0] ?? null,
+)
+const availableModels = computed(() => selectedProvider.value?.models ?? [])
+const selectedModel = computed<ModelCatalogEntry | null>(
+  () => availableModels.value.find((item) => item.id === selectedModelId.value) ?? availableModels.value[0] ?? null,
+)
+const selectedModelLabel = computed(() => selectedModel.value?.name || selectedModelId.value || '选择模型')
+const modelMenuDisabled = computed(() => sending.value || catalogLoading.value || availableProviders.value.length === 0)
+const composerDisabled = computed(() => sending.value || catalogLoading.value || !selectedProviderId.value || !selectedModelId.value)
 
 function activeConversationTitle() {
   const current = conversations.value.find((conversation) => conversation.id === activeConversationId.value)
@@ -84,6 +110,7 @@ async function loadConversations(preferredConversationId = '') {
       activeConversationId.value = preferredConversationId
       const exists = conversations.value.some((conversation) => conversation.id === preferredConversationId)
       if (exists) {
+        syncSelectionFromConversation(preferredConversationId)
         return
       }
     }
@@ -91,6 +118,10 @@ async function loadConversations(preferredConversationId = '') {
     if (activeConversationId.value) {
       const exists = conversations.value.some((conversation) => conversation.id === activeConversationId.value)
       if (exists) {
+        if (entries.value.length > 0) {
+          syncSelectionFromConversation(activeConversationId.value)
+          return
+        }
         await selectConversation(activeConversationId.value)
         return
       }
@@ -102,6 +133,7 @@ async function loadConversations(preferredConversationId = '') {
 
 async function selectConversation(conversationId: string) {
   activeConversationId.value = conversationId
+  syncSelectionFromConversation(conversationId)
   sidebarDrawerOpen.value = false
   messagesLoading.value = true
   errorMessage.value = ''
@@ -123,6 +155,8 @@ function startNewConversation() {
   entries.value = []
   errorMessage.value = ''
   sidebarDrawerOpen.value = false
+  modelMenuOpen.value = false
+  applyDefaultSelection()
 }
 
 function toggleSidebarCollapsed() {
@@ -179,16 +213,103 @@ function stopActiveStream() {
   activeStreamingTaskId = ''
 }
 
+function closeModelMenu() {
+  modelMenuOpen.value = false
+}
+
+function toggleModelMenu() {
+  if (modelMenuDisabled.value) {
+    return
+  }
+  modelMenuOpen.value = !modelMenuOpen.value
+}
+
 function clearActiveTask() {
   activeTaskId.value = ''
   activeStreamingTaskId = ''
 }
 
-async function completeTaskConversation(conversationId: string, usage?: TranscriptTokenUsage) {
+async function completeTaskConversation(conversationId: string, usage?: TranscriptTokenUsage, providerId = '', modelId = '') {
   activeConversationId.value = conversationId
-  const messages = await fetchConversationMessages(conversationId)
-  entries.value = attachTokenUsageToLatestReply(buildTranscriptEntries(messages), usage)
+  entries.value = attachReplyMetaToLatestReply(entries.value, {
+    provider_id: providerId || selectedProviderId.value,
+    model_id: modelId || selectedModelId.value,
+    token_usage: usage,
+  })
   await loadConversations(conversationId)
+  syncSelectionFromConversation(conversationId)
+}
+
+function resolveProvider(providerId: string) {
+  return availableProviders.value.find((provider) => provider.id === providerId) ?? null
+}
+
+function resolveProviderDefaultModel(provider: ModelCatalogProvider | null, fallbackModelId = '') {
+  if (!provider) {
+    return ''
+  }
+  if (fallbackModelId && provider.models.some((model) => model.id === fallbackModelId)) {
+    return fallbackModelId
+  }
+  return provider.models[0]?.id ?? ''
+}
+
+function applySelection(providerId: string, modelId: string) {
+  const provider = resolveProvider(providerId) ?? availableProviders.value[0] ?? null
+  selectedProviderId.value = provider?.id ?? ''
+  selectedModelId.value = resolveProviderDefaultModel(provider, modelId)
+}
+
+function applyDefaultSelection() {
+  if (!modelCatalog.value) {
+    return
+  }
+  applySelection(modelCatalog.value.default_provider_id, modelCatalog.value.default_model_id)
+}
+
+function chooseModel(providerId: string, modelId: string) {
+  applySelection(providerId, modelId)
+  closeModelMenu()
+}
+
+function syncSelectionFromConversation(conversationId: string) {
+  const conversation = conversations.value.find((item) => item.id === conversationId)
+  if (!conversation) {
+    return false
+  }
+  applySelection(conversation.provider_id, conversation.model_id)
+  return true
+}
+
+async function loadCatalog() {
+  catalogLoading.value = true
+  try {
+    modelCatalog.value = await fetchModelCatalog()
+    if (!selectedProviderId.value || !selectedModelId.value) {
+      applyDefaultSelection()
+    }
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '加载模型目录失败'
+  } finally {
+    catalogLoading.value = false
+  }
+}
+
+function handleGlobalPointerDown(event: PointerEvent) {
+  if (!modelMenuOpen.value) {
+    return
+  }
+  const target = event.target
+  if (target instanceof Node && modelMenuRef.value?.contains(target)) {
+    return
+  }
+  closeModelMenu()
+}
+
+function handleGlobalKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape') {
+    closeModelMenu()
+  }
 }
 
 async function attachTaskStream(taskId: string) {
@@ -216,7 +337,7 @@ async function attachTaskStream(taskId: string) {
     )
 
     clearActiveTask()
-    await completeTaskConversation(result.conversation_id, result.usage)
+    await completeTaskConversation(result.conversation_id, result.usage, result.provider_id, result.model_id)
   } catch (error) {
     if (error instanceof Error && error.message === TASK_STREAM_ABORTED_MESSAGE) {
       return
@@ -311,8 +432,8 @@ async function handleSend(message: string) {
     const task = await createRunTask({
       createdBy: username.value,
       conversationId: activeConversationId.value || undefined,
-      providerId: DEFAULT_PROVIDER_ID,
-      modelId: DEFAULT_MODEL_ID,
+      providerId: selectedProviderId.value,
+      modelId: selectedModelId.value,
       message,
     })
     activeTaskId.value = task.id
@@ -342,12 +463,18 @@ async function handleLogout() {
 onMounted(async () => {
   syncSidebarViewport()
   window.addEventListener('resize', syncSidebarViewport)
+  window.addEventListener('pointerdown', handleGlobalPointerDown)
+  window.addEventListener('keydown', handleGlobalKeydown)
 
   const saved = loadChatState()
   activeConversationId.value = saved.activeConversationId
   activeTaskId.value = saved.activeTaskId
   entries.value = saved.entries
+  await loadCatalog()
   await loadConversations()
+  if (!activeConversationId.value || !syncSelectionFromConversation(activeConversationId.value)) {
+    applyDefaultSelection()
+  }
   await resumeSavedTask()
 
   if (!activeConversationId.value && entries.value.length > 0) {
@@ -358,6 +485,8 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   stopActiveStream()
   window.removeEventListener('resize', syncSidebarViewport)
+  window.removeEventListener('pointerdown', handleGlobalPointerDown)
+  window.removeEventListener('keydown', handleGlobalKeydown)
 })
 </script>
 
@@ -400,6 +529,40 @@ onBeforeUnmount(() => {
           <component :is="sidebarDrawerOpen ? Close : Menu" />
         </button>
         <div class="topbar-title-block">
+          <div v-if="availableProviders.length > 0" ref="modelMenuRef" class="model-menu">
+            <button
+              class="model-menu-trigger"
+              type="button"
+              :disabled="modelMenuDisabled"
+              aria-haspopup="menu"
+              :aria-expanded="modelMenuOpen ? 'true' : 'false'"
+              @click="toggleModelMenu"
+            >
+              <span class="model-menu-trigger-label">{{ selectedModelLabel }}</span>
+              <span class="model-menu-trigger-caret" :class="{ open: modelMenuOpen }" aria-hidden="true"></span>
+            </button>
+            <transition name="model-menu-fade">
+              <div v-if="modelMenuOpen" class="model-menu-panel" role="menu">
+                <div v-for="provider in availableProviders" :key="provider.id" class="model-menu-group">
+                  <div class="model-menu-group-label">{{ provider.name }}</div>
+                  <button
+                    v-for="item in provider.models"
+                    :key="`${provider.id}:${item.id}`"
+                    class="model-menu-option"
+                    :class="{ active: provider.id === selectedProviderId && item.id === selectedModelId }"
+                    type="button"
+                    role="menuitemradio"
+                    :aria-checked="provider.id === selectedProviderId && item.id === selectedModelId ? 'true' : 'false'"
+                    :data-model-option="item.id"
+                    @click="chooseModel(provider.id, item.id)"
+                  >
+                    <span class="model-menu-option-check" aria-hidden="true"></span>
+                    <span class="model-menu-option-label">{{ item.name }}</span>
+                  </button>
+                </div>
+              </div>
+            </transition>
+          </div>
           <strong class="topbar-conversation-title" :title="activeConversationTitle()">
             {{ activeConversationTitle() }}
           </strong>
@@ -413,7 +576,7 @@ onBeforeUnmount(() => {
         <MessageList :loading="messagesLoading || sending" :entries="entries" />
       </div>
       <div class="chat-composer-dock">
-        <MessageComposer :disabled="sending" @send="handleSend" />
+        <MessageComposer :disabled="composerDisabled" @send="handleSend" />
       </div>
     </section>
   </main>

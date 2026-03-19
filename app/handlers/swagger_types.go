@@ -59,8 +59,40 @@ type ConversationDeleteSwaggerData struct {
 type ConversationMessageDoc struct {
 	Role       string `json:"role"`
 	Content    string `json:"content"`
+	ProviderID string `json:"provider_id"`
+	ModelID    string `json:"model_id"`
 	Reasoning  string `json:"reasoning"`
 	ToolCallID string `json:"tool_call_id"`
+}
+
+// ModelCatalogSwaggerResponse 描述模型目录接口的响应结构。
+type ModelCatalogSwaggerResponse struct {
+	Code    int                    `json:"code"`
+	Message string                 `json:"message"`
+	Data    ModelCatalogSwaggerDoc `json:"data"`
+	OK      bool                   `json:"ok"`
+	Time    string                 `json:"time"`
+}
+
+// ModelCatalogSwaggerDoc 描述前端模型选择所需的 provider/model 目录。
+type ModelCatalogSwaggerDoc struct {
+	DefaultProviderID string                    `json:"default_provider_id"`
+	DefaultModelID    string                    `json:"default_model_id"`
+	Providers         []ModelProviderSwaggerDoc `json:"providers"`
+}
+
+// ModelProviderSwaggerDoc 描述一个 provider 及其模型列表。
+type ModelProviderSwaggerDoc struct {
+	ID     string                 `json:"id"`
+	Name   string                 `json:"name"`
+	Models []ModelEntrySwaggerDoc `json:"models"`
+}
+
+// ModelEntrySwaggerDoc 描述一个模型选项。
+type ModelEntrySwaggerDoc struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Type string `json:"type"`
 }
 
 // ErrorSwaggerResponse 描述通用失败响应结构。

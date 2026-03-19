@@ -319,6 +319,32 @@ const docTemplate = `{
                 }
             }
         },
+        "/models": {
+            "get": {
+                "description": "返回当前服务启动时注入的全部 LLM provider/model 配置，以及前端可直接使用的默认 provider/model。",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "models"
+                ],
+                "summary": "获取模型目录",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ModelCatalogSwaggerResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/swagger": {
             "get": {
                 "description": "将 ` + "`" + `/swagger` + "`" + ` 与 ` + "`" + `/swagger/` + "`" + ` 重定向到可直接访问的 Swagger UI 页面。",
@@ -777,6 +803,12 @@ const docTemplate = `{
                 "content": {
                     "type": "string"
                 },
+                "model_id": {
+                    "type": "string"
+                },
+                "provider_id": {
+                    "type": "string"
+                },
                 "reasoning": {
                     "type": "string"
                 },
@@ -906,6 +938,74 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "time": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.ModelCatalogSwaggerDoc": {
+            "type": "object",
+            "properties": {
+                "default_model_id": {
+                    "type": "string"
+                },
+                "default_provider_id": {
+                    "type": "string"
+                },
+                "providers": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.ModelProviderSwaggerDoc"
+                    }
+                }
+            }
+        },
+        "handlers.ModelCatalogSwaggerResponse": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "integer"
+                },
+                "data": {
+                    "$ref": "#/definitions/handlers.ModelCatalogSwaggerDoc"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "ok": {
+                    "type": "boolean"
+                },
+                "time": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.ModelEntrySwaggerDoc": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.ModelProviderSwaggerDoc": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "models": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.ModelEntrySwaggerDoc"
+                    }
+                },
+                "name": {
                     "type": "string"
                 }
             }

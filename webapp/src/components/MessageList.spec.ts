@@ -261,6 +261,14 @@ describe('MessageList', () => {
     expect(wrapper.find('.trace-block.reply').classes()).toContain('centered-trace')
     expect(wrapper.find('.trace-block.reasoning .trace-detail-label').classes()).toContain('loading-marquee')
     expect(wrapper.find('.trace-tool-group-summary .trace-detail-label').classes()).toContain('loading-marquee')
+    expect(reasoningDetails[0].classes()).toContain('trace-flat-shell')
+    expect(toolGroups[0].classes()).toContain('trace-flat-shell')
+    expect(toolItems[0].classes()).toContain('trace-flat-shell')
+    expect(wrapper.find('.trace-block.reasoning .trace-detail-block-header').exists()).toBe(false)
+    expect(wrapper.find('.trace-block.reasoning').text()).not.toContain('Trace')
+    expect(wrapper.find('.trace-block.reasoning .trace-loading.small').exists()).toBe(false)
+    expect(wrapper.find('.trace-block.reasoning .trace-kind-badge.reasoning').exists()).toBe(true)
+    expect(wrapper.find('.trace-block.tool .trace-kind-badge.tool.operation-badge svg').exists()).toBe(true)
   })
 
   it('renders finish token stats at the end of assistant reply', () => {
@@ -273,6 +281,8 @@ describe('MessageList', () => {
             kind: 'reply',
             title: '',
             content: 'Done.',
+            provider_id: 'openai',
+            model_id: 'gpt-5.4',
             token_usage: {
               prompt_tokens: 123,
               completion_tokens: 45,
@@ -285,10 +295,32 @@ describe('MessageList', () => {
 
     const usage = wrapper.find('.trace-reply-usage')
     expect(usage.exists()).toBe(true)
+    expect(usage.text()).toContain('openai / gpt-5.4')
     expect(usage.text()).toContain('Token')
     expect(usage.text()).toContain('123')
     expect(usage.text()).toContain('45')
     expect(usage.text()).toContain('168')
+  })
+
+  it('centers non-user error messages in the shared message column', () => {
+    const wrapper = mount(MessageList, {
+      props: {
+        loading: false,
+        entries: [
+          {
+            id: 'error-1',
+            kind: 'error',
+            title: '运行失败',
+            content: 'boom',
+          } as any,
+        ],
+      },
+    })
+
+    expect(wrapper.find('.trace-block.error').classes()).toContain('centered-trace')
+    expect(wrapper.find('.trace-error-detail').classes()).toContain('trace-flat-shell')
+    expect(wrapper.find('.trace-error-detail .trace-detail-label').text()).toBe('运行失败')
+    expect(wrapper.find('.trace-block.error .trace-kind-badge.error').exists()).toBe(true)
   })
 
   it('shows a copy button before reply token stats', async () => {

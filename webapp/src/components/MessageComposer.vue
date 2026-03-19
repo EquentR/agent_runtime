@@ -12,6 +12,7 @@ const emit = defineEmits<{
 
 const draft = ref('')
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
+const minComposerHeightPx = 64
 
 const canSend = computed(() => !props.disabled && draft.value.trim().length > 0)
 
@@ -21,7 +22,7 @@ function syncTextareaHeight() {
   }
 
   textareaRef.value.style.height = 'auto'
-  textareaRef.value.style.height = `${textareaRef.value.scrollHeight}px`
+  textareaRef.value.style.height = `${Math.max(textareaRef.value.scrollHeight, minComposerHeightPx)}px`
 }
 
 function handleKeydown(event: KeyboardEvent) {

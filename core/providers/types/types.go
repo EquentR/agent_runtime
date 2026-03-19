@@ -17,6 +17,10 @@ const (
 type Message struct {
 	Role    string
 	Content string
+	// ProviderID / ModelID 记录该条消息所属的运行模型，主要用于前端回放展示。
+	// 它们不参与 provider 请求构造，只作为历史元数据存在。
+	ProviderID string
+	ModelID    string
 	// Usage 保存该条 assistant 回复对应的整轮 token 统计，主要用于持久化后在 UI 中回放。
 	// 它不参与后续模型请求，只作为历史展示元数据存在。
 	Usage *TokenUsage `json:"Usage,omitempty"`

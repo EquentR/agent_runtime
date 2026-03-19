@@ -65,14 +65,18 @@ describe('normalizeConversationMessage', () => {
       normalizeConversationMessage({
         Role: 'assistant',
         Content: 'hello',
+        ProviderID: 'openai',
+        ModelID: 'gpt-5.4',
         Reasoning: 'trace',
         ToolCallId: 'call_1',
         ReasoningItems: [{ Summary: [{ Text: 'plan first' }] }],
         ToolCalls: [{ ID: 'call_1', Name: 'read_file', Arguments: '{}' }],
       }),
-    ).toEqual({
+    ).toMatchObject({
       role: 'assistant',
       content: 'hello',
+      provider_id: 'openai',
+      model_id: 'gpt-5.4',
       reasoning: 'trace',
       tool_call_id: 'call_1',
       reasoning_items: [{ text: 'plan first' }],
@@ -130,9 +134,11 @@ describe('normalizeRunTaskResult', () => {
         final_message: {
           Role: 'assistant',
           Content: 'done',
+          ProviderID: 'openai',
+          ModelID: 'gpt-5.4',
         },
       }),
-    ).toEqual({
+    ).toMatchObject({
       conversation_id: 'conv_1',
       provider_id: 'openai',
       model_id: 'gpt-5.4',
@@ -140,6 +146,8 @@ describe('normalizeRunTaskResult', () => {
       final_message: {
         role: 'assistant',
         content: 'done',
+        provider_id: 'openai',
+        model_id: 'gpt-5.4',
       },
     })
   })

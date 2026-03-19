@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import MarkdownIt from 'markdown-it'
-import { CircleCheckFilled, CopyDocument, WarningFilled } from '@element-plus/icons-vue'
+import { CircleCheckFilled, CopyDocument, Operation, WarningFilled } from '@element-plus/icons-vue'
 
 import { formatMessageContent } from '../lib/chat'
-import type { TranscriptEntry, TranscriptEntryDetail, TranscriptTokenUsage } from '../types/api'
+import type { TranscriptEntry, TranscriptEntryDetail } from '../types/api'
 
 const props = defineProps<{
   loading: boolean
@@ -131,15 +131,6 @@ watch(() => props.entries, (nextEntries, previousEntries) => {
 
 const showJumpButton = computed(() => normalizedEntries.value.length > 0 && !stickToBottom.value)
 
-function statusLabel(entry: TranscriptEntry) {
-  if (entry.kind !== 'tool') {
-    return ''
-  }
-  if (entry.status === 'running') return 'Running'
-  if (entry.status === 'error') return 'Failed'
-  return 'Done'
-}
-
 function detailSections(entry: TranscriptEntry): TranscriptEntryDetail[] {
   return entry.details ?? []
 }
@@ -165,8 +156,20 @@ function toolSummary(details: TranscriptEntryDetail[]) {
   return [`${counts.running} running`, `${counts.done} done`].join(' / ')
 }
 
+function previewError(content: string | undefined) {
+  const trimmed = (content ?? '').replace(/\s+/g, ' ').trim()
+  if (!trimmed) {
+    return '查看详情'
+  }
+  return trimmed.length > 72 ? `${trimmed.slice(0, 72)}...` : trimmed
+}
+
+function primaryBlockValue(detail: TranscriptEntryDetail) {
+  return detail.blocks?.[0]?.value ?? ''
+}
+
 function hasUsage(entry: TranscriptEntry) {
-  return entry.kind === 'reply' && Boolean(entry.token_usage)
+  return entry.kind === 'reply' && Boolean(entry.token_usage || entry.provider_id || entry.model_id)
 }
 
 function canCopyReply(entry: TranscriptEntry) {
@@ -181,16 +184,20 @@ function formatUsageValue(value: number | undefined) {
   return value.toLocaleString('en-US')
 }
 
-function replyUsageSummary(usage: TranscriptTokenUsage | undefined) {
-  if (!usage) {
+function replyUsageSummary(entry: TranscriptEntry) {
+  if (entry.kind !== 'reply') {
     return ''
   }
 
+  const usage = entry.token_usage
+  const providerModel = [entry.provider_id, entry.model_id].filter(Boolean).join(' / ')
+
   return [
-    `Tokens ${formatUsageValue(usage.total_tokens)}`,
-    `Prompt ${formatUsageValue(usage.prompt_tokens)}`,
-    `Completion ${formatUsageValue(usage.completion_tokens)}`,
-    usage.cached_prompt_tokens ? `Cached ${formatUsageValue(usage.cached_prompt_tokens)}` : '',
+    providerModel,
+    usage ? `Tokens ${formatUsageValue(usage.total_tokens)}` : '',
+    usage ? `Prompt ${formatUsageValue(usage.prompt_tokens)}` : '',
+    usage ? `Completion ${formatUsageValue(usage.completion_tokens)}` : '',
+    usage?.cached_prompt_tokens ? `Cached ${formatUsageValue(usage.cached_prompt_tokens)}` : '',
   ].filter(Boolean).join(' · ')
 }
 
@@ -267,24 +274,30 @@ function showCopyToast(message: string, variant: 'success' | 'error') {
           :class="[
             entry.kind,
             {
-              'centered-trace': ['reply', 'reasoning', 'tool'].includes(entry.kind),
+              'centered-trace': entry.kind !== 'user',
               compact: entry.kind !== 'reply',
               'bubble-right': entry.kind === 'user',
               'bubble-content': entry.kind === 'user',
             },
           ]"
         >
-          <div v-if="entry.kind === 'error'" class="trace-header">
-            <span class="message-role">{{ entry.title }}</span>
-            <span v-if="statusLabel(entry)" class="trace-status">{{ statusLabel(entry) }}</span>
-          </div>
+          <details v-if="entry.kind === 'error'" class="trace-detail trace-error-detail trace-flat-shell">
+            <summary class="trace-detail-summary">
+              <span class="trace-summary-leading">
+                <span class="trace-kind-badge error" aria-hidden="true"></span>
+                <span class="trace-detail-label">{{ entry.title }}</span>
+              </span>
+              <span class="trace-detail-preview">{{ previewError(entry.content) }}</span>
+            </summary>
+            <pre v-if="entry.content" class="trace-detail-content">{{ formatMessageContent(entry.content) }}</pre>
+          </details>
           <div
             v-if="entry.kind === 'reply' && entry.content"
             class="trace-content markdown-content"
             v-html="renderReplyContent(entry.content)"
             @click="handleMarkdownClick"
           ></div>
-          <p v-else-if="entry.content && ['error', 'user'].includes(entry.kind)" class="trace-content">
+          <p v-else-if="entry.content && entry.kind === 'user'" class="trace-content">
             {{ formatMessageContent(entry.content) }}
           </p>
           <div v-if="entry.kind === 'reply' && (canCopyReply(entry) || hasUsage(entry))" class="trace-reply-footer">
@@ -307,12 +320,15 @@ function showCopyToast(message: string, variant: 'success' | 'error') {
               </span>
             </button>
             <p v-if="hasUsage(entry)" class="trace-reply-usage">
-              {{ replyUsageSummary(entry.token_usage) }}
+              {{ replyUsageSummary(entry) }}
             </p>
           </div>
-          <details v-if="isGroupedToolEntry(entry)" class="trace-tool-group">
+          <details v-if="isGroupedToolEntry(entry)" class="trace-tool-group trace-flat-shell">
             <summary class="trace-detail-summary trace-tool-group-summary">
-              <span class="trace-detail-label" :class="{ 'loading-marquee': entry.status === 'running' }">{{ entry.title }}</span>
+              <span class="trace-summary-leading">
+                <span class="trace-kind-badge tool operation-badge" aria-hidden="true"><Operation /></span>
+                <span class="trace-detail-label" :class="{ 'loading-marquee': entry.status === 'running' }">{{ entry.title }}</span>
+              </span>
               <span class="trace-detail-preview trace-tool-group-text">{{ toolSummary(detailSections(entry)) }}</span>
               <span v-if="entry.status === 'running'" class="trace-loading" aria-hidden="true"></span>
             </summary>
@@ -320,7 +336,7 @@ function showCopyToast(message: string, variant: 'success' | 'error') {
               <details
                 v-for="detail in detailSections(entry)"
                 :key="detail.key ?? `${entry.id}-${detail.label}`"
-                class="trace-detail trace-tool-item"
+                class="trace-detail trace-tool-item trace-flat-shell"
                 :open="detail.collapsed ? undefined : true"
               >
                 <summary class="trace-detail-summary">
@@ -341,15 +357,34 @@ function showCopyToast(message: string, variant: 'success' | 'error') {
             </div>
           </details>
           <details
+            v-else-if="entry.kind === 'reasoning'"
+            v-for="detail in detailSections(entry)"
+            :key="detail.key ?? `${entry.id}-${detail.label}`"
+            class="trace-detail trace-flat-shell"
+            :open="detail.collapsed ? undefined : true"
+          >
+            <summary class="trace-detail-summary">
+              <span class="trace-summary-leading">
+                <span class="trace-kind-badge reasoning" aria-hidden="true"></span>
+                <span class="trace-detail-label" :class="{ 'loading-marquee': detail.loading }">{{ detail.label }}</span>
+              </span>
+              <span class="trace-detail-preview">{{ detail.preview }}</span>
+              <span v-if="detail.loading" class="trace-loading" aria-hidden="true"></span>
+            </summary>
+            <pre v-if="primaryBlockValue(detail)" class="trace-detail-content">{{ formatMessageContent(primaryBlockValue(detail)) }}</pre>
+          </details>
+          <details
             v-else
             v-for="detail in detailSections(entry)"
             :key="detail.key ?? `${entry.id}-${detail.label}`"
             class="trace-detail"
+            :class="{ 'trace-flat-shell': entry.kind === 'tool' }"
             :open="detail.collapsed ? undefined : true"
           >
             <summary class="trace-detail-summary">
               <template v-if="entry.kind === 'tool'">
                 <span class="trace-summary-leading">
+                  <span class="trace-kind-badge tool operation-badge" aria-hidden="true"><Operation /></span>
                   <span class="trace-detail-label" :class="{ 'loading-marquee': detail.loading }">{{ entry.title }}</span>
                   <span class="trace-tool-name">{{ detail.label }}</span>
                 </span>

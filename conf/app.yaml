@@ -31,22 +31,43 @@ log:
 llmProviders:
   # UI 侧会通过 provider_id + model_id 选择具体模型，
   # 其中 provider_id 对应这里的 name，model_id 对应 models[].id。
-- name: openai
+- name: aihubmix
   baseUrl: ${OPENAI_BASE_URL}
   apiKey: ${OPENAI_API_KEY}
   models:
     - id: glm-5
-      name: glm-5
+      name: GLM-5
       type: openai_completions
+      context:
+        max: 202000
+        input: 193808
+        output: 8192
+      cost:
+        input: 0.438
+        cachedInput: 0.04375
+        output: 3.5
+    - id: kimi-k2.5
+      name: Kimi-K2.5
+      type: openai_completions
+      context:
+        max: 256000
+        input: 247808
+        output: 8192
+      cost:
+        input: 0.6
+        cachedInput: 0.01
+        output: 3
+    - id: gpt-5.4
+      name: GPT-5.4
+      type: openai_responses
       context:
         max: 1050000
         input: 922000
         output: 128000
       cost:
-        input: 0.438
-        cachedInput: 0.04375
-        output: 3.5
-
+        input: 0.6
+        cachedInput: 0.01
+        output: 3
 
 #embeddingProvider:
 #  # 下面是 embedding / rerank 的占位示例；当前 app 还未实际装配。

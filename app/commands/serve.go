@@ -58,11 +58,12 @@ func Serve(c *config.Config, version, commit string) {
 	if err != nil {
 		log.Panicf("Failed to register builtin tools: %v", err)
 	}
+	resolver := &coreagent.ModelResolver{Providers: c.LLM}
 	if err := taskManager.RegisterExecutor("agent.run", coreagent.NewTaskExecutor(coreagent.ExecutorDependencies{
-		Resolver:          &coreagent.ModelResolver{Provider: &c.LLM[0]},
+		Resolver:          resolver,
 		ConversationStore: conversationStore,
 		Registry:          toolRegistry,
-		ClientFactory:     buildLLMClientFactory(&c.LLM[0]),
+		ClientFactory:     buildLLMClientFactory(),
 	})); err != nil {
 		log.Panicf("Failed to register agent.run executor: %v", err)
 	}
@@ -72,6 +73,7 @@ func Serve(c *config.Config, version, commit string) {
 	router.Init(engine, c.Server.ApiBasePath, c.Server.StaticPaths, router.Dependencies{
 		TaskManager:       taskManager,
 		ConversationStore: conversationStore,
+		ModelResolver:     resolver,
 		AuthLogic:         authLogic,
 	})
 
@@ -96,12 +98,12 @@ func Serve(c *config.Config, version, commit string) {
 	}
 }
 
-func buildLLMClientFactory(provider *coretypes.LLMProvider) coreagent.ClientFactory {
-	return func(model *coretypes.LLMModel) (model.LlmClient, error) {
+func buildLLMClientFactory() coreagent.ClientFactory {
+	return func(provider *coretypes.LLMProvider, llmModel *coretypes.LLMModel) (model.LlmClient, error) {
 		if provider == nil {
 			return nil, fmt.Errorf("llm provider is not configured")
 		}
-		switch model.ModelType() {
+		switch llmModel.ModelType() {
 		case coretypes.LLMTypeOpenAIResponses:
 			return openairesponses.NewOpenAiResponsesClient(provider.AuthKey(), provider.BaseURL(), 30*time.Second), nil
 		case coretypes.LLMTypeOpenAICompletions:
@@ -109,7 +111,7 @@ func buildLLMClientFactory(provider *coretypes.LLMProvider) coreagent.ClientFact
 		case coretypes.LLMTypeGoogle:
 			return googleclient.NewGoogleGenAIClient(provider.BaseURL(), provider.AuthKey())
 		default:
-			return nil, fmt.Errorf("unsupported llm model type %q", model.ModelType())
+			return nil, fmt.Errorf("unsupported llm model type %q", llmModel.ModelType())
 		}
 	}
 }

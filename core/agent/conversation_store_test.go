@@ -258,6 +258,38 @@ func TestConversationStoreAppendMessagesUpdatesTitleSummaryAndCount(t *testing.T
 	}
 }
 
+func TestConversationStoreEnsureConversationUpdatesLatestModelSelection(t *testing.T) {
+	store := newConversationStoreForTest(t)
+	_, err := store.CreateConversation(context.Background(), CreateConversationInput{
+		ID:         "conv_1",
+		ProviderID: "openai",
+		ModelID:    "gpt-5.4",
+	})
+	if err != nil {
+		t.Fatalf("CreateConversation() error = %v", err)
+	}
+
+	conversation, err := store.EnsureConversation(context.Background(), EnsureConversationInput{
+		ID:         "conv_1",
+		ProviderID: "google",
+		ModelID:    "gemini-2.5-flash",
+	})
+	if err != nil {
+		t.Fatalf("EnsureConversation() error = %v", err)
+	}
+	if conversation.ProviderID != "google" || conversation.ModelID != "gemini-2.5-flash" {
+		t.Fatalf("conversation = %#v, want latest provider/model persisted", conversation)
+	}
+
+	reloaded, err := store.GetConversation(context.Background(), "conv_1")
+	if err != nil {
+		t.Fatalf("GetConversation() error = %v", err)
+	}
+	if reloaded.ProviderID != "google" || reloaded.ModelID != "gemini-2.5-flash" {
+		t.Fatalf("reloaded = %#v, want updated provider/model", reloaded)
+	}
+}
+
 func TestConversationStoreListConversationsReturnsMostRecentFirst(t *testing.T) {
 	store := newConversationStoreForTest(t)
 	_, err := store.CreateConversation(context.Background(), CreateConversationInput{ID: "conv_old", ProviderID: "openai", ModelID: "gpt-5.4"})

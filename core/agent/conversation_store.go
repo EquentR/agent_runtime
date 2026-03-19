@@ -154,6 +154,24 @@ func (s *ConversationStore) EnsureConversation(ctx context.Context, input Ensure
 	}
 	conversation, err := s.GetConversation(ctx, input.ID)
 	if err == nil {
+		updated := false
+		if providerID := strings.TrimSpace(input.ProviderID); providerID != "" && !strings.EqualFold(conversation.ProviderID, providerID) {
+			conversation.ProviderID = providerID
+			updated = true
+		}
+		if modelID := strings.TrimSpace(input.ModelID); modelID != "" && !strings.EqualFold(conversation.ModelID, modelID) {
+			conversation.ModelID = modelID
+			updated = true
+		}
+		if createdBy := strings.TrimSpace(input.CreatedBy); createdBy != "" && strings.TrimSpace(conversation.CreatedBy) == "" {
+			conversation.CreatedBy = createdBy
+			updated = true
+		}
+		if updated {
+			if saveErr := s.db.WithContext(ctx).Save(conversation).Error; saveErr != nil {
+				return nil, saveErr
+			}
+		}
 		return conversation, nil
 	}
 	if !errors.Is(err, ErrConversationNotFound) {
