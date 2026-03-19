@@ -9,6 +9,7 @@ const props = defineProps<{
   activeConversationId: string
   collapsed?: boolean
   conversations: Conversation[]
+  desktopHidden?: boolean
   loading: boolean
   mobile?: boolean
   open?: boolean
@@ -25,6 +26,7 @@ const emit = defineEmits<{
 }>()
 
 const items = computed(() => props.conversations)
+const compact = computed(() => Boolean(props.collapsed && !props.mobile))
 const confirmingConversationId = ref('')
 const confirmingLogout = ref(false)
 
@@ -56,9 +58,14 @@ function confirmLogout() {
 </script>
 
 <template>
-  <aside class="sidebar-panel" :class="{ collapsed: collapsed && !mobile, mobile: mobile, open: open }">
+  <aside
+    class="sidebar-panel"
+    :class="{ collapsed: compact, mobile: mobile, open: open }"
+    :aria-hidden="desktopHidden ? 'true' : undefined"
+    :inert="desktopHidden || undefined"
+  >
     <div class="sidebar-header">
-      <div v-if="!collapsed || mobile">
+      <div v-if="!compact || mobile">
         <h2>对话列表</h2>
       </div>
       <div class="sidebar-header-actions">
@@ -66,7 +73,7 @@ function confirmLogout() {
           v-if="!mobile"
           class="ghost-button icon-button sidebar-toggle"
           type="button"
-          :aria-label="collapsed ? '展开侧栏' : '收起侧栏'"
+          :aria-label="compact ? '展开侧栏' : '收起侧栏'"
           @click="emit('toggle-collapse')"
         >
           <Fold />
@@ -94,9 +101,9 @@ function confirmLogout() {
           type="button"
           @click="emit('select', conversation.id)"
         >
-          <span v-if="collapsed" class="conversation-compact-dot" aria-hidden="true"></span>
+          <span v-if="compact" class="conversation-compact-dot" aria-hidden="true"></span>
           <span
-            v-if="!collapsed"
+            v-if="!compact"
             class="conversation-title truncate-text"
             :title="formatConversationTitle(conversation.title, '未命名对话')"
           >
@@ -106,7 +113,7 @@ function confirmLogout() {
             {{ formatConversationTitle(conversation.title, '未命名对话').slice(0, 1).toUpperCase() }}
           </span>
           <button
-            v-if="!collapsed"
+            v-if="!compact"
             class="ghost-button icon-button conversation-delete-button"
             type="button"
             aria-label="删除对话"
@@ -127,8 +134,8 @@ function confirmLogout() {
       </template>
     </div>
 
-    <div class="sidebar-account" :class="{ collapsed: collapsed && !mobile }">
-      <div v-if="!collapsed || mobile" class="sidebar-account-copy">
+    <div class="sidebar-account" :class="{ collapsed: compact }">
+      <div v-if="!compact || mobile" class="sidebar-account-copy">
         <span class="sidebar-account-label">当前账号</span>
         <strong class="sidebar-account-name">{{ username }}</strong>
       </div>

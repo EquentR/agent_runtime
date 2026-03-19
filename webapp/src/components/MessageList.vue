@@ -2,7 +2,7 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 
 import { formatMessageContent } from '../lib/chat'
-import type { TranscriptEntry, TranscriptEntryDetail } from '../types/api'
+import type { TranscriptEntry, TranscriptEntryDetail, TranscriptTokenUsage } from '../types/api'
 
 const props = defineProps<{
   loading: boolean
@@ -125,6 +125,31 @@ function toolSummary(details: TranscriptEntryDetail[]) {
 
   return [`${counts.running} running`, `${counts.done} done`].join(' / ')
 }
+
+function hasUsage(entry: TranscriptEntry) {
+  return entry.kind === 'reply' && Boolean(entry.token_usage)
+}
+
+function formatUsageValue(value: number | undefined) {
+  if (typeof value !== 'number') {
+    return '--'
+  }
+
+  return value.toLocaleString('en-US')
+}
+
+function replyUsageSummary(usage: TranscriptTokenUsage | undefined) {
+  if (!usage) {
+    return ''
+  }
+
+  return [
+    `Tokens ${formatUsageValue(usage.total_tokens)}`,
+    `Prompt ${formatUsageValue(usage.prompt_tokens)}`,
+    `Completion ${formatUsageValue(usage.completion_tokens)}`,
+    usage.cached_prompt_tokens ? `Cached ${formatUsageValue(usage.cached_prompt_tokens)}` : '',
+  ].filter(Boolean).join(' · ')
+}
 </script>
 
 <template>
@@ -143,7 +168,6 @@ function toolSummary(details: TranscriptEntryDetail[]) {
             entry.kind,
             {
               compact: entry.kind !== 'reply',
-              'compact-inline': entry.kind !== 'reply',
               'bubble-right': entry.kind === 'user',
               'bubble-content': entry.kind === 'user',
             },
@@ -155,6 +179,9 @@ function toolSummary(details: TranscriptEntryDetail[]) {
           </div>
           <p v-if="entry.content && ['reply', 'error', 'user'].includes(entry.kind)" class="trace-content">
             {{ formatMessageContent(entry.content) }}
+          </p>
+          <p v-if="hasUsage(entry)" class="trace-reply-usage">
+            {{ replyUsageSummary(entry.token_usage) }}
           </p>
           <details v-if="isGroupedToolEntry(entry)" class="trace-tool-group">
             <summary class="trace-detail-summary trace-tool-group-summary">

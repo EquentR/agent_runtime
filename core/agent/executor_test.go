@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	model "github.com/EquentR/agent_runtime/core/providers/types"
@@ -126,6 +127,53 @@ func TestAgentExecutorLoadsConversationHistoryAndAppendsNewTurn(t *testing.T) {
 	}
 	if len(got) != 4 {
 		t.Fatalf("len(messages) = %d, want 4", len(got))
+	}
+}
+
+func TestAgentExecutorPersistsFinalAssistantUsageInConversationHistory(t *testing.T) {
+	store := newConversationStoreForTest(t)
+	resolver := &ModelResolver{Provider: &coretypes.LLMProvider{
+		BaseProvider: coretypes.BaseProvider{Name: "openai"},
+		Models: []coretypes.LLMModel{{
+			BaseModel: coretypes.BaseModel{ID: "gpt-5.4", Name: "GPT 5.4"},
+			Type:      coretypes.LLMTypeOpenAIResponses,
+		}},
+	}}
+	executor := NewTaskExecutor(ExecutorDependencies{
+		Resolver:          resolver,
+		ConversationStore: store,
+		ClientFactory: func(*coretypes.LLMModel) (model.LlmClient, error) {
+			return &stubClient{streams: []model.Stream{newStubStream(
+				[]model.StreamEvent{
+					{Type: model.StreamEventUsage, Usage: model.TokenUsage{PromptTokens: 21, CompletionTokens: 13, TotalTokens: 34}},
+					{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "hello"}},
+				},
+				model.Message{Role: model.RoleAssistant, Content: "hello"},
+				nil,
+			)}}, nil
+		},
+	})
+
+	payload, _ := json.Marshal(RunTaskInput{ProviderID: "openai", ModelID: "gpt-5.4", Message: "hi", CreatedBy: "tester"})
+	task := &coretasks.Task{ID: "task_1", TaskType: "agent.run", InputJSON: payload}
+	result, err := executor(context.Background(), task, nil)
+	if err != nil {
+		t.Fatalf("executor() error = %v", err)
+	}
+	runResult := result.(RunTaskResult)
+
+	var stored []ConversationMessage
+	if err := store.db.Where("conversation_id = ?", runResult.ConversationID).Order("seq asc").Find(&stored).Error; err != nil {
+		t.Fatalf("query stored messages error = %v", err)
+	}
+	if len(stored) != 2 {
+		t.Fatalf("len(stored) = %d, want 2", len(stored))
+	}
+	if string(stored[1].MessageJSON) == "" || !strings.Contains(string(stored[1].MessageJSON), `"Usage":{"PromptTokens":21,"CachedPromptTokens":0,"CompletionTokens":13,"TotalTokens":34}`) {
+		t.Fatalf("assistant message json = %s, want persisted usage payload", string(stored[1].MessageJSON))
+	}
+	if string(stored[1].MessageJSON) != "" && strings.Contains(string(stored[0].MessageJSON), `"Usage":`) {
+		t.Fatalf("user message json = %s, want no usage on user turn", string(stored[0].MessageJSON))
 	}
 }
 

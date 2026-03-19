@@ -40,6 +40,31 @@ describe('buildTranscriptEntries', () => {
       },
     ])
   })
+
+  it('attaches persisted token usage to the rebuilt assistant reply', () => {
+    const entries = buildTranscriptEntries([
+      {
+        role: 'assistant',
+        content: 'Done.',
+        usage: {
+          prompt_tokens: 123,
+          completion_tokens: 45,
+          total_tokens: 168,
+        },
+      } as any,
+    ])
+
+    expect(entries).toHaveLength(1)
+    expect(entries[0]).toMatchObject({
+      kind: 'reply',
+      content: 'Done.',
+      token_usage: {
+        prompt_tokens: 123,
+        completion_tokens: 45,
+        total_tokens: 168,
+      },
+    })
+  })
 })
 
 describe('updateTranscriptFromStreamEvent', () => {
@@ -295,6 +320,68 @@ describe('updateTranscriptFromStreamEvent', () => {
     expect(entries[0].details?.[0].loading).toBe(false)
     expect(entries[1]).toMatchObject({ kind: 'tool', status: 'done' })
     expect(entries[1].details?.map((detail) => detail.loading)).toEqual([false, false])
+  })
+
+  it('attaches finish usage stats to the latest reply entry', () => {
+    let entries: TranscriptEntry[] = []
+
+    entries = updateTranscriptFromStreamEvent(entries, {
+      type: 'log.message',
+      payload: { Kind: 'text_delta', Text: 'Final answer' },
+    })
+    entries = updateTranscriptFromStreamEvent(entries, {
+      type: 'task.finished',
+      payload: {
+        status: 'succeeded',
+        usage: {
+          prompt_tokens: 300,
+          completion_tokens: 120,
+          total_tokens: 420,
+        },
+      },
+    })
+
+    expect(entries).toHaveLength(1)
+    expect(entries[0]).toMatchObject({
+      kind: 'reply',
+      content: 'Final answer',
+      token_usage: {
+        prompt_tokens: 300,
+        completion_tokens: 120,
+        total_tokens: 420,
+      },
+    })
+  })
+
+  it('attaches SSE usage events to the latest reply entry immediately', () => {
+    let entries: TranscriptEntry[] = []
+
+    entries = updateTranscriptFromStreamEvent(entries, {
+      type: 'log.message',
+      payload: { Kind: 'text_delta', Text: 'Final answer' },
+    })
+    entries = updateTranscriptFromStreamEvent(entries, {
+      type: 'log.message',
+      payload: {
+        Kind: 'usage',
+        Usage: {
+          PromptTokens: 240,
+          CompletionTokens: 80,
+          TotalTokens: 320,
+        },
+      },
+    })
+
+    expect(entries).toHaveLength(1)
+    expect(entries[0]).toMatchObject({
+      kind: 'reply',
+      content: 'Final answer',
+      token_usage: {
+        prompt_tokens: 240,
+        completion_tokens: 80,
+        total_tokens: 320,
+      },
+    })
   })
 
   it('renders persisted system failure messages as error entries', () => {

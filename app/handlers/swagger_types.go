@@ -41,6 +41,20 @@ type ConversationMessagesSwaggerResponse struct {
 	Time    string                   `json:"time"`
 }
 
+// ConversationDeleteSwaggerResponse 描述删除会话接口的返回结构。
+type ConversationDeleteSwaggerResponse struct {
+	Code    int                           `json:"code"`
+	Message string                        `json:"message"`
+	Data    ConversationDeleteSwaggerData `json:"data"`
+	OK      bool                          `json:"ok"`
+	Time    string                        `json:"time"`
+}
+
+// ConversationDeleteSwaggerData 描述删除会话结果。
+type ConversationDeleteSwaggerData struct {
+	Deleted bool `json:"deleted"`
+}
+
 // ConversationMessageDoc 描述会话消息列表的文档结构。
 type ConversationMessageDoc struct {
 	Role       string `json:"role"`
@@ -56,6 +70,48 @@ type ErrorSwaggerResponse struct {
 	Data    any    `json:"data"`
 	OK      bool   `json:"ok"`
 	Time    string `json:"time"`
+}
+
+// AuthUserSwaggerDoc 描述登录态用户信息的文档结构。
+type AuthUserSwaggerDoc struct {
+	ID       uint64 `json:"id"`
+	Username string `json:"username"`
+}
+
+// AuthUserSwaggerResponse 描述登录、注册、当前用户接口的成功响应结构。
+type AuthUserSwaggerResponse struct {
+	Code    int                `json:"code"`
+	Message string             `json:"message"`
+	Data    AuthUserSwaggerDoc `json:"data"`
+	OK      bool               `json:"ok"`
+	Time    string             `json:"time"`
+}
+
+// AuthLogoutSwaggerResponse 描述退出登录接口的成功响应结构。
+type AuthLogoutSwaggerResponse struct {
+	Code    int                   `json:"code"`
+	Message string                `json:"message"`
+	Data    AuthLogoutSwaggerData `json:"data"`
+	OK      bool                  `json:"ok"`
+	Time    string                `json:"time"`
+}
+
+// AuthLogoutSwaggerData 描述退出登录结果。
+type AuthLogoutSwaggerData struct {
+	LoggedOut bool `json:"logged_out"`
+}
+
+// AuthRegisterSwaggerRequest 描述注册接口请求结构。
+type AuthRegisterSwaggerRequest struct {
+	Username        string `json:"username"`
+	Password        string `json:"password"`
+	ConfirmPassword string `json:"confirm_password"`
+}
+
+// AuthLoginSwaggerRequest 描述登录接口请求结构。
+type AuthLoginSwaggerRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
 }
 
 // TaskSwaggerResponse 描述任务接口的成功响应结构。

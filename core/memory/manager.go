@@ -675,6 +675,10 @@ func cloneMessages(messages []model.Message) []model.Message {
 
 func cloneMessage(message model.Message) model.Message {
 	cloned := message
+	if message.Usage != nil {
+		usage := *message.Usage
+		cloned.Usage = &usage
+	}
 
 	if len(message.Attachments) > 0 {
 		cloned.Attachments = make([]model.Attachment, 0, len(message.Attachments))

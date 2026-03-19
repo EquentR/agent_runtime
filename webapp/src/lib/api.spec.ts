@@ -95,6 +95,28 @@ describe('normalizeConversationMessage', () => {
       tool_calls: [{ id: 'call_1', name: 'read_file', arguments: '{}' }],
     })
   })
+
+  it('normalizes persisted token usage from backend message payloads', () => {
+    expect(
+      normalizeConversationMessage({
+        Role: 'assistant',
+        Content: 'hello',
+        Usage: {
+          PromptTokens: 123,
+          CompletionTokens: 45,
+          TotalTokens: 168,
+        },
+      }),
+    ).toMatchObject({
+      role: 'assistant',
+      content: 'hello',
+      usage: {
+        prompt_tokens: 123,
+        completion_tokens: 45,
+        total_tokens: 168,
+      },
+    })
+  })
 })
 
 describe('normalizeRunTaskResult', () => {

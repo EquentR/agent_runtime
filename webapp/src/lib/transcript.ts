@@ -4,7 +4,10 @@ import type {
   TranscriptEntry,
   TranscriptEntryDetail,
   TranscriptEntryDetailBlock,
+  TranscriptTokenUsage,
 } from '../types/api'
+
+import { normalizeTranscriptTokenUsage } from './api'
 
 function createEntryId(prefix: string) {
   return `${prefix}-${Math.random().toString(36).slice(2, 10)}`
@@ -400,6 +403,7 @@ function applyConversationMessage(
 
   if (message.content.trim()) {
     next = appendReply(next, message.content)
+    next = attachTokenUsageToLatestReply(next, message.usage)
   }
 
   return next
@@ -423,6 +427,28 @@ function latestToolFailureMessage(entries: TranscriptEntry[]) {
   }
 
   return ''
+}
+
+export function attachTokenUsageToLatestReply(entries: TranscriptEntry[], usage: TranscriptTokenUsage | undefined) {
+  if (!usage) {
+    return entries
+  }
+
+  const next = [...entries]
+  for (let index = next.length - 1; index >= 0; index -= 1) {
+    const entry = next[index]
+    if (entry.kind !== 'reply') {
+      continue
+    }
+
+    next[index] = {
+      ...entry,
+      token_usage: usage,
+    }
+    return next
+  }
+
+  return next
 }
 
 export function summarizeToolResult(output: string) {
@@ -469,6 +495,13 @@ export function updateTranscriptFromStreamEvent(entries: TranscriptEntry[], even
       }
       next.push({ id: createEntryId('reply'), kind: 'reply', title: '', content: text })
       return next
+    }
+
+    if (kind === 'usage') {
+      return attachTokenUsageToLatestReply(
+        entries,
+        normalizeTranscriptTokenUsage(payload.Usage ?? payload.usage ?? payload.token_usage ?? payload.TokenUsage),
+      )
     }
 
     if (kind === 'tool_call_delta') {
@@ -536,7 +569,10 @@ export function updateTranscriptFromStreamEvent(entries: TranscriptEntry[], even
   if (event.type === 'task.finished') {
     const status = String(payload.status ?? '')
     const terminalToolStatus = status === 'failed' || status === 'cancelled' ? 'error' : 'done'
-    const settledEntries = stopAllLoading(entries, terminalToolStatus)
+    const settledEntries = attachTokenUsageToLatestReply(
+      stopAllLoading(entries, terminalToolStatus),
+      normalizeTranscriptTokenUsage(payload.usage ?? payload.token_usage ?? payload.Usage ?? payload.TokenUsage),
+    )
     if (status === 'failed' || status === 'cancelled') {
       const nestedError = payload.error && typeof payload.error === 'object' ? String((payload.error as Record<string, unknown>).message ?? '') : ''
       return [

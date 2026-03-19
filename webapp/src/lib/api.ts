@@ -7,6 +7,7 @@ import type {
   RunTaskResult,
   TaskStreamEvent,
   TaskSnapshot,
+  TranscriptTokenUsage,
 } from '../types/api'
 
 const API_BASE = '/api/v1'
@@ -51,10 +52,12 @@ export function normalizeConversationMessage(
   message: Partial<ConversationMessage> & {
     Role?: string
     Content?: string
+    Usage?: unknown
     Reasoning?: string
     ToolCallId?: string
     ToolCallID?: string
     toolCallId?: string
+    usage?: unknown
     ReasoningItems?: Array<{ Summary?: Array<{ Text?: string }> }>
     ToolCalls?: Array<{ ID?: string; Name?: string; Arguments?: string; id?: string; name?: string; arguments?: string }>
     toolCalls?: Array<{ ID?: string; Name?: string; Arguments?: string; id?: string; name?: string; arguments?: string }>
@@ -63,6 +66,7 @@ export function normalizeConversationMessage(
   return {
     role: (message.role ?? message.Role ?? 'assistant') as ConversationMessage['role'],
     content: message.content ?? message.Content ?? '',
+    usage: normalizeTranscriptTokenUsage(message.usage ?? message.Usage),
     reasoning: message.reasoning ?? message.Reasoning,
     tool_call_id: message.tool_call_id ?? message.ToolCallId ?? message.ToolCallID ?? message.toolCallId,
     reasoning_items:
@@ -93,7 +97,32 @@ export function normalizeRunTaskResult(
   return {
     ...result,
     final_message: normalizeConversationMessage(result.final_message),
+    usage: normalizeTranscriptTokenUsage(result.usage),
   }
+}
+
+function normalizeTokenValue(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+export function normalizeTranscriptTokenUsage(value: unknown): TranscriptTokenUsage | undefined {
+  if (!value || typeof value !== 'object') {
+    return undefined
+  }
+
+  const raw = value as Record<string, unknown>
+  const usage: TranscriptTokenUsage = {
+    prompt_tokens: normalizeTokenValue(raw.prompt_tokens ?? raw.promptTokens ?? raw.PromptTokens),
+    cached_prompt_tokens: normalizeTokenValue(raw.cached_prompt_tokens ?? raw.cachedPromptTokens ?? raw.CachedPromptTokens),
+    completion_tokens: normalizeTokenValue(raw.completion_tokens ?? raw.completionTokens ?? raw.CompletionTokens),
+    total_tokens: normalizeTokenValue(raw.total_tokens ?? raw.totalTokens ?? raw.TotalTokens),
+  }
+
+  if (Object.values(usage).every((field) => field == null)) {
+    return undefined
+  }
+
+  return usage
 }
 
 export function normalizeTaskDetails(task: TaskDetails): TaskDetails {

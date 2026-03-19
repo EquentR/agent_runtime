@@ -15,6 +15,8 @@ import (
 	coreagent "github.com/EquentR/agent_runtime/core/agent"
 	coretasks "github.com/EquentR/agent_runtime/core/tasks"
 	"github.com/EquentR/agent_runtime/pkg/rest"
+	resp "github.com/EquentR/agent_runtime/pkg/rest"
+	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 )
@@ -142,6 +144,79 @@ func TestAuthMiddlewareRejectsAnonymousTaskAndConversationRequests(t *testing.T)
 	defer conversationResponse.Body.Close()
 	if decodeEnvelope(t, conversationResponse.Body).OK {
 		t.Fatal("anonymous conversation list ok = true, want false")
+	}
+}
+
+func TestAuthMiddlewareWrapperOptionProtectsSingleRoute(t *testing.T) {
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("gorm.Open() error = %v", err)
+	}
+	authLogic := newAuthLogicForTest(t, db)
+	user, err := authLogic.Register(context.Background(), "alice", "secret-123", "secret-123")
+	if err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	_, session, err := authLogic.Login(context.Background(), user.Username, "secret-123")
+	if err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+	authMiddleware := NewAuthMiddleware(authLogic)
+
+	engine := rest.Init()
+	group := engine.Group("/api/v1/test")
+	resp.HandlerWrapper(group, "", []*resp.Handler{
+		resp.NewJsonOptionsHandler(func() (method, relativePath string, wrapper resp.JsonOptionsResultWrapper, opts []resp.WrapperOption) {
+			return http.MethodGet, "/public", func(c *gin.Context) (any, []resp.ResOpt, error) {
+				return gin.H{"public": true}, nil, nil
+			}, nil
+		}),
+		resp.NewJsonOptionsHandler(func() (method, relativePath string, wrapper resp.JsonOptionsResultWrapper, opts []resp.WrapperOption) {
+			return http.MethodGet, "/private", func(c *gin.Context) (any, []resp.ResOpt, error) {
+				current, ok := authMiddleware.CurrentUser(c)
+				if !ok || current == nil {
+					return nil, []resp.ResOpt{resp.WithCode(http.StatusUnauthorized)}, fmt.Errorf("missing auth user in context")
+				}
+				return authUserResponse(current), nil, nil
+			}, []resp.WrapperOption{authMiddleware.RequireSessionOption()}
+		}),
+	})
+
+	server := httptest.NewServer(engine)
+	t.Cleanup(server.Close)
+
+	publicResponse, err := http.Get(server.URL + "/api/v1/test/public")
+	if err != nil {
+		t.Fatalf("http.Get(public) error = %v", err)
+	}
+	defer publicResponse.Body.Close()
+	if !decodeEnvelope(t, publicResponse.Body).OK {
+		t.Fatal("public route ok = false, want true")
+	}
+
+	privateResponse, err := http.Get(server.URL + "/api/v1/test/private")
+	if err != nil {
+		t.Fatalf("http.Get(private) error = %v", err)
+	}
+	defer privateResponse.Body.Close()
+	if decodeEnvelope(t, privateResponse.Body).OK {
+		t.Fatal("anonymous private route ok = true, want false")
+	}
+
+	authedRequest, err := http.NewRequest(http.MethodGet, server.URL+"/api/v1/test/private", nil)
+	if err != nil {
+		t.Fatalf("NewRequest(private) error = %v", err)
+	}
+	authedRequest.AddCookie(&http.Cookie{Name: authSessionCookieName, Value: session.ID})
+	authedResponse, err := http.DefaultClient.Do(authedRequest)
+	if err != nil {
+		t.Fatalf("Do(private) error = %v", err)
+	}
+	defer authedResponse.Body.Close()
+	authedUser := decodeAuthUserResponse(t, authedResponse.Body)
+	if authedUser.Username != "alice" {
+		t.Fatalf("private username = %q, want alice", authedUser.Username)
 	}
 }
 

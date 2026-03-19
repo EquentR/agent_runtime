@@ -8,10 +8,11 @@ import (
 )
 
 type Config struct {
-	Server    rest.Config                 `yaml:"server"`
-	Sqlite    db.Database                 `yaml:"sqlite"`
-	Log       log.Config                  `yaml:"log"`
-	LLM       []coretypes.LLMProvider     `yaml:"llmProviders"`
-	Embedding coretypes.EmbeddingProvider `yaml:"embeddingProvider"`
-	Rerank    coretypes.RerankingProvider `yaml:"rerankProvider"`
+	WorkspaceDir string                      `yaml:"workspaceDir"`
+	Server       rest.Config                 `yaml:"server"`
+	Sqlite       db.Database                 `yaml:"sqlite"`
+	Log          log.Config                  `yaml:"log"`
+	LLM          []coretypes.LLMProvider     `yaml:"llmProviders"`
+	Embedding    coretypes.EmbeddingProvider `yaml:"embeddingProvider"`
+	Rerank       coretypes.RerankingProvider `yaml:"rerankProvider"`
 }

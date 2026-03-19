@@ -225,14 +225,83 @@ func (s *ConversationStore) ListMessages(ctx context.Context, conversationID str
 		return nil, err
 	}
 	messages := make([]model.Message, 0, len(records))
+	backfillTargets := map[string]int{}
 	for _, record := range records {
 		message, err := decodePersistedConversationMessage(record.MessageJSON)
 		if err != nil {
 			return nil, err
 		}
 		messages = append(messages, cloneMessage(message))
+		if record.TaskID != "" && message.Role == model.RoleAssistant {
+			if hasPersistedTokenUsage(message.Usage) {
+				delete(backfillTargets, record.TaskID)
+				continue
+			}
+			backfillTargets[record.TaskID] = len(messages) - 1
+		}
+	}
+	if len(backfillTargets) == 0 {
+		return messages, nil
+	}
+	usageByTaskID, err := s.loadTaskUsageByID(ctx, mapKeys(backfillTargets))
+	if err != nil {
+		return nil, err
+	}
+	for taskID, messageIndex := range backfillTargets {
+		usage, ok := usageByTaskID[taskID]
+		if !ok || !hasTokenUsage(usage) {
+			continue
+		}
+		usageCopy := usage
+		messages[messageIndex].Usage = &usageCopy
 	}
 	return messages, nil
+}
+
+func hasPersistedTokenUsage(usage *model.TokenUsage) bool {
+	return usage != nil && hasTokenUsage(*usage)
+}
+
+func (s *ConversationStore) loadTaskUsageByID(ctx context.Context, taskIDs []string) (map[string]model.TokenUsage, error) {
+	if len(taskIDs) == 0 || s == nil || s.db == nil {
+		return map[string]model.TokenUsage{}, nil
+	}
+	if !s.db.Migrator().HasTable("tasks") {
+		return map[string]model.TokenUsage{}, nil
+	}
+
+	var rows []struct {
+		ID         string          `gorm:"column:id"`
+		ResultJSON json.RawMessage `gorm:"column:result_json"`
+	}
+	if err := s.db.WithContext(ctx).Table("tasks").Select("id", "result_json").Where("id IN ?", taskIDs).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+
+	usageByTaskID := make(map[string]model.TokenUsage, len(rows))
+	for _, row := range rows {
+		var payload struct {
+			Usage model.TokenUsage `json:"usage"`
+		}
+		if len(row.ResultJSON) == 0 {
+			continue
+		}
+		if err := json.Unmarshal(row.ResultJSON, &payload); err != nil {
+			return nil, err
+		}
+		if hasTokenUsage(payload.Usage) {
+			usageByTaskID[row.ID] = payload.Usage
+		}
+	}
+	return usageByTaskID, nil
+}
+
+func mapKeys[K comparable, V any](input map[K]V) []K {
+	keys := make([]K, 0, len(input))
+	for key := range input {
+		keys = append(keys, key)
+	}
+	return keys
 }
 
 func decodePersistedConversationMessage(raw json.RawMessage) (model.Message, error) {

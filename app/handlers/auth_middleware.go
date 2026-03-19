@@ -43,6 +43,10 @@ func (m *AuthMiddleware) RequireSession() gin.HandlerFunc {
 	}
 }
 
+func (m *AuthMiddleware) RequireSessionOption() resp.WrapperOption {
+	return resp.WithMiddlewares(m.RequireSession())
+}
+
 func (m *AuthMiddleware) CurrentUser(c *gin.Context) (*models.User, bool) {
 	value, ok := c.Get(authUserContextKey)
 	if !ok {

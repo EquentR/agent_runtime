@@ -22,6 +22,7 @@ export interface Conversation {
 export interface ConversationMessage {
   role: 'user' | 'assistant' | 'tool' | 'system'
   content: string
+  usage?: TranscriptTokenUsage
   reasoning?: string
   tool_call_id?: string
   reasoning_items?: Array<{ text?: string }>
@@ -60,6 +61,7 @@ export interface RunTaskResult {
   provider_id: string
   model_id: string
   final_message: ConversationMessage
+  usage?: TranscriptTokenUsage
   messages_appended: number
 }
 
@@ -79,6 +81,14 @@ export interface TranscriptEntry {
   details?: TranscriptEntryDetail[]
   status?: 'running' | 'done' | 'error'
   group_key?: string
+  token_usage?: TranscriptTokenUsage
+}
+
+export interface TranscriptTokenUsage {
+  prompt_tokens?: number
+  cached_prompt_tokens?: number
+  completion_tokens?: number
+  total_tokens?: number
 }
 
 export interface TranscriptEntryDetail {

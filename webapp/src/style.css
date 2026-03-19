@@ -200,8 +200,9 @@ p {
   overflow: hidden;
 }
 
-.chat-shell.sidebar-collapsed {
-  grid-template-columns: 88px minmax(0, 1fr);
+.chat-shell.sidebar-hidden {
+  grid-template-columns: 0 minmax(0, 1fr);
+  gap: 0;
 }
 
 .chat-shell > * {
@@ -209,9 +210,7 @@ p {
 }
 
 .sidebar-panel,
-.chat-stage,
-.messages-panel,
-.composer-panel {
+.chat-stage {
   background: rgba(255, 255, 255, 0.8);
   border: 1px solid rgba(25, 50, 59, 0.1);
   box-shadow: 0 20px 48px rgba(39, 61, 68, 0.08);
@@ -228,6 +227,17 @@ p {
     width 220ms ease,
     padding 220ms ease,
     transform 220ms ease;
+}
+
+.chat-shell.sidebar-hidden .sidebar-panel {
+  width: 0;
+  min-width: 0;
+  padding: 0;
+  border-width: 0;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
+  transform: translateX(-1rem);
 }
 
 .sidebar-panel.collapsed {
@@ -421,8 +431,7 @@ p {
 
 .messages-panel {
   position: relative;
-  border-radius: 16px;
-  padding: 0.9rem;
+  padding: 0.3rem 0;
   display: grid;
   min-height: 0;
   height: 100%;
@@ -472,8 +481,6 @@ p {
   display: grid;
   place-items: center;
   text-align: center;
-  border-radius: 20px;
-  background: linear-gradient(180deg, rgba(255, 248, 240, 0.9), rgba(239, 247, 248, 0.9));
 }
 
 .messages-stack {
@@ -613,6 +620,12 @@ p {
   font-size: 0.95rem;
 }
 
+.trace-reply-usage {
+  font-size: 0.76rem;
+  line-height: 1.4;
+  color: #6a7d82;
+}
+
 .trace-detail {
   border-radius: 8px;
   border: 1px solid rgba(25, 50, 59, 0.06);
@@ -750,8 +763,7 @@ p {
 }
 
 .composer-panel {
-  border-radius: 16px;
-  padding: 0.78rem;
+  padding: 0;
   display: grid;
   gap: 0.6rem;
 }
@@ -798,8 +810,6 @@ p {
   position: relative;
   z-index: 2;
   flex: 0 0 auto;
-  background: linear-gradient(180deg, rgba(243, 247, 248, 0) 0%, rgba(243, 247, 248, 0.88) 18%, rgba(243, 247, 248, 1) 100%);
-  padding-top: 0.15rem;
 }
 
 .sidebar-account {

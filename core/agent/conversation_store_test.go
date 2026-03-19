@@ -9,6 +9,7 @@ import (
 	"time"
 
 	model "github.com/EquentR/agent_runtime/core/providers/types"
+	coretasks "github.com/EquentR/agent_runtime/core/tasks"
 	coretypes "github.com/EquentR/agent_runtime/core/types"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
@@ -168,6 +169,60 @@ func TestConversationStoreListMessagesReadsVersionedEnvelope(t *testing.T) {
 	}
 	if got[0].ProviderState == nil || got[0].ProviderState.ResponseID != "resp_1" {
 		t.Fatalf("got[0].ProviderState = %#v, want ResponseID resp_1", got[0].ProviderState)
+	}
+}
+
+func TestConversationStoreListMessagesBackfillsOnlyFinalAssistantReply(t *testing.T) {
+	store := newConversationStoreForTest(t)
+	if err := store.db.AutoMigrate(&coretasks.Task{}); err != nil {
+		t.Fatalf("AutoMigrate(tasks) error = %v", err)
+	}
+	_, err := store.CreateConversation(context.Background(), CreateConversationInput{
+		ID:         "conv_1",
+		ProviderID: "openai",
+		ModelID:    "gpt-5.4",
+	})
+	if err != nil {
+		t.Fatalf("CreateConversation() error = %v", err)
+	}
+
+	firstAssistantRaw := []byte(`{"version":"v1","message":{"Role":"assistant","Content":"planning tool call"}}`)
+	finalAssistantRaw := []byte(`{"version":"v1","message":{"Role":"assistant","Content":"final answer","Usage":{"PromptTokens":123,"CompletionTokens":45,"TotalTokens":168}}}`)
+	if err := store.db.Create(&ConversationMessage{ConversationID: "conv_1", Seq: 1, Role: model.RoleAssistant, Content: "planning tool call", MessageJSON: firstAssistantRaw, TaskID: "task_1"}).Error; err != nil {
+		t.Fatalf("insert first assistant error = %v", err)
+	}
+	if err := store.db.Create(&ConversationMessage{ConversationID: "conv_1", Seq: 2, Role: model.RoleTool, Content: "tool output", MessageJSON: []byte(`{"version":"v1","message":{"Role":"tool","Content":"tool output"}}`), TaskID: "task_1"}).Error; err != nil {
+		t.Fatalf("insert tool error = %v", err)
+	}
+	if err := store.db.Create(&ConversationMessage{ConversationID: "conv_1", Seq: 3, Role: model.RoleAssistant, Content: "final answer", MessageJSON: finalAssistantRaw, TaskID: "task_1"}).Error; err != nil {
+		t.Fatalf("insert final assistant error = %v", err)
+	}
+	if err := store.db.Create(&coretasks.Task{
+		ID:            "task_1",
+		TaskType:      "agent.run",
+		Status:        coretasks.StatusSucceeded,
+		InputJSON:     []byte(`{}`),
+		ConfigJSON:    []byte(`{}`),
+		MetadataJSON:  []byte(`{}`),
+		ResultJSON:    []byte(`{"usage":{"PromptTokens":123,"CompletionTokens":45,"TotalTokens":168}}`),
+		ExecutionMode: coretasks.ExecutionModeSerial,
+		RootTaskID:    "task_1",
+	}).Error; err != nil {
+		t.Fatalf("insert task error = %v", err)
+	}
+
+	got, err := store.ListMessages(context.Background(), "conv_1")
+	if err != nil {
+		t.Fatalf("ListMessages() error = %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("len(messages) = %d, want 3", len(got))
+	}
+	if got[0].Usage != nil {
+		t.Fatalf("got[0].Usage = %#v, want nil on non-final assistant", got[0].Usage)
+	}
+	if got[2].Usage == nil || got[2].Usage.TotalTokens != 168 {
+		t.Fatalf("got[2].Usage = %#v, want persisted final usage", got[2].Usage)
 	}
 }
 

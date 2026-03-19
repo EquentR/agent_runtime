@@ -72,6 +72,21 @@ describe('session helpers', () => {
     expect(getSessionName()).toBe('alice')
   })
 
+  it('clears stale local cache when forced session validation fails', async () => {
+    localStorage.setItem(SESSION_STORAGE_KEY, 'alice')
+    vi.mocked(fetch).mockResolvedValue({
+      ok: true,
+      json: async () => ({ ok: false, code: 401, message: '未登录或会话已失效', data: null, time: '' }),
+    } as Response)
+
+    const username = await syncSession(true)
+
+    expect(fetch).toHaveBeenCalledWith('/api/v1/auth/me', expect.objectContaining({ credentials: 'include' }))
+    expect(username).toBe('')
+    expect(getSessionName()).toBe('')
+    expect(hasActiveSession()).toBe(false)
+  })
+
   it('clears local cache after logout', async () => {
     localStorage.setItem(SESSION_STORAGE_KEY, 'alice')
     vi.mocked(fetch).mockResolvedValue({

@@ -17,6 +17,9 @@ const (
 type Message struct {
 	Role    string
 	Content string
+	// Usage 保存该条 assistant 回复对应的整轮 token 统计，主要用于持久化后在 UI 中回放。
+	// 它不参与后续模型请求，只作为历史展示元数据存在。
+	Usage *TokenUsage `json:"Usage,omitempty"`
 	// Reasoning 保存 provider 单独返回的思考文本；某些后端在后续 tool turn
 	// 需要把这段内容原样回放，才能继续同一条推理链。
 	Reasoning string
@@ -153,12 +156,21 @@ func cloneMessages(messages []Message) []Message {
 }
 
 func cloneMessage(message Message) Message {
+	message.Usage = cloneTokenUsage(message.Usage)
 	message.ReasoningItems = cloneReasoningItems(message.ReasoningItems)
 	message.Attachments = cloneAttachments(message.Attachments)
 	message.ToolCalls = cloneToolCalls(message.ToolCalls)
 	message.ProviderState = cloneProviderState(message.ProviderState)
 	message.ProviderData = cloneProviderData(message.ProviderData)
 	return message
+}
+
+func cloneTokenUsage(usage *TokenUsage) *TokenUsage {
+	if usage == nil {
+		return nil
+	}
+	cloned := *usage
+	return &cloned
 }
 
 func cloneProviderData(value any) any {

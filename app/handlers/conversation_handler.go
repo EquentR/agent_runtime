@@ -127,7 +127,7 @@ func (h *ConversationHandler) handleGetConversationMessages() (method, relativeP
 // @Tags conversations
 // @Produce json
 // @Param id path string true "会话 ID"
-// @Success 200 {object} JsonEnvelope
+// @Success 200 {object} ConversationDeleteSwaggerResponse
 // @Failure 404 {object} ErrorSwaggerResponse
 // @Router /conversations/{id} [delete]
 func (h *ConversationHandler) handleDeleteConversation() (method, relativePath string, wrapper resp.JsonOptionsResultWrapper, opts []resp.WrapperOption) {

@@ -144,6 +144,7 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 			}
 			return nil, err
 		}
+		result = attachUsageToPersistedAssistantReply(result)
 		if err := deps.ConversationStore.AppendMessages(ctx, conversation.ID, task.ID, result.Messages); err != nil {
 			return nil, err
 		}
@@ -157,6 +158,28 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 			MessagesAppended: 1 + len(result.Messages),
 		}, nil
 	}
+}
+
+func attachUsageToPersistedAssistantReply(result RunResult) RunResult {
+	if !hasTokenUsage(result.Usage) {
+		return result
+	}
+
+	usage := result.Usage
+	result.FinalMessage.Usage = &usage
+	for index := len(result.Messages) - 1; index >= 0; index -= 1 {
+		if result.Messages[index].Role != model.RoleAssistant {
+			continue
+		}
+		usageCopy := result.Usage
+		result.Messages[index].Usage = &usageCopy
+		break
+	}
+	return result
+}
+
+func hasTokenUsage(usage model.TokenUsage) bool {
+	return usage.PromptTokens > 0 || usage.CachedPromptTokens > 0 || usage.CompletionTokens > 0 || usage.TotalTokens > 0
 }
 
 func firstNonEmpty(values ...string) string {

@@ -45,12 +45,21 @@ func cloneMessages(messages []model.Message) []model.Message {
 }
 
 func cloneMessage(message model.Message) model.Message {
+	message.Usage = cloneTokenUsage(message.Usage)
 	message.ReasoningItems = cloneReasoningItems(message.ReasoningItems)
 	message.Attachments = cloneAttachments(message.Attachments)
 	message.ToolCalls = cloneToolCalls(message.ToolCalls)
 	message.ProviderState = cloneProviderState(message.ProviderState)
 	message.ProviderData = cloneProviderData(message.ProviderData)
 	return message
+}
+
+func cloneTokenUsage(usage *model.TokenUsage) *model.TokenUsage {
+	if usage == nil {
+		return nil
+	}
+	cloned := *usage
+	return &cloned
 }
 
 func cloneReasoningItems(items []model.ReasoningItem) []model.ReasoningItem {

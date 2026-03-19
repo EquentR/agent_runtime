@@ -1,5 +1,77 @@
 basePath: /api/v1
 definitions:
+  handlers.AuthLoginSwaggerRequest:
+    properties:
+      password:
+        type: string
+      username:
+        type: string
+    type: object
+  handlers.AuthLogoutSwaggerData:
+    properties:
+      logged_out:
+        type: boolean
+    type: object
+  handlers.AuthLogoutSwaggerResponse:
+    properties:
+      code:
+        type: integer
+      data:
+        $ref: '#/definitions/handlers.AuthLogoutSwaggerData'
+      message:
+        type: string
+      ok:
+        type: boolean
+      time:
+        type: string
+    type: object
+  handlers.AuthRegisterSwaggerRequest:
+    properties:
+      confirm_password:
+        type: string
+      password:
+        type: string
+      username:
+        type: string
+    type: object
+  handlers.AuthUserSwaggerDoc:
+    properties:
+      id:
+        type: integer
+      username:
+        type: string
+    type: object
+  handlers.AuthUserSwaggerResponse:
+    properties:
+      code:
+        type: integer
+      data:
+        $ref: '#/definitions/handlers.AuthUserSwaggerDoc'
+      message:
+        type: string
+      ok:
+        type: boolean
+      time:
+        type: string
+    type: object
+  handlers.ConversationDeleteSwaggerData:
+    properties:
+      deleted:
+        type: boolean
+    type: object
+  handlers.ConversationDeleteSwaggerResponse:
+    properties:
+      code:
+        type: integer
+      data:
+        $ref: '#/definitions/handlers.ConversationDeleteSwaggerData'
+      message:
+        type: string
+      ok:
+        type: boolean
+      time:
+        type: string
+    type: object
   handlers.ConversationDetailSwaggerResponse:
     properties:
       code:
@@ -160,6 +232,102 @@ info:
   title: Agent Runtime API
   version: 0.0.1
 paths:
+  /auth/login:
+    post:
+      consumes:
+      - application/json
+      description: 校验用户名密码并写入 session cookie，成功后返回当前用户信息。
+      parameters:
+      - description: 登录请求
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.AuthLoginSwaggerRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.AuthUserSwaggerResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+      summary: 用户登录
+      tags:
+      - auth
+  /auth/logout:
+    post:
+      consumes:
+      - application/json
+      description: 删除当前 session 并清理浏览器中的 session cookie。
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.AuthLogoutSwaggerResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+      summary: 退出登录
+      tags:
+      - auth
+  /auth/me:
+    get:
+      description: 校验 session cookie 后返回当前登录用户的基础信息。
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.AuthUserSwaggerResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+      summary: 获取当前用户
+      tags:
+      - auth
+  /auth/register:
+    post:
+      consumes:
+      - application/json
+      description: 使用用户名和密码创建账号，注册成功后返回用户基础信息。
+      parameters:
+      - description: 注册请求
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.AuthRegisterSwaggerRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.AuthUserSwaggerResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+      summary: 注册账号
+      tags:
+      - auth
   /conversations:
     get:
       description: 返回按最近活跃时间倒序排列的 conversation 列表，包含标题、最后一条消息摘要和消息数等轻量展示字段。
@@ -178,6 +346,28 @@ paths:
       tags:
       - conversations
   /conversations/{id}:
+    delete:
+      description: 根据 conversation id 删除会话及其历史消息，供 UI 删除会话项。
+      parameters:
+      - description: 会话 ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.ConversationDeleteSwaggerResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+      summary: 删除会话
+      tags:
+      - conversations
     get:
       description: 根据 conversation id 返回会话元数据，包括 provider、model、标题、最近消息摘要与消息数。
       parameters:
@@ -413,6 +603,25 @@ paths:
           schema:
             $ref: '#/definitions/handlers.ErrorSwaggerResponse'
       summary: 重试任务
+      tags:
+      - tasks
+  /tasks/running:
+    get:
+      description: 根据 conversation id 返回最近一个非终态任务；若不存在则返回 null。
+      parameters:
+      - description: 会话 ID
+        in: query
+        name: conversation_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.TaskSwaggerResponse'
+      summary: 查询会话运行中任务
       tags:
       - tasks
 swagger: "2.0"

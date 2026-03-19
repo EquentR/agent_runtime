@@ -19,8 +19,8 @@ import {
 import { clearChatState, loadChatState, saveChatState } from '../lib/chat-state'
 import { DEFAULT_MODEL_ID, DEFAULT_PROVIDER_ID } from '../lib/chat'
 import { getSessionName, logout } from '../lib/session'
-import { buildTranscriptEntries, updateTranscriptFromStreamEvent } from '../lib/transcript'
-import type { Conversation, TaskDetails, TaskStreamEvent, TranscriptEntry } from '../types/api'
+import { attachTokenUsageToLatestReply, buildTranscriptEntries, updateTranscriptFromStreamEvent } from '../lib/transcript'
+import type { Conversation, TaskDetails, TaskStreamEvent, TranscriptEntry, TranscriptTokenUsage } from '../types/api'
 
 const router = useRouter()
 
@@ -40,7 +40,7 @@ let activeStreamAbortController: AbortController | null = null
 let activeStreamingTaskId = ''
 
 const chatShellClass = computed(() => ({
-  'sidebar-collapsed': !sidebarMobile.value && sidebarCollapsed.value,
+  'sidebar-hidden': !sidebarMobile.value && sidebarCollapsed.value,
   'sidebar-mobile': sidebarMobile.value,
   'sidebar-open': sidebarMobile.value && sidebarDrawerOpen.value,
 }))
@@ -51,6 +51,7 @@ const topbarStatusClass = computed(() => ({
   idle: !messagesLoading.value && !sending.value,
   loading: messagesLoading.value || sending.value,
 }))
+const sidebarDesktopHidden = computed(() => !sidebarMobile.value && sidebarCollapsed.value)
 
 function activeConversationTitle() {
   const current = conversations.value.find((conversation) => conversation.id === activeConversationId.value)
@@ -183,10 +184,10 @@ function clearActiveTask() {
   activeStreamingTaskId = ''
 }
 
-async function completeTaskConversation(conversationId: string) {
+async function completeTaskConversation(conversationId: string, usage?: TranscriptTokenUsage) {
   activeConversationId.value = conversationId
   const messages = await fetchConversationMessages(conversationId)
-  entries.value = buildTranscriptEntries(messages)
+  entries.value = attachTokenUsageToLatestReply(buildTranscriptEntries(messages), usage)
   await loadConversations(conversationId)
 }
 
@@ -215,7 +216,7 @@ async function attachTaskStream(taskId: string) {
     )
 
     clearActiveTask()
-    await completeTaskConversation(result.conversation_id)
+    await completeTaskConversation(result.conversation_id, result.usage)
   } catch (error) {
     if (error instanceof Error && error.message === TASK_STREAM_ABORTED_MESSAGE) {
       return
@@ -374,6 +375,7 @@ onBeforeUnmount(() => {
       :active-conversation-id="activeConversationId"
       :collapsed="sidebarCollapsed"
       :conversations="conversations"
+      :desktop-hidden="sidebarDesktopHidden"
       :loading="sidebarLoading"
       :mobile="sidebarMobile"
       :open="sidebarDrawerOpen"
@@ -389,10 +391,10 @@ onBeforeUnmount(() => {
     <section class="chat-stage">
       <header class="topbar">
         <button
-          v-if="sidebarMobile"
+          v-if="sidebarMobile || sidebarCollapsed"
           class="ghost-button icon-button topbar-sidebar-toggle"
           type="button"
-          aria-label="Open conversations"
+          :aria-label="sidebarMobile && sidebarDrawerOpen ? 'Close conversations' : 'Open conversations'"
           @click="toggleSidebarCollapsed"
         >
           <component :is="sidebarDrawerOpen ? Close : Menu" />

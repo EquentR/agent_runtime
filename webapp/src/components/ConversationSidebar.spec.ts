@@ -32,7 +32,7 @@ describe('ConversationSidebar', () => {
     expect(wrapper.find('.conversation-preview').exists()).toBe(false)
     expect(wrapper.find('.conversation-meta').exists()).toBe(false)
     expect(wrapper.find('.sidebar-list').exists()).toBe(true)
-    expect(wrapper.find('[aria-label="New chat"]').exists()).toBe(true)
+    expect(wrapper.find('[aria-label="新建对话"]').exists()).toBe(true)
     expect(wrapper.find('.sidebar-account-name').text()).toContain('demo-user')
     expect(wrapper.find('.sidebar-account-logout').exists()).toBe(true)
     expect(wrapper.find('.sidebar-account-logout').classes()).toContain('icon-button')

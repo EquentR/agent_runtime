@@ -343,6 +343,55 @@ describe('ChatView', () => {
     expect(wrapper.find('.conversation-card.active').text()).toContain('Newest chat')
   })
 
+  it('keeps finish token stats visible after the conversation reloads', async () => {
+    api.fetchConversations
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          id: 'conv_new',
+          title: 'Newest chat',
+          last_message: 'assistant answer',
+          message_count: 2,
+          provider_id: 'openai',
+          model_id: 'gpt-5.4',
+          created_by: 'demo-user',
+          created_at: '',
+          updated_at: '',
+        },
+      ])
+    api.createRunTask.mockResolvedValue({ id: 'task_1' })
+    api.streamRunTask.mockResolvedValue({
+      conversation_id: 'conv_new',
+      usage: {
+        prompt_tokens: 321,
+        completion_tokens: 54,
+        total_tokens: 375,
+      },
+    })
+    api.fetchConversationMessages.mockResolvedValue([{ role: 'assistant', content: 'assistant answer' }])
+
+    const router = makeRouter()
+    await router.push('/chat')
+    await router.isReady()
+
+    const wrapper = mount(ChatView, {
+      global: {
+        plugins: [router],
+      },
+    })
+
+    await flushPromises()
+    await wrapper.find('textarea').setValue('hello')
+    await wrapper.find('form').trigger('submit.prevent')
+    await flushPromises()
+
+    const usage = wrapper.find('.trace-reply-usage')
+    expect(usage.exists()).toBe(true)
+    expect(usage.text()).toContain('321')
+    expect(usage.text()).toContain('54')
+    expect(usage.text()).toContain('375')
+  })
+
   it('uses a drawer sidebar on narrow screens and removes the redundant conversation eyebrow', async () => {
     setViewportWidth(800)
     api.fetchConversations.mockResolvedValue([
@@ -386,6 +435,130 @@ describe('ChatView', () => {
     await wrapper.find('.topbar-sidebar-toggle').trigger('click')
 
     expect(wrapper.find('.chat-shell').classes()).toContain('sidebar-open')
+  })
+
+  it('moves the sidebar reopen control into the chat stage when desktop sidebar is collapsed', async () => {
+    setViewportWidth(1280)
+    api.fetchConversations.mockResolvedValue([
+      {
+        id: 'conv_1',
+        title: 'Desktop chat',
+        last_message: 'hello',
+        message_count: 2,
+        provider_id: 'openai',
+        model_id: 'gpt-5.4',
+        created_by: 'demo-user',
+        created_at: '',
+        updated_at: '',
+      },
+    ])
+    api.fetchConversationMessages.mockResolvedValue([{ role: 'assistant', content: 'hello' }])
+
+    const router = makeRouter()
+    await router.push('/chat')
+    await router.isReady()
+
+    const wrapper = mount(ChatView, {
+      global: {
+        plugins: [router],
+      },
+    })
+
+    await flushPromises()
+    expect(wrapper.find('.topbar-sidebar-toggle').exists()).toBe(false)
+
+    await wrapper.find('.sidebar-toggle').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('.chat-shell').classes()).toContain('sidebar-hidden')
+    expect(wrapper.find('.topbar-sidebar-toggle').exists()).toBe(true)
+
+    await wrapper.find('.topbar-sidebar-toggle').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('.chat-shell').classes()).not.toContain('sidebar-hidden')
+    expect(wrapper.find('.topbar-sidebar-toggle').exists()).toBe(false)
+  })
+
+  it('keeps the mobile drawer fully expanded after resizing from desktop hidden mode', async () => {
+    setViewportWidth(1280)
+    api.fetchConversations.mockResolvedValue([
+      {
+        id: 'conv_1',
+        title: 'Desktop chat',
+        last_message: 'hello',
+        message_count: 2,
+        provider_id: 'openai',
+        model_id: 'gpt-5.4',
+        created_by: 'demo-user',
+        created_at: '',
+        updated_at: '',
+      },
+    ])
+    api.fetchConversationMessages.mockResolvedValue([{ role: 'assistant', content: 'hello' }])
+
+    const router = makeRouter()
+    await router.push('/chat')
+    await router.isReady()
+
+    const wrapper = mount(ChatView, {
+      global: {
+        plugins: [router],
+      },
+    })
+
+    await flushPromises()
+    await wrapper.find('.sidebar-toggle').trigger('click')
+    await flushPromises()
+
+    setViewportWidth(800)
+    await flushPromises()
+    await wrapper.find('.topbar-sidebar-toggle').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('.chat-shell').classes()).toContain('sidebar-mobile')
+    expect(wrapper.find('.chat-shell').classes()).toContain('sidebar-open')
+    expect(wrapper.find('.conversation-title').exists()).toBe(true)
+    expect(wrapper.find('.conversation-compact-label').exists()).toBe(false)
+    expect(wrapper.find('.conversation-delete-button').exists()).toBe(true)
+  })
+
+  it('marks the desktop-hidden sidebar inert while collapsed', async () => {
+    setViewportWidth(1280)
+    api.fetchConversations.mockResolvedValue([
+      {
+        id: 'conv_1',
+        title: 'Desktop chat',
+        last_message: 'hello',
+        message_count: 2,
+        provider_id: 'openai',
+        model_id: 'gpt-5.4',
+        created_by: 'demo-user',
+        created_at: '',
+        updated_at: '',
+      },
+    ])
+    api.fetchConversationMessages.mockResolvedValue([{ role: 'assistant', content: 'hello' }])
+
+    const router = makeRouter()
+    await router.push('/chat')
+    await router.isReady()
+
+    const wrapper = mount(ChatView, {
+      global: {
+        plugins: [router],
+      },
+    })
+
+    await flushPromises()
+    expect(wrapper.find('.sidebar-panel').attributes('aria-hidden')).toBeUndefined()
+    expect(wrapper.find('.sidebar-panel').attributes('inert')).toBeUndefined()
+
+    await wrapper.find('.sidebar-toggle').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('.sidebar-panel').attributes('aria-hidden')).toBe('true')
+    expect(wrapper.find('.sidebar-panel').attributes('inert')).toBe('true')
   })
 
   it('shows animated syncing status beside the title while sending', async () => {

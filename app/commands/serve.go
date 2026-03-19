@@ -3,6 +3,7 @@ package commands
 import (
 	"fmt"
 	"net"
+	"os"
 	"time"
 
 	"github.com/EquentR/agent_runtime/app/config"
@@ -53,7 +54,7 @@ func Serve(c *config.Config, version, commit string) {
 	if err != nil {
 		log.Panicf("Failed to init auth logic: %v", err)
 	}
-	toolRegistry, err := newDefaultToolRegistry("")
+	toolRegistry, err := newDefaultToolRegistry(c.WorkspaceDir)
 	if err != nil {
 		log.Panicf("Failed to register builtin tools: %v", err)
 	}
@@ -115,6 +116,18 @@ func buildLLMClientFactory(provider *coretypes.LLMProvider) coreagent.ClientFact
 
 func newDefaultToolRegistry(workspaceRoot string) (*coretools.Registry, error) {
 	registry := coretools.NewRegistry()
+	// 检查 workspace 是否为空；为空时使用当前工作目录；有值时确保目录存在，不存在则创建。
+	if workspaceRoot == "" {
+		var err error
+		workspaceRoot, err = os.Getwd()
+		if err != nil {
+			return nil, fmt.Errorf("get current working directory: %w", err)
+		}
+	} else {
+		if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
+			return nil, fmt.Errorf("create workspace root %q: %w", workspaceRoot, err)
+		}
+	}
 	if err := builtin.Register(registry, builtin.Options{WorkspaceRoot: workspaceRoot}); err != nil {
 		return nil, err
 	}

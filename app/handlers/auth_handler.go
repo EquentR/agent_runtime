@@ -42,6 +42,18 @@ func (h *AuthHandler) Register(rg *gin.RouterGroup) {
 	})
 }
 
+// handleRegister 返回用户注册接口的路由定义。
+//
+// @Summary 注册账号
+// @Description 使用用户名和密码创建账号，注册成功后返回用户基础信息。
+// @Tags auth
+// @Accept json
+// @Produce json
+// @Param body body AuthRegisterSwaggerRequest true "注册请求"
+// @Success 200 {object} AuthUserSwaggerResponse
+// @Failure 400 {object} ErrorSwaggerResponse
+// @Failure 409 {object} ErrorSwaggerResponse
+// @Router /auth/register [post]
 func (h *AuthHandler) handleRegister() (method, relativePath string, wrapper resp.JsonOptionsResultWrapper, opts []resp.WrapperOption) {
 	return http.MethodPost, "/register", func(c *gin.Context) (any, []resp.ResOpt, error) {
 		var request registerRequest
@@ -56,6 +68,18 @@ func (h *AuthHandler) handleRegister() (method, relativePath string, wrapper res
 	}, nil
 }
 
+// handleLogin 返回用户登录接口的路由定义。
+//
+// @Summary 用户登录
+// @Description 校验用户名密码并写入 session cookie，成功后返回当前用户信息。
+// @Tags auth
+// @Accept json
+// @Produce json
+// @Param body body AuthLoginSwaggerRequest true "登录请求"
+// @Success 200 {object} AuthUserSwaggerResponse
+// @Failure 400 {object} ErrorSwaggerResponse
+// @Failure 401 {object} ErrorSwaggerResponse
+// @Router /auth/login [post]
 func (h *AuthHandler) handleLogin() (method, relativePath string, wrapper resp.JsonOptionsResultWrapper, opts []resp.WrapperOption) {
 	return http.MethodPost, "/login", func(c *gin.Context) (any, []resp.ResOpt, error) {
 		var request loginRequest
@@ -71,6 +95,16 @@ func (h *AuthHandler) handleLogin() (method, relativePath string, wrapper resp.J
 	}, nil
 }
 
+// handleLogout 返回退出登录接口的路由定义。
+//
+// @Summary 退出登录
+// @Description 删除当前 session 并清理浏览器中的 session cookie。
+// @Tags auth
+// @Accept json
+// @Produce json
+// @Success 200 {object} AuthLogoutSwaggerResponse
+// @Failure 500 {object} ErrorSwaggerResponse
+// @Router /auth/logout [post]
 func (h *AuthHandler) handleLogout() (method, relativePath string, wrapper resp.JsonOptionsResultWrapper, opts []resp.WrapperOption) {
 	return http.MethodPost, "/logout", func(c *gin.Context) (any, []resp.ResOpt, error) {
 		cookie, _ := c.Cookie(h.logic.CookieName())
@@ -82,14 +116,23 @@ func (h *AuthHandler) handleLogout() (method, relativePath string, wrapper resp.
 	}, nil
 }
 
+// handleCurrentUser 返回当前登录用户接口的路由定义。
+//
+// @Summary 获取当前用户
+// @Description 校验 session cookie 后返回当前登录用户的基础信息。
+// @Tags auth
+// @Produce json
+// @Success 200 {object} AuthUserSwaggerResponse
+// @Failure 401 {object} ErrorSwaggerResponse
+// @Router /auth/me [get]
 func (h *AuthHandler) handleCurrentUser() (method, relativePath string, wrapper resp.JsonOptionsResultWrapper, opts []resp.WrapperOption) {
 	return http.MethodGet, "/me", func(c *gin.Context) (any, []resp.ResOpt, error) {
-		user, _, err := h.middleware.resolve(c)
-		if err != nil {
-			return nil, []resp.ResOpt{resp.WithCode(authStatusCode(err, http.StatusUnauthorized))}, err
+		user, ok := h.middleware.CurrentUser(c)
+		if !ok || user == nil {
+			return nil, []resp.ResOpt{resp.WithCode(http.StatusUnauthorized)}, logics.ErrUnauthorized
 		}
 		return authUserResponse(user), nil, nil
-	}, nil
+	}, []resp.WrapperOption{h.middleware.RequireSessionOption()}
 }
 
 func (h *AuthHandler) setSessionCookie(c *gin.Context, session *models.UserSession) {

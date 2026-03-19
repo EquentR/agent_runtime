@@ -12,6 +12,7 @@ import (
 
 	coreagent "github.com/EquentR/agent_runtime/core/agent"
 	model "github.com/EquentR/agent_runtime/core/providers/types"
+	coretasks "github.com/EquentR/agent_runtime/core/tasks"
 	"github.com/EquentR/agent_runtime/pkg/rest"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
@@ -62,6 +63,79 @@ func TestConversationHandlerGetConversationMessages(t *testing.T) {
 	}
 	if got[0].Role != model.RoleUser || got[1].Role != model.RoleAssistant {
 		t.Fatalf("messages = %#v, want ordered user/assistant messages", got)
+	}
+}
+
+func TestConversationHandlerGetConversationMessagesIncludesPersistedUsage(t *testing.T) {
+	_, db, server := newConversationHandlerTestServerWithDB(t)
+	if err := db.Create(&coreagent.Conversation{ID: "conv_1", ProviderID: "openai", ModelID: "gpt-5.4"}).Error; err != nil {
+		t.Fatalf("create conversation error = %v", err)
+	}
+	envelopeRaw := []byte(`{"version":"v1","message":{"Role":"assistant","Content":"hello","Usage":{"PromptTokens":123,"CompletionTokens":45,"TotalTokens":168}}}`)
+	if err := db.Create(&coreagent.ConversationMessage{ConversationID: "conv_1", Seq: 1, Role: model.RoleAssistant, Content: "hello", MessageJSON: envelopeRaw, TaskID: "task_1"}).Error; err != nil {
+		t.Fatalf("insert message error = %v", err)
+	}
+
+	resp, err := http.Get(server.URL + "/api/v1/conversations/conv_1/messages")
+	if err != nil {
+		t.Fatalf("http.Get() error = %v", err)
+	}
+	defer resp.Body.Close()
+	got := decodeConversationMessagesResponseAsMaps(t, resp.Body)
+	if len(got) != 1 {
+		t.Fatalf("len(messages) = %d, want 1", len(got))
+	}
+	usage, ok := got[0]["Usage"].(map[string]any)
+	if !ok {
+		t.Fatalf("message = %#v, want Usage map", got[0])
+	}
+	if usage["PromptTokens"] != float64(123) || usage["CompletionTokens"] != float64(45) || usage["TotalTokens"] != float64(168) {
+		t.Fatalf("usage = %#v, want persisted token usage", usage)
+	}
+}
+
+func TestConversationHandlerGetConversationMessagesBackfillsUsageFromTaskResult(t *testing.T) {
+	_, db, server := newConversationHandlerTestServerWithDB(t)
+	if err := db.AutoMigrate(&coretasks.Task{}); err != nil {
+		t.Fatalf("AutoMigrate(tasks) error = %v", err)
+	}
+	if err := db.Create(&coreagent.Conversation{ID: "conv_1", ProviderID: "openai", ModelID: "gpt-5.4"}).Error; err != nil {
+		t.Fatalf("create conversation error = %v", err)
+	}
+	envelopeRaw := []byte(`{"version":"v1","message":{"Role":"assistant","Content":"hello"}}`)
+	if err := db.Create(&coreagent.ConversationMessage{ConversationID: "conv_1", Seq: 1, Role: model.RoleAssistant, Content: "hello", MessageJSON: envelopeRaw, TaskID: "task_1"}).Error; err != nil {
+		t.Fatalf("insert message error = %v", err)
+	}
+	resultJSON := []byte(`{"conversation_id":"conv_1","final_message":{"Role":"assistant","Content":"hello"},"usage":{"PromptTokens":222,"CompletionTokens":33,"TotalTokens":255}}`)
+	if err := db.Create(&coretasks.Task{
+		ID:            "task_1",
+		TaskType:      "agent.run",
+		Status:        coretasks.StatusSucceeded,
+		InputJSON:     []byte(`{}`),
+		ConfigJSON:    []byte(`{}`),
+		MetadataJSON:  []byte(`{}`),
+		ResultJSON:    resultJSON,
+		ExecutionMode: coretasks.ExecutionModeSerial,
+		RootTaskID:    "task_1",
+	}).Error; err != nil {
+		t.Fatalf("insert task error = %v", err)
+	}
+
+	resp, err := http.Get(server.URL + "/api/v1/conversations/conv_1/messages")
+	if err != nil {
+		t.Fatalf("http.Get() error = %v", err)
+	}
+	defer resp.Body.Close()
+	got := decodeConversationMessagesResponseAsMaps(t, resp.Body)
+	if len(got) != 1 {
+		t.Fatalf("len(messages) = %d, want 1", len(got))
+	}
+	usage, ok := got[0]["Usage"].(map[string]any)
+	if !ok {
+		t.Fatalf("message = %#v, want backfilled Usage map", got[0])
+	}
+	if usage["PromptTokens"] != float64(222) || usage["CompletionTokens"] != float64(33) || usage["TotalTokens"] != float64(255) {
+		t.Fatalf("usage = %#v, want task result usage", usage)
 	}
 }
 
@@ -152,6 +226,11 @@ func TestConversationHandlerDeleteConversation(t *testing.T) {
 }
 
 func newConversationHandlerTestServer(t *testing.T) (*coreagent.ConversationStore, *httptest.Server) {
+	store, _, server := newConversationHandlerTestServerWithDB(t)
+	return store, server
+}
+
+func newConversationHandlerTestServerWithDB(t *testing.T) (*coreagent.ConversationStore, *gorm.DB, *httptest.Server) {
 	t.Helper()
 	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
@@ -166,7 +245,7 @@ func newConversationHandlerTestServer(t *testing.T) (*coreagent.ConversationStor
 	NewConversationHandler(store).Register(engine.Group("/api/v1"))
 	server := httptest.NewServer(engine)
 	t.Cleanup(server.Close)
-	return store, server
+	return store, db, server
 }
 
 func decodeConversationResponse(t *testing.T, body io.Reader) coreagent.Conversation {
@@ -195,6 +274,22 @@ func decodeConversationMessagesResponse(t *testing.T, body io.Reader) []model.Me
 		t.Fatalf("response ok = false, raw data = %s", string(envelope.Data))
 	}
 	var got []model.Message
+	if err := json.Unmarshal(envelope.Data, &got); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	return got
+}
+
+func decodeConversationMessagesResponseAsMaps(t *testing.T, body io.Reader) []map[string]any {
+	t.Helper()
+	var envelope taskTestResponse
+	if err := json.NewDecoder(body).Decode(&envelope); err != nil {
+		t.Fatalf("Decode() envelope error = %v", err)
+	}
+	if !envelope.OK {
+		t.Fatalf("response ok = false, raw data = %s", string(envelope.Data))
+	}
+	var got []map[string]any
 	if err := json.Unmarshal(envelope.Data, &got); err != nil {
 		t.Fatalf("json.Unmarshal() error = %v", err)
 	}

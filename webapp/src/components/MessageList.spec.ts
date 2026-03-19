@@ -240,10 +240,38 @@ describe('MessageList', () => {
     expect(wrapper.find('.trace-tool-group-summary').text()).toContain('2 running / 0 done')
     expect(wrapper.find('.trace-block.tool .trace-loading').exists()).toBe(true)
     expect(wrapper.find('.trace-block.reply .trace-loading').exists()).toBe(false)
-    expect(wrapper.find('.trace-block.tool').classes()).toContain('compact-inline')
-    expect(wrapper.find('.trace-block.reasoning').classes()).toContain('compact-inline')
+    expect(wrapper.find('.trace-block.tool').classes()).not.toContain('compact-inline')
+    expect(wrapper.find('.trace-block.reasoning').classes()).not.toContain('compact-inline')
     expect(wrapper.find('.trace-block.reasoning .trace-detail-label').classes()).toContain('loading-marquee')
     expect(wrapper.find('.trace-tool-group-summary .trace-detail-label').classes()).toContain('loading-marquee')
+  })
+
+  it('renders finish token stats at the end of assistant reply', () => {
+    const wrapper = mount(MessageList, {
+      props: {
+        loading: false,
+        entries: [
+          {
+            id: 'reply-1',
+            kind: 'reply',
+            title: '',
+            content: 'Done.',
+            token_usage: {
+              prompt_tokens: 123,
+              completion_tokens: 45,
+              total_tokens: 168,
+            },
+          } as any,
+        ],
+      },
+    })
+
+    const usage = wrapper.find('.trace-reply-usage')
+    expect(usage.exists()).toBe(true)
+    expect(usage.text()).toContain('Token')
+    expect(usage.text()).toContain('123')
+    expect(usage.text()).toContain('45')
+    expect(usage.text()).toContain('168')
   })
 
   it('shows 单个工具调用标题 while preserving the tool name', () => {
