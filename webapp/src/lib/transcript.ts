@@ -210,6 +210,71 @@ function completeLatestReasoning(entries: TranscriptEntry[]) {
   return next
 }
 
+function findLatestReplyIndex(entries: TranscriptEntry[]) {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    if (entries[index]?.kind === 'reply') {
+      return index
+    }
+  }
+
+  return -1
+}
+
+function findLatestReasoningBeforeReply(entries: TranscriptEntry[], replyIndex: number) {
+  for (let index = replyIndex - 1; index >= 0; index -= 1) {
+    const entry = entries[index]
+    if (entry.kind === 'reasoning') {
+      return index
+    }
+    if (entry.kind === 'reply' || entry.kind === 'user' || entry.kind === 'error') {
+      break
+    }
+  }
+
+  return -1
+}
+
+function upsertReasoningBeforeReply(entries: TranscriptEntry[], replyIndex: number, content: string) {
+  const next = [...entries]
+  const reasoningIndex = findLatestReasoningBeforeReply(next, replyIndex)
+
+  if (reasoningIndex >= 0) {
+    next[reasoningIndex] = updateReasoningEntry(next[reasoningIndex], content, false)
+    return next
+  }
+
+  next.splice(replyIndex, 0, makeReasoningEntry(content, false))
+  return next
+}
+
+function attachReplyMetaAtIndex(
+  entries: TranscriptEntry[],
+  replyIndex: number,
+  meta: Pick<TranscriptEntry, 'provider_id' | 'model_id' | 'token_usage'>,
+) {
+  if (replyIndex < 0) {
+    return entries
+  }
+
+  const reply = entries[replyIndex]
+  if (!reply || reply.kind !== 'reply') {
+    return entries
+  }
+
+  if (!meta.provider_id && !meta.model_id && !meta.token_usage) {
+    return entries
+  }
+
+  const next = [...entries]
+  next[replyIndex] = {
+    ...reply,
+    ...(meta.provider_id ? { provider_id: meta.provider_id } : {}),
+    ...(meta.model_id ? { model_id: meta.model_id } : {}),
+    ...(meta.token_usage ? { token_usage: meta.token_usage } : {}),
+  }
+  return next
+}
+
 function stopAllLoading(entries: TranscriptEntry[], toolStatus: TranscriptEntry['status'] = 'done') {
   return entries.map((entry) => {
     const details = (entry.details ?? []).map((detail) => ({
@@ -429,6 +494,53 @@ function applyConversationMessage(
   return next
 }
 
+function applyCompletedAssistantMessage(
+  entries: TranscriptEntry[],
+  message: ConversationMessage,
+  options?: {
+    groupKey?: string
+    toolNames?: Map<string, string>
+  },
+) {
+  let next = [...entries]
+  const reasoning = summarizeReasoning(message)
+  const content = message.content.trim()
+  const toolCalls = message.tool_calls ?? []
+  const latestReplyIndex = content ? findLatestReplyIndex(next) : -1
+  const hasMatchingLatestReply =
+    latestReplyIndex >= 0 && next[latestReplyIndex]?.kind === 'reply' && (next[latestReplyIndex].content ?? '') === message.content
+
+  if (reasoning) {
+    next = hasMatchingLatestReply ? upsertReasoningBeforeReply(next, latestReplyIndex, reasoning) : upsertReasoning(next, reasoning, false)
+  }
+
+  for (const toolCall of toolCalls) {
+    options?.toolNames?.set(toolCall.id, toolCall.name)
+  }
+  if (toolCalls.length > 0 && options?.groupKey) {
+    next = updatePendingToolGroupFromMessage(next, options.groupKey, toolCalls)
+  }
+
+  if (!content) {
+    return next
+  }
+
+  if (hasMatchingLatestReply) {
+    return attachReplyMetaAtIndex(next, findLatestReplyIndex(next), {
+      provider_id: message.provider_id,
+      model_id: message.model_id,
+      token_usage: message.usage,
+    })
+  }
+
+  next = appendReply(next, message.content)
+  return attachReplyMetaToLatestReply(next, {
+    provider_id: message.provider_id,
+    model_id: message.model_id,
+    token_usage: message.usage,
+  })
+}
+
 function latestToolFailureMessage(entries: TranscriptEntry[]) {
   for (let i = entries.length - 1; i >= 0; i -= 1) {
     const entry = entries[i]
@@ -555,6 +667,9 @@ export function updateTranscriptFromStreamEvent(entries: TranscriptEntry[], even
 
     if (kind === 'completed' && payload.Message && typeof payload.Message === 'object') {
       const message = normalizeStreamMessage(payload.Message as Record<string, unknown>)
+      if (message.role === 'assistant') {
+        return applyCompletedAssistantMessage(entries, message, { groupKey })
+      }
       return applyConversationMessage(entries, message, { groupKey })
     }
   }

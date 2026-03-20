@@ -446,6 +446,43 @@ describe('updateTranscriptFromStreamEvent', () => {
 
     expect(comparableEntries(streamed)).toEqual(comparableEntries(persisted))
   })
+
+  it('does not duplicate a streamed final reply when the completed assistant message repeats the same content', () => {
+    const persisted = buildTranscriptEntries([
+      {
+        role: 'assistant',
+        content: 'Final answer',
+        reasoning: 'thinking',
+        provider_id: 'openai',
+        model_id: 'gpt-5.4',
+      },
+    ])
+
+    let streamed: TranscriptEntry[] = []
+    streamed = updateTranscriptFromStreamEvent(streamed, {
+      type: 'log.message',
+      payload: { Kind: 'reasoning_delta', Reasoning: 'thinking' },
+    })
+    streamed = updateTranscriptFromStreamEvent(streamed, {
+      type: 'log.message',
+      payload: { Kind: 'text_delta', Text: 'Final answer' },
+    })
+    streamed = updateTranscriptFromStreamEvent(streamed, {
+      type: 'log.message',
+      payload: {
+        Kind: 'completed',
+        Message: {
+          Role: 'assistant',
+          Content: 'Final answer',
+          Reasoning: 'thinking',
+          ProviderID: 'openai',
+          ModelID: 'gpt-5.4',
+        },
+      },
+    })
+
+    expect(comparableEntries(streamed)).toEqual(comparableEntries(persisted))
+  })
 })
 
 describe('summarizeToolResult', () => {
