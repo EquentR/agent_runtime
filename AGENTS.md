@@ -1,94 +1,45 @@
-# Agent Runtime - AI 编码指南
+# Agent Runtime - 编码指南
 
-## 项目快照（2026-03-15）
-- 模块路径固定为 `github.com/EquentR/agent_runtime`，新增导入必须遵循该路径
-- 当前唯一命令行入口是 `cmd/example_agent`，可启动一个基于 Gin + SQLite 的示例应用
-- 现阶段真正已落地的核心能力集中在 `core/providers`、`core/tools`、`core/mcp`、`core/memory`、`core/tasks`、`core/types` 与 `pkg/*`
-- `README.md` 仍保留一部分规划性描述；遇到文档和代码不一致时，优先以当前目录、导入关系和可执行验证结果为准
+## 适用范围
+- 以代码为准。这个仓库已经包含可运行的参考应用，入口在 `cmd/example_agent`，装配层在 `app/*`。
+- 保持现有分层：`app -> core -> pkg`。
+- 产品装配放在 `app`，可复用 runtime 能力放在 `core`，共享基础设施放在 `pkg`。
 
-## 当前目录地图（以代码实况为准）
-- `cmd/example_agent`：读取 `conf/app.yaml`，做环境变量展开，装配并启动应用
-- `app/config`：聚合 `server`、`sqlite`、`log`、`llmProvider`、`embeddingProvider`、`rerankProvider` 配置
-- `app/commands`：负责服务启动和 graceful shutdown，不承载核心业务逻辑
-- `app/router`：路由装配、静态资源注册、handler 汇总入口
-- `app/handlers`：HTTP handler 注册层；当前包含示例接口、task API 与 Swagger UI 路由
-- `app/logics`：业务逻辑层；当前仅有 `ExampleLogic`
-- `app/migration`：应用级数据库迁移定义与 bootstrap
-- `core/providers`：统一 LLM 抽象和 provider adapter
-  - `core/providers/types`：`ChatRequest`、`ChatResponse`、`Stream`、reasoning/tool call/multimodal 结构
-  - `core/providers/client/google`：Gemini adapter
-  - `core/providers/client/openai_completions`：OpenAI-compatible chat completions adapter
-  - `core/providers/client/openai_responses`：OpenAI Responses API adapter
-  - `core/providers/tools`：本地 token counter 与异步计数能力
-- `core/tools`：工具注册表、本地工具定义、MCP tools/prompts 包装
-- `core/tools/builtin`：文件、命令、HTTP、web search 等内建工具；文件操作受工作目录限制
-- `core/mcp`：MCP 抽象、配置与 `mark3labs` adapter
-- `core/memory`：会话压缩记忆、token budget 分配与 summary 注入
-- `core/tasks`：durable task manager、事件流、后台串行 runner、取消/重试与运行时桥接
-- `core/types`：provider 配置、模型成本、tool schema 等通用类型
-- `pkg/db`、`pkg/log`、`pkg/migrate`、`pkg/rest`：共享基础设施层
-- `conf`、`data`、`logs`：运行时配置、SQLite 数据文件、日志输出目录
-- `docs/swagger`：Swagger JSON/YAML 与内嵌式 Swagger UI 页面资源
+## 启动与配置
+- 先沿当前启动链阅读和改动，不要额外引入旁路启动方式。顺序参考 `cmd/example_agent/main.go` -> `app/commands/serve.go` -> `app/router/init.go`。
+- 应用配置通过 `conf/app.yaml` 加载；`cmd/example_agent/main.go` 会在 YAML 反序列化前先展开环境变量。
+- 新增运行时依赖时，先在 `app/commands/serve.go` 装配，再通过 `app/router/deps.go` 往下传，不要直接引入新的全局变量。
 
-## 与 README 的现状差异
-- `core/memory` 已实现并有测试，不应再按“未落地能力”处理
-- `app/migration` 已进入实际启动链路，负责数据库版本升级
-- `core/tasks` 已实现 durable task manager 基础层，不应再按“未落地外围能力”处理
-- `core/agent`、`core/rag` 当前目录尚未落地；不要按 README 预设它们已存在
-- 涉及架构调整时，先看真实目录和 `go list ./...` 输出，再决定放在哪一层
+## HTTP 与 Handler 模式
+- 路由通过带 `Register` 方法的 handler 类型注册。现有例子见 `app/handlers/task_handler.go`、`app/handlers/conversation_handler.go`、`app/handlers/auth_handler.go`。
+- HTTP 入参/出参与响应整形留在 handler，非平凡业务逻辑下沉到 `app/logics`。参考 `app/handlers/auth_handler.go` 和 `app/logics/auth_logic.go`。
+- 新 handler 统一加入 `app/router/init.go` 的集中注册列表，不要从 `serve.go` 临时注册路由。
+- JSON 接口沿用 `pkg/rest` 的包装方式，优先复用 `resp.HandlerWrapper(...)`，不要为新接口重复写一套原始 Gin 样板。
 
-## 当前启动链路
-- `cmd/example_agent/main.go`：打印版本信息，读取 YAML 配置并做 `os.ExpandEnv`
-- `app/commands/serve.go`：初始化日志、SQLite、migration、Gin engine、task manager 和 router
-- `app/router/init.go`：注册 `handlers.NewExampleHandler()`、`handlers.NewTaskHandler()`、`handlers.NewSwaggerHandler()`
-- `app/handlers/example_handler.go`：暴露示例接口并调用 `app/logics/example_logic.go`
-- `app/handlers/task_handler.go`：暴露任务创建/查询/取消/重试/SSE 观测接口
-- `app/handlers/swagger_handler.go`：暴露浏览器可访问的 Swagger UI 页面与原始 Swagger 文档
-- 当前示例应用更像 runtime skeleton，不是完整的 agent loop 产品
+## Tasks、Conversations 与 Agent Run
+- 后台执行统一按 task 处理。`core/tasks/manager.go` 和 `app/handlers/task_handler.go` 已定义创建、查询、取消、重试、SSE 订阅这一套模式。
+- 多轮对话状态统一持久化到 `core/agent/conversation_store.go`，不要在 `app` 再造一套 conversation 存储。
+- `agent.run` 是当前默认执行路径。`core/agent/executor.go` 展示了 provider 解析、memory、tools、task runtime 和 conversation persistence 的组合方式。
+- task 涉及 conversation 时，沿用现有权限校验方式，参考 `app/handlers/task_handler.go` 与 `app/handlers/conversation_handler.go`。
 
-## 依赖边界
-- 继续保持单向依赖：`app -> core -> pkg`
-- `pkg` 不得导入 `core` 或 `app`
-- `cmd` 与 `app/commands` 只负责装配、启动、信号处理，不写核心业务
-- LLM、tool、MCP 抽象统一放在 `core`；具体 provider/adapter 细节隐藏在对应子包内
-- 数据库、日志、REST 封装等跨模块基础设施统一放在 `pkg`
+## Providers、Tools 与 MCP
+- 面向模型的抽象放在 `core/providers/types` 和 `core/types`；provider 专属 client 放在 `core/providers/client/*`。
+- provider/model 解析方式以 `app/commands/serve.go` 和 `core/agent/executor.go` 为准；模型目录接口由 `app/handlers/model_catalog_handler.go` 暴露。
+- 本地工具通过 `core/tools/register.go` 注册；内建工具放在 `core/tools/builtin/*`，并受 `WorkspaceRoot` 约束。
+- 远端 MCP 能力通过 `core/mcp` 和 `core/tools` 的注册辅助接入，不要把第三方 MCP SDK 细节泄漏到 `app`。
 
-## 关键依赖
-- Web：`github.com/gin-gonic/gin`、`github.com/soulteary/gin-static`
-- DB：`github.com/glebarez/sqlite`、`gorm.io/gorm`
-- Logging：`go.uber.org/zap`、`gopkg.in/natefinch/lumberjack.v2`
-- LLM：`google.golang.org/genai`、`github.com/sashabaranov/go-openai`、`github.com/openai/openai-go`
-- MCP：`github.com/mark3labs/mcp-go`
-- Token 计数：`github.com/pkoukk/tiktoken-go`
+## 数据库、迁移与文档
+- 数据库结构变更要在 `app/migration/init.go` / `app/migration/define.go` 注册，不要只改 model。
+- Swagger 注解跟着 handler 定义走；请求/响应结构变化后，重新生成 `docs/swagger/*`。现有例子见 `app/handlers/task_handler.go`、`app/handlers/conversation_handler.go`、`app/handlers/swagger_handler.go`。
+- SQLite、日志、迁移和 REST 基础设施已经分别在 `pkg/db`、`pkg/log`、`pkg/migrate`、`pkg/rest` 中实现；优先扩展这些包，不要在 `app` 或 `core` 里重复造基础设施。
 
-## 配置与编码约定
-- 配置入口是 `conf/app.yaml`，反序列化前会先展开环境变量
-- `app/config.Config` 已预留 `llmProvider`、`embeddingProvider`、`rerankProvider`，即使当前示例 app 还未完整消费这些配置
-- `core/types/BaseProvider` 当前 YAML tag 使用 `apiKey`；修改 provider 配置或测试时，要同步检查 tag、示例配置和测试数据
-- `pkg/rest.Config` 当前字段是 `staticPaths`，`conf/app.yaml` 也已经使用该字段
-- Swagger 文档生成命令建议显式使用 `C:\Users\Equent\go\bin\swag.exe`，不要依赖 PATH 中一定存在 `swag`
-- 文档和注释保持中英混用风格：中文解释功能，术语保留 English
+## 优先阅读的文件
+- 启动/配置：`cmd/example_agent/main.go`、`app/commands/serve.go`、`conf/app.yaml`
+- 路由/API：`app/router/init.go`、`app/handlers/task_handler.go`、`app/handlers/conversation_handler.go`、`app/handlers/auth_handler.go`
+- Agent runtime：`core/agent/executor.go`、`core/agent/conversation_store.go`、`core/memory/manager.go`
+- 任务系统：`core/tasks/manager.go`、`core/tasks/store.go`
+- Providers/Tools/MCP：`core/tools/register.go`、`core/tools/builtin/README.md`、`core/providers/README.md`、`core/mcp/README.md`
 
-## 开发时优先查看的文件
-- 启动与配置：`cmd/example_agent/main.go`、`app/config/app.go`、`app/commands/serve.go`、`conf/app.yaml`
-- 路由与 API：`app/router/init.go`、`app/router/types.go`、`app/handlers/example_handler.go`、`app/handlers/task_handler.go`、`app/handlers/swagger_handler.go`
-- 数据迁移：`app/migration/init.go`、`app/migration/define.go`、`pkg/migrate/*`
-- 任务系统：`core/tasks/*`
-- Provider 抽象：`core/providers/types/*`、`core/types/provider_config.go`
-- Tool/MCP：`core/tools/register.go`、`core/tools/builtin/README.md`、`core/mcp/README.md`
-- API 文档：`docs/swagger/*`
-- 基础设施：`pkg/db/sqlite.go`、`pkg/log/logger.go`、`pkg/rest/*`
-
-## 验证现状（2026-03-15 已验证）
-- `go list ./...`：通过
-- `go build ./cmd/...`：通过
-- `go test ./...`：通过
-- 当前全量包测试可作为默认验收命令；改动较小时可先跑包级测试，再补全量测试
-
-## 提交前检查
-- 改 provider/模型配置时，同时检查 `core/types/provider_config.go`、对应测试和 `conf` 示例
-- 改 HTTP 启动链时，同时检查 `cmd/example_agent`、`app/commands`、`app/router`、`pkg/rest`
-- 改数据库结构时，在 `app/migration` 注册 migration，不要只改 model
-- 改 task API、handler 注释或请求/响应结构时，重新执行 Swagger 生成命令并检查 `docs/swagger/*`
-- 改工具系统时，优先扩展 `core/tools` / `core/mcp`，避免把 adapter 细节泄漏到 `app`
-- 如果变更触及 README 的规划与现实差异，顺手更新相关文档，避免再次漂移
+## 验证
+- 默认仓库校验命令是 `go test ./...`、`go build ./cmd/...` 和 `go list ./...`。
+- 小范围改动可以先跑相关包测试，再在交付前补全上述全量校验。
