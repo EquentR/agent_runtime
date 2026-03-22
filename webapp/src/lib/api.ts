@@ -1,5 +1,9 @@
 import type {
   ApiEnvelope,
+  AuditEvent,
+  AuditReplayBundle,
+  AuditRun,
+  AuthUser,
   Conversation,
   ConversationMessage,
   ModelCatalog,
@@ -9,6 +13,7 @@ import type {
   TaskStreamEvent,
   TaskSnapshot,
   TranscriptTokenUsage,
+  UserRole,
 } from '../types/api'
 
 const API_BASE = '/api/v1'
@@ -22,6 +27,18 @@ export function unwrapEnvelope<T>(envelope: ApiEnvelope<T>) {
   }
 
   return envelope.data
+}
+
+function normalizeRole(value: unknown): UserRole {
+  return value === 'admin' ? 'admin' : 'user'
+}
+
+export function normalizeAuthUser(user: Partial<AuthUser>): AuthUser {
+  return {
+    id: typeof user.id === 'number' && Number.isFinite(user.id) ? user.id : 0,
+    username: typeof user.username === 'string' ? user.username.trim() : '',
+    role: normalizeRole(user.role),
+  }
 }
 
 export function buildRunTaskRequest(input: {
@@ -207,6 +224,10 @@ export async function fetchConversations() {
   return request<Conversation[]>('/conversations')
 }
 
+export async function fetchConversation(conversationId: string) {
+  return request<Conversation>(`/conversations/${conversationId}`)
+}
+
 export async function fetchModelCatalog() {
   return request<ModelCatalog>('/models')
 }
@@ -222,6 +243,18 @@ export async function deleteConversation(conversationId: string) {
   return request<{ deleted: boolean }>(`/conversations/${conversationId}`, {
     method: 'DELETE',
   })
+}
+
+export async function fetchAuditRun(runId: string) {
+  return request<AuditRun>(`/audit/runs/${runId}`)
+}
+
+export async function fetchAuditRunEvents(runId: string) {
+  return request<AuditEvent[]>(`/audit/runs/${runId}/events`)
+}
+
+export async function fetchAuditRunReplay(runId: string) {
+  return request<AuditReplayBundle>(`/audit/runs/${runId}/replay`)
 }
 
 export async function createRunTask(input: {

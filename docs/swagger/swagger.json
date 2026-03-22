@@ -992,6 +992,7 @@
                     "type": "string"
                 },
                 "status": {
+                    "type": "string",
                     "enum": [
                         "queued",
                         "running",
@@ -999,8 +1000,7 @@
                         "cancelled",
                         "succeeded",
                         "failed"
-                    ],
-                    "type": "string"
+                    ]
                 },
                 "task_id": {
                     "type": "string"
@@ -1091,6 +1091,9 @@
             "properties": {
                 "id": {
                     "type": "integer"
+                },
+                "role": {
+                    "type": "string"
                 },
                 "username": {
                     "type": "string"

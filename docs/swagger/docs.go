@@ -999,6 +999,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "status": {
+                    "type": "string",
                     "enum": [
                         "queued",
                         "running",
@@ -1006,8 +1007,7 @@ const docTemplate = `{
                         "cancelled",
                         "succeeded",
                         "failed"
-                    ],
-                    "type": "string"
+                    ]
                 },
                 "task_id": {
                     "type": "string"
@@ -1098,6 +1098,9 @@ const docTemplate = `{
             "properties": {
                 "id": {
                     "type": "integer"
+                },
+                "role": {
+                    "type": "string"
                 },
                 "username": {
                     "type": "string"

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/EquentR/agent_runtime/app/logics"
+	"github.com/EquentR/agent_runtime/app/models"
 	coreaudit "github.com/EquentR/agent_runtime/core/audit"
 	"github.com/EquentR/agent_runtime/pkg/rest"
 	"github.com/glebarez/sqlite"
@@ -119,7 +120,9 @@ func TestAuditHandlerRequiresSession(t *testing.T) {
 func TestAuditHandlerRejectsCrossUserAccess(t *testing.T) {
 	deps, server := newAuthenticatedAuditHandlerTestServer(t)
 	seedAuditReplayRunWithOwner(t, deps.store, "run_1", "owner")
-	cookie := newAuditHandlerSessionCookie(t, deps.authLogic, "guest")
+	registerAuditHandlerUser(t, deps.authLogic, "admin")
+	registerAuditHandlerUser(t, deps.authLogic, "guest")
+	cookie := loginAuditHandlerSessionCookie(t, deps.authLogic, "guest")
 
 	request, err := http.NewRequest(http.MethodGet, server.URL+"/api/v1/audit/runs/run_1/replay", nil)
 	if err != nil {
@@ -142,6 +145,71 @@ func TestAuditHandlerRejectsCrossUserAccess(t *testing.T) {
 	}
 	if !strings.Contains(envelope.Message, "无权") {
 		t.Fatalf("envelope.Message = %q, want ownership denial", envelope.Message)
+	}
+}
+
+func TestAuditHandlerAdminCanReadAnotherUsersRunAndReplay(t *testing.T) {
+	deps, server := newAuthenticatedAuditHandlerTestServer(t)
+	admin := registerAuditHandlerUser(t, deps.authLogic, "admin")
+	if admin.Role != models.UserRoleAdmin {
+		t.Fatalf("admin.Role = %q, want %q", admin.Role, models.UserRoleAdmin)
+	}
+	owner := registerAuditHandlerUser(t, deps.authLogic, "owner")
+	seedAuditReplayRunWithOwner(t, deps.store, "run_1", owner.Username)
+	cookie := loginAuditHandlerSessionCookie(t, deps.authLogic, admin.Username)
+
+	runRequest, err := http.NewRequest(http.MethodGet, server.URL+"/api/v1/audit/runs/run_1", nil)
+	if err != nil {
+		t.Fatalf("http.NewRequest(run) error = %v", err)
+	}
+	runRequest.AddCookie(cookie)
+
+	runResponse, err := http.DefaultClient.Do(runRequest)
+	if err != nil {
+		t.Fatalf("Do(run) error = %v", err)
+	}
+	defer runResponse.Body.Close()
+	run := decodeAuditRunResponse(t, runResponse.Body)
+	if run.ID != "run_1" {
+		t.Fatalf("run.ID = %q, want run_1", run.ID)
+	}
+	if run.CreatedBy != owner.Username {
+		t.Fatalf("run.CreatedBy = %q, want %q", run.CreatedBy, owner.Username)
+	}
+
+	eventsRequest, err := http.NewRequest(http.MethodGet, server.URL+"/api/v1/audit/runs/run_1/events", nil)
+	if err != nil {
+		t.Fatalf("http.NewRequest(events) error = %v", err)
+	}
+	eventsRequest.AddCookie(cookie)
+
+	eventsResponse, err := http.DefaultClient.Do(eventsRequest)
+	if err != nil {
+		t.Fatalf("Do(events) error = %v", err)
+	}
+	defer eventsResponse.Body.Close()
+	events := decodeAuditEventsResponse(t, eventsResponse.Body)
+	if len(events) != 3 {
+		t.Fatalf("len(events) = %d, want 3", len(events))
+	}
+
+	replayRequest, err := http.NewRequest(http.MethodGet, server.URL+"/api/v1/audit/runs/run_1/replay", nil)
+	if err != nil {
+		t.Fatalf("http.NewRequest(replay) error = %v", err)
+	}
+	replayRequest.AddCookie(cookie)
+
+	replayResponse, err := http.DefaultClient.Do(replayRequest)
+	if err != nil {
+		t.Fatalf("Do(replay) error = %v", err)
+	}
+	defer replayResponse.Body.Close()
+	bundle := decodeAuditReplayResponse(t, replayResponse.Body)
+	if bundle.Run.ID != "run_1" {
+		t.Fatalf("bundle.Run.ID = %q, want run_1", bundle.Run.ID)
+	}
+	if bundle.Run.CreatedBy != owner.Username {
+		t.Fatalf("bundle.Run.CreatedBy = %q, want %q", bundle.Run.CreatedBy, owner.Username)
 	}
 }
 
@@ -358,11 +426,29 @@ func newAuditHandlerSessionCookie(t *testing.T, logic *logics.AuthLogic, usernam
 	if _, err := logic.Register(context.Background(), username, password, password); err != nil {
 		t.Fatalf("Register(%q) error = %v", username, err)
 	}
+	return loginAuditHandlerSessionCookie(t, logic, username)
+}
+
+func loginAuditHandlerSessionCookie(t *testing.T, logic *logics.AuthLogic, username string) *http.Cookie {
+	t.Helper()
+
+	const password = "secret1"
 	_, session, err := logic.Login(context.Background(), username, password)
 	if err != nil {
 		t.Fatalf("Login(%q) error = %v", username, err)
 	}
 	return &http.Cookie{Name: logic.CookieName(), Value: session.ID}
+}
+
+func registerAuditHandlerUser(t *testing.T, logic *logics.AuthLogic, username string) *models.User {
+	t.Helper()
+
+	const password = "secret1"
+	user, err := logic.Register(context.Background(), username, password, password)
+	if err != nil {
+		t.Fatalf("Register(%q) error = %v", username, err)
+	}
+	return user
 }
 
 func decodeAuditRunResponse(t *testing.T, body io.Reader) coreaudit.Run {

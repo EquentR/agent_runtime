@@ -155,6 +155,28 @@ describe('ChatView', () => {
     expect(wrapper.find('.topbar .status-pill').text()).toContain('就绪')
   })
 
+  it('shows an admin audit entry point for admin users only', async () => {
+    localStorage.setItem('agent-runtime.user', JSON.stringify({ username: 'demo-user', role: 'admin' }))
+    api.fetchConversations.mockResolvedValue([])
+
+    const router = makeRouter()
+    await router.push('/chat')
+    await router.isReady()
+
+    const wrapper = mount(ChatView, {
+      global: {
+        plugins: [router],
+      },
+    })
+
+    await flushPromises()
+
+    const link = wrapper.find('.topbar-audit-link')
+    expect(link.exists()).toBe(true)
+    expect(link.text()).toContain('审计')
+    expect(link.attributes('href')).toBe('/admin/audit')
+  })
+
   it('opens on a new conversation instead of auto-selecting an existing one after refresh', async () => {
     api.fetchConversations.mockResolvedValue([
       {

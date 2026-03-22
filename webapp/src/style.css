@@ -590,6 +590,138 @@ p {
   overflow: hidden;
 }
 
+.topbar-audit-link {
+  text-decoration: none;
+}
+
+.admin-audit-shell {
+  min-height: 100svh;
+  display: grid;
+  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
+  gap: 0.9rem;
+  padding: 0.9rem;
+}
+
+.admin-audit-panel {
+  background: rgba(255, 255, 255, 0.8);
+  border: 1px solid rgba(25, 50, 59, 0.1);
+  box-shadow: 0 20px 48px rgba(39, 61, 68, 0.08);
+  border-radius: 18px;
+  padding: 0.9rem;
+}
+
+.admin-audit-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.9rem;
+}
+
+.admin-audit-header.compact {
+  margin-bottom: 0.75rem;
+}
+
+.admin-audit-header h1,
+.admin-audit-header h2,
+.admin-audit-card h3 {
+  margin: 0;
+}
+
+.admin-audit-copy,
+.admin-audit-empty,
+.admin-audit-conversation span,
+.admin-audit-card dt,
+.admin-audit-card dd {
+  color: #5e767d;
+}
+
+.admin-audit-list {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.admin-audit-conversation {
+  width: 100%;
+  text-align: left;
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.72rem 0.8rem;
+  border-radius: 12px;
+  border: 1px solid rgba(25, 50, 59, 0.08);
+  background: rgba(245, 249, 249, 0.9);
+}
+
+.admin-audit-conversation.active {
+  background: linear-gradient(135deg, rgba(255, 228, 201, 0.95), rgba(232, 244, 247, 0.96));
+  border-color: rgba(196, 88, 63, 0.24);
+}
+
+.admin-audit-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.admin-audit-card {
+  padding: 0.8rem;
+  border-radius: 14px;
+  border: 1px solid rgba(25, 50, 59, 0.08);
+  background: rgba(247, 250, 250, 0.92);
+}
+
+.admin-audit-card dl {
+  display: grid;
+  gap: 0.55rem;
+  margin: 0.75rem 0 0;
+}
+
+.admin-audit-card dl div {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.admin-audit-card dt {
+  font-size: 0.78rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.admin-audit-card dd {
+  margin: 0;
+  color: #1f3b44;
+  word-break: break-word;
+}
+
+.admin-audit-event-list {
+  list-style: none;
+  display: grid;
+  gap: 0.45rem;
+  padding: 0;
+  margin: 0.75rem 0 0;
+}
+
+.admin-audit-event-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.55rem 0.65rem;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid rgba(25, 50, 59, 0.08);
+}
+
+@media (max-width: 960px) {
+  .admin-audit-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-audit-detail-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .trace-copy-toast {
   position: absolute;
   left: calc(100% + 0.5rem);
@@ -1368,6 +1500,170 @@ p {
   background: rgba(25, 50, 59, 0.2);
 }
 
+.admin-audit-shell {
+  height: 100svh;
+}
+
+.admin-audit-sidebar,
+.admin-audit-stage {
+  min-height: 0;
+}
+
+.admin-audit-topbar {
+  flex: 0 0 auto;
+}
+
+.admin-audit-content {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 0.75rem;
+  min-height: 0;
+}
+
+.admin-audit-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.admin-audit-summary-card,
+.admin-audit-card {
+  border-radius: 16px;
+  border: 1px solid rgba(25, 50, 59, 0.08);
+  background: rgba(245, 249, 249, 0.85);
+  padding: 0.85rem 0.95rem;
+}
+
+.admin-audit-summary-card dl,
+.admin-audit-card dl {
+  margin: 0.7rem 0 0;
+  display: grid;
+  gap: 0.55rem;
+}
+
+.admin-audit-summary-card dt,
+.admin-audit-card dt {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #7d8f94;
+}
+
+.admin-audit-summary-card dd,
+.admin-audit-card dd {
+  margin: 0.18rem 0 0;
+  color: #1f3b44;
+  font-size: 0.9rem;
+  word-break: break-word;
+}
+
+.admin-audit-detail-grid {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(280px, 0.95fr) minmax(0, 1.25fr);
+  gap: 0.75rem;
+}
+
+.admin-audit-timeline-panel,
+.admin-audit-artifact-panel {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 0.7rem;
+}
+
+.admin-audit-timeline {
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  align-content: start;
+  gap: 0.55rem;
+  padding-right: 0.2rem;
+}
+
+.admin-audit-timeline-item {
+  width: 100%;
+  border: 1px solid rgba(25, 50, 59, 0.08);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.78);
+  padding: 0.78rem 0.85rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  text-align: left;
+}
+
+.admin-audit-timeline-item.active {
+  border-color: rgba(196, 88, 63, 0.24);
+  background: linear-gradient(135deg, rgba(255, 228, 201, 0.86), rgba(232, 244, 247, 0.92));
+}
+
+.admin-audit-timeline-leading {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  min-width: 0;
+}
+
+.admin-audit-timeline-leading strong {
+  display: block;
+  color: #1f3b44;
+  font-size: 0.94rem;
+}
+
+.admin-audit-timeline-leading p {
+  margin-top: 0.16rem;
+  color: #60767d;
+  font-size: 0.77rem;
+}
+
+.admin-audit-artifact-chip {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  padding: 0.26rem 0.58rem;
+  background: rgba(196, 88, 63, 0.12);
+  color: #a24b37;
+  font-size: 0.73rem;
+  font-weight: 700;
+}
+
+.admin-audit-artifact-detail {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 0.55rem;
+}
+
+.admin-audit-detail-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  color: #60767d;
+  font-size: 0.78rem;
+}
+
+.admin-audit-json {
+  min-height: 0;
+  height: 100%;
+  overflow: auto;
+  margin: 0;
+  background: rgba(255, 255, 255, 0.88);
+  border-radius: 12px;
+  border: 1px solid rgba(25, 50, 59, 0.08);
+  padding: 0.78rem 0.85rem;
+}
+
+.admin-audit-list .conversation-card {
+  background: rgba(245, 249, 249, 0.92);
+}
+
+.admin-audit-list .conversation-meta {
+  margin-top: 0.18rem;
+  font-size: 0.78rem;
+}
+
 @keyframes rise-in {
   from {
     opacity: 0;
@@ -1444,6 +1740,11 @@ p {
 
   .messages-stack {
     padding-inline: 0.35rem;
+  }
+
+  .admin-audit-detail-grid,
+  .admin-audit-summary-grid {
+    grid-template-columns: 1fr;
   }
 }
 

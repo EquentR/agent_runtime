@@ -1,6 +1,7 @@
 import { createMemoryHistory, createRouter, createWebHistory } from 'vue-router'
 
 import { syncSession } from '../lib/session'
+import AdminAuditView from '../views/AdminAuditView.vue'
 import ChatView from '../views/ChatView.vue'
 import LoginView from '../views/LoginView.vue'
 
@@ -22,6 +23,15 @@ const routes = [
       requiresSession: true,
     },
   },
+  {
+    path: '/admin/audit',
+    name: 'admin-audit',
+    component: AdminAuditView,
+    meta: {
+      requiresSession: true,
+      requiresAdmin: true,
+    },
+  },
 ]
 
 export function createAppRouter(memory = false) {
@@ -31,11 +41,15 @@ export function createAppRouter(memory = false) {
   })
 
   router.beforeEach(async (to) => {
-    const username = to.meta.requiresSession ? await syncSession(true) : await syncSession()
-    const active = username.length > 0
+    const session = to.meta.requiresSession ? await syncSession(true) : await syncSession()
+    const active = Boolean(session?.username)
 
     if (to.meta.requiresSession && !active) {
       return { path: '/login' }
+    }
+
+    if (to.meta.requiresAdmin && session?.role !== 'admin') {
+      return { path: '/chat' }
     }
 
     if (to.path === '/login' && active) {

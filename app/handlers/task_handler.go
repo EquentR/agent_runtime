@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -12,6 +13,8 @@ import (
 	resp "github.com/EquentR/agent_runtime/pkg/rest"
 	"github.com/gin-gonic/gin"
 )
+
+var errConversationAccessDenied = errors.New("无权访问该会话")
 
 // TaskHandler 提供任务创建、查询、取消、重试与事件订阅接口。
 type TaskHandler struct {
@@ -43,7 +46,7 @@ func (h *TaskHandler) Register(rg *gin.RouterGroup) {
 		options = append(options, resp.WithMiddlewares(h.middlewares...))
 	}
 	resp.HandlerWrapper(rg, "tasks", []*resp.Handler{
-		resp.NewJsonHandler(h.handleCreateTask),
+		resp.NewJsonOptionsHandler(h.handleCreateTask),
 		resp.NewJsonHandler(h.handleFindRunningTask),
 		resp.NewJsonHandler(h.handleGetTask),
 		resp.NewJsonHandler(h.handleCancelTask),
@@ -63,19 +66,23 @@ func (h *TaskHandler) Register(rg *gin.RouterGroup) {
 // @Success 200 {object} TaskSwaggerResponse
 // @Failure 400 {object} ErrorSwaggerResponse
 // @Router /tasks [post]
-func (h *TaskHandler) handleCreateTask() (method, relativePath string, wrapper resp.JsonResultWrapper, opts []resp.WrapperOption) {
-	return http.MethodPost, "", func(c *gin.Context) (any, error) {
+func (h *TaskHandler) handleCreateTask() (method, relativePath string, wrapper resp.JsonOptionsResultWrapper, opts []resp.WrapperOption) {
+	return http.MethodPost, "", func(c *gin.Context) (any, []resp.ResOpt, error) {
 		if h.manager == nil {
-			return nil, fmt.Errorf("task manager is not configured")
+			return nil, nil, fmt.Errorf("task manager is not configured")
 		}
 
 		var request CreateTaskRequest
 		if err := c.ShouldBindJSON(&request); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		request.CreatedBy = h.resolveCreatedBy(c, request.CreatedBy)
+		h.canonicalizeTaskInputCreatedBy(request.Input, request.CreatedBy)
 		if err := h.ensureConversationOwnership(c, request.Input); err != nil {
-			return nil, err
+			if errors.Is(err, errConversationAccessDenied) {
+				return gin.H{}, []resp.ResOpt{resp.WithCode(http.StatusUnauthorized)}, err
+			}
+			return nil, nil, err
 		}
 
 		task, err := h.manager.CreateTask(c.Request.Context(), coretasks.CreateTaskInput{
@@ -87,10 +94,18 @@ func (h *TaskHandler) handleCreateTask() (method, relativePath string, wrapper r
 			IdempotencyKey: request.IdempotencyKey,
 		})
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		return task, nil
+		return task, nil, nil
 	}, nil
+}
+
+func (h *TaskHandler) canonicalizeTaskInputCreatedBy(input map[string]any, createdBy string) {
+	if len(input) == 0 || createdBy == "" {
+		return
+	}
+	input["created_by"] = createdBy
+	input["CreatedBy"] = createdBy
 }
 
 func (h *TaskHandler) ensureConversationOwnership(c *gin.Context, input map[string]any) error {

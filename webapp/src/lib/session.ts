@@ -1,22 +1,51 @@
-import { unwrapEnvelope } from './api'
-import type { ApiEnvelope } from '../types/api'
+import { normalizeAuthUser, unwrapEnvelope } from './api'
+import type { ApiEnvelope, AuthUser, SessionUser, UserRole } from '../types/api'
 
 export const SESSION_STORAGE_KEY = 'agent-runtime.user'
 
-interface AuthUser {
-  id: number
-  username: string
+function normalizeSessionRole(value: unknown): UserRole {
+  return value === 'admin' ? 'admin' : 'user'
 }
 
-function setSessionName(name: string) {
-  const value = name.trim()
+function parseSessionValue(raw: string | null): SessionUser | null {
+  const value = raw?.trim() ?? ''
   if (!value) {
-    clearSession()
-    return ''
+    return null
   }
 
-  localStorage.setItem(SESSION_STORAGE_KEY, value)
-  return value
+  try {
+    const parsed = JSON.parse(value) as Partial<SessionUser>
+    const username = typeof parsed.username === 'string' ? parsed.username.trim() : ''
+    if (!username) {
+      return null
+    }
+
+    return {
+      username,
+      role: normalizeSessionRole(parsed.role),
+    }
+  } catch {
+    return {
+      username: value,
+      role: 'user',
+    }
+  }
+}
+
+function setSessionUser(session: SessionUser | null) {
+  const username = session?.username.trim() ?? ''
+  if (!username) {
+    clearSession()
+    return null
+  }
+
+  const normalized = {
+    username,
+    role: normalizeSessionRole(session?.role),
+  } satisfies SessionUser
+
+  localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(normalized))
+  return normalized
 }
 
 async function requestAuth<T>(path: string, init?: RequestInit) {
@@ -34,27 +63,35 @@ async function requestAuth<T>(path: string, init?: RequestInit) {
 }
 
 export function saveSession(name: string) {
-  return setSessionName(name)
+  return setSessionUser({ username: name, role: 'user' })
 }
 
 export function clearSession() {
   localStorage.removeItem(SESSION_STORAGE_KEY)
 }
 
+export function getSessionUser() {
+  return parseSessionValue(localStorage.getItem(SESSION_STORAGE_KEY))
+}
+
 export function getSessionName() {
-  return localStorage.getItem(SESSION_STORAGE_KEY)?.trim() ?? ''
+  return getSessionUser()?.username ?? ''
+}
+
+export function getSessionRole() {
+  return getSessionUser()?.role ?? 'user'
 }
 
 export function hasActiveSession() {
-  return getSessionName().length > 0
+  return getSessionUser() !== null
 }
 
 export async function login(username: string, password: string) {
-  const user = await requestAuth<AuthUser>('/login', {
+  const user = normalizeAuthUser(await requestAuth<AuthUser>('/login', {
     method: 'POST',
     body: JSON.stringify({ username, password }),
-  })
-  setSessionName(user.username)
+  }))
+  setSessionUser({ username: user.username, role: user.role })
   return user
 }
 
@@ -73,17 +110,17 @@ export async function register(username: string, password: string, confirmPasswo
 
 export async function syncSession(force = false) {
   if (!force && hasActiveSession()) {
-    return getSessionName()
+    return getSessionUser()
   }
 
   try {
-    const user = await requestAuth<AuthUser>('/me', {
+    const user = normalizeAuthUser(await requestAuth<AuthUser>('/me', {
       method: 'GET',
-    })
-    return setSessionName(user.username)
+    }))
+    return setSessionUser({ username: user.username, role: user.role })
   } catch {
     clearSession()
-    return ''
+    return null
   }
 }
 

@@ -108,6 +108,7 @@ type ErrorSwaggerResponse struct {
 type AuthUserSwaggerDoc struct {
 	ID       uint64 `json:"id"`
 	Username string `json:"username"`
+	Role     string `json:"role"`
 }
 
 // AuthUserSwaggerResponse 描述登录、注册、当前用户接口的成功响应结构。

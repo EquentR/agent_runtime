@@ -24,6 +24,7 @@ import (
 type authTestUser struct {
 	ID       uint64 `json:"id"`
 	Username string `json:"username"`
+	Role     string `json:"role"`
 }
 
 func TestAuthHandlerRegisterLoginLogoutFlow(t *testing.T) {
@@ -41,6 +42,9 @@ func TestAuthHandlerRegisterLoginLogoutFlow(t *testing.T) {
 	registered := decodeAuthUserResponse(t, register.Body)
 	if registered.Username != "alice" {
 		t.Fatalf("registered username = %q, want alice", registered.Username)
+	}
+	if registered.Role != "admin" {
+		t.Fatalf("registered role = %q, want admin", registered.Role)
 	}
 
 	duplicate := postAuthJSON(t, server.URL+"/api/v1/auth/register", map[string]any{
@@ -69,6 +73,9 @@ func TestAuthHandlerRegisterLoginLogoutFlow(t *testing.T) {
 	if loggedIn.Username != "alice" {
 		t.Fatalf("login username = %q, want alice", loggedIn.Username)
 	}
+	if loggedIn.Role != "admin" {
+		t.Fatalf("login role = %q, want admin", loggedIn.Role)
+	}
 
 	meRequest, err := http.NewRequest(http.MethodGet, server.URL+"/api/v1/auth/me", nil)
 	if err != nil {
@@ -83,6 +90,9 @@ func TestAuthHandlerRegisterLoginLogoutFlow(t *testing.T) {
 	current := decodeAuthUserResponse(t, meResponse.Body)
 	if current.Username != "alice" {
 		t.Fatalf("current username = %q, want alice", current.Username)
+	}
+	if current.Role != "admin" {
+		t.Fatalf("current role = %q, want admin", current.Role)
 	}
 
 	logoutRequest, err := http.NewRequest(http.MethodPost, server.URL+"/api/v1/auth/logout", bytes.NewReader([]byte("{}")))
@@ -278,9 +288,119 @@ func TestAuthMiddlewareRejectsTaskCreationAgainstAnotherUsersConversation(t *tes
 	}
 }
 
+func TestAuthMiddlewareRejectsAdminTaskCreationAgainstAnotherUsersConversation(t *testing.T) {
+	deps, server := newAuthHandlerTestServerWithDeps(t)
+
+	admin, err := deps.authLogic.Register(context.Background(), "admin", "secret-123", "secret-123")
+	if err != nil {
+		t.Fatalf("Register(admin) error = %v", err)
+	}
+	if admin.Role != "admin" {
+		t.Fatalf("admin.Role = %q, want admin", admin.Role)
+	}
+	owner, err := deps.authLogic.Register(context.Background(), "owner", "secret-123", "secret-123")
+	if err != nil {
+		t.Fatalf("Register(owner) error = %v", err)
+	}
+	conversation, err := deps.conversationStore.CreateConversation(context.Background(), coreagent.CreateConversationInput{
+		ID:         "conv_owner",
+		ProviderID: "openai",
+		ModelID:    "gpt-5.4",
+		CreatedBy:  owner.Username,
+	})
+	if err != nil {
+		t.Fatalf("CreateConversation() error = %v", err)
+	}
+	_, adminSession, err := deps.authLogic.Login(context.Background(), admin.Username, "secret-123")
+	if err != nil {
+		t.Fatalf("Login(admin) error = %v", err)
+	}
+
+	request, err := http.NewRequest(http.MethodPost, server.URL+"/api/v1/tasks", bytes.NewReader(mustJSON(t, map[string]any{
+		"task_type": "agent.run",
+		"input": map[string]any{
+			"conversation_id": conversation.ID,
+			"provider_id":     "openai",
+			"model_id":        "gpt-5.4",
+			"message":         "hello",
+		},
+	})))
+	if err != nil {
+		t.Fatalf("NewRequest() error = %v", err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.AddCookie(&http.Cookie{Name: authSessionCookieName, Value: adminSession.ID})
+
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("Do() error = %v", err)
+	}
+	defer response.Body.Close()
+
+	envelope := decodeEnvelope(t, response.Body)
+	if envelope.OK {
+		t.Fatal("admin cross-user task create ok = true, want false")
+	}
+	if envelope.Code != http.StatusUnauthorized {
+		t.Fatalf("envelope.Code = %d, want %d", envelope.Code, http.StatusUnauthorized)
+	}
+	if !strings.Contains(envelope.Message, "无权") {
+		t.Fatalf("message = %q, want ownership denial", envelope.Message)
+	}
+}
+
+func TestAuthMiddlewareCanonicalizesNestedCreatedByOnTaskCreate(t *testing.T) {
+	deps, server := newAuthHandlerTestServerWithDeps(t)
+
+	owner, err := deps.authLogic.Register(context.Background(), "owner", "secret-123", "secret-123")
+	if err != nil {
+		t.Fatalf("Register(owner) error = %v", err)
+	}
+	_, ownerSession, err := deps.authLogic.Login(context.Background(), owner.Username, "secret-123")
+	if err != nil {
+		t.Fatalf("Login(owner) error = %v", err)
+	}
+
+	request, err := http.NewRequest(http.MethodPost, server.URL+"/api/v1/tasks", bytes.NewReader(mustJSON(t, map[string]any{
+		"task_type":  "agent.run",
+		"created_by": "spoofed-top",
+		"input": map[string]any{
+			"provider_id": "openai",
+			"model_id":    "gpt-5.4",
+			"message":     "hello",
+			"created_by":  "spoofed-nested",
+		},
+	})))
+	if err != nil {
+		t.Fatalf("NewRequest() error = %v", err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.AddCookie(&http.Cookie{Name: authSessionCookieName, Value: ownerSession.ID})
+
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("Do() error = %v", err)
+	}
+	defer response.Body.Close()
+
+	created := decodeTaskResponse(t, response.Body)
+	task, err := deps.taskManager.GetTask(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("GetTask() error = %v", err)
+	}
+	if task.CreatedBy != owner.Username {
+		t.Fatalf("task.CreatedBy = %q, want %q", task.CreatedBy, owner.Username)
+	}
+	decodedInput := decodeJSONRaw(t, task.InputJSON)
+	if decodedInput["created_by"] != owner.Username {
+		t.Fatalf("input.created_by = %#v, want %q", decodedInput["created_by"], owner.Username)
+	}
+}
+
 type authHandlerTestDeps struct {
 	authLogic         *logics.AuthLogic
 	conversationStore *coreagent.ConversationStore
+	taskManager       *coretasks.Manager
 }
 
 func newAuthHandlerTestServer(t *testing.T) *httptest.Server {
@@ -311,12 +431,12 @@ func newAuthHandlerTestServerWithDeps(t *testing.T) (*authHandlerTestDeps, *http
 	engine := rest.Init()
 	group := engine.Group("/api/v1")
 	NewAuthHandler(authLogic).Register(group)
-	NewConversationHandler(conversationStore, authMiddleware.RequireSession()).Register(group)
+	NewConversationHandler(conversationStore, nil, authMiddleware.RequireSession()).Register(group)
 	NewTaskHandler(taskManager, conversationStore, authMiddleware.RequireSession()).Register(group)
 
 	server := httptest.NewServer(engine)
 	t.Cleanup(server.Close)
-	return &authHandlerTestDeps{authLogic: authLogic, conversationStore: conversationStore}, server
+	return &authHandlerTestDeps{authLogic: authLogic, conversationStore: conversationStore, taskManager: taskManager}, server
 }
 
 func newAuthLogicForTest(t *testing.T, db *gorm.DB) *logics.AuthLogic {

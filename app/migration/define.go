@@ -43,3 +43,43 @@ var to005 = migrate.NewMigration("0.0.5", func(tx *gorm.DB) error {
 var to006 = migrate.NewMigration("0.0.6", func(tx *gorm.DB) error {
 	return tx.AutoMigrate(&audit.Run{}, &audit.Event{}, &audit.Artifact{})
 })
+
+// to007 为用户补齐 role 字段，并将存量首个用户回填为管理员。
+var to007 = migrate.NewMigration("0.0.7", func(tx *gorm.DB) error {
+	if err := tx.AutoMigrate(&models.User{}, &models.UserSession{}); err != nil {
+		return err
+	}
+
+	var users []models.User
+	if err := tx.Order("id asc").Find(&users).Error; err != nil {
+		return err
+	}
+	if len(users) == 0 {
+		return nil
+	}
+
+	adminFound := false
+	for _, user := range users {
+		if user.Role == models.UserRoleAdmin {
+			adminFound = true
+			break
+		}
+	}
+	if adminFound {
+		return nil
+	}
+
+	if err := tx.Model(&models.User{}).
+		Where("id = ?", users[0].ID).
+		Updates(map[string]any{"role": models.UserRoleAdmin}).Error; err != nil {
+		return err
+	}
+	if len(users) == 1 {
+		return nil
+	}
+
+	return tx.Model(&models.User{}).
+		Where("role = ? OR role = ''", models.UserRoleAdmin).
+		Where("id <> ?", users[0].ID).
+		Update("role", models.UserRoleUser).Error
+})

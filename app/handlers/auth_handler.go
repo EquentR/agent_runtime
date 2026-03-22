@@ -146,7 +146,7 @@ func (h *AuthHandler) clearSessionCookie(c *gin.Context) {
 }
 
 func authUserResponse(user *models.User) gin.H {
-	return gin.H{"id": user.ID, "username": user.Username}
+	return gin.H{"id": user.ID, "username": user.Username, "role": user.Role}
 }
 
 func authStatusCode(err error, fallback int) int {

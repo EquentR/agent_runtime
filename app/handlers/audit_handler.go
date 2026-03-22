@@ -137,9 +137,8 @@ func (h *AuditHandler) ensureRunAccess(c *gin.Context, run *coreaudit.Run) error
 	if !h.authRequired {
 		return nil
 	}
-	user := currentAuthUser(c)
-	if user != nil && user.Username == run.CreatedBy {
+	if run == nil {
 		return nil
 	}
-	return fmt.Errorf("无权访问该审计记录")
+	return ensureOwnerReadableByCurrentUser(c, run.CreatedBy, "无权访问该审计记录")
 }

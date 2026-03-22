@@ -338,6 +338,51 @@ func TestRecorderStartRunRejectsRunIDDriftForExistingTask(t *testing.T) {
 	}
 }
 
+func TestStoreGetLatestRunByConversationIDReturnsNewestRun(t *testing.T) {
+	db := newTestDB(t)
+	store := NewStore(db)
+	if err := store.AutoMigrate(); err != nil {
+		t.Fatalf("AutoMigrate() error = %v", err)
+	}
+
+	ctx := context.Background()
+	firstStartedAt := time.Date(2026, time.March, 22, 8, 0, 0, 0, time.UTC)
+	secondStartedAt := firstStartedAt.Add(5 * time.Minute)
+	if _, err := store.CreateRun(ctx, StartRunInput{
+		RunID:          "run_1",
+		TaskID:         "task_1",
+		ConversationID: "conv_1",
+		TaskType:       "agent.run",
+		Status:         StatusSucceeded,
+		SchemaVersion:  SchemaVersionV1,
+		StartedAt:      firstStartedAt,
+	}); err != nil {
+		t.Fatalf("CreateRun(first) error = %v", err)
+	}
+	if _, err := store.CreateRun(ctx, StartRunInput{
+		RunID:          "run_2",
+		TaskID:         "task_2",
+		ConversationID: "conv_1",
+		TaskType:       "agent.run",
+		Status:         StatusSucceeded,
+		SchemaVersion:  SchemaVersionV1,
+		StartedAt:      secondStartedAt,
+	}); err != nil {
+		t.Fatalf("CreateRun(second) error = %v", err)
+	}
+
+	run, err := store.GetLatestRunByConversationID(ctx, "conv_1")
+	if err != nil {
+		t.Fatalf("GetLatestRunByConversationID() error = %v", err)
+	}
+	if run == nil {
+		t.Fatal("run = nil, want latest run")
+	}
+	if run.ID != "run_2" {
+		t.Fatalf("run.ID = %q, want run_2", run.ID)
+	}
+}
+
 func TestRecorderAppendsEventsInSequenceForSerializedWrites(t *testing.T) {
 	db := newTestDB(t)
 	store := NewStore(db)

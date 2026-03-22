@@ -85,11 +85,23 @@ func (l *AuthLogic) Register(ctx context.Context, username, password, confirmPas
 	if err != nil {
 		return nil, err
 	}
-	user := &models.User{Username: username, PasswordHash: string(hash)}
-	if err := l.db.WithContext(ctx).Create(user).Error; err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "unique") {
-			return nil, ErrUsernameTaken
+	user := &models.User{Username: username, PasswordHash: string(hash), Role: models.UserRoleUser}
+	if err := l.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var userCount int64
+		if err := tx.Model(&models.User{}).Count(&userCount).Error; err != nil {
+			return err
 		}
+		if userCount == 0 {
+			user.Role = models.UserRoleAdmin
+		}
+		if err := tx.Create(user).Error; err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "unique") {
+				return ErrUsernameTaken
+			}
+			return err
+		}
+		return nil
+	}); err != nil {
 		return nil, err
 	}
 	return user, nil

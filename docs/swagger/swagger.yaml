@@ -217,6 +217,8 @@ definitions:
     properties:
       id:
         type: integer
+      role:
+        type: string
       username:
         type: string
     type: object

@@ -6,6 +6,19 @@ export interface ApiEnvelope<T> {
   time: string
 }
 
+export type UserRole = 'admin' | 'user'
+
+export interface AuthUser {
+  id: number
+  username: string
+  role: UserRole
+}
+
+export interface SessionUser {
+  username: string
+  role: UserRole
+}
+
 export interface Conversation {
   id: string
   title: string
@@ -17,6 +30,76 @@ export interface Conversation {
   created_at: string
   updated_at: string
   last_message_at?: string
+  audit_run_id?: string
+  auditRunId?: string
+  run_id?: string
+  runId?: string
+}
+
+export interface AuditRun {
+  id: string
+  task_id: string
+  conversation_id?: string
+  task_type: string
+  provider_id?: string
+  model_id?: string
+  runner_id?: string
+  status: TaskSnapshot['status']
+  created_by: string
+  replayable: boolean
+  schema_version: string
+  started_at?: string
+  finished_at?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface AuditEvent {
+  id: number
+  run_id: string
+  task_id: string
+  seq: number
+  phase: string
+  event_type: string
+  level: string
+  step_index: number
+  parent_seq: number
+  ref_artifact_id: string
+  payload?: unknown
+  created_at: string
+}
+
+export interface AuditReplayArtifactSummary {
+  id: string
+  kind: string
+  mime_type: string
+  encoding: string
+  size_bytes: number
+  sha256?: string
+  redaction_state: string
+  created_at: string
+}
+
+export interface AuditReplayEvent {
+  seq: number
+  phase: string
+  event_type: string
+  level: string
+  step_index: number
+  parent_seq: number
+  created_at: string
+  payload?: unknown
+  artifact?: AuditReplayArtifactSummary | null
+}
+
+export interface AuditReplayArtifact extends AuditReplayArtifactSummary {
+  body?: unknown
+}
+
+export interface AuditReplayBundle {
+  run: AuditRun
+  timeline: AuditReplayEvent[]
+  artifacts: AuditReplayArtifact[]
 }
 
 export interface ConversationMessage {

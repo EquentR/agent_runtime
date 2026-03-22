@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { RouterLink, useRouter } from 'vue-router'
 import { Close, Menu } from '@element-plus/icons-vue'
 
 import ConversationSidebar from '../components/ConversationSidebar.vue'
@@ -18,7 +18,7 @@ import {
   TASK_STREAM_ABORTED_MESSAGE,
 } from '../lib/api'
 import { clearChatState, loadChatState, saveChatState } from '../lib/chat-state'
-import { getSessionName, logout } from '../lib/session'
+import { getSessionName, getSessionRole, logout } from '../lib/session'
 import { attachReplyMetaToLatestReply, buildTranscriptEntries, updateTranscriptFromStreamEvent } from '../lib/transcript'
 import type {
   Conversation,
@@ -53,6 +53,7 @@ const modelMenuOpen = ref(false)
 const modelMenuRef = ref<HTMLElement | null>(null)
 let activeStreamAbortController: AbortController | null = null
 let activeStreamingTaskId = ''
+const isAdmin = computed(() => getSessionRole() === 'admin')
 
 const chatShellClass = computed(() => ({
   'sidebar-hidden': !sidebarMobile.value && sidebarCollapsed.value,
@@ -567,6 +568,7 @@ onBeforeUnmount(() => {
             {{ activeConversationTitle() }}
           </strong>
         </div>
+        <RouterLink v-if="isAdmin" class="topbar-audit-link ghost-button" to="/admin/audit">审计</RouterLink>
         <span :class="topbarStatusClass">{{ topbarStatusLabel }}</span>
       </header>
 

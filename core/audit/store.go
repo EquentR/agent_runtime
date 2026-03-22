@@ -65,6 +65,26 @@ func (s *Store) GetRunByTaskID(ctx context.Context, taskID string) (*Run, error)
 	return &run, nil
 }
 
+func (s *Store) GetLatestRunByConversationID(ctx context.Context, conversationID string) (*Run, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("store db cannot be nil")
+	}
+
+	var run Run
+	err := s.db.WithContext(ctx).
+		Where("conversation_id = ?", strings.TrimSpace(conversationID)).
+		Order("created_at desc").
+		Order("id desc").
+		Take(&run).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &run, nil
+}
+
 func (s *Store) ListEvents(ctx context.Context, runID string) ([]Event, error) {
 	if s == nil || s.db == nil {
 		return nil, fmt.Errorf("store db cannot be nil")
