@@ -3,6 +3,7 @@ package migration
 import (
 	"github.com/EquentR/agent_runtime/app/models"
 	"github.com/EquentR/agent_runtime/core/agent"
+	"github.com/EquentR/agent_runtime/core/audit"
 	"github.com/EquentR/agent_runtime/core/memory"
 	coretasks "github.com/EquentR/agent_runtime/core/tasks"
 	"github.com/EquentR/agent_runtime/pkg/migrate"
@@ -36,4 +37,9 @@ var to004 = migrate.NewMigration("0.0.4", func(tx *gorm.DB) error {
 // to005 创建用户和 session 表，为登录注册与 cookie session 提供持久化支持。
 var to005 = migrate.NewMigration("0.0.5", func(tx *gorm.DB) error {
 	return tx.AutoMigrate(&models.User{}, &models.UserSession{})
+})
+
+// to006 创建审计运行、事件与产物表，为回放 MVP 提供持久化证据。
+var to006 = migrate.NewMigration("0.0.6", func(tx *gorm.DB) error {
+	return tx.AutoMigrate(&audit.Run{}, &audit.Event{}, &audit.Artifact{})
 })

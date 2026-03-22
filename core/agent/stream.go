@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync"
 
+	coreaudit "github.com/EquentR/agent_runtime/core/audit"
 	model "github.com/EquentR/agent_runtime/core/providers/types"
 	coretypes "github.com/EquentR/agent_runtime/core/types"
 )
@@ -36,6 +37,15 @@ type RunStreamResult struct {
 	Events <-chan RunStreamEvent
 	Wait   func() (RunResult, error)
 	Close  func() error
+}
+
+type runnerResolvedPromptArtifact struct {
+	Messages []model.Message `json:"messages"`
+}
+
+type runnerModelResponseArtifact struct {
+	Message model.Message    `json:"message"`
+	Usage   model.TokenUsage `json:"usage"`
 }
 
 func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResult, error) {
@@ -96,17 +106,30 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 				runErr = err
 				return
 			}
+			usage = model.TokenUsage{}
 			title := fmt.Sprintf("Agent step %d", step)
 			r.emitStepStart(ctx, step, title)
+			promptArtifactID := r.attachAuditArtifact(ctx, coreaudit.ArtifactKindResolvedPrompt, runnerResolvedPromptArtifact{Messages: cloneMessages(conversation)})
+			r.appendAuditEvent(ctx, step, coreaudit.PhasePrompt, "prompt.resolved", map[string]any{
+				"message_count": len(conversation),
+			}, promptArtifactID)
 
-			stream, err := r.client.ChatStream(ctx, model.ChatRequest{
+			request := model.ChatRequest{
 				Model:      r.options.Model,
 				Messages:   cloneMessages(conversation),
 				MaxTokens:  r.options.MaxTokens,
 				Tools:      cloneTools(requestTools),
 				ToolChoice: r.options.ToolChoice,
 				TraceID:    r.options.TraceID,
-			})
+			}
+			requestArtifactID := r.attachAuditArtifact(ctx, coreaudit.ArtifactKindModelRequest, request)
+			r.appendAuditEvent(ctx, step, coreaudit.PhaseRequest, "request.built", map[string]any{
+				"message_count": len(request.Messages),
+				"tool_count":    len(request.Tools),
+				"max_tokens":    request.MaxTokens,
+			}, requestArtifactID)
+
+			stream, err := r.client.ChatStream(ctx, request)
 			if err != nil {
 				r.emitStepFinish(ctx, step, title, map[string]any{"error": err.Error()})
 				snapshotResult(step - 1)
@@ -169,6 +192,18 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 				return
 			}
 			assistant = normalizeAssistantMessage(model.ChatResponse{Message: assistant})
+			responseArtifactID := r.attachAuditArtifact(ctx, coreaudit.ArtifactKindModelResponse, runnerModelResponseArtifact{
+				Message: cloneMessage(assistant),
+				Usage:   usage,
+			})
+			r.appendAuditEvent(ctx, step, coreaudit.PhaseModel, "model.completed", map[string]any{
+				"message_role":            assistant.Role,
+				"content_length":          len(assistant.Content),
+				"tool_call_count":         len(assistant.ToolCalls),
+				"usage_prompt_tokens":     usage.PromptTokens,
+				"usage_completion_tokens": usage.CompletionTokens,
+				"usage_total_tokens":      usage.TotalTokens,
+			}, responseArtifactID)
 			conversation = append(conversation, assistant)
 			produced = append(produced, assistant)
 			if r.options.Memory != nil {
@@ -189,6 +224,13 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 					cost := totalCost
 					result.Cost = &cost
 				}
+				return
+			}
+			if r.registry == nil {
+				wrapped := fmt.Errorf("tool registry is required when model emits tool calls")
+				r.emitStepFinish(ctx, step, title, map[string]any{"error": wrapped.Error()})
+				snapshotResult(step)
+				runErr = wrapped
 				return
 			}
 

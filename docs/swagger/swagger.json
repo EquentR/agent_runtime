@@ -8,6 +8,135 @@
     },
     "basePath": "/api/v1",
     "paths": {
+        "/audit/runs/{id}": {
+            "get": {
+                "description": "根据审计运行 id 返回运行快照，供调试页展示运行级元数据。",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "audit"
+                ],
+                "summary": "获取审计运行",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "审计运行 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.AuditRunSwaggerResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/audit/runs/{id}/events": {
+            "get": {
+                "description": "根据审计运行 id 返回按 seq 升序排列的审计事件列表。",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "audit"
+                ],
+                "summary": "获取审计运行事件",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "审计运行 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.AuditEventsSwaggerResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/audit/runs/{id}/replay": {
+            "get": {
+                "description": "根据审计运行 id 返回已组装的回放包，包含时间线与调试所需工件摘要。",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "audit"
+                ],
+                "summary": "获取审计运行回放包",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "审计运行 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.AuditReplaySwaggerResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/auth/login": {
             "post": {
                 "description": "校验用户名密码并写入 session cookie，成功后返回当前用户信息。",
@@ -635,6 +764,275 @@
         }
     },
     "definitions": {
+        "handlers.AuditEventSwaggerDoc": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "event_type": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "level": {
+                    "type": "string"
+                },
+                "parent_seq": {
+                    "type": "integer"
+                },
+                "payload": {},
+                "phase": {
+                    "type": "string"
+                },
+                "ref_artifact_id": {
+                    "type": "string"
+                },
+                "run_id": {
+                    "type": "string"
+                },
+                "seq": {
+                    "type": "integer"
+                },
+                "step_index": {
+                    "type": "integer"
+                },
+                "task_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.AuditEventsSwaggerResponse": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "integer"
+                },
+                "data": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.AuditEventSwaggerDoc"
+                    }
+                },
+                "message": {
+                    "type": "string"
+                },
+                "ok": {
+                    "type": "boolean"
+                },
+                "time": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.AuditReplayArtifactSummarySwaggerDoc": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "encoding": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "mime_type": {
+                    "type": "string"
+                },
+                "redaction_state": {
+                    "type": "string"
+                },
+                "sha256": {
+                    "type": "string"
+                },
+                "size_bytes": {
+                    "type": "integer"
+                }
+            }
+        },
+        "handlers.AuditReplayArtifactSwaggerDoc": {
+            "type": "object",
+            "properties": {
+                "body": {},
+                "created_at": {
+                    "type": "string"
+                },
+                "encoding": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "mime_type": {
+                    "type": "string"
+                },
+                "redaction_state": {
+                    "type": "string"
+                },
+                "sha256": {
+                    "type": "string"
+                },
+                "size_bytes": {
+                    "type": "integer"
+                }
+            }
+        },
+        "handlers.AuditReplayBundleSwaggerDoc": {
+            "type": "object",
+            "properties": {
+                "artifacts": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.AuditReplayArtifactSwaggerDoc"
+                    }
+                },
+                "run": {
+                    "$ref": "#/definitions/handlers.AuditRunSwaggerDoc"
+                },
+                "timeline": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.AuditReplayEventSwaggerDoc"
+                    }
+                }
+            }
+        },
+        "handlers.AuditReplayEventSwaggerDoc": {
+            "type": "object",
+            "properties": {
+                "artifact": {
+                    "$ref": "#/definitions/handlers.AuditReplayArtifactSummarySwaggerDoc"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "event_type": {
+                    "type": "string"
+                },
+                "level": {
+                    "type": "string"
+                },
+                "parent_seq": {
+                    "type": "integer"
+                },
+                "payload": {},
+                "phase": {
+                    "type": "string"
+                },
+                "seq": {
+                    "type": "integer"
+                },
+                "step_index": {
+                    "type": "integer"
+                }
+            }
+        },
+        "handlers.AuditReplaySwaggerResponse": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "integer"
+                },
+                "data": {
+                    "$ref": "#/definitions/handlers.AuditReplayBundleSwaggerDoc"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "ok": {
+                    "type": "boolean"
+                },
+                "time": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.AuditRunSwaggerDoc": {
+            "type": "object",
+            "properties": {
+                "conversation_id": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "created_by": {
+                    "type": "string"
+                },
+                "finished_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "model_id": {
+                    "type": "string"
+                },
+                "provider_id": {
+                    "type": "string"
+                },
+                "replayable": {
+                    "type": "boolean"
+                },
+                "runner_id": {
+                    "type": "string"
+                },
+                "schema_version": {
+                    "type": "string"
+                },
+                "started_at": {
+                    "type": "string"
+                },
+                "status": {
+                    "enum": [
+                        "queued",
+                        "running",
+                        "cancel_requested",
+                        "cancelled",
+                        "succeeded",
+                        "failed"
+                    ],
+                    "type": "string"
+                },
+                "task_id": {
+                    "type": "string"
+                },
+                "task_type": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.AuditRunSwaggerResponse": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "integer"
+                },
+                "data": {
+                    "$ref": "#/definitions/handlers.AuditRunSwaggerDoc"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "ok": {
+                    "type": "boolean"
+                },
+                "time": {
+                    "type": "string"
+                }
+            }
+        },
         "handlers.AuthLoginSwaggerRequest": {
             "type": "object",
             "properties": {

@@ -168,6 +168,113 @@ type TaskSwaggerDoc struct {
 	UpdatedAt        string `json:"updated_at"`
 }
 
+// AuditRunSwaggerResponse 描述审计运行详情接口的成功响应结构。
+type AuditRunSwaggerResponse struct {
+	Code    int                `json:"code"`
+	Message string             `json:"message"`
+	Data    AuditRunSwaggerDoc `json:"data"`
+	OK      bool               `json:"ok"`
+	Time    string             `json:"time"`
+}
+
+// AuditRunSwaggerDoc 描述审计运行的文档结构。
+type AuditRunSwaggerDoc struct {
+	ID             string `json:"id"`
+	TaskID         string `json:"task_id"`
+	ConversationID string `json:"conversation_id"`
+	TaskType       string `json:"task_type"`
+	ProviderID     string `json:"provider_id"`
+	ModelID        string `json:"model_id"`
+	RunnerID       string `json:"runner_id"`
+	Status         string `json:"status" enums:"queued,running,cancel_requested,cancelled,succeeded,failed"`
+	CreatedBy      string `json:"created_by"`
+	Replayable     bool   `json:"replayable"`
+	SchemaVersion  string `json:"schema_version"`
+	StartedAt      string `json:"started_at"`
+	FinishedAt     string `json:"finished_at"`
+	CreatedAt      string `json:"created_at"`
+	UpdatedAt      string `json:"updated_at"`
+}
+
+// AuditEventsSwaggerResponse 描述审计事件列表接口的成功响应结构。
+type AuditEventsSwaggerResponse struct {
+	Code    int                    `json:"code"`
+	Message string                 `json:"message"`
+	Data    []AuditEventSwaggerDoc `json:"data"`
+	OK      bool                   `json:"ok"`
+	Time    string                 `json:"time"`
+}
+
+// AuditEventSwaggerDoc 描述审计事件的文档结构。
+type AuditEventSwaggerDoc struct {
+	ID            uint64 `json:"id"`
+	RunID         string `json:"run_id"`
+	TaskID        string `json:"task_id"`
+	Seq           int64  `json:"seq"`
+	Phase         string `json:"phase"`
+	EventType     string `json:"event_type"`
+	Level         string `json:"level"`
+	StepIndex     int    `json:"step_index"`
+	ParentSeq     int64  `json:"parent_seq"`
+	RefArtifactID string `json:"ref_artifact_id"`
+	Payload       any    `json:"payload"`
+	CreatedAt     string `json:"created_at"`
+}
+
+// AuditReplaySwaggerResponse 描述审计回放包接口的成功响应结构。
+type AuditReplaySwaggerResponse struct {
+	Code    int                         `json:"code"`
+	Message string                      `json:"message"`
+	Data    AuditReplayBundleSwaggerDoc `json:"data"`
+	OK      bool                        `json:"ok"`
+	Time    string                      `json:"time"`
+}
+
+// AuditReplayBundleSwaggerDoc 描述审计回放包的文档结构。
+type AuditReplayBundleSwaggerDoc struct {
+	Run       AuditRunSwaggerDoc              `json:"run"`
+	Timeline  []AuditReplayEventSwaggerDoc    `json:"timeline"`
+	Artifacts []AuditReplayArtifactSwaggerDoc `json:"artifacts"`
+}
+
+// AuditReplayEventSwaggerDoc 描述回放时间线事件的文档结构。
+type AuditReplayEventSwaggerDoc struct {
+	Seq       int64                                 `json:"seq"`
+	Phase     string                                `json:"phase"`
+	EventType string                                `json:"event_type"`
+	Level     string                                `json:"level"`
+	StepIndex int                                   `json:"step_index"`
+	ParentSeq int64                                 `json:"parent_seq"`
+	CreatedAt string                                `json:"created_at"`
+	Payload   any                                   `json:"payload"`
+	Artifact  *AuditReplayArtifactSummarySwaggerDoc `json:"artifact"`
+}
+
+// AuditReplayArtifactSummarySwaggerDoc 描述回放时间线中引用的工件摘要。
+type AuditReplayArtifactSummarySwaggerDoc struct {
+	ID             string `json:"id"`
+	Kind           string `json:"kind"`
+	MimeType       string `json:"mime_type"`
+	Encoding       string `json:"encoding"`
+	SizeBytes      int64  `json:"size_bytes"`
+	SHA256         string `json:"sha256"`
+	RedactionState string `json:"redaction_state"`
+	CreatedAt      string `json:"created_at"`
+}
+
+// AuditReplayArtifactSwaggerDoc 描述回放包中保留的工件结构。
+type AuditReplayArtifactSwaggerDoc struct {
+	ID             string `json:"id"`
+	Kind           string `json:"kind"`
+	MimeType       string `json:"mime_type"`
+	Encoding       string `json:"encoding"`
+	SizeBytes      int64  `json:"size_bytes"`
+	SHA256         string `json:"sha256"`
+	RedactionState string `json:"redaction_state"`
+	CreatedAt      string `json:"created_at"`
+	Body           any    `json:"body"`
+}
+
 // ExampleSayHelloSwaggerResponse 描述示例接口的成功响应结构。
 type ExampleSayHelloSwaggerResponse struct {
 	Code    int    `json:"code"`

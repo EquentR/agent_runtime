@@ -17,12 +17,49 @@ type ManagerOptions struct {
 	PollInterval      time.Duration
 	LeaseDuration     time.Duration
 	HeartbeatInterval time.Duration
+	AuditRecorder     AuditRecorder
+}
+
+type AuditRun struct {
+	ID     string
+	TaskID string
+}
+
+type AuditEvent struct {
+	RunID     string
+	EventType string
+}
+
+type AuditStartRunInput struct {
+	TaskID    string
+	TaskType  string
+	RunnerID  string
+	CreatedBy string
+	Status    Status
+	StartedAt time.Time
+}
+
+type AuditAppendEventInput struct {
+	EventType string
+	Payload   any
+}
+
+type AuditFinishRunInput struct {
+	Status     Status
+	FinishedAt time.Time
+}
+
+type AuditRecorder interface {
+	StartRun(ctx context.Context, input AuditStartRunInput) (*AuditRun, error)
+	AppendEvent(ctx context.Context, runID string, input AuditAppendEventInput) (*AuditEvent, error)
+	FinishRun(ctx context.Context, runID string, input AuditFinishRunInput) error
 }
 
 // Manager 负责任务的创建、领取、串行执行、取消与事件发布。
 type Manager struct {
 	store *Store
 	hub   *EventHub
+	audit AuditRecorder
 
 	runnerID          string
 	pollInterval      time.Duration
@@ -60,6 +97,7 @@ func NewManager(store *Store, options ManagerOptions) *Manager {
 	return &Manager{
 		store:             store,
 		hub:               NewEventHub(),
+		audit:             options.AuditRecorder,
 		runnerID:          runnerID,
 		pollInterval:      pollInterval,
 		leaseDuration:     leaseDuration,
@@ -100,6 +138,7 @@ func (m *Manager) CreateTask(ctx context.Context, input CreateTaskInput) (*Task,
 	if err != nil {
 		return nil, err
 	}
+	m.recordTaskCreated(task)
 	m.publish(events...)
 	return task, nil
 }
@@ -142,12 +181,18 @@ func (m *Manager) CancelTask(ctx context.Context, id string) (*Task, error) {
 		return nil, err
 	}
 	m.publish(events...)
+	if updated.Status.IsTerminal() {
+		return updated, nil
+	}
 
 	// 尚未执行的任务可直接在管理器层完成终态转换。
-	if updated.Status == StatusCancelRequested && current.Status == StatusQueued {
+	if updated.Status == StatusCancelRequested && taskIsQueuedBeforeExecution(updated) {
 		cancelled, finishEvents, err := m.store.MarkCancelled(ctx, id, map[string]any{"message": "task cancelled before execution"})
 		if err != nil {
 			return nil, err
+		}
+		if len(finishEvents) > 0 {
+			m.recordTaskFinished(cancelled, map[string]any{"message": "task cancelled before execution"})
 		}
 		m.publish(finishEvents...)
 		return cancelled, nil
@@ -166,6 +211,7 @@ func (m *Manager) RetryTask(ctx context.Context, id string) (*Task, error) {
 	if err != nil {
 		return nil, err
 	}
+	m.recordTaskCreated(task)
 	m.publish(events...)
 	return task, nil
 }
@@ -195,6 +241,7 @@ func (m *Manager) run(ctx context.Context) {
 		}
 
 		// 2. 先发布 task.started，再执行实际任务逻辑。
+		m.recordTaskStarted(task)
 		m.publish(events...)
 		m.executeTask(ctx, task)
 	}
@@ -206,8 +253,10 @@ func (m *Manager) executeTask(ctx context.Context, task *Task) {
 	if !ok {
 		failed, events, err := m.store.MarkFailed(context.Background(), task.ID, map[string]any{"message": "executor not found"})
 		if err == nil {
+			if len(events) > 0 {
+				m.recordTaskFinished(failed, map[string]any{"message": "executor not found"})
+			}
 			m.publish(events...)
-			_ = failed
 		}
 		return
 	}
@@ -225,19 +274,26 @@ func (m *Manager) executeTask(ctx context.Context, task *Task) {
 
 	// 3. 调用注册执行器，并把任务运行时交给上层逻辑使用。
 	runtime := newRuntime(m, task.ID)
-	result, err := executor(taskCtx, task, runtime)
+	result, execErr := executor(taskCtx, task, runtime)
 
+	var finished *Task
 	var events []TaskEvent
+	var reason any
 	// 4. 根据执行结果写入最终状态。
 	switch {
-	case errors.Is(err, context.Canceled) || errors.Is(taskCtx.Err(), context.Canceled):
-		_, events, err = m.store.MarkCancelled(context.Background(), task.ID, map[string]any{"message": "task cancelled"})
-	case err != nil:
-		_, events, err = m.store.MarkFailed(context.Background(), task.ID, map[string]any{"message": err.Error()})
+	case errors.Is(execErr, context.Canceled) || errors.Is(taskCtx.Err(), context.Canceled):
+		reason = map[string]any{"message": "task cancelled"}
+		finished, events, execErr = m.store.MarkCancelled(context.Background(), task.ID, reason)
+	case execErr != nil:
+		reason = map[string]any{"message": execErr.Error()}
+		finished, events, execErr = m.store.MarkFailed(context.Background(), task.ID, reason)
 	default:
-		_, events, err = m.store.MarkSucceeded(context.Background(), task.ID, result)
+		finished, events, execErr = m.store.MarkSucceeded(context.Background(), task.ID, result)
 	}
-	if err == nil {
+	if execErr == nil {
+		if len(events) > 0 {
+			m.recordTaskFinished(finished, reason)
+		}
 		m.publish(events...)
 	}
 }
@@ -260,6 +316,91 @@ func (m *Manager) heartbeatLoop(ctx context.Context, taskID string) {
 // publish 将事件推送给所有实时订阅者。
 func (m *Manager) publish(events ...TaskEvent) {
 	m.hub.Publish(events...)
+}
+
+func (m *Manager) recordTaskCreated(task *Task) {
+	if m == nil || m.audit == nil || task == nil {
+		return
+	}
+	run, err := m.audit.StartRun(context.Background(), AuditStartRunInput{
+		TaskID:    task.ID,
+		TaskType:  task.TaskType,
+		CreatedBy: task.CreatedBy,
+		Status:    StatusQueued,
+	})
+	if err != nil || run == nil {
+		return
+	}
+	_, _ = m.audit.AppendEvent(context.Background(), run.ID, AuditAppendEventInput{
+		EventType: "run.created",
+		Payload: map[string]any{
+			"status":    task.Status,
+			"task_type": task.TaskType,
+		},
+	})
+}
+
+func (m *Manager) recordTaskStarted(task *Task) {
+	if m == nil || m.audit == nil || task == nil {
+		return
+	}
+	run, err := m.audit.StartRun(context.Background(), AuditStartRunInput{
+		TaskID:    task.ID,
+		TaskType:  task.TaskType,
+		RunnerID:  task.RunnerID,
+		CreatedBy: task.CreatedBy,
+		Status:    StatusRunning,
+		StartedAt: derefTime(task.StartedAt),
+	})
+	if err != nil || run == nil {
+		return
+	}
+	_, _ = m.audit.AppendEvent(context.Background(), run.ID, AuditAppendEventInput{
+		EventType: "run.started",
+		Payload: map[string]any{
+			"status":    task.Status,
+			"runner_id": task.RunnerID,
+		},
+	})
+}
+
+func (m *Manager) recordTaskFinished(task *Task, reason any) {
+	if m == nil || m.audit == nil || task == nil || !task.Status.IsTerminal() {
+		return
+	}
+	run, err := m.audit.StartRun(context.Background(), AuditStartRunInput{
+		TaskID:    task.ID,
+		TaskType:  task.TaskType,
+		RunnerID:  task.RunnerID,
+		CreatedBy: task.CreatedBy,
+		Status:    task.Status,
+		StartedAt: derefTime(task.StartedAt),
+	})
+	if err != nil || run == nil {
+		return
+	}
+	input := AuditAppendEventInput{
+		EventType: terminalAuditEventType(task.Status),
+		Payload: map[string]any{
+			"status": task.Status,
+		},
+	}
+	if reason != nil {
+		input.Payload = map[string]any{
+			"status": task.Status,
+			"error":  reason,
+		}
+	}
+	if input.EventType == "" {
+		return
+	}
+	if _, err := m.audit.AppendEvent(context.Background(), run.ID, input); err != nil {
+		return
+	}
+	_ = m.audit.FinishRun(context.Background(), run.ID, AuditFinishRunInput{
+		Status:     task.Status,
+		FinishedAt: derefTime(task.FinishedAt),
+	})
 }
 
 // executor 读取指定任务类型对应的执行器。
@@ -289,4 +430,31 @@ func (m *Manager) clearActiveCancel(taskID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.activeCancel, taskID)
+}
+
+func terminalAuditEventType(status Status) string {
+	switch status {
+	case StatusSucceeded:
+		return "run.succeeded"
+	case StatusFailed:
+		return "run.failed"
+	case StatusCancelled:
+		return "run.cancelled"
+	default:
+		return ""
+	}
+}
+
+func derefTime(value *time.Time) time.Time {
+	if value == nil {
+		return time.Time{}
+	}
+	return value.UTC()
+}
+
+func taskIsQueuedBeforeExecution(task *Task) bool {
+	if task == nil {
+		return false
+	}
+	return task.RunnerID == "" && task.StartedAt == nil
 }

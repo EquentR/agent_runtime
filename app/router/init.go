@@ -16,6 +16,7 @@ func Init(e *gin.Engine, baseUrl string, staticPath []rest.Static, deps Dependen
 		handlers.NewModelCatalogHandler(deps.ModelResolver, authMiddleware.RequireSession()),
 		handlers.NewTaskHandler(deps.TaskManager, deps.ConversationStore, authMiddleware.RequireSession()),
 		handlers.NewConversationHandler(deps.ConversationStore, authMiddleware.RequireSession()),
+		handlers.NewAuditHandler(deps.AuditStore, authMiddleware.RequireSession()),
 		handlers.NewSwaggerHandler(),
 	}
 	InitRouter(e, registers, baseUrl, staticPath)

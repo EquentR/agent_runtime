@@ -2,9 +2,13 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 
+	coreaudit "github.com/EquentR/agent_runtime/core/audit"
 	model "github.com/EquentR/agent_runtime/core/providers/types"
 	coretasks "github.com/EquentR/agent_runtime/core/tasks"
 	coretools "github.com/EquentR/agent_runtime/core/tools"
@@ -147,6 +151,123 @@ func TestRunnerEmitsStepAndToolEvents(t *testing.T) {
 	}
 	if sink.events[0] != "step.start" || sink.events[1] != "tool.start" || sink.events[2] != "tool.finish" || sink.events[3] != "step.finish" {
 		t.Fatalf("events = %#v, want step/tool ordering", sink.events)
+	}
+}
+
+func TestRunnerEmitsReplayableAuditArtifacts(t *testing.T) {
+	registry := newTestRegistry(t, map[string]func(context.Context, map[string]interface{}) (string, error){
+		"lookup_weather": func(context.Context, map[string]interface{}) (string, error) {
+			return "sunny", nil
+		},
+	})
+	recorder := newRecordingRunnerAuditRecorder()
+	client := &stubClient{streams: []model.Stream{
+		newStubStream(
+			[]model.StreamEvent{
+				{Type: model.StreamEventUsage, Usage: model.TokenUsage{PromptTokens: 12, CompletionTokens: 8, TotalTokens: 20}},
+				{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "lookup_weather", Arguments: `{"city":"Shanghai"}`}}}},
+			},
+			model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "lookup_weather", Arguments: `{"city":"Shanghai"}`}}},
+			nil,
+		),
+		newStubStream(
+			[]model.StreamEvent{
+				{Type: model.StreamEventUsage, Usage: model.TokenUsage{PromptTokens: 16, CompletionTokens: 4, TotalTokens: 20}},
+				{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "The weather is sunny."}},
+			},
+			model.Message{Role: model.RoleAssistant, Content: "The weather is sunny."},
+			nil,
+		),
+	}}
+
+	runner, err := NewRunner(client, registry, Options{
+		Model:         "test-model",
+		AuditRecorder: recorder,
+		AuditRunID:    "run_1",
+	})
+	if err != nil {
+		t.Fatalf("NewRunner() error = %v", err)
+	}
+
+	result, err := runner.Run(context.Background(), RunInput{
+		Messages: []model.Message{{Role: model.RoleUser, Content: "weather?"}},
+		Tools:    registry.List(),
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.FinalMessage.Content != "The weather is sunny." {
+		t.Fatalf("FinalMessage.Content = %q, want %q", result.FinalMessage.Content, "The weather is sunny.")
+	}
+
+	assertRunnerAuditEventTypes(t, recorder, "run_1",
+		"step.started",
+		"prompt.resolved",
+		"request.built",
+		"model.completed",
+		"tool.started",
+		"tool.finished",
+		"step.finished",
+		"step.started",
+		"prompt.resolved",
+		"request.built",
+		"model.completed",
+		"step.finished",
+	)
+
+	requestEvent := recorder.requireEventForStep(t, "run_1", "request.built", 1)
+	requestPayload := decodeAuditPayload(t, requestEvent)
+	if _, ok := requestPayload["messages"]; ok {
+		t.Fatalf("request payload = %#v, want compact payload without full messages", requestPayload)
+	}
+	if requestPayload["message_count"] != float64(1) {
+		t.Fatalf("request payload = %#v, want message_count=1", requestPayload)
+	}
+
+	toolStarted := recorder.requireEventForStep(t, "run_1", "tool.started", 1)
+	toolStartedPayload := decodeAuditPayload(t, toolStarted)
+	if _, ok := toolStartedPayload["arguments"]; ok {
+		t.Fatalf("tool.started payload = %#v, want compact payload without arguments", toolStartedPayload)
+	}
+	if toolStartedPayload["tool_name"] != "lookup_weather" {
+		t.Fatalf("tool.started payload = %#v, want tool_name lookup_weather", toolStartedPayload)
+	}
+
+	toolFinished := recorder.requireEventForStep(t, "run_1", "tool.finished", 1)
+	toolFinishedPayload := decodeAuditPayload(t, toolFinished)
+	if _, ok := toolFinishedPayload["output"]; ok {
+		t.Fatalf("tool.finished payload = %#v, want compact payload without output", toolFinishedPayload)
+	}
+	if toolFinishedPayload["tool_name"] != "lookup_weather" {
+		t.Fatalf("tool.finished payload = %#v, want tool_name lookup_weather", toolFinishedPayload)
+	}
+
+	requestArtifacts := recorder.requireArtifactsByKind(t, "run_1", coreaudit.ArtifactKindModelRequest)
+	if len(requestArtifacts) != 2 {
+		t.Fatalf("model request artifact count = %d, want 2", len(requestArtifacts))
+	}
+	firstRequest := decodeModelRequestArtifact(t, requestArtifacts[0])
+	if len(firstRequest.Messages) != 1 || firstRequest.Messages[0].Content != "weather?" {
+		t.Fatalf("first request messages = %#v, want single user message", firstRequest.Messages)
+	}
+	if len(firstRequest.Tools) != 1 || firstRequest.Tools[0].Name != "lookup_weather" {
+		t.Fatalf("first request tools = %#v, want lookup_weather", firstRequest.Tools)
+	}
+	secondRequest := decodeModelRequestArtifact(t, requestArtifacts[1])
+	if len(secondRequest.Messages) != 3 {
+		t.Fatalf("second request message count = %d, want 3", len(secondRequest.Messages))
+	}
+
+	toolArgsArtifact := recorder.requireArtifactByKind(t, "run_1", coreaudit.ArtifactKindToolArguments)
+	toolArgs := decodeToolArgumentsArtifact(t, toolArgsArtifact)
+	if toolArgs.ToolName != "lookup_weather" || toolArgs.Arguments != `{"city":"Shanghai"}` {
+		t.Fatalf("tool arguments artifact = %#v, want lookup_weather with original arguments", toolArgs)
+	}
+
+	toolOutputArtifact := recorder.requireArtifactByKind(t, "run_1", coreaudit.ArtifactKindToolOutput)
+	toolOutput := decodeToolOutputArtifact(t, toolOutputArtifact)
+	if toolOutput.ToolName != "lookup_weather" || toolOutput.Output != "sunny" {
+		t.Fatalf("tool output artifact = %#v, want lookup_weather sunny", toolOutput)
 	}
 }
 
@@ -491,10 +612,184 @@ type recordingTaskRuntime struct {
 	emits    []recordedEmit
 }
 
+type toolArgumentsAuditArtifact struct {
+	ToolCallID string `json:"tool_call_id,omitempty"`
+	ToolName   string `json:"tool_name"`
+	Arguments  string `json:"arguments,omitempty"`
+}
+
+type toolOutputAuditArtifact struct {
+	ToolCallID string `json:"tool_call_id,omitempty"`
+	ToolName   string `json:"tool_name"`
+	Output     string `json:"output,omitempty"`
+	Error      string `json:"error,omitempty"`
+}
+
 type recordedEmit struct {
 	eventType string
 	level     string
 	payload   any
+}
+
+type recordingRunnerAuditRecorder struct {
+	mu               sync.Mutex
+	eventsByRunID    map[string][]*coreaudit.Event
+	artifactsByRunID map[string][]*coreaudit.Artifact
+	seqByRunID       map[string]int64
+}
+
+func newRecordingRunnerAuditRecorder() *recordingRunnerAuditRecorder {
+	return &recordingRunnerAuditRecorder{
+		eventsByRunID:    make(map[string][]*coreaudit.Event),
+		artifactsByRunID: make(map[string][]*coreaudit.Artifact),
+		seqByRunID:       make(map[string]int64),
+	}
+}
+
+func (r *recordingRunnerAuditRecorder) StartRun(_ context.Context, input coreaudit.StartRunInput) (*coreaudit.Run, error) {
+	return &coreaudit.Run{ID: input.RunID, TaskID: input.TaskID, TaskType: input.TaskType}, nil
+}
+
+func (r *recordingRunnerAuditRecorder) AppendEvent(_ context.Context, runID string, input coreaudit.AppendEventInput) (*coreaudit.Event, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	payloadJSON, err := json.Marshal(input.Payload)
+	if err != nil {
+		return nil, err
+	}
+	r.seqByRunID[runID]++
+	event := &coreaudit.Event{
+		RunID:         runID,
+		Seq:           r.seqByRunID[runID],
+		Phase:         input.Phase,
+		EventType:     input.EventType,
+		Level:         input.Level,
+		StepIndex:     input.StepIndex,
+		ParentSeq:     input.ParentSeq,
+		RefArtifactID: input.RefArtifactID,
+		PayloadJSON:   payloadJSON,
+	}
+	r.eventsByRunID[runID] = append(r.eventsByRunID[runID], event)
+	return cloneAuditEvent(event), nil
+}
+
+func (r *recordingRunnerAuditRecorder) AttachArtifact(_ context.Context, runID string, input coreaudit.CreateArtifactInput) (*coreaudit.Artifact, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	bodyJSON, err := json.Marshal(input.Body)
+	if err != nil {
+		return nil, err
+	}
+	artifact := &coreaudit.Artifact{
+		ID:       firstNonEmpty(input.ArtifactID, fmt.Sprintf("art_%d", len(r.artifactsByRunID[runID])+1)),
+		RunID:    runID,
+		Kind:     input.Kind,
+		MimeType: input.MimeType,
+		Encoding: input.Encoding,
+		BodyJSON: bodyJSON,
+	}
+	r.artifactsByRunID[runID] = append(r.artifactsByRunID[runID], artifact)
+	return cloneAuditArtifact(artifact), nil
+}
+
+func (r *recordingRunnerAuditRecorder) FinishRun(context.Context, string, coreaudit.FinishRunInput) error {
+	return nil
+}
+
+func (r *recordingRunnerAuditRecorder) requireEventForStep(t *testing.T, runID string, eventType string, step int) *coreaudit.Event {
+	t.Helper()
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, event := range r.eventsByRunID[runID] {
+		if event.EventType == eventType && event.StepIndex == step {
+			return cloneAuditEvent(event)
+		}
+	}
+	t.Fatalf("run %q did not record audit event %q for step %d", runID, eventType, step)
+	return nil
+}
+
+func (r *recordingRunnerAuditRecorder) requireArtifactByKind(t *testing.T, runID string, kind coreaudit.ArtifactKind) *coreaudit.Artifact {
+	t.Helper()
+
+	artifacts := r.requireArtifactsByKind(t, runID, kind)
+	return artifacts[0]
+}
+
+func (r *recordingRunnerAuditRecorder) requireArtifactsByKind(t *testing.T, runID string, kind coreaudit.ArtifactKind) []*coreaudit.Artifact {
+	t.Helper()
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var artifacts []*coreaudit.Artifact
+	for _, artifact := range r.artifactsByRunID[runID] {
+		if artifact.Kind == kind {
+			artifacts = append(artifacts, cloneAuditArtifact(artifact))
+		}
+	}
+	if len(artifacts) == 0 {
+		t.Fatalf("run %q did not record artifact kind %q", runID, kind)
+	}
+	return artifacts
+}
+
+func (r *recordingRunnerAuditRecorder) eventTypes(runID string) []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	events := r.eventsByRunID[runID]
+	result := make([]string, 0, len(events))
+	for _, event := range events {
+		result = append(result, event.EventType)
+	}
+	return result
+}
+
+func assertRunnerAuditEventTypes(t *testing.T, recorder *recordingRunnerAuditRecorder, runID string, want ...string) {
+	t.Helper()
+
+	got := recorder.eventTypes(runID)
+	if len(got) != len(want) {
+		t.Fatalf("audit event count = %d, want %d (%v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("audit events = %v, want %v", got, want)
+		}
+	}
+}
+
+func decodeModelRequestArtifact(t *testing.T, artifact *coreaudit.Artifact) model.ChatRequest {
+	t.Helper()
+
+	var request model.ChatRequest
+	if err := json.Unmarshal(artifact.BodyJSON, &request); err != nil {
+		t.Fatalf("decode model_request artifact error = %v", err)
+	}
+	return request
+}
+
+func decodeToolArgumentsArtifact(t *testing.T, artifact *coreaudit.Artifact) toolArgumentsAuditArtifact {
+	t.Helper()
+
+	var snapshot toolArgumentsAuditArtifact
+	if err := json.Unmarshal(artifact.BodyJSON, &snapshot); err != nil {
+		t.Fatalf("decode tool_arguments artifact error = %v", err)
+	}
+	return snapshot
+}
+
+func decodeToolOutputArtifact(t *testing.T, artifact *coreaudit.Artifact) toolOutputAuditArtifact {
+	t.Helper()
+
+	var snapshot toolOutputAuditArtifact
+	if err := json.Unmarshal(artifact.BodyJSON, &snapshot); err != nil {
+		t.Fatalf("decode tool_output artifact error = %v", err)
+	}
+	return snapshot
 }
 
 func (r *recordingTaskRuntime) StartStep(_ context.Context, key string, title string) error {

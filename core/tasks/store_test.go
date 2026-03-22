@@ -115,6 +115,106 @@ func TestStoreRequestCancelTransitionsRunningTask(t *testing.T) {
 	}
 }
 
+func TestStoreRequestCancelDoesNotOverwriteTerminalTask(t *testing.T) {
+	store := newTestStore(t)
+
+	created, _, err := store.CreateTask(context.Background(), CreateTaskInput{TaskType: "agent.run"})
+	if err != nil {
+		t.Fatalf("CreateTask() error = %v", err)
+	}
+	if _, _, err := store.ClaimNextTask(context.Background(), "runner-1", 30*time.Second); err != nil {
+		t.Fatalf("ClaimNextTask() error = %v", err)
+	}
+	if _, _, err := store.MarkSucceeded(context.Background(), created.ID, map[string]any{"message": "done"}); err != nil {
+		t.Fatalf("MarkSucceeded() error = %v", err)
+	}
+
+	updated, events, err := store.RequestCancel(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("RequestCancel() error = %v", err)
+	}
+	if updated.Status != StatusSucceeded {
+		t.Fatalf("updated status = %q, want %q", updated.Status, StatusSucceeded)
+	}
+	if len(events) != 0 {
+		t.Fatalf("len(events) = %d, want 0", len(events))
+	}
+
+	persisted, err := store.GetTask(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("GetTask() error = %v", err)
+	}
+	if persisted.Status != StatusSucceeded {
+		t.Fatalf("persisted status = %q, want %q", persisted.Status, StatusSucceeded)
+	}
+	if persisted.FinishedAt == nil {
+		t.Fatal("finished_at = nil, want timestamp")
+	}
+	if got := decodeJSONRaw(t, persisted.ResultJSON)["message"]; got != "done" {
+		t.Fatalf("result message = %#v, want %q", got, "done")
+	}
+	listed, err := store.ListEvents(context.Background(), created.ID, 0, 10)
+	if err != nil {
+		t.Fatalf("ListEvents() error = %v", err)
+	}
+	for _, event := range listed {
+		if event.EventType == EventTaskCancelRequested {
+			t.Fatalf("unexpected event type %q after late cancel", event.EventType)
+		}
+	}
+}
+
+func TestStoreFinishTaskKeepsExistingTerminalState(t *testing.T) {
+	store := newTestStore(t)
+
+	created, _, err := store.CreateTask(context.Background(), CreateTaskInput{TaskType: "agent.run"})
+	if err != nil {
+		t.Fatalf("CreateTask() error = %v", err)
+	}
+	if _, _, err := store.ClaimNextTask(context.Background(), "runner-1", 30*time.Second); err != nil {
+		t.Fatalf("ClaimNextTask() error = %v", err)
+	}
+	first, firstEvents, err := store.MarkSucceeded(context.Background(), created.ID, map[string]any{"message": "done"})
+	if err != nil {
+		t.Fatalf("MarkSucceeded() error = %v", err)
+	}
+	if first.Status != StatusSucceeded || len(firstEvents) != 1 {
+		t.Fatalf("first terminal write = (%q, %d events), want (%q, 1)", first.Status, len(firstEvents), StatusSucceeded)
+	}
+
+	second, secondEvents, err := store.MarkCancelled(context.Background(), created.ID, map[string]any{"message": "too late"})
+	if err != nil {
+		t.Fatalf("MarkCancelled() error = %v", err)
+	}
+	if second.Status != StatusSucceeded {
+		t.Fatalf("second status = %q, want preserved %q", second.Status, StatusSucceeded)
+	}
+	if len(secondEvents) != 0 {
+		t.Fatalf("len(secondEvents) = %d, want 0", len(secondEvents))
+	}
+
+	persisted, err := store.GetTask(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("GetTask() error = %v", err)
+	}
+	if persisted.Status != StatusSucceeded {
+		t.Fatalf("persisted status = %q, want %q", persisted.Status, StatusSucceeded)
+	}
+	if got := decodeJSONRaw(t, persisted.ResultJSON)["message"]; got != "done" {
+		t.Fatalf("result message = %#v, want %q", got, "done")
+	}
+	listed, err := store.ListEvents(context.Background(), created.ID, 0, 10)
+	if err != nil {
+		t.Fatalf("ListEvents() error = %v", err)
+	}
+	if len(listed) != 3 {
+		t.Fatalf("event count = %d, want 3", len(listed))
+	}
+	if listed[2].EventType != EventTaskFinished {
+		t.Fatalf("last event = %q, want %q", listed[2].EventType, EventTaskFinished)
+	}
+}
+
 // TestStoreRetryTaskCreatesNewQueuedTaskLinkedToOriginal 验证重试会生成新的排队任务并关联原任务。
 func TestStoreRetryTaskCreatesNewQueuedTaskLinkedToOriginal(t *testing.T) {
 	store := newTestStore(t)

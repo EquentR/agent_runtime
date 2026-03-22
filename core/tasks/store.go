@@ -14,6 +14,8 @@ import (
 
 var ErrTaskNotFound = errors.New("task not found")
 
+var terminalTaskStatuses = []Status{StatusCancelled, StatusSucceeded, StatusFailed}
+
 // Store 封装任务快照与事件流的数据库访问逻辑。
 type Store struct {
 	db *gorm.DB
@@ -150,6 +152,7 @@ func (s *Store) ClaimNextTask(ctx context.Context, runnerID string, lease time.D
 func (s *Store) RequestCancel(ctx context.Context, id string) (*Task, []TaskEvent, error) {
 	var task *Task
 	var event TaskEvent
+	var events []TaskEvent
 
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		// 1. 读取并锁定当前任务快照。
@@ -157,14 +160,31 @@ func (s *Store) RequestCancel(ctx context.Context, id string) (*Task, []TaskEven
 		if err != nil {
 			return err
 		}
+		if loaded.Status.IsTerminal() || loaded.Status == StatusCancelRequested {
+			task = loaded
+			return nil
+		}
 
 		now := time.Now().UTC()
 		// 2. 更新状态与取消时间。
-		loaded.Status = StatusCancelRequested
-		loaded.CancelRequestedAt = &now
-		if err := tx.Save(loaded).Error; err != nil {
+		result := tx.Model(&Task{}).
+			Where("id = ?", loaded.ID).
+			Where("status NOT IN ?", terminalTaskStatuses).
+			Where("status <> ?", StatusCancelRequested).
+			Updates(map[string]any{
+				"status":              StatusCancelRequested,
+				"cancel_requested_at": now,
+				"updated_at":          now,
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			task, err = loadTaskTx(tx, id)
 			return err
 		}
+		loaded.Status = StatusCancelRequested
+		loaded.CancelRequestedAt = &now
 
 		// 3. 追加 task.cancel_requested 事件。
 		event, err = appendEventTx(tx, loaded.ID, EventTaskCancelRequested, "info", map[string]any{
@@ -174,12 +194,13 @@ func (s *Store) RequestCancel(ctx context.Context, id string) (*Task, []TaskEven
 			return err
 		}
 		task = loaded
+		events = []TaskEvent{event}
 		return nil
 	})
 	if err != nil {
 		return nil, nil, err
 	}
-	return task, []TaskEvent{event}, nil
+	return task, events, nil
 }
 
 // MarkSucceeded 将任务推进到 succeeded 终态。
@@ -359,11 +380,16 @@ func (s *Store) AppendEvent(ctx context.Context, taskID string, eventType string
 func (s *Store) finishTask(ctx context.Context, id string, status Status, result any, reason any) (*Task, []TaskEvent, error) {
 	var task *Task
 	var event TaskEvent
+	var events []TaskEvent
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		// 1. 读取当前任务快照。
 		loaded, err := loadTaskTx(tx, id)
 		if err != nil {
 			return err
+		}
+		if loaded.Status.IsTerminal() {
+			task = loaded
+			return nil
 		}
 		now := time.Now().UTC()
 		resultJSON, err := marshalJSON(result, false)
@@ -375,15 +401,31 @@ func (s *Store) finishTask(ctx context.Context, id string, status Status, result
 			return err
 		}
 		// 2. 写入终态结果、错误信息与收尾时间。
+		resultTx := tx.Model(&Task{}).
+			Where("id = ?", loaded.ID).
+			Where("status NOT IN ?", terminalTaskStatuses).
+			Updates(map[string]any{
+				"status":           status,
+				"result_json":      resultJSON,
+				"error_json":       errorJSON,
+				"finished_at":      now,
+				"lease_expires_at": nil,
+				"heartbeat_at":     now,
+				"updated_at":       now,
+			})
+		if resultTx.Error != nil {
+			return resultTx.Error
+		}
+		if resultTx.RowsAffected == 0 {
+			task, err = loadTaskTx(tx, id)
+			return err
+		}
 		loaded.Status = status
 		loaded.ResultJSON = resultJSON
 		loaded.ErrorJSON = errorJSON
 		loaded.FinishedAt = &now
 		loaded.LeaseExpiresAt = nil
 		loaded.HeartbeatAt = &now
-		if err := tx.Save(loaded).Error; err != nil {
-			return err
-		}
 		// 3. 追加 task.finished 事件，形成快照与事件流的一致提交。
 		event, err = appendEventTx(tx, loaded.ID, EventTaskFinished, "info", map[string]any{
 			"status": status,
@@ -393,12 +435,13 @@ func (s *Store) finishTask(ctx context.Context, id string, status Status, result
 			return err
 		}
 		task = loaded
+		events = []TaskEvent{event}
 		return nil
 	})
 	if err != nil {
 		return nil, nil, err
 	}
-	return task, []TaskEvent{event}, nil
+	return task, events, nil
 }
 
 // newTask 根据创建输入构造标准化的任务快照。

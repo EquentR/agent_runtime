@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"github.com/EquentR/agent_runtime/app/migration"
 	"github.com/EquentR/agent_runtime/app/router"
 	coreagent "github.com/EquentR/agent_runtime/core/agent"
+	coreaudit "github.com/EquentR/agent_runtime/core/audit"
 	googleclient "github.com/EquentR/agent_runtime/core/providers/client/google"
 	openaicompletions "github.com/EquentR/agent_runtime/core/providers/client/openai_completions"
 	openairesponses "github.com/EquentR/agent_runtime/core/providers/client/openai_responses"
@@ -22,6 +24,7 @@ import (
 	"github.com/EquentR/agent_runtime/pkg/db"
 	"github.com/EquentR/agent_runtime/pkg/log"
 	"github.com/EquentR/agent_runtime/pkg/rest"
+	"gorm.io/gorm"
 )
 
 // Serve 负责装配应用依赖并启动 HTTP 服务。
@@ -43,8 +46,13 @@ func Serve(c *config.Config, version, commit string) {
 
 	// 初始化任务持久层与后台管理器，为后续 agent executor 预留接入点。
 	taskStore := coretasks.NewStore(db.DB())
+	auditRuntime, err := initAuditRuntime(db.DB())
+	if err != nil {
+		log.Panicf("Failed to init audit runtime: %v", err)
+	}
 	taskManager := coretasks.NewManager(taskStore, coretasks.ManagerOptions{
-		RunnerID: "example-agent",
+		RunnerID:      "example-agent",
+		AuditRecorder: auditRuntime.TaskRecorder,
 	})
 	conversationStore := coreagent.NewConversationStore(db.DB())
 	if err := conversationStore.AutoMigrate(); err != nil {
@@ -59,23 +67,13 @@ func Serve(c *config.Config, version, commit string) {
 		log.Panicf("Failed to register builtin tools: %v", err)
 	}
 	resolver := &coreagent.ModelResolver{Providers: c.LLM}
-	if err := taskManager.RegisterExecutor("agent.run", coreagent.NewTaskExecutor(coreagent.ExecutorDependencies{
-		Resolver:          resolver,
-		ConversationStore: conversationStore,
-		Registry:          toolRegistry,
-		ClientFactory:     buildLLMClientFactory(),
-	})); err != nil {
+	if err := registerAgentRunExecutor(taskManager, resolver, conversationStore, toolRegistry, buildLLMClientFactory(), auditRuntime.RunRecorder); err != nil {
 		log.Panicf("Failed to register agent.run executor: %v", err)
 	}
 	taskManager.Start(globalCtx)
 
 	// 将任务管理器作为依赖注入路由层。
-	router.Init(engine, c.Server.ApiBasePath, c.Server.StaticPaths, router.Dependencies{
-		TaskManager:       taskManager,
-		ConversationStore: conversationStore,
-		ModelResolver:     resolver,
-		AuthLogic:         authLogic,
-	})
+	router.Init(engine, c.Server.ApiBasePath, c.Server.StaticPaths, buildRouterDependencies(taskManager, conversationStore, auditRuntime.Store, resolver, authLogic))
 
 	addr := fmt.Sprintf("%s:%d", c.Server.Host, c.Server.Port)
 	ln, err := net.Listen("tcp", addr)
@@ -116,6 +114,48 @@ func buildLLMClientFactory() coreagent.ClientFactory {
 	}
 }
 
+func registerAgentRunExecutor(taskManager *coretasks.Manager, resolver *coreagent.ModelResolver, conversationStore *coreagent.ConversationStore, toolRegistry *coretools.Registry, clientFactory coreagent.ClientFactory, auditRecorder coreaudit.Recorder) error {
+	if taskManager == nil {
+		return fmt.Errorf("task manager is required")
+	}
+	return taskManager.RegisterExecutor("agent.run", coreagent.NewTaskExecutor(coreagent.ExecutorDependencies{
+		Resolver:          resolver,
+		ConversationStore: conversationStore,
+		Registry:          toolRegistry,
+		ClientFactory:     clientFactory,
+		AuditRecorder:     auditRecorder,
+	}))
+}
+
+func buildRouterDependencies(taskManager *coretasks.Manager, conversationStore *coreagent.ConversationStore, auditStore *coreaudit.Store, resolver *coreagent.ModelResolver, authLogic *logics.AuthLogic) router.Dependencies {
+	return router.Dependencies{
+		TaskManager:       taskManager,
+		ConversationStore: conversationStore,
+		AuditStore:        auditStore,
+		ModelResolver:     resolver,
+		AuthLogic:         authLogic,
+	}
+}
+
+type auditRuntime struct {
+	Store        *coreaudit.Store
+	RunRecorder  coreaudit.Recorder
+	TaskRecorder coretasks.AuditRecorder
+}
+
+func initAuditRuntime(database *gorm.DB) (*auditRuntime, error) {
+	if database == nil {
+		return nil, fmt.Errorf("audit runtime db is required")
+	}
+	store := coreaudit.NewStore(database)
+	runRecorder := coreaudit.NewRecorder(store)
+	return &auditRuntime{
+		Store:        store,
+		RunRecorder:  runRecorder,
+		TaskRecorder: newTaskAuditRecorder(runRecorder),
+	}, nil
+}
+
 func newDefaultToolRegistry(workspaceRoot string) (*coretools.Registry, error) {
 	registry := coretools.NewRegistry()
 	// 检查 workspace 是否为空；为空时使用当前工作目录；有值时确保目录存在，不存在则创建。
@@ -134,4 +174,49 @@ func newDefaultToolRegistry(workspaceRoot string) (*coretools.Registry, error) {
 		return nil, err
 	}
 	return registry, nil
+}
+
+type taskAuditRecorder struct {
+	recorder coreaudit.Recorder
+}
+
+func newTaskAuditRecorder(recorder coreaudit.Recorder) coretasks.AuditRecorder {
+	if recorder == nil {
+		return nil
+	}
+	return &taskAuditRecorder{recorder: recorder}
+}
+
+func (r *taskAuditRecorder) StartRun(ctx context.Context, input coretasks.AuditStartRunInput) (*coretasks.AuditRun, error) {
+	run, err := r.recorder.StartRun(ctx, coreaudit.StartRunInput{
+		TaskID:        input.TaskID,
+		TaskType:      input.TaskType,
+		RunnerID:      input.RunnerID,
+		CreatedBy:     input.CreatedBy,
+		Status:        coreaudit.Status(input.Status),
+		StartedAt:     input.StartedAt,
+		SchemaVersion: coreaudit.SchemaVersionV1,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &coretasks.AuditRun{ID: run.ID, TaskID: run.TaskID}, nil
+}
+
+func (r *taskAuditRecorder) AppendEvent(ctx context.Context, runID string, input coretasks.AuditAppendEventInput) (*coretasks.AuditEvent, error) {
+	event, err := r.recorder.AppendEvent(ctx, runID, coreaudit.AppendEventInput{
+		EventType: input.EventType,
+		Payload:   input.Payload,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &coretasks.AuditEvent{RunID: event.RunID, EventType: event.EventType}, nil
+}
+
+func (r *taskAuditRecorder) FinishRun(ctx context.Context, runID string, input coretasks.AuditFinishRunInput) error {
+	return r.recorder.FinishRun(ctx, runID, coreaudit.FinishRunInput{
+		Status:     coreaudit.Status(input.Status),
+		FinishedAt: input.FinishedAt,
+	})
 }

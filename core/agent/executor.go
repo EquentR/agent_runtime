@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	coreaudit "github.com/EquentR/agent_runtime/core/audit"
 	"github.com/EquentR/agent_runtime/core/memory"
 	model "github.com/EquentR/agent_runtime/core/providers/types"
 	coretasks "github.com/EquentR/agent_runtime/core/tasks"
@@ -75,6 +76,7 @@ type ExecutorDependencies struct {
 	ClientFactory     ClientFactory
 	MemoryFactory     MemoryFactory
 	NewEventSink      EventSinkFactory
+	AuditRecorder     coreaudit.Recorder
 }
 
 func (r *ModelResolver) Resolve(providerID, modelID string) (*ResolvedModel, error) {
@@ -151,7 +153,7 @@ func (r *ModelResolver) findProvider(providerID string) *coretypes.LLMProvider {
 }
 
 func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
-	return func(ctx context.Context, task *coretasks.Task, runtime *coretasks.Runtime) (any, error) {
+	return func(ctx context.Context, task *coretasks.Task, runtime *coretasks.Runtime) (output any, execErr error) {
 		if task == nil {
 			return nil, fmt.Errorf("task is required")
 		}
@@ -165,10 +167,27 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 			return nil, fmt.Errorf("client factory is required")
 		}
 
+		auditor := newExecutorAuditor(deps.AuditRecorder, task, RunTaskInput{CreatedBy: task.CreatedBy})
+		var (
+			partialMessages []model.Message
+			snapshotErr     error
+		)
+		defer func() {
+			if execErr == nil {
+				return
+			}
+			auditErr := execErr
+			if snapshotErr != nil {
+				auditErr = snapshotErr
+			}
+			auditor.recordErrorSnapshot(ctx, auditErr, partialMessages)
+		}()
+
 		var input RunTaskInput
 		if err := json.Unmarshal(task.InputJSON, &input); err != nil {
 			return nil, err
 		}
+		auditor.setInput(input)
 
 		resolved, err := deps.Resolver.Resolve(input.ProviderID, input.ModelID)
 		if err != nil {
@@ -185,10 +204,12 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 		if err != nil {
 			return nil, err
 		}
+		auditor.setConversation(conversation)
 		history, err := deps.ConversationStore.ListMessages(ctx, conversation.ID)
 		if err != nil {
 			return nil, err
 		}
+		auditor.recordConversationLoaded(ctx, history)
 		client, err := deps.ClientFactory(provider, llmModel)
 		if err != nil {
 			return nil, err
@@ -203,12 +224,16 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 		} else if runtime != nil {
 			sink = NewTaskRuntimeSink(runtime)
 		}
+		runID := auditor.ensureRun(ctx)
 		runner, err := NewRunner(client, deps.Registry, Options{
-			LLMModel:     llmModel,
-			Memory:       memoryManager,
-			SystemPrompt: input.SystemPrompt,
-			EventSink:    sink,
-			Actor:        "agent.run",
+			LLMModel:      llmModel,
+			Memory:        memoryManager,
+			SystemPrompt:  input.SystemPrompt,
+			EventSink:     sink,
+			TaskID:        task.ID,
+			AuditRecorder: deps.AuditRecorder,
+			AuditRunID:    runID,
+			Actor:         "agent.run",
 			Metadata: map[string]string{
 				"conversation_id": conversation.ID,
 				"provider_id":     conversation.ProviderID,
@@ -223,23 +248,30 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 			return nil, err
 		}
 		messages := append(cloneMessages(history), userMessage)
+		auditor.recordUserMessageAppended(ctx, userMessage, messages)
 		result, err := runner.Run(ctx, RunInput{Messages: messages})
 		if err != nil {
+			snapshotErr = err
+			partialMessages = cloneMessages(result.Messages)
 			if len(result.Messages) > 0 {
 				if appendErr := deps.ConversationStore.AppendMessages(ctx, conversation.ID, task.ID, result.Messages); appendErr != nil {
 					return nil, appendErr
 				}
+				auditor.recordMessagesPersisted(ctx, result.Messages)
 			}
 			failureMessage := model.Message{Role: model.RoleSystem, Content: fmt.Sprintf("Run failed: %s", err.Error())}
 			if appendErr := deps.ConversationStore.AppendMessages(ctx, conversation.ID, task.ID, []model.Message{failureMessage}); appendErr != nil {
 				return nil, appendErr
 			}
+			auditor.recordMessagesPersisted(ctx, []model.Message{failureMessage})
 			return nil, err
 		}
 		result = attachUsageToPersistedAssistantReply(result, input.ProviderID, input.ModelID)
+		partialMessages = cloneMessages(result.Messages)
 		if err := deps.ConversationStore.AppendMessages(ctx, conversation.ID, task.ID, result.Messages); err != nil {
 			return nil, err
 		}
+		auditor.recordMessagesPersisted(ctx, result.Messages)
 		return RunTaskResult{
 			ConversationID:   conversation.ID,
 			ProviderID:       conversation.ProviderID,
