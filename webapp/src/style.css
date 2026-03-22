@@ -1454,6 +1454,7 @@ p {
   gap: 0.65rem;
   padding-top: 0.5rem;
   border-top: 1px solid rgba(25, 50, 59, 0.08);
+  position: relative;
 }
 
 .sidebar-account.collapsed {
@@ -1483,12 +1484,129 @@ p {
   text-overflow: ellipsis;
 }
 
-.sidebar-account-logout {
+.sidebar-user-menu-trigger {
+  flex: 0 0 auto;
+  width: 2.25rem;
+  height: 2.25rem;
+}
+
+.sidebar-user-menu-anchor {
+  position: relative;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sidebar-user-menu-trigger.compact {
+  width: 2.25rem;
+  height: 2.25rem;
+}
+
+.sidebar-user-menu-panel {
+  width: max-content;
+  min-width: 148px;
+  max-width: min(260px, calc(100vw - 2rem));
+  z-index: 36;
+  padding: 0.55rem;
+  border-radius: 16px;
+  border: 1px solid rgba(25, 50, 59, 0.1);
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 22px 44px rgba(39, 61, 68, 0.16);
+}
+
+.sidebar-user-menu-panel.compact {
+  transform-origin: right bottom;
+}
+
+.sidebar-admin-link,
+.sidebar-user-menu-logout {
+  text-decoration: none;
+}
+
+.sidebar-user-menu-option {
+  width: 100%;
+  margin-top: 0.08rem;
+  padding: 0.48rem 0.58rem 0.48rem 0.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: #203840;
+  text-align: left;
+  font-size: 0.8rem;
+}
+
+.sidebar-user-menu-option:hover,
+.sidebar-user-menu-option.active {
+  background: linear-gradient(135deg, rgba(255, 232, 210, 0.86), rgba(236, 245, 247, 0.9));
+}
+
+.sidebar-user-menu-option-check {
+  width: 0.3rem;
+  height: 0.82rem;
+  flex: 0 0 auto;
+  position: relative;
+}
+
+.sidebar-user-menu-option-label {
+  min-width: 0;
+  font-size: 0.8rem;
+  line-height: 1.25;
+}
+
+.sidebar-user-menu-logout {
+  width: 100%;
+}
+
+.sidebar-user-menu-logout svg,
+.sidebar-admin-link svg {
+  width: 0.9rem;
+  height: 0.9rem;
   flex: 0 0 auto;
 }
 
-.sidebar-logout-confirm {
-  margin-top: -0.15rem;
+.sidebar-confirm-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  background: rgba(25, 50, 59, 0.28);
+}
+
+.sidebar-confirm-dialog {
+  width: min(420px, calc(100vw - 2rem));
+  padding: 1.15rem 1.1rem;
+  border-radius: 18px;
+  border: 1px solid rgba(25, 50, 59, 0.1);
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 24px 48px rgba(31, 59, 68, 0.18);
+}
+
+.sidebar-confirm-dialog h3 {
+  margin: 0;
+  color: #1f3b44;
+  font-size: 1.05rem;
+}
+
+.sidebar-confirm-dialog p {
+  margin: 0.55rem 0 0;
+  color: #60767d;
+}
+
+.sidebar-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.6rem;
+  margin-top: 1rem;
+}
+
+.sidebar-confirm-confirm {
+  background: rgba(196, 88, 63, 0.12);
+  color: #a24b37;
 }
 
 .sidebar-backdrop {
@@ -1497,7 +1615,9 @@ p {
   z-index: 20;
   border: 0;
   padding: 0;
-  background: rgba(25, 50, 59, 0.2);
+  background: rgba(25, 50, 59, 0.26);
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
 }
 
 .admin-audit-shell {
@@ -1511,6 +1631,11 @@ p {
 
 .admin-audit-topbar {
   flex: 0 0 auto;
+}
+
+.admin-audit-back-link {
+  flex: 0 0 auto;
+  text-decoration: none;
 }
 
 .admin-audit-content {
@@ -1532,6 +1657,13 @@ p {
   border: 1px solid rgba(25, 50, 59, 0.08);
   background: rgba(245, 249, 249, 0.85);
   padding: 0.85rem 0.95rem;
+}
+
+.admin-audit-summary-card h2,
+.admin-audit-card h2 {
+  margin: 0;
+  color: #1f3b44;
+  font-size: 1rem;
 }
 
 .admin-audit-summary-card dl,
@@ -1568,7 +1700,7 @@ p {
 .admin-audit-artifact-panel {
   min-height: 0;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
   gap: 0.7rem;
 }
 
@@ -1664,6 +1796,136 @@ p {
   font-size: 0.78rem;
 }
 
+.admin-audit-conversation {
+  align-items: stretch;
+}
+
+.admin-audit-conversation-main {
+  min-width: 0;
+  width: 100%;
+}
+
+.admin-audit-conversation-row {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.admin-audit-conversation-row .conversation-title {
+  width: 100%;
+  min-width: 0;
+}
+
+.admin-audit-conversation-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+.admin-audit-conversation-meta .truncate-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.admin-audit-conversation-time {
+  flex: 0 0 auto;
+  font-size: 0.72rem;
+  color: #7d8f94;
+  white-space: nowrap;
+}
+
+.admin-audit-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding-bottom: 0.15rem;
+  background: linear-gradient(180deg, rgba(245, 249, 249, 0.98), rgba(245, 249, 249, 0.9));
+}
+
+.admin-audit-filter {
+  border: 1px solid rgba(25, 50, 59, 0.08);
+  background: rgba(255, 255, 255, 0.82);
+  color: #53707a;
+  border-radius: 999px;
+  padding: 0.38rem 0.72rem;
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.admin-audit-filter.active {
+  background: rgba(196, 88, 63, 0.12);
+  border-color: rgba(196, 88, 63, 0.22);
+  color: #a24b37;
+}
+
+.admin-audit-entry-icon {
+  width: 1.7rem;
+  height: 1.7rem;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+}
+
+.admin-audit-entry-icon svg {
+  width: 0.92rem;
+  height: 0.92rem;
+}
+
+.admin-audit-entry-icon.tone-request,
+.admin-audit-timeline-item.tone-request .admin-audit-artifact-chip {
+  background: rgba(177, 132, 84, 0.14);
+  color: #9b693e;
+}
+
+.admin-audit-entry-icon.tone-tool,
+.admin-audit-timeline-item.tone-tool .admin-audit-artifact-chip {
+  background: rgba(88, 144, 162, 0.14);
+  color: #487f90;
+}
+
+.admin-audit-entry-icon.tone-error,
+.admin-audit-timeline-item.tone-error .admin-audit-artifact-chip {
+  background: rgba(196, 88, 63, 0.16);
+  color: #ad4f3a;
+}
+
+.admin-audit-entry-icon.tone-run,
+.admin-audit-timeline-item.tone-run .admin-audit-artifact-chip {
+  background: rgba(92, 152, 110, 0.14);
+  color: #4a7f58;
+}
+
+.admin-audit-timeline-item.tone-request {
+  border-left: 4px solid rgba(177, 132, 84, 0.38);
+}
+
+.admin-audit-timeline-item.tone-tool {
+  border-left: 4px solid rgba(88, 144, 162, 0.38);
+}
+
+.admin-audit-timeline-item.tone-error {
+  border-left: 4px solid rgba(196, 88, 63, 0.42);
+}
+
+.admin-audit-timeline-item.tone-run {
+  border-left: 4px solid rgba(92, 152, 110, 0.36);
+}
+
+.admin-audit-timeline-empty {
+  margin: 0;
+  min-height: 120px;
+  display: grid;
+  place-items: center;
+  text-align: center;
+}
+
 @keyframes rise-in {
   from {
     opacity: 0;
@@ -1714,6 +1976,10 @@ p {
     bottom: 0.9rem;
     width: min(320px, calc(100vw - 1.8rem));
     z-index: 30;
+    background: rgba(255, 252, 247, 0.94);
+    -webkit-backdrop-filter: blur(18px);
+    backdrop-filter: blur(18px);
+    box-shadow: 0 28px 56px rgba(26, 47, 56, 0.18);
     transform: translateX(calc(-100% - 1rem));
     opacity: 0;
     pointer-events: none;

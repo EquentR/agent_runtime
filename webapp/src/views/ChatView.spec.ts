@@ -1,6 +1,11 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createRouter, createMemoryHistory } from 'vue-router'
+
+const chatStyles = readFileSync(resolve(process.cwd(), 'src/style.css'), 'utf8')
 
 const api = vi.hoisted(() => ({
   TASK_STREAM_ABORTED_MESSAGE: 'Task event stream aborted',
@@ -171,10 +176,16 @@ describe('ChatView', () => {
 
     await flushPromises()
 
-    const link = wrapper.find('.topbar-audit-link')
-    expect(link.exists()).toBe(true)
-    expect(link.text()).toContain('审计')
-    expect(link.attributes('href')).toBe('/admin/audit')
+    const trigger = wrapper.find('.sidebar-user-menu-trigger')
+    expect(trigger.exists()).toBe(true)
+    await trigger.trigger('click')
+    await flushPromises()
+
+    const link = document.body.querySelector('.sidebar-admin-link') as HTMLAnchorElement | null
+    expect(link).not.toBeNull()
+    expect(link?.textContent).toContain('审计')
+    expect(link?.getAttribute('href')).toBe('/admin/audit')
+    expect(wrapper.find('.topbar-audit-link').exists()).toBe(false)
   })
 
   it('opens on a new conversation instead of auto-selecting an existing one after refresh', async () => {
@@ -543,11 +554,53 @@ describe('ChatView', () => {
     expect(wrapper.find('.topbar-conversation-title').text()).toBe('新对话')
     expect(wrapper.find('.topbar .status-pill').exists()).toBe(true)
     expect(wrapper.find('.sidebar-account-name').text()).toContain('demo-user')
-    expect(wrapper.find('.sidebar-account-logout').exists()).toBe(true)
+    expect(wrapper.find('.sidebar-user-menu-trigger').exists()).toBe(true)
 
     await wrapper.find('.topbar-sidebar-toggle').trigger('click')
 
     expect(wrapper.find('.chat-shell').classes()).toContain('sidebar-open')
+  })
+
+  it('keeps the mobile account menu above the drawer and uses a blurred backdrop', async () => {
+    setViewportWidth(800)
+    api.fetchConversations.mockResolvedValue([
+      {
+        id: 'conv_1',
+        title: 'Mobile chat',
+        last_message: 'hello',
+        message_count: 2,
+        provider_id: 'openai',
+        model_id: 'gpt-5.4',
+        created_by: 'demo-user',
+        created_at: '',
+        updated_at: '',
+      },
+    ])
+    api.fetchConversationMessages.mockResolvedValue([{ role: 'assistant', content: 'hello' }])
+
+    const router = makeRouter()
+    await router.push('/chat')
+    await router.isReady()
+
+    const wrapper = mount(ChatView, {
+      global: {
+        plugins: [router],
+      },
+    })
+
+    await flushPromises()
+    await wrapper.find('.topbar-sidebar-toggle').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('.sidebar-backdrop').exists()).toBe(true)
+
+    await wrapper.find('.sidebar-user-menu-trigger').trigger('click')
+    await flushPromises()
+
+    expect(document.body.querySelector('.sidebar-user-menu-panel')).not.toBeNull()
+    expect(chatStyles).toMatch(/\.sidebar-panel\s*\{[\s\S]*?z-index:\s*30;/)
+    expect(chatStyles).toMatch(/\.sidebar-user-menu-panel\s*\{[\s\S]*?z-index:\s*(?:3[1-9]|[4-9]\d|\d{3,});/)
+    expect(chatStyles).toMatch(/\.sidebar-backdrop\s*\{[\s\S]*?backdrop-filter:\s*blur\(/)
   })
 
   it('moves the sidebar reopen control into the chat stage when desktop sidebar is collapsed', async () => {

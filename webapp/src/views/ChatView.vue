@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { RouterLink, useRouter } from 'vue-router'
+import { useRouter } from 'vue-router'
 import { Close, Menu } from '@element-plus/icons-vue'
 
 import ConversationSidebar from '../components/ConversationSidebar.vue'
@@ -506,6 +506,7 @@ onBeforeUnmount(() => {
       :collapsed="sidebarCollapsed"
       :conversations="conversations"
       :desktop-hidden="sidebarDesktopHidden"
+      :is-admin="isAdmin"
       :loading="sidebarLoading"
       :mobile="sidebarMobile"
       :open="sidebarDrawerOpen"
@@ -568,7 +569,6 @@ onBeforeUnmount(() => {
             {{ activeConversationTitle() }}
           </strong>
         </div>
-        <RouterLink v-if="isAdmin" class="topbar-audit-link ghost-button" to="/admin/audit">审计</RouterLink>
         <span :class="topbarStatusClass">{{ topbarStatusLabel }}</span>
       </header>
 

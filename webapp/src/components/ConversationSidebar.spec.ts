@@ -1,4 +1,5 @@
 import { mount } from '@vue/test-utils'
+import { nextTick } from 'vue'
 import { describe, expect, it } from 'vitest'
 
 import ConversationSidebar from './ConversationSidebar.vue'
@@ -6,6 +7,14 @@ import ConversationSidebar from './ConversationSidebar.vue'
 describe('ConversationSidebar', () => {
   it('renders only one-line titles without preview metadata rows', () => {
     const wrapper = mount(ConversationSidebar, {
+      global: {
+        stubs: {
+          RouterLink: {
+            props: ['to'],
+            template: '<a :href="to"><slot /></a>',
+          },
+        },
+      },
       props: {
         activeConversationId: 'conv_1',
         loading: false,
@@ -34,13 +43,19 @@ describe('ConversationSidebar', () => {
     expect(wrapper.find('.sidebar-list').exists()).toBe(true)
     expect(wrapper.find('[aria-label="新建对话"]').exists()).toBe(true)
     expect(wrapper.find('.sidebar-account-name').text()).toContain('demo-user')
-    expect(wrapper.find('.sidebar-account-logout').exists()).toBe(true)
-    expect(wrapper.find('.sidebar-account-logout').classes()).toContain('icon-button')
-    expect(wrapper.find('.sidebar-account-logout').text()).toBe('')
+    expect(wrapper.find('.sidebar-user-menu-trigger').exists()).toBe(true)
   })
 
-  it('supports collapsing workspace and uses inline delete confirmation', async () => {
+  it('supports collapsing workspace and uses fullscreen delete confirmation', async () => {
     const wrapper = mount(ConversationSidebar, {
+      global: {
+        stubs: {
+          RouterLink: {
+            props: ['to'],
+            template: '<a :href="to"><slot /></a>',
+          },
+        },
+      },
       props: {
         activeConversationId: 'conv_1',
         collapsed: false,
@@ -66,36 +81,69 @@ describe('ConversationSidebar', () => {
     expect(wrapper.emitted('toggle-collapse')).toHaveLength(1)
 
     await wrapper.find('.conversation-delete-button').trigger('click')
-    expect(wrapper.find('.conversation-delete-confirm').exists()).toBe(true)
+    expect(wrapper.find('.sidebar-confirm-overlay').exists()).toBe(true)
+    expect(wrapper.find('.sidebar-confirm-dialog').text()).toContain('确认删除这个对话？')
     expect(wrapper.emitted('delete')).toBeUndefined()
 
-    await wrapper.find('.conversation-delete-cancel').trigger('click')
-    expect(wrapper.find('.conversation-delete-confirm').exists()).toBe(false)
+    await wrapper.find('.sidebar-confirm-cancel').trigger('click')
+    expect(wrapper.find('.sidebar-confirm-overlay').exists()).toBe(false)
 
     await wrapper.find('.conversation-delete-button').trigger('click')
-    await wrapper.find('.conversation-delete-confirm-button').trigger('click')
+    await wrapper.find('.sidebar-confirm-confirm').trigger('click')
     expect(wrapper.emitted('delete')).toEqual([['conv_1']])
   })
 
-  it('uses inline confirmation before logout from the sidebar account area', async () => {
+  it('shows a floating user menu and uses fullscreen confirmation before logout', async () => {
     const wrapper = mount(ConversationSidebar, {
+      global: {
+        stubs: {
+          RouterLink: {
+            props: ['to'],
+            template: '<a :href="to"><slot /></a>',
+          },
+        },
+      },
       props: {
         activeConversationId: '',
         loading: false,
         username: 'demo-user',
         conversations: [],
+        isAdmin: true,
       },
     })
 
-    await wrapper.find('.sidebar-account-logout').trigger('click')
-    expect(wrapper.find('.sidebar-logout-confirm').exists()).toBe(true)
+    expect(wrapper.find('.sidebar-user-menu-panel').exists()).toBe(false)
+    expect(wrapper.find('.sidebar-user-menu-anchor').exists()).toBe(true)
+
+    await wrapper.find('.sidebar-user-menu-trigger').trigger('click')
+    await nextTick()
+    const bodyMenu = document.body.querySelector('.sidebar-user-menu-panel')
+    expect(bodyMenu).not.toBeNull()
+    expect(bodyMenu?.classList.contains('upward')).toBe(true)
+    expect(document.body.querySelector('.sidebar-admin-link')).not.toBeNull()
+    expect(document.body.querySelector('.sidebar-user-menu-logout')).not.toBeNull()
+    expect(wrapper.find('.sidebar-user-menu-trigger-caret').exists()).toBe(false)
+    expect(bodyMenu?.matches('::after')).toBe(false)
+
+    document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('.sidebar-user-menu-panel').exists()).toBe(false)
+
+    await wrapper.find('.sidebar-user-menu-trigger').trigger('click')
+
+    await document.body.querySelector('.sidebar-user-menu-logout')?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('.sidebar-confirm-overlay').exists()).toBe(true)
+    expect(wrapper.find('.sidebar-confirm-dialog').text()).toContain('确认退出登录？')
     expect(wrapper.emitted('logout')).toBeUndefined()
 
-    await wrapper.find('.sidebar-logout-cancel').trigger('click')
-    expect(wrapper.find('.sidebar-logout-confirm').exists()).toBe(false)
+    await wrapper.find('.sidebar-confirm-cancel').trigger('click')
+    expect(wrapper.find('.sidebar-confirm-overlay').exists()).toBe(false)
 
-    await wrapper.find('.sidebar-account-logout').trigger('click')
-    await wrapper.find('.sidebar-logout-confirm-button').trigger('click')
+    await wrapper.find('.sidebar-user-menu-trigger').trigger('click')
+    await document.body.querySelector('.sidebar-user-menu-logout')?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await wrapper.vm.$nextTick()
+    await wrapper.find('.sidebar-confirm-confirm').trigger('click')
 
     expect(wrapper.emitted('logout')).toHaveLength(1)
   })

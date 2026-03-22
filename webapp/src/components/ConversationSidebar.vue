@@ -1,6 +1,15 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import { Close, Delete, Fold, Plus, SwitchButton } from '@element-plus/icons-vue'
+import { Teleport, computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { RouterLink } from 'vue-router'
+import {
+  Close,
+  DataAnalysis,
+  Delete,
+  Fold,
+  Menu,
+  Plus,
+  Remove
+} from '@element-plus/icons-vue'
 
 import { formatConversationTitle } from '../lib/chat'
 import type { Conversation } from '../types/api'
@@ -14,6 +23,7 @@ const props = defineProps<{
   mobile?: boolean
   open?: boolean
   username: string
+  isAdmin?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -25,36 +35,111 @@ const emit = defineEmits<{
   'toggle-collapse': []
 }>()
 
+type ConfirmState =
+  | { kind: 'delete'; conversationId: string; title: string; message: string; confirmLabel: string }
+  | { kind: 'logout'; title: string; message: string; confirmLabel: string }
+
 const items = computed(() => props.conversations)
 const compact = computed(() => Boolean(props.collapsed && !props.mobile))
-const confirmingConversationId = ref('')
-const confirmingLogout = ref(false)
+const confirmState = ref<ConfirmState | null>(null)
+const userMenuOpen = ref(false)
+const userMenuAnchor = ref<HTMLElement | null>(null)
+const userMenuPanel = ref<HTMLElement | null>(null)
+const userMenuStyle = ref<Record<string, string>>({})
 
 function requestDelete(conversationId: string) {
-  confirmingConversationId.value = conversationId
+  userMenuOpen.value = false
+  confirmState.value = {
+    kind: 'delete',
+    conversationId,
+    title: '删除对话',
+    message: '确认删除这个对话？',
+    confirmLabel: '删除',
+  }
 }
 
-function cancelDelete() {
-  confirmingConversationId.value = ''
-}
-
-function confirmDelete(conversationId: string) {
-  confirmingConversationId.value = ''
-  emit('delete', conversationId)
+function closeUserMenu() {
+	userMenuOpen.value = false
 }
 
 function requestLogout() {
-  confirmingLogout.value = true
+  closeUserMenu()
+  confirmState.value = {
+    kind: 'logout',
+    title: '退出登录',
+    message: '确认退出登录？',
+    confirmLabel: '退出',
+  }
 }
 
-function cancelLogout() {
-  confirmingLogout.value = false
+function cancelConfirm() {
+	confirmState.value = null
 }
 
-function confirmLogout() {
-  confirmingLogout.value = false
-  emit('logout')
+function confirmAction() {
+	if (!confirmState.value) {
+		return
+	}
+	if (confirmState.value.kind === 'delete') {
+		emit('delete', confirmState.value.conversationId)
+	} else {
+		emit('logout')
+	}
+	confirmState.value = null
 }
+
+function toggleUserMenu() {
+	userMenuOpen.value = !userMenuOpen.value
+	if (userMenuOpen.value) {
+		void nextTick().then(syncUserMenuPosition)
+	}
+}
+
+function syncUserMenuPosition() {
+	const anchor = userMenuAnchor.value
+	if (!anchor || !userMenuOpen.value) {
+		return
+	}
+	const rect = anchor.getBoundingClientRect()
+	userMenuStyle.value = {
+		position: 'fixed',
+		right: `${Math.max(window.innerWidth - rect.right, 16)}px`,
+		bottom: `${Math.max(window.innerHeight - rect.top + 8, 16)}px`,
+	}
+}
+
+function handleDocumentMouseDown(event: MouseEvent) {
+	if (!userMenuOpen.value) {
+		return
+	}
+	const target = event.target
+	if (!(target instanceof Node)) {
+		return
+	}
+	if (userMenuAnchor.value?.contains(target) || userMenuPanel.value?.contains(target)) {
+		return
+	}
+	closeUserMenu()
+}
+
+function handleViewportChange() {
+	if (!userMenuOpen.value) {
+		return
+	}
+	syncUserMenuPosition()
+}
+
+onMounted(() => {
+	document.addEventListener('mousedown', handleDocumentMouseDown)
+	window.addEventListener('resize', handleViewportChange)
+	window.addEventListener('scroll', handleViewportChange, true)
+})
+
+onBeforeUnmount(() => {
+	document.removeEventListener('mousedown', handleDocumentMouseDown)
+	window.removeEventListener('resize', handleViewportChange)
+	window.removeEventListener('scroll', handleViewportChange, true)
+})
 </script>
 
 <template>
@@ -122,15 +207,6 @@ function confirmLogout() {
             <Delete />
           </button>
         </button>
-        <div v-if="confirmingConversationId === conversation.id" class="conversation-delete-confirm compact-confirm">
-          <span class="compact-confirm-text">确认删除这个对话？</span>
-          <div class="compact-confirm-actions">
-            <button class="ghost-button compact-confirm-button conversation-delete-cancel" type="button" @click="cancelDelete">取消</button>
-            <button class="ghost-button compact-confirm-button conversation-delete-confirm-button" type="button" @click="confirmDelete(conversation.id)">
-              删除
-            </button>
-          </div>
-        </div>
       </template>
     </div>
 
@@ -139,20 +215,48 @@ function confirmLogout() {
         <span class="sidebar-account-label">当前账号</span>
         <strong class="sidebar-account-name">{{ username }}</strong>
       </div>
-      <button
-        class="ghost-button icon-button sidebar-account-logout"
-        type="button"
-        aria-label="退出登录"
-        @click="requestLogout"
-      >
-        <SwitchButton />
-      </button>
+      <div ref="userMenuAnchor" class="sidebar-user-menu-anchor">
+        <button
+          v-if="compact && !mobile"
+          class="ghost-button icon-button sidebar-user-menu-trigger compact"
+          type="button"
+          aria-label="打开用户菜单"
+          @click="toggleUserMenu"
+        >
+          <Menu />
+        </button>
+        <button v-else class="ghost-button icon-button sidebar-user-menu-trigger" type="button" aria-label="打开用户菜单" @click="toggleUserMenu">
+          <Menu />
+        </button>
+
+      </div>
     </div>
-    <div v-if="confirmingLogout" class="sidebar-logout-confirm compact-confirm">
-      <span class="compact-confirm-text">确认退出？</span>
-      <div class="compact-confirm-actions">
-        <button class="ghost-button compact-confirm-button sidebar-logout-cancel" type="button" @click="cancelLogout">取消</button>
-        <button class="ghost-button compact-confirm-button sidebar-logout-confirm-button" type="button" @click="confirmLogout">退出</button>
+
+    <Teleport to="body">
+      <transition name="model-menu-fade">
+        <div v-if="userMenuOpen" ref="userMenuPanel" class="sidebar-user-menu-panel upward" :class="{ compact }" :style="userMenuStyle">
+          <RouterLink v-if="isAdmin" class="sidebar-user-menu-option sidebar-admin-link" to="/admin/audit" @click="closeUserMenu">
+            <span class="sidebar-user-menu-option-check" aria-hidden="true"></span>
+            <DataAnalysis />
+            <span class="sidebar-user-menu-option-label">审计</span>
+          </RouterLink>
+          <button class="sidebar-user-menu-option sidebar-user-menu-logout" type="button" @click="requestLogout">
+            <span class="sidebar-user-menu-option-check" aria-hidden="true"></span>
+            <Remove />
+            <span class="sidebar-user-menu-option-label">退出登录</span>
+          </button>
+        </div>
+      </transition>
+    </Teleport>
+
+    <div v-if="confirmState" class="sidebar-confirm-overlay" @click.self="cancelConfirm">
+      <div class="sidebar-confirm-dialog">
+        <h3>{{ confirmState.title }}</h3>
+        <p>{{ confirmState.message }}</p>
+        <div class="sidebar-confirm-actions">
+          <button class="ghost-button sidebar-confirm-cancel" type="button" @click="cancelConfirm">取消</button>
+          <button class="ghost-button sidebar-confirm-confirm" type="button" @click="confirmAction">{{ confirmState.confirmLabel }}</button>
+        </div>
       </div>
     </div>
   </aside>
