@@ -17,6 +17,7 @@ import {
   streamRunTask,
   TASK_STREAM_ABORTED_MESSAGE,
 } from '../lib/api'
+import { formatConversationTitle, formatDocumentTitle } from '../lib/chat'
 import { clearChatState, loadChatState, saveChatState } from '../lib/chat-state'
 import { getSessionName, getSessionRole, logout } from '../lib/session'
 import { attachReplyMetaToLatestReply, buildTranscriptEntries, updateTranscriptFromStreamEvent } from '../lib/transcript'
@@ -82,14 +83,17 @@ const composerDisabled = computed(() => sending.value || catalogLoading.value ||
 
 function activeConversationTitle() {
   const current = conversations.value.find((conversation) => conversation.id === activeConversationId.value)
-  if (current?.title?.trim()) {
-    return current.title.trim()
-  }
   if (activeConversationId.value) {
-      return '未命名对话'
+    return formatConversationTitle(current?.title ?? '', '未命名对话')
   }
   return '新对话'
 }
+
+function syncDocumentTitle() {
+  document.title = formatDocumentTitle(activeConversationTitle())
+}
+
+watch([activeConversationId, conversations], syncDocumentTitle, { deep: true, immediate: true })
 
 function syncChatState() {
   saveChatState({

@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const session = vi.hoisted(() => ({
@@ -12,6 +15,30 @@ describe('app router session guard', () => {
     vi.resetModules()
     session.hasActiveSession.mockReset()
     session.syncSession.mockReset()
+    document.title = 'webapp'
+  })
+
+  it('uses a Chinese default title in the HTML shell', () => {
+    const html = readFileSync(resolve(process.cwd(), 'index.html'), 'utf8')
+
+    expect(html).toContain('<title>智能体工作台 - Agent Runtime</title>')
+  })
+
+  it('updates the browser title when the route changes', async () => {
+    session.hasActiveSession.mockReturnValue(true)
+    session.syncSession.mockResolvedValue({ username: 'alice', role: 'admin' })
+
+    const { createAppRouter } = await import('./index')
+    const router = createAppRouter(true)
+
+    await router.push('/chat')
+    await router.isReady()
+
+    expect(document.title).toBe('聊天 - Agent Runtime')
+
+    await router.push('/admin/audit')
+
+    expect(document.title).toBe('审计会话 - Agent Runtime')
   })
 
   it('forces backend session validation before entering protected pages', async () => {

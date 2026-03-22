@@ -238,6 +238,39 @@ describe('ChatView', () => {
     expect(wrapper.find('.topbar-conversation-title').text()).toBe('新对话')
   })
 
+  it('updates the browser title with the active conversation name', async () => {
+    api.fetchConversations.mockResolvedValue([
+      {
+        id: 'conv_1',
+        title: '项目周报',
+        last_message: 'hello',
+        message_count: 2,
+        provider_id: 'openai',
+        model_id: 'gpt-5.4',
+        created_by: 'demo-user',
+        created_at: '',
+        updated_at: '',
+      },
+    ])
+    api.fetchConversationMessages.mockResolvedValue([{ role: 'assistant', content: 'hello' }])
+
+    const router = makeRouter()
+    await router.push('/chat')
+    await router.isReady()
+
+    const wrapper = mount(ChatView, {
+      global: {
+        plugins: [router],
+      },
+    })
+
+    await flushPromises()
+    await wrapper.find('.conversation-card').trigger('click')
+    await flushPromises()
+
+    expect(document.title).toBe('项目周报 - Agent Runtime')
+  })
+
   it('renders conversation history after selecting a sidebar conversation', async () => {
     api.fetchConversations.mockResolvedValue([
       {

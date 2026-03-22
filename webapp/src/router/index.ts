@@ -1,5 +1,6 @@
 import { createMemoryHistory, createRouter, createWebHistory } from 'vue-router'
 
+import { formatDocumentTitle } from '../lib/chat'
 import { syncSession } from '../lib/session'
 import AdminAuditView from '../views/AdminAuditView.vue'
 import ChatView from '../views/ChatView.vue'
@@ -14,6 +15,9 @@ const routes = [
     path: '/login',
     name: 'login',
     component: LoginView,
+    meta: {
+      title: '登录',
+    },
   },
   {
     path: '/chat',
@@ -21,6 +25,7 @@ const routes = [
     component: ChatView,
     meta: {
       requiresSession: true,
+      title: '聊天',
     },
   },
   {
@@ -30,6 +35,7 @@ const routes = [
     meta: {
       requiresSession: true,
       requiresAdmin: true,
+      title: '审计会话',
     },
   },
 ]
@@ -57,6 +63,10 @@ export function createAppRouter(memory = false) {
     }
 
     return true
+  })
+
+  router.afterEach((to) => {
+    document.title = formatDocumentTitle(typeof to.meta.title === 'string' ? to.meta.title : undefined)
   })
 
   return router
