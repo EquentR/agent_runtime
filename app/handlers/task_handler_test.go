@@ -14,6 +14,7 @@ import (
 	"time"
 
 	coreagent "github.com/EquentR/agent_runtime/core/agent"
+	coreprompt "github.com/EquentR/agent_runtime/core/prompt"
 	model "github.com/EquentR/agent_runtime/core/providers/types"
 	coretasks "github.com/EquentR/agent_runtime/core/tasks"
 	coretypes "github.com/EquentR/agent_runtime/core/types"
@@ -379,6 +380,16 @@ func newAgentRunTaskTestServer(t *testing.T) (*coretasks.Manager, *httptest.Serv
 	if err := conversationStore.AutoMigrate(); err != nil {
 		t.Fatalf("conversation AutoMigrate() error = %v", err)
 	}
+	promptStore := coreprompt.NewStore(db)
+	if db.Migrator().HasTable("prompt_documents") || db.Migrator().HasTable("prompt_bindings") {
+		t.Fatal("prompt tables exist before explicit test migration, want newAgentRunTaskTestServer to prepare prompt schema explicitly")
+	}
+	if err := promptStore.AutoMigrate(); err != nil {
+		t.Fatalf("prompt AutoMigrate() error = %v", err)
+	}
+	if !db.Migrator().HasTable("prompt_documents") || !db.Migrator().HasTable("prompt_bindings") {
+		t.Fatal("prompt tables missing after explicit test migration")
+	}
 	manager := coretasks.NewManager(store, coretasks.ManagerOptions{
 		RunnerID:          "handler-test",
 		PollInterval:      5 * time.Millisecond,
@@ -393,6 +404,7 @@ func newAgentRunTaskTestServer(t *testing.T) (*coretasks.Manager, *httptest.Serv
 	if err := manager.RegisterExecutor("agent.run", coreagent.NewTaskExecutor(coreagent.ExecutorDependencies{
 		Resolver:          resolver,
 		ConversationStore: conversationStore,
+		PromptResolver:    coreprompt.NewResolver(promptStore),
 		ClientFactory: func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) {
 			answer := responses[0]
 			responses = responses[1:]

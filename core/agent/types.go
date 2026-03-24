@@ -6,6 +6,7 @@ import (
 
 	coreaudit "github.com/EquentR/agent_runtime/core/audit"
 	"github.com/EquentR/agent_runtime/core/memory"
+	coreprompt "github.com/EquentR/agent_runtime/core/prompt"
 	model "github.com/EquentR/agent_runtime/core/providers/types"
 	"github.com/EquentR/agent_runtime/core/tools"
 	coretypes "github.com/EquentR/agent_runtime/core/types"
@@ -20,20 +21,21 @@ type Runner struct {
 }
 
 type Options struct {
-	SystemPrompt  string
-	Model         string
-	LLMModel      *coretypes.LLMModel
-	MaxSteps      int
-	MaxTokens     int64
-	Memory        *memory.Manager
-	EventSink     EventSink
-	TraceID       string
-	ToolChoice    coretypes.ToolChoice
-	Metadata      map[string]string
-	Actor         string
-	TaskID        string
-	AuditRecorder coreaudit.Recorder
-	AuditRunID    string
+	SystemPrompt   string
+	ResolvedPrompt *coreprompt.ResolvedPrompt
+	Model          string
+	LLMModel       *coretypes.LLMModel
+	MaxSteps       int
+	MaxTokens      int64
+	Memory         *memory.Manager
+	EventSink      EventSink
+	TraceID        string
+	ToolChoice     coretypes.ToolChoice
+	Metadata       map[string]string
+	Actor          string
+	TaskID         string
+	AuditRecorder  coreaudit.Recorder
+	AuditRunID     string
 }
 
 type RunInput struct {

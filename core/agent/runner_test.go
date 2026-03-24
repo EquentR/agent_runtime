@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
 	coreaudit "github.com/EquentR/agent_runtime/core/audit"
+	"github.com/EquentR/agent_runtime/core/memory"
+	coreprompt "github.com/EquentR/agent_runtime/core/prompt"
 	model "github.com/EquentR/agent_runtime/core/providers/types"
 	coretasks "github.com/EquentR/agent_runtime/core/tasks"
 	coretools "github.com/EquentR/agent_runtime/core/tools"
@@ -110,6 +113,320 @@ func TestRunnerExecutesToolCallsAndContinuesConversation(t *testing.T) {
 	}
 	if secondReq[1].Role != model.RoleAssistant || len(secondReq[1].ToolCalls) != 1 {
 		t.Fatalf("assistant replay message = %#v, want tool call replay", secondReq[1])
+	}
+}
+
+func TestRunnerInjectsStepPreModelOnEveryTurnAndToolResultOnlyAfterToolContinuation(t *testing.T) {
+	registry := coretools.NewRegistry()
+	if err := registry.Register(coretools.Tool{
+		Name: "lookup_weather",
+		Handler: func(context.Context, map[string]interface{}) (string, error) {
+			return "sunny", nil
+		},
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	client := &stubClient{streams: []model.Stream{
+		newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "lookup_weather", Arguments: `{"city":"Shanghai"}`}}}}},
+			model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "lookup_weather", Arguments: `{"city":"Shanghai"}`}}},
+			nil,
+		),
+		newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "The weather is sunny."}}},
+			model.Message{Role: model.RoleAssistant, Content: "The weather is sunny."},
+			nil,
+		),
+	}}
+
+	runner, err := NewRunner(client, registry, Options{
+		Model: "test-model",
+		ResolvedPrompt: &coreprompt.ResolvedPrompt{
+			Session:      []model.Message{{Role: model.RoleSystem, Content: "Session prompt"}},
+			StepPreModel: []model.Message{{Role: model.RoleSystem, Content: "Step prompt"}},
+			ToolResult:   []model.Message{{Role: model.RoleSystem, Content: "Tool-result prompt"}},
+		},
+		MaxSteps: 4,
+	})
+	if err != nil {
+		t.Fatalf("NewRunner() error = %v", err)
+	}
+
+	result, err := runner.Run(context.Background(), RunInput{Messages: []model.Message{{Role: model.RoleUser, Content: "weather?"}}, Tools: registry.List()})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.FinalMessage.Content != "The weather is sunny." {
+		t.Fatalf("final content = %q", result.FinalMessage.Content)
+	}
+	if len(client.streamRequests) != 2 {
+		t.Fatalf("request count = %d, want 2", len(client.streamRequests))
+	}
+
+	firstReq := client.streamRequests[0].Messages
+	if len(firstReq) != 3 {
+		t.Fatalf("len(first request messages) = %d, want 3", len(firstReq))
+	}
+	if firstReq[0].Content != "Session prompt" || firstReq[1].Content != "Step prompt" || firstReq[2].Content != "weather?" {
+		t.Fatalf("first request messages = %#v, want session+step+user", firstReq)
+	}
+	assertMessagesDoNotContainContent(t, firstReq, "Tool-result prompt")
+
+	secondReq := client.streamRequests[1].Messages
+	if len(secondReq) != 6 {
+		t.Fatalf("len(second request messages) = %d, want 6", len(secondReq))
+	}
+	if secondReq[0].Content != "Session prompt" || secondReq[1].Content != "Step prompt" || secondReq[2].Content != "Tool-result prompt" {
+		t.Fatalf("second request prompt prefix = %#v, want session+step+tool_result", secondReq[:3])
+	}
+	if secondReq[3].Role != model.RoleUser || secondReq[3].Content != "weather?" {
+		t.Fatalf("second request user replay = %#v, want original user message", secondReq[3])
+	}
+	if secondReq[4].Role != model.RoleAssistant || len(secondReq[4].ToolCalls) != 1 {
+		t.Fatalf("second request assistant replay = %#v, want assistant tool call replay", secondReq[4])
+	}
+	if secondReq[5].Role != model.RoleTool || secondReq[5].Content != "sunny" {
+		t.Fatalf("second request tool replay = %#v, want tool output replay", secondReq[5])
+	}
+}
+
+func TestRunnerFallsBackToLegacySystemPromptWhenResolvedPromptAbsent(t *testing.T) {
+	client := &stubClient{
+		streams: []model.Stream{newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "hello"}}},
+			model.Message{Role: model.RoleAssistant, Content: "hello"},
+			nil,
+		)},
+	}
+	runner, err := NewRunner(client, nil, Options{Model: "test-model", SystemPrompt: "Legacy prompt"})
+	if err != nil {
+		t.Fatalf("NewRunner() error = %v", err)
+	}
+
+	_, err = runner.Run(context.Background(), RunInput{Messages: []model.Message{{Role: model.RoleUser, Content: "say hi"}}})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(client.streamRequests) != 1 {
+		t.Fatalf("request count = %d, want 1", len(client.streamRequests))
+	}
+	got := client.streamRequests[0].Messages
+	if len(got) != 2 {
+		t.Fatalf("len(request messages) = %d, want 2", len(got))
+	}
+	if got[0].Role != model.RoleSystem || got[0].Content != "Legacy prompt" {
+		t.Fatalf("first request message = %#v, want legacy system prompt", got[0])
+	}
+	if got[1].Role != model.RoleUser || got[1].Content != "say hi" {
+		t.Fatalf("second request message = %#v, want user message", got[1])
+	}
+}
+
+func TestRunnerUsesMemoryManagedContextOnLaterSteps(t *testing.T) {
+	mgr, err := memory.NewManager(memory.Options{
+		MaxContextTokens: 60,
+		Counter:          fakeTokenCounter{},
+		Compressor: func(context.Context, memory.CompressionRequest) (string, error) {
+			return "compressed memory", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+
+	registry := coretools.NewRegistry()
+	if err := registry.Register(coretools.Tool{
+		Name: "lookup_weather",
+		Handler: func(context.Context, map[string]interface{}) (string, error) {
+			return strings.Repeat("sunny", 12), nil
+		},
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	client := &stubClient{streams: []model.Stream{
+		newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "lookup_weather", Arguments: `{"city":"` + strings.Repeat("x", 40) + `"}`}}}}},
+			model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "lookup_weather", Arguments: `{"city":"` + strings.Repeat("x", 40) + `"}`}}},
+			nil,
+		),
+		newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "done"}}},
+			model.Message{Role: model.RoleAssistant, Content: "done"},
+			nil,
+		),
+	}}
+
+	runner, err := NewRunner(client, registry, Options{Model: "test-model", Memory: mgr, MaxSteps: 4})
+	if err != nil {
+		t.Fatalf("NewRunner() error = %v", err)
+	}
+
+	result, err := runner.Run(context.Background(), RunInput{Messages: []model.Message{{Role: model.RoleUser, Content: "weather?"}}, Tools: registry.List()})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.FinalMessage.Content != "done" {
+		t.Fatalf("final content = %q, want done", result.FinalMessage.Content)
+	}
+	if len(client.streamRequests) != 2 {
+		t.Fatalf("request count = %d, want 2", len(client.streamRequests))
+	}
+
+	secondReq := client.streamRequests[1].Messages
+	if len(secondReq) != 1 {
+		t.Fatalf("len(second request messages) = %d, want 1 compressed summary message", len(secondReq))
+	}
+	if secondReq[0].Role != model.RoleSystem || !strings.Contains(secondReq[0].Content, "compressed memory") {
+		t.Fatalf("second request messages = %#v, want compressed summary from memory manager", secondReq)
+	}
+	assertMessagesDoNotContainContent(t, secondReq, "weather?")
+	assertMessagesDoNotContainContent(t, secondReq, strings.Repeat("sunny", 12))
+}
+
+func TestRunnerDoesNotReAddProducedMessagesToMemoryWhenInitialInputEmpty(t *testing.T) {
+	mgr, err := memory.NewManager(memory.Options{Counter: fakeTokenCounter{}})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+
+	registry := coretools.NewRegistry()
+	if err := registry.Register(coretools.Tool{
+		Name: "lookup_weather",
+		Handler: func(context.Context, map[string]interface{}) (string, error) {
+			return "sunny", nil
+		},
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	client := &stubClient{streams: []model.Stream{
+		newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "lookup_weather", Arguments: `{"city":"Shanghai"}`}}}}},
+			model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "lookup_weather", Arguments: `{"city":"Shanghai"}`}}},
+			nil,
+		),
+		newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "done"}}},
+			model.Message{Role: model.RoleAssistant, Content: "done"},
+			nil,
+		),
+	}}
+
+	runner, err := NewRunner(client, registry, Options{Model: "test-model", Memory: mgr, MaxSteps: 4})
+	if err != nil {
+		t.Fatalf("NewRunner() error = %v", err)
+	}
+
+	result, err := runner.Run(context.Background(), RunInput{Tools: registry.List()})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.FinalMessage.Content != "done" {
+		t.Fatalf("final content = %q, want done", result.FinalMessage.Content)
+	}
+	if len(client.streamRequests) != 2 {
+		t.Fatalf("request count = %d, want 2", len(client.streamRequests))
+	}
+
+	secondReq := client.streamRequests[1].Messages
+	if len(secondReq) != 2 {
+		t.Fatalf("len(second request messages) = %d, want 2 without duplicated replay", len(secondReq))
+	}
+	if secondReq[0].Role != model.RoleAssistant || len(secondReq[0].ToolCalls) != 1 {
+		t.Fatalf("second request first message = %#v, want assistant tool call replay", secondReq[0])
+	}
+	if secondReq[1].Role != model.RoleTool || secondReq[1].Content != "sunny" {
+		t.Fatalf("second request second message = %#v, want tool result replay", secondReq[1])
+	}
+
+	got := mgr.ShortTermMessages()
+	if len(got) != 3 {
+		t.Fatalf("len(ShortTermMessages()) = %d, want 3 without duplicates", len(got))
+	}
+	if got[0].Role != model.RoleAssistant || len(got[0].ToolCalls) != 1 {
+		t.Fatalf("first memory message = %#v, want assistant tool call", got[0])
+	}
+	if got[1].Role != model.RoleTool || got[1].Content != "sunny" {
+		t.Fatalf("second memory message = %#v, want tool output", got[1])
+	}
+	if got[2].Role != model.RoleAssistant || got[2].Content != "done" {
+		t.Fatalf("third memory message = %#v, want final assistant reply", got[2])
+	}
+}
+
+func TestRunnerInjectsToolResultPromptAfterToolTurnEvenWhenMemoryCompressesSuffixAway(t *testing.T) {
+	mgr, err := memory.NewManager(memory.Options{
+		MaxContextTokens: 60,
+		Counter:          fakeTokenCounter{},
+		Compressor: func(context.Context, memory.CompressionRequest) (string, error) {
+			return "compressed memory", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+
+	registry := coretools.NewRegistry()
+	if err := registry.Register(coretools.Tool{
+		Name: "lookup_weather",
+		Handler: func(context.Context, map[string]interface{}) (string, error) {
+			return strings.Repeat("sunny", 12), nil
+		},
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	client := &stubClient{streams: []model.Stream{
+		newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "lookup_weather", Arguments: `{"city":"` + strings.Repeat("x", 40) + `"}`}}}}},
+			model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "lookup_weather", Arguments: `{"city":"` + strings.Repeat("x", 40) + `"}`}}},
+			nil,
+		),
+		newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "done"}}},
+			model.Message{Role: model.RoleAssistant, Content: "done"},
+			nil,
+		),
+	}}
+
+	runner, err := NewRunner(client, registry, Options{
+		Model:  "test-model",
+		Memory: mgr,
+		ResolvedPrompt: &coreprompt.ResolvedPrompt{
+			StepPreModel: []model.Message{{Role: model.RoleSystem, Content: "Step prompt"}},
+			ToolResult:   []model.Message{{Role: model.RoleSystem, Content: "Tool-result prompt"}},
+		},
+		MaxSteps: 4,
+	})
+	if err != nil {
+		t.Fatalf("NewRunner() error = %v", err)
+	}
+
+	result, err := runner.Run(context.Background(), RunInput{Messages: []model.Message{{Role: model.RoleUser, Content: "weather?"}}, Tools: registry.List()})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.FinalMessage.Content != "done" {
+		t.Fatalf("final content = %q, want done", result.FinalMessage.Content)
+	}
+	if len(client.streamRequests) != 2 {
+		t.Fatalf("request count = %d, want 2", len(client.streamRequests))
+	}
+
+	secondReq := client.streamRequests[1].Messages
+	if len(secondReq) != 3 {
+		t.Fatalf("len(second request messages) = %d, want 3", len(secondReq))
+	}
+	if secondReq[0].Role != model.RoleSystem || secondReq[0].Content != "Step prompt" {
+		t.Fatalf("second request first message = %#v, want step prompt", secondReq[0])
+	}
+	if secondReq[1].Role != model.RoleSystem || secondReq[1].Content != "Tool-result prompt" {
+		t.Fatalf("second request second message = %#v, want tool-result prompt despite compression", secondReq[1])
+	}
+	if secondReq[2].Role != model.RoleSystem || !strings.Contains(secondReq[2].Content, "compressed memory") {
+		t.Fatalf("second request third message = %#v, want compressed memory context", secondReq[2])
 	}
 }
 
@@ -758,6 +1075,16 @@ func assertRunnerAuditEventTypes(t *testing.T, recorder *recordingRunnerAuditRec
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("audit events = %v, want %v", got, want)
+		}
+	}
+}
+
+func assertMessagesDoNotContainContent(t *testing.T, messages []model.Message, forbidden string) {
+	t.Helper()
+
+	for _, message := range messages {
+		if message.Content == forbidden {
+			t.Fatalf("messages = %#v, want no message with content %q", messages, forbidden)
 		}
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"github.com/EquentR/agent_runtime/core/agent"
 	"github.com/EquentR/agent_runtime/core/audit"
 	"github.com/EquentR/agent_runtime/core/memory"
+	"github.com/EquentR/agent_runtime/core/prompt"
 	coretasks "github.com/EquentR/agent_runtime/core/tasks"
 	"github.com/EquentR/agent_runtime/pkg/migrate"
 	"gorm.io/gorm"
@@ -83,3 +84,12 @@ var to007 = migrate.NewMigration("0.0.7", func(tx *gorm.DB) error {
 		Where("id <> ?", users[0].ID).
 		Update("role", models.UserRoleUser).Error
 })
+
+// to008 创建 prompt 文档与绑定表，为提示词管理与运行时注入提供持久化支持。
+var to008 = migrate.NewMigration("0.0.8", func(tx *gorm.DB) error {
+	return tx.AutoMigrate(&prompt.PromptDocument{}, &prompt.PromptBinding{})
+})
+
+func init() {
+	versionMigrations = append(versionMigrations, to008)
+}

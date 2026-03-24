@@ -157,6 +157,365 @@ describe('audit API helpers', () => {
   })
 })
 
+describe('prompt API helpers', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    vi.stubGlobal('fetch', vi.fn())
+  })
+
+  it('fetches prompt documents and bindings from the backend', async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          code: 200,
+          message: 'OK',
+          data: [
+            {
+              id: 'doc-1',
+              name: 'Welcome Prompt',
+              description: 'Session prompt',
+              content: 'Always explain the plan first.',
+              scope: 'admin',
+              status: 'active',
+              created_by: 'alice',
+              updated_by: 'alice',
+              created_at: '2026-03-23T09:00:00Z',
+              updated_at: '2026-03-23T09:00:00Z',
+            },
+          ],
+          time: '',
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          code: 200,
+          message: 'OK',
+          data: [
+            {
+              id: 11,
+              prompt_id: 'doc-1',
+              scene: 'agent.run.default',
+              phase: 'session',
+              is_default: true,
+              priority: 5,
+              provider_id: '',
+              model_id: '',
+              status: 'active',
+              created_by: 'alice',
+              updated_by: 'alice',
+              created_at: '2026-03-23T09:00:00Z',
+              updated_at: '2026-03-23T09:00:00Z',
+            },
+          ],
+          time: '',
+        }),
+      } as Response)
+
+    const api = (await import('./api')) as Record<string, unknown>
+
+    expect(typeof api.fetchPromptDocuments).toBe('function')
+    expect(typeof api.fetchPromptBindings).toBe('function')
+
+    if (typeof api.fetchPromptDocuments !== 'function' || typeof api.fetchPromptBindings !== 'function') {
+      return
+    }
+
+    const documents = await api.fetchPromptDocuments()
+    const bindings = await api.fetchPromptBindings()
+
+    expect(fetch).toHaveBeenNthCalledWith(1, '/api/v1/prompts/documents', expect.objectContaining({ credentials: 'include' }))
+    expect(fetch).toHaveBeenNthCalledWith(2, '/api/v1/prompts/bindings', expect.objectContaining({ credentials: 'include' }))
+    expect(documents).toEqual([
+      expect.objectContaining({ id: 'doc-1', name: 'Welcome Prompt', status: 'active' }),
+    ])
+    expect(bindings).toEqual([
+      expect.objectContaining({ id: 11, prompt_id: 'doc-1', phase: 'session', is_default: true, priority: 5 }),
+    ])
+  })
+
+  it('creates and updates prompt documents with the expected request payloads', async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          code: 200,
+          message: 'OK',
+          data: {
+            id: 'doc-1',
+            name: 'Welcome Prompt',
+            description: 'Session prompt',
+            content: 'Always explain the plan first.',
+            scope: 'admin',
+            status: 'active',
+            created_by: 'alice',
+            updated_by: 'alice',
+            created_at: '2026-03-23T09:00:00Z',
+            updated_at: '2026-03-23T09:00:00Z',
+          },
+          time: '',
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          code: 200,
+          message: 'OK',
+          data: {
+            id: 'doc-1',
+            name: 'Welcome Prompt Updated',
+            description: 'Session prompt',
+            content: 'Keep the answer concise.',
+            scope: 'admin',
+            status: 'disabled',
+            created_by: 'alice',
+            updated_by: 'alice',
+            created_at: '2026-03-23T09:00:00Z',
+            updated_at: '2026-03-23T09:05:00Z',
+          },
+          time: '',
+        }),
+      } as Response)
+
+    const api = (await import('./api')) as Record<string, unknown>
+
+    expect(typeof api.createPromptDocument).toBe('function')
+    expect(typeof api.updatePromptDocument).toBe('function')
+
+    if (typeof api.createPromptDocument !== 'function' || typeof api.updatePromptDocument !== 'function') {
+      return
+    }
+
+    await api.createPromptDocument({
+      id: 'doc-1',
+      name: 'Welcome Prompt',
+      description: 'Session prompt',
+      content: 'Always explain the plan first.',
+      scope: 'admin',
+      status: 'active',
+    })
+    await api.updatePromptDocument('doc-1', {
+      name: 'Welcome Prompt Updated',
+      description: 'Session prompt',
+      content: 'Keep the answer concise.',
+      scope: 'admin',
+      status: 'disabled',
+    })
+
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      '/api/v1/prompts/documents',
+      expect.objectContaining({
+        credentials: 'include',
+        method: 'POST',
+        body: JSON.stringify({
+          id: 'doc-1',
+          name: 'Welcome Prompt',
+          description: 'Session prompt',
+          content: 'Always explain the plan first.',
+          scope: 'admin',
+          status: 'active',
+        }),
+      }),
+    )
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      '/api/v1/prompts/documents/doc-1',
+      expect.objectContaining({
+        credentials: 'include',
+        method: 'PUT',
+        body: JSON.stringify({
+          name: 'Welcome Prompt Updated',
+          description: 'Session prompt',
+          content: 'Keep the answer concise.',
+          scope: 'admin',
+          status: 'disabled',
+        }),
+      }),
+    )
+  })
+
+  it('deletes prompt documents with the expected request payload', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        code: 200,
+        message: 'OK',
+        data: { deleted: true },
+        time: '',
+      }),
+    } as Response)
+
+    const api = (await import('./api')) as Record<string, unknown>
+
+    expect(typeof api.deletePromptDocument).toBe('function')
+
+    if (typeof api.deletePromptDocument !== 'function') {
+      return
+    }
+
+    await api.deletePromptDocument('doc-1')
+
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      '/api/v1/prompts/documents/doc-1',
+      expect.objectContaining({
+        credentials: 'include',
+        method: 'DELETE',
+      }),
+    )
+  })
+
+  it('creates, updates, and deletes prompt bindings with the expected request payloads', async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          code: 200,
+          message: 'OK',
+          data: {
+            id: 11,
+            prompt_id: 'doc-1',
+            scene: 'agent.run.default',
+            phase: 'session',
+            is_default: true,
+            priority: 5,
+            provider_id: '',
+            model_id: '',
+            status: 'active',
+            created_by: 'alice',
+            updated_by: 'alice',
+            created_at: '2026-03-23T09:00:00Z',
+            updated_at: '2026-03-23T09:00:00Z',
+          },
+          time: '',
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          code: 200,
+          message: 'OK',
+          data: {
+            id: 11,
+            prompt_id: 'doc-1',
+            scene: 'agent.run.default',
+            phase: 'tool_result',
+            is_default: false,
+            priority: 20,
+            provider_id: 'openai',
+            model_id: 'gpt-5.4',
+            status: 'disabled',
+            created_by: 'alice',
+            updated_by: 'alice',
+            created_at: '2026-03-23T09:00:00Z',
+            updated_at: '2026-03-23T09:05:00Z',
+          },
+          time: '',
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          code: 200,
+          message: 'OK',
+          data: { deleted: true },
+          time: '',
+        }),
+      } as Response)
+
+    const api = (await import('./api')) as Record<string, unknown>
+
+    expect(typeof api.createPromptBinding).toBe('function')
+    expect(typeof api.updatePromptBinding).toBe('function')
+    expect(typeof api.deletePromptBinding).toBe('function')
+
+    if (
+      typeof api.createPromptBinding !== 'function' ||
+      typeof api.updatePromptBinding !== 'function' ||
+      typeof api.deletePromptBinding !== 'function'
+    ) {
+      return
+    }
+
+    await api.createPromptBinding({
+      prompt_id: 'doc-1',
+      scene: 'agent.run.default',
+      phase: 'session',
+      is_default: true,
+      priority: 5,
+      provider_id: '',
+      model_id: '',
+      status: 'active',
+    })
+    await api.updatePromptBinding(11, {
+      prompt_id: 'doc-1',
+      scene: 'agent.run.default',
+      phase: 'tool_result',
+      is_default: false,
+      priority: 20,
+      provider_id: 'openai',
+      model_id: 'gpt-5.4',
+      status: 'disabled',
+    })
+    await api.deletePromptBinding(11)
+
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      '/api/v1/prompts/bindings',
+      expect.objectContaining({
+        credentials: 'include',
+        method: 'POST',
+        body: JSON.stringify({
+          prompt_id: 'doc-1',
+          scene: 'agent.run.default',
+          phase: 'session',
+          is_default: true,
+          priority: 5,
+          provider_id: '',
+          model_id: '',
+          status: 'active',
+        }),
+      }),
+    )
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      '/api/v1/prompts/bindings/11',
+      expect.objectContaining({
+        credentials: 'include',
+        method: 'PUT',
+        body: JSON.stringify({
+          prompt_id: 'doc-1',
+          scene: 'agent.run.default',
+          phase: 'tool_result',
+          is_default: false,
+          priority: 20,
+          provider_id: 'openai',
+          model_id: 'gpt-5.4',
+          status: 'disabled',
+        }),
+      }),
+    )
+    expect(fetch).toHaveBeenNthCalledWith(
+      3,
+      '/api/v1/prompts/bindings/11',
+      expect.objectContaining({
+        credentials: 'include',
+        method: 'DELETE',
+      }),
+    )
+  })
+})
+
 describe('unwrapEnvelope', () => {
   it('returns data when backend reports success', () => {
     const value = unwrapEnvelope({

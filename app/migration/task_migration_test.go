@@ -1,11 +1,15 @@
 package migration
 
 import (
+	"database/sql"
+	"sort"
+	"strings"
 	"testing"
 
 	"github.com/EquentR/agent_runtime/app/models"
 	"github.com/EquentR/agent_runtime/core/agent"
 	"github.com/EquentR/agent_runtime/core/memory"
+	"github.com/EquentR/agent_runtime/core/prompt"
 	coretasks "github.com/EquentR/agent_runtime/core/tasks"
 	"github.com/EquentR/agent_runtime/pkg/db"
 	"github.com/EquentR/agent_runtime/pkg/log"
@@ -93,4 +97,208 @@ func TestBootstrapBackfillsAdminRoleForExistingUsers(t *testing.T) {
 	if users[1].Role != models.UserRoleUser {
 		t.Fatalf("second migrated user role = %q, want %q", users[1].Role, models.UserRoleUser)
 	}
+}
+
+func TestBootstrapMigratesPromptTables(t *testing.T) {
+	log.Init(&log.Config{Level: "error"})
+
+	db.Init(&db.Database{
+		Name:     "prompt_migration_test",
+		DbDir:    t.TempDir(),
+		InMemory: true,
+		LogLevel: "silent",
+	})
+	rawDB := db.DB()
+	if err := rawDB.Migrator().DropTable(&prompt.PromptBinding{}, &prompt.PromptDocument{}, &migrate.DataVersion{}); err != nil {
+		t.Fatalf("reset prompt migration tables error = %v", err)
+	}
+
+	Bootstrap("0.0.8")
+
+	assertTableHasColumns(t, "prompt_documents",
+		"id",
+		"name",
+		"description",
+		"content",
+		"scope",
+		"status",
+		"created_by",
+		"updated_by",
+		"created_at",
+		"updated_at",
+	)
+	assertTableColumnDefault(t, "prompt_documents", "status", "active")
+	assertTableHasIndexWithColumns(t, "prompt_documents", "scope")
+	assertTableHasIndexWithColumns(t, "prompt_documents", "status")
+
+	assertTableHasColumns(t, "prompt_bindings",
+		"id",
+		"prompt_id",
+		"scene",
+		"phase",
+		"is_default",
+		"priority",
+		"provider_id",
+		"model_id",
+		"status",
+		"created_by",
+		"updated_by",
+		"created_at",
+		"updated_at",
+	)
+	assertTableColumnDefault(t, "prompt_bindings", "is_default", "false", "0")
+	assertTableColumnDefault(t, "prompt_bindings", "priority", "0")
+	assertTableColumnDefault(t, "prompt_bindings", "status", "active")
+	assertTableHasIndexWithColumns(t, "prompt_bindings", "prompt_id")
+	assertTableHasIndexWithColumns(t, "prompt_bindings", "scene", "phase")
+	assertTableHasForeignKey(t, "prompt_bindings", "prompt_documents", "prompt_id", "id")
+}
+
+func assertTableHasColumns(t *testing.T, table string, columns ...string) {
+	t.Helper()
+
+	migrator := db.DB().Migrator()
+	if !migrator.HasTable(table) {
+		t.Fatalf("%s table was not created", table)
+	}
+
+	for _, column := range columns {
+		if !migrator.HasColumn(table, column) {
+			t.Fatalf("%s.%s column was not created", table, column)
+		}
+	}
+}
+
+type pragmaColumnInfo struct {
+	Name         string         `gorm:"column:name"`
+	DefaultValue sql.NullString `gorm:"column:dflt_value"`
+}
+
+type pragmaIndexEntry struct {
+	Name string `gorm:"column:name"`
+}
+
+type pragmaIndexColumnInfo struct {
+	Seqno int    `gorm:"column:seqno"`
+	Name  string `gorm:"column:name"`
+}
+
+type pragmaForeignKeyInfo struct {
+	Table string `gorm:"column:table"`
+	From  string `gorm:"column:from"`
+	To    string `gorm:"column:to"`
+}
+
+func assertTableColumnDefault(t *testing.T, table string, column string, want ...string) {
+	t.Helper()
+
+	defaultValue, ok := tableColumnDefault(t, table, column)
+	if !ok {
+		t.Fatalf("%s.%s column default missing", table, column)
+	}
+
+	got := normalizeDefaultValue(defaultValue)
+	for _, candidate := range want {
+		if got == normalizeDefaultValue(candidate) {
+			return
+		}
+	}
+
+	t.Fatalf("%s.%s default = %q, want one of %v", table, column, defaultValue, want)
+}
+
+func tableColumnDefault(t *testing.T, table string, column string) (string, bool) {
+	t.Helper()
+
+	var columns []pragmaColumnInfo
+	if err := db.DB().Raw("PRAGMA table_info('" + table + "')").Scan(&columns).Error; err != nil {
+		t.Fatalf("PRAGMA table_info(%s) error = %v", table, err)
+	}
+	for _, info := range columns {
+		if info.Name == column && info.DefaultValue.Valid {
+			return info.DefaultValue.String, true
+		}
+	}
+	return "", false
+}
+
+func normalizeDefaultValue(value string) string {
+	trimmed := strings.TrimSpace(value)
+	trimmed = strings.Trim(trimmed, "'\"")
+	return strings.ToLower(trimmed)
+}
+
+func assertTableHasIndexWithColumns(t *testing.T, table string, wantColumns ...string) {
+	t.Helper()
+
+	for _, index := range tableIndexes(t, table) {
+		gotColumns := tableIndexColumns(t, index.Name)
+		if sameStrings(gotColumns, wantColumns) {
+			return
+		}
+	}
+
+	t.Fatalf("%s index with columns %v was not created", table, wantColumns)
+}
+
+func tableIndexes(t *testing.T, table string) []pragmaIndexEntry {
+	t.Helper()
+
+	var indexes []pragmaIndexEntry
+	if err := db.DB().Raw("PRAGMA index_list('" + table + "')").Scan(&indexes).Error; err != nil {
+		t.Fatalf("PRAGMA index_list(%s) error = %v", table, err)
+	}
+	return indexes
+}
+
+func tableIndexColumns(t *testing.T, indexName string) []string {
+	t.Helper()
+
+	var columns []pragmaIndexColumnInfo
+	if err := db.DB().Raw("PRAGMA index_info('" + indexName + "')").Scan(&columns).Error; err != nil {
+		t.Fatalf("PRAGMA index_info(%s) error = %v", indexName, err)
+	}
+	sort.Slice(columns, func(i, j int) bool {
+		return columns[i].Seqno < columns[j].Seqno
+	})
+
+	result := make([]string, 0, len(columns))
+	for _, column := range columns {
+		result = append(result, column.Name)
+	}
+	return result
+}
+
+func sameStrings(got []string, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func assertTableHasForeignKey(t *testing.T, table string, referencedTable string, fromColumn string, toColumn string) {
+	t.Helper()
+
+	for _, fk := range tableForeignKeys(t, table) {
+		if fk.Table == referencedTable && fk.From == fromColumn && fk.To == toColumn {
+			return
+		}
+	}
+
+	t.Fatalf("%s foreign key %s -> %s.%s was not created", table, fromColumn, referencedTable, toColumn)
+}
+
+func tableForeignKeys(t *testing.T, table string) []pragmaForeignKeyInfo {
+	t.Helper()
+
+	var foreignKeys []pragmaForeignKeyInfo
+	if err := db.DB().Raw("PRAGMA foreign_key_list('" + table + "')").Scan(&foreignKeys).Error; err != nil {
+		t.Fatalf("PRAGMA foreign_key_list(%s) error = %v", table, err)
+	}
+	return foreignKeys
 }

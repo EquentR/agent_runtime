@@ -16,6 +16,13 @@ import (
 
 var ErrConversationNotFound = errors.New("conversation not found")
 
+const (
+	systemMessageProviderDataKey  = "system_message"
+	systemMessageVisibleToUserKey = "visible_to_user"
+	systemMessageKindKey          = "kind"
+	systemMessageKindFailure      = "failure"
+)
+
 type Conversation struct {
 	ID            string     `json:"id" gorm:"type:varchar(64);primaryKey"`
 	ProviderID    string     `json:"provider_id" gorm:"type:varchar(128);not null;index"`
@@ -203,6 +210,30 @@ func (s *ConversationStore) AppendMessages(ctx context.Context, conversationID s
 		now := time.Now().UTC()
 		for _, message := range messages {
 			seq++
+			if !isConversationMessageVisible(message) {
+				raw, err := json.Marshal(cloneMessage(message))
+				if err == nil {
+					raw, err = json.Marshal(persistedConversationMessage{
+						Version: persistedConversationMessageVersion,
+						Message: cloneMessage(message),
+					})
+				}
+				if err != nil {
+					return err
+				}
+				record := ConversationMessage{
+					ConversationID: conversationID,
+					Seq:            seq,
+					Role:           message.Role,
+					Content:        message.Content,
+					MessageJSON:    raw,
+					TaskID:         strings.TrimSpace(taskID),
+				}
+				if err := tx.Create(&record).Error; err != nil {
+					return err
+				}
+				continue
+			}
 			if conversation.Title == "" && message.Role == model.RoleUser {
 				conversation.Title = summarizeConversationText(message.Content, 40)
 			}
@@ -239,6 +270,14 @@ func (s *ConversationStore) AppendMessages(ctx context.Context, conversationID s
 }
 
 func (s *ConversationStore) ListMessages(ctx context.Context, conversationID string) ([]model.Message, error) {
+	return s.listMessages(ctx, conversationID, isConversationMessageVisible)
+}
+
+func (s *ConversationStore) ListReplayMessages(ctx context.Context, conversationID string) ([]model.Message, error) {
+	return s.listMessages(ctx, conversationID, isConversationReplayMessage)
+}
+
+func (s *ConversationStore) listMessages(ctx context.Context, conversationID string, include func(model.Message) bool) ([]model.Message, error) {
 	var records []ConversationMessage
 	if err := s.db.WithContext(ctx).Where("conversation_id = ?", strings.TrimSpace(conversationID)).Order("seq asc").Find(&records).Error; err != nil {
 		return nil, err
@@ -249,6 +288,9 @@ func (s *ConversationStore) ListMessages(ctx context.Context, conversationID str
 		message, err := decodePersistedConversationMessage(record.MessageJSON)
 		if err != nil {
 			return nil, err
+		}
+		if include != nil && !include(message) {
+			continue
 		}
 		messages = append(messages, cloneMessage(message))
 		if record.TaskID != "" && message.Role == model.RoleAssistant {
@@ -275,6 +317,36 @@ func (s *ConversationStore) ListMessages(ctx context.Context, conversationID str
 		messages[messageIndex].Usage = &usageCopy
 	}
 	return messages, nil
+}
+
+func (s *ConversationStore) BuildVisibleConversationSummary(ctx context.Context, conversationID string) (title string, lastMessage string, messageCount int, lastMessageAt *time.Time, err error) {
+	var records []ConversationMessage
+	if err = s.db.WithContext(ctx).Where("conversation_id = ?", strings.TrimSpace(conversationID)).Order("seq asc").Find(&records).Error; err != nil {
+		return "", "", 0, nil, err
+	}
+
+	for _, record := range records {
+		message, decodeErr := decodePersistedConversationMessage(record.MessageJSON)
+		if decodeErr != nil {
+			return "", "", 0, nil, decodeErr
+		}
+		if !isConversationMessageVisible(message) {
+			continue
+		}
+		if title == "" && message.Role == model.RoleUser {
+			title = summarizeConversationText(message.Content, 40)
+		}
+		if summary := summarizeConversationText(message.Content, 120); summary != "" {
+			lastMessage = summary
+			createdAt := record.CreatedAt
+			lastMessageAt = &createdAt
+		}
+		messageCount++
+	}
+	if title == "" {
+		title = lastMessage
+	}
+	return title, lastMessage, messageCount, lastMessageAt, nil
 }
 
 func hasPersistedTokenUsage(usage *model.TokenUsage) bool {
@@ -334,6 +406,47 @@ func decodePersistedConversationMessage(raw json.RawMessage) (model.Message, err
 		return model.Message{}, err
 	}
 	return cloneMessage(legacy), nil
+}
+
+func newVisibleFailureSystemMessage(content string) model.Message {
+	return model.Message{
+		Role:    model.RoleSystem,
+		Content: content,
+		ProviderData: map[string]any{
+			systemMessageProviderDataKey: map[string]any{
+				systemMessageVisibleToUserKey: true,
+				systemMessageKindKey:          systemMessageKindFailure,
+			},
+		},
+	}
+}
+
+func isConversationMessageVisible(message model.Message) bool {
+	if message.Role != model.RoleSystem {
+		return true
+	}
+	return systemMessageVisibleToUser(message)
+}
+
+func isConversationReplayMessage(message model.Message) bool {
+	return message.Role != model.RoleSystem
+}
+
+func systemMessageVisibleToUser(message model.Message) bool {
+	if message.Role != model.RoleSystem {
+		return false
+	}
+
+	providerData, ok := message.ProviderData.(map[string]any)
+	if !ok || providerData == nil {
+		return false
+	}
+	metadata, ok := providerData[systemMessageProviderDataKey].(map[string]any)
+	if !ok || metadata == nil {
+		return false
+	}
+	visible, ok := metadata[systemMessageVisibleToUserKey].(bool)
+	return ok && visible
 }
 
 func (s *ConversationStore) getConversationTx(tx *gorm.DB, id string) (*Conversation, error) {

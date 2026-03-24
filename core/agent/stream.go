@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 
 	coreaudit "github.com/EquentR/agent_runtime/core/audit"
+	coreprompt "github.com/EquentR/agent_runtime/core/prompt"
 	model "github.com/EquentR/agent_runtime/core/providers/types"
 	coretypes "github.com/EquentR/agent_runtime/core/types"
 )
@@ -39,8 +41,24 @@ type RunStreamResult struct {
 	Close  func() error
 }
 
+const (
+	runnerPromptPhaseSession      = "session"
+	runnerPromptPhaseStepPreModel = "step_pre_model"
+	runnerPromptPhaseToolResult   = "tool_result"
+
+	runnerPromptSourceKindLegacySystemPrompt = "legacy_system_prompt"
+	runnerPromptSourceRefLegacySystemPrompt  = "system_prompt"
+)
+
 type runnerResolvedPromptArtifact struct {
-	Messages []model.Message `json:"messages"`
+	Scene              string                             `json:"scene,omitempty"`
+	Session            []model.Message                    `json:"session,omitempty"`
+	StepPreModel       []model.Message                    `json:"step_pre_model,omitempty"`
+	ToolResult         []model.Message                    `json:"tool_result,omitempty"`
+	Segments           []coreprompt.ResolvedPromptSegment `json:"segments,omitempty"`
+	Messages           []model.Message                    `json:"messages"`
+	PhaseSegmentCounts map[string]int                     `json:"phase_segment_counts,omitempty"`
+	SourceCounts       map[string]int                     `json:"source_counts,omitempty"`
 }
 
 type runnerModelResponseArtifact struct {
@@ -59,7 +77,9 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 		return nil, fmt.Errorf("tool registry is required when tools are provided")
 	}
 
-	conversation, err := r.buildRequestMessages(ctx, input.Messages)
+	memoryInsertedCount := len(input.Messages)
+	baseConversation := cloneMessages(input.Messages)
+	conversation, err := r.prepareConversationMessagesWithPersistedCount(ctx, baseConversation, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -83,6 +103,7 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 		defer close(events)
 		produced := make([]model.Message, 0, r.options.MaxSteps*2)
 		toolCalls := 0
+		afterToolTurn := false
 		var usage model.TokenUsage
 		var totalUsage model.TokenUsage
 		var totalCost coretypes.CostBreakdown
@@ -106,17 +127,29 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 				runErr = err
 				return
 			}
+			if step > 1 {
+				if r.options.Memory != nil {
+					conversation, err = r.prepareConversationMessagesWithPersistedCount(ctx, baseConversation, memoryInsertedCount)
+					if err != nil {
+						snapshotResult(step - 1)
+						runErr = err
+						return
+					}
+				} else {
+					conversation = cloneMessages(baseConversation)
+				}
+			}
+			requestMessages := r.buildRequestMessages(conversation, afterToolTurn)
 			usage = model.TokenUsage{}
 			title := fmt.Sprintf("Agent step %d", step)
 			r.emitStepStart(ctx, step, title)
-			promptArtifactID := r.attachAuditArtifact(ctx, coreaudit.ArtifactKindResolvedPrompt, runnerResolvedPromptArtifact{Messages: cloneMessages(conversation)})
-			r.appendAuditEvent(ctx, step, coreaudit.PhasePrompt, "prompt.resolved", map[string]any{
-				"message_count": len(conversation),
-			}, promptArtifactID)
+			promptArtifact := buildRunnerResolvedPromptArtifact(r.options, requestMessages, afterToolTurn)
+			promptArtifactID := r.attachAuditArtifact(ctx, coreaudit.ArtifactKindResolvedPrompt, promptArtifact)
+			r.appendAuditEvent(ctx, step, coreaudit.PhasePrompt, "prompt.resolved", buildRunnerResolvedPromptPayload(promptArtifact, len(conversation)), promptArtifactID)
 
 			request := model.ChatRequest{
 				Model:      r.options.Model,
-				Messages:   cloneMessages(conversation),
+				Messages:   cloneMessages(requestMessages),
 				MaxTokens:  r.options.MaxTokens,
 				Tools:      cloneTools(requestTools),
 				ToolChoice: r.options.ToolChoice,
@@ -204,13 +237,15 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 				"usage_completion_tokens": usage.CompletionTokens,
 				"usage_total_tokens":      usage.TotalTokens,
 			}, responseArtifactID)
-			conversation = append(conversation, assistant)
+			baseConversation = append(baseConversation, assistant)
 			produced = append(produced, assistant)
 			if r.options.Memory != nil {
 				r.options.Memory.AddMessage(assistant)
+				memoryInsertedCount++
 			}
 
 			if len(assistant.ToolCalls) == 0 {
+				afterToolTurn = false
 				r.emitStepFinish(ctx, step, title, map[string]any{"stop_reason": "assistant_message"})
 				result = RunResult{
 					Messages:      produced,
@@ -263,13 +298,15 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 					return
 				}
 				toolMessage := model.Message{Role: model.RoleTool, ToolCallId: call.ID, Content: output}
-				conversation = append(conversation, toolMessage)
+				baseConversation = append(baseConversation, toolMessage)
 				produced = append(produced, toolMessage)
 				if r.options.Memory != nil {
 					r.options.Memory.AddMessage(toolMessage)
+					memoryInsertedCount++
 				}
 				r.emitToolFinish(ctx, step, call, output, nil)
 			}
+			afterToolTurn = len(assistant.ToolCalls) > 0
 
 			r.emitStepFinish(ctx, step, title, map[string]any{"tool_calls": len(assistant.ToolCalls)})
 		}
@@ -307,4 +344,164 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 
 type streamCloser interface {
 	Close() error
+}
+
+func buildRunnerResolvedPromptArtifact(options Options, requestMessages []model.Message, afterToolTurn bool) runnerResolvedPromptArtifact {
+	artifact := runnerResolvedPromptArtifact{Messages: cloneMessages(requestMessages)}
+	resolved := options.ResolvedPrompt
+	if resolved == nil {
+		if options.SystemPrompt != "" {
+			systemPrompt := options.SystemPrompt
+			artifact.Session = []model.Message{{Role: model.RoleSystem, Content: systemPrompt}}
+			artifact.Segments = []coreprompt.ResolvedPromptSegment{{
+				Order:      1,
+				Phase:      runnerPromptPhaseSession,
+				Content:    systemPrompt,
+				SourceKind: runnerPromptSourceKindLegacySystemPrompt,
+				SourceRef:  runnerPromptSourceRefLegacySystemPrompt,
+			}}
+		}
+		artifact.PhaseSegmentCounts = countPromptSegmentsByPhase(artifact.Segments)
+		artifact.SourceCounts = countPromptSegmentsBySource(artifact.Segments)
+		return artifact
+	}
+
+	artifact.Scene = strings.TrimSpace(resolved.Scene)
+	artifact.Session = cloneMessages(resolved.Session)
+	artifact.StepPreModel = cloneMessages(resolved.StepPreModel)
+	if afterToolTurn {
+		artifact.ToolResult = cloneMessages(resolved.ToolResult)
+	}
+	artifact.Segments = filterResolvedPromptSegmentsForStep(resolved, afterToolTurn)
+	artifact.PhaseSegmentCounts = countPromptSegmentsByPhase(artifact.Segments)
+	artifact.SourceCounts = countPromptSegmentsBySource(artifact.Segments)
+	return artifact
+}
+
+func buildRunnerResolvedPromptPayload(artifact runnerResolvedPromptArtifact, conversationMessageCount int) map[string]any {
+	promptMessageCount := len(artifact.Messages) - conversationMessageCount
+	if promptMessageCount < 0 {
+		promptMessageCount = 0
+	}
+	payload := map[string]any{
+		"message_count":        len(artifact.Messages),
+		"prompt_message_count": promptMessageCount,
+		"segment_count":        len(artifact.Segments),
+	}
+	if artifact.Scene != "" {
+		payload["scene"] = artifact.Scene
+	}
+	if len(artifact.PhaseSegmentCounts) > 0 {
+		payload["phase_segment_counts"] = cloneIntMap(artifact.PhaseSegmentCounts)
+	}
+	if len(artifact.SourceCounts) > 0 {
+		payload["source_counts"] = cloneIntMap(artifact.SourceCounts)
+	}
+	return payload
+}
+
+func synthesizeResolvedPromptSegments(resolved *coreprompt.ResolvedPrompt) []coreprompt.ResolvedPromptSegment {
+	if resolved == nil {
+		return nil
+	}
+	segments := make([]coreprompt.ResolvedPromptSegment, 0, len(resolved.Session)+len(resolved.StepPreModel)+len(resolved.ToolResult))
+	appendPhaseSegments := func(phase string, messages []model.Message) {
+		for _, message := range messages {
+			content := strings.TrimSpace(message.Content)
+			if content == "" {
+				continue
+			}
+			segments = append(segments, coreprompt.ResolvedPromptSegment{
+				Order:   len(segments) + 1,
+				Phase:   phase,
+				Content: content,
+			})
+		}
+	}
+	appendPhaseSegments(runnerPromptPhaseSession, resolved.Session)
+	appendPhaseSegments(runnerPromptPhaseStepPreModel, resolved.StepPreModel)
+	appendPhaseSegments(runnerPromptPhaseToolResult, resolved.ToolResult)
+	return segments
+}
+
+func filterResolvedPromptSegmentsForStep(resolved *coreprompt.ResolvedPrompt, afterToolTurn bool) []coreprompt.ResolvedPromptSegment {
+	if resolved == nil {
+		return nil
+	}
+	segments := cloneResolvedPromptSegments(resolved.Segments)
+	if len(segments) == 0 {
+		segments = synthesizeResolvedPromptSegments(resolved)
+	}
+	if len(segments) == 0 {
+		return nil
+	}
+	filtered := make([]coreprompt.ResolvedPromptSegment, 0, len(segments))
+	for _, segment := range segments {
+		phase := strings.TrimSpace(segment.Phase)
+		if phase == runnerPromptPhaseToolResult && !afterToolTurn {
+			continue
+		}
+		segment.Order = len(filtered) + 1
+		filtered = append(filtered, segment)
+	}
+	if len(filtered) == 0 {
+		return nil
+	}
+	return filtered
+}
+
+func cloneResolvedPromptSegments(segments []coreprompt.ResolvedPromptSegment) []coreprompt.ResolvedPromptSegment {
+	if len(segments) == 0 {
+		return nil
+	}
+	cloned := make([]coreprompt.ResolvedPromptSegment, len(segments))
+	copy(cloned, segments)
+	return cloned
+}
+
+func countPromptSegmentsByPhase(segments []coreprompt.ResolvedPromptSegment) map[string]int {
+	if len(segments) == 0 {
+		return nil
+	}
+	counts := make(map[string]int)
+	for _, segment := range segments {
+		phase := strings.TrimSpace(segment.Phase)
+		if phase == "" {
+			continue
+		}
+		counts[phase]++
+	}
+	if len(counts) == 0 {
+		return nil
+	}
+	return counts
+}
+
+func countPromptSegmentsBySource(segments []coreprompt.ResolvedPromptSegment) map[string]int {
+	if len(segments) == 0 {
+		return nil
+	}
+	counts := make(map[string]int)
+	for _, segment := range segments {
+		sourceKind := strings.TrimSpace(segment.SourceKind)
+		if sourceKind == "" {
+			continue
+		}
+		counts[sourceKind]++
+	}
+	if len(counts) == 0 {
+		return nil
+	}
+	return counts
+}
+
+func cloneIntMap(input map[string]int) map[string]int {
+	if len(input) == 0 {
+		return nil
+	}
+	cloned := make(map[string]int, len(input))
+	for key, value := range input {
+		cloned[key] = value
+	}
+	return cloned
 }

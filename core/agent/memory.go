@@ -3,22 +3,48 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"strings"
 
 	model "github.com/EquentR/agent_runtime/core/providers/types"
 	coretypes "github.com/EquentR/agent_runtime/core/types"
 )
 
-func (r *Runner) buildRequestMessages(ctx context.Context, input []model.Message) ([]model.Message, error) {
+func (r *Runner) prepareConversationMessages(ctx context.Context, input []model.Message) ([]model.Message, error) {
+	return r.prepareConversationMessagesWithPersistedCount(ctx, input, 0)
+}
+
+func (r *Runner) prepareConversationMessagesWithPersistedCount(ctx context.Context, input []model.Message, persistedCount int) ([]model.Message, error) {
 	conversation := cloneMessages(input)
-	if r.options.Memory != nil {
-		r.options.Memory.AddMessages(conversation)
-		contextMessages, err := r.options.Memory.ContextMessages(ctx)
-		if err != nil {
-			return nil, err
-		}
-		conversation = contextMessages
+	if r.options.Memory == nil {
+		return conversation, nil
 	}
-	return prependSystemPrompt(r.options.SystemPrompt, conversation), nil
+
+	if persistedCount <= 0 {
+		newMessages := unpersistedConversationTail(conversation, persistedCount)
+		if len(newMessages) > 0 {
+			r.options.Memory.AddMessages(newMessages)
+		}
+	}
+	contextMessages, err := r.options.Memory.ContextMessages(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return contextMessages, nil
+}
+
+func (r *Runner) buildRequestMessages(conversation []model.Message, afterToolTurn bool) []model.Message {
+	base := cloneMessages(conversation)
+	if r.options.ResolvedPrompt != nil {
+		request := make([]model.Message, 0, len(base)+3)
+		request = appendCombinedPromptMessage(request, r.options.ResolvedPrompt.Session)
+		request = appendCombinedPromptMessage(request, r.options.ResolvedPrompt.StepPreModel)
+		if afterToolTurn {
+			request = appendCombinedPromptMessage(request, r.options.ResolvedPrompt.ToolResult)
+		}
+		request = append(request, base...)
+		return request
+	}
+	return prependSystemPrompt(r.options.SystemPrompt, base)
 }
 
 func prependSystemPrompt(systemPrompt string, messages []model.Message) []model.Message {
@@ -31,6 +57,39 @@ func prependSystemPrompt(systemPrompt string, messages []model.Message) []model.
 		Content: systemPrompt,
 	}}, conversation...)
 	return conversation
+}
+
+func appendCombinedPromptMessage(dst []model.Message, prompts []model.Message) []model.Message {
+	content := joinPromptContents(prompts)
+	if content == "" {
+		return dst
+	}
+	return append(dst, model.Message{Role: model.RoleSystem, Content: content})
+}
+
+func joinPromptContents(prompts []model.Message) string {
+	parts := make([]string, 0, len(prompts))
+	for _, prompt := range prompts {
+		content := strings.TrimSpace(prompt.Content)
+		if content == "" {
+			continue
+		}
+		parts = append(parts, content)
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+func unpersistedConversationTail(messages []model.Message, persistedCount int) []model.Message {
+	if len(messages) == 0 {
+		return nil
+	}
+	if persistedCount <= 0 {
+		return cloneMessages(messages)
+	}
+	if persistedCount >= len(messages) {
+		return nil
+	}
+	return cloneMessages(messages[persistedCount:])
 }
 
 func cloneMessages(messages []model.Message) []model.Message {

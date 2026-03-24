@@ -8,6 +8,7 @@ import (
 
 	coreaudit "github.com/EquentR/agent_runtime/core/audit"
 	"github.com/EquentR/agent_runtime/core/memory"
+	coreprompt "github.com/EquentR/agent_runtime/core/prompt"
 	model "github.com/EquentR/agent_runtime/core/providers/types"
 	coretasks "github.com/EquentR/agent_runtime/core/tasks"
 	"github.com/EquentR/agent_runtime/core/tools"
@@ -49,9 +50,12 @@ type RunTaskInput struct {
 	ModelID        string `json:"model_id"`
 	UserID         string `json:"user_id,omitempty"`
 	Message        string `json:"message"`
+	Scene          string `json:"scene,omitempty"`
 	SystemPrompt   string `json:"system_prompt,omitempty"`
 	CreatedBy      string `json:"created_by,omitempty"`
 }
+
+const defaultRunTaskScene = "agent.run.default"
 
 type RunTaskResult struct {
 	ConversationID   string                   `json:"conversation_id"`
@@ -73,6 +77,8 @@ type ExecutorDependencies struct {
 	Resolver          *ModelResolver
 	ConversationStore *ConversationStore
 	Registry          *tools.Registry
+	PromptResolver    *coreprompt.Resolver
+	WorkspaceRoot     string
 	ClientFactory     ClientFactory
 	MemoryFactory     MemoryFactory
 	NewEventSink      EventSinkFactory
@@ -166,6 +172,9 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 		if deps.ClientFactory == nil {
 			return nil, fmt.Errorf("client factory is required")
 		}
+		if deps.PromptResolver == nil {
+			return nil, fmt.Errorf("prompt resolver is required")
+		}
 
 		auditor := newExecutorAuditor(deps.AuditRecorder, task, RunTaskInput{CreatedBy: task.CreatedBy})
 		var (
@@ -195,6 +204,16 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 		}
 		provider := resolved.Provider
 		llmModel := resolved.Model
+		resolvedPrompt, err := deps.PromptResolver.Resolve(ctx, coreprompt.ResolveInput{
+			Scene:              resolveRunTaskScene(input.Scene),
+			ProviderID:         provider.ProviderName(),
+			ModelID:            llmModel.ModelID(),
+			LegacySystemPrompt: input.SystemPrompt,
+			WorkspaceRoot:      deps.WorkspaceRoot,
+		})
+		if err != nil {
+			return nil, err
+		}
 		conversation, err := deps.ConversationStore.EnsureConversation(ctx, EnsureConversationInput{
 			ID:         input.ConversationID,
 			ProviderID: input.ProviderID,
@@ -205,7 +224,7 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 			return nil, err
 		}
 		auditor.setConversation(conversation)
-		history, err := deps.ConversationStore.ListMessages(ctx, conversation.ID)
+		history, err := deps.ConversationStore.ListReplayMessages(ctx, conversation.ID)
 		if err != nil {
 			return nil, err
 		}
@@ -226,14 +245,15 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 		}
 		runID := auditor.ensureRun(ctx)
 		runner, err := NewRunner(client, deps.Registry, Options{
-			LLMModel:      llmModel,
-			Memory:        memoryManager,
-			SystemPrompt:  input.SystemPrompt,
-			EventSink:     sink,
-			TaskID:        task.ID,
-			AuditRecorder: deps.AuditRecorder,
-			AuditRunID:    runID,
-			Actor:         "agent.run",
+			LLMModel:       llmModel,
+			Memory:         memoryManager,
+			SystemPrompt:   bridgeLegacySystemPromptFromResolvedPromptSession(resolvedPrompt),
+			ResolvedPrompt: resolvedPrompt,
+			EventSink:      sink,
+			TaskID:         task.ID,
+			AuditRecorder:  deps.AuditRecorder,
+			AuditRunID:     runID,
+			Actor:          "agent.run",
 			Metadata: map[string]string{
 				"conversation_id": conversation.ID,
 				"provider_id":     conversation.ProviderID,
@@ -259,7 +279,7 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 				}
 				auditor.recordMessagesPersisted(ctx, result.Messages)
 			}
-			failureMessage := model.Message{Role: model.RoleSystem, Content: fmt.Sprintf("Run failed: %s", err.Error())}
+			failureMessage := newVisibleFailureSystemMessage(fmt.Sprintf("Run failed: %s", err.Error()))
 			if appendErr := deps.ConversationStore.AppendMessages(ctx, conversation.ID, task.ID, []model.Message{failureMessage}); appendErr != nil {
 				return nil, appendErr
 			}
@@ -328,4 +348,25 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func resolveRunTaskScene(scene string) string {
+	if trimmed := strings.TrimSpace(scene); trimmed != "" {
+		return trimmed
+	}
+	return defaultRunTaskScene
+}
+
+func bridgeLegacySystemPromptFromResolvedPromptSession(resolved *coreprompt.ResolvedPrompt) string {
+	if resolved == nil || len(resolved.Session) == 0 {
+		return ""
+	}
+
+	parts := make([]string, 0, len(resolved.Session))
+	for _, message := range resolved.Session {
+		if content := strings.TrimSpace(message.Content); content != "" {
+			parts = append(parts, content)
+		}
+	}
+	return strings.Join(parts, "\n\n")
 }

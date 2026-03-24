@@ -120,7 +120,12 @@ describe('ConversationSidebar', () => {
     const bodyMenu = document.body.querySelector('.sidebar-user-menu-panel')
     expect(bodyMenu).not.toBeNull()
     expect(bodyMenu?.classList.contains('upward')).toBe(true)
-    expect(document.body.querySelector('.sidebar-admin-link')).not.toBeNull()
+    const adminLinks = Array.from(document.body.querySelectorAll('.sidebar-admin-link'))
+    expect(adminLinks).toHaveLength(2)
+    expect(adminLinks.map((link) => link.getAttribute('href'))).toEqual(['/admin/audit', '/admin/prompts'])
+    expect(adminLinks.map((link) => link.textContent ?? '')).toEqual(
+      expect.arrayContaining(['审计', '提示词管理']),
+    )
     expect(document.body.querySelector('.sidebar-user-menu-logout')).not.toBeNull()
     expect(wrapper.find('.sidebar-user-menu-trigger-caret').exists()).toBe(false)
     expect(bodyMenu?.matches('::after')).toBe(false)

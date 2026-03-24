@@ -39,6 +39,10 @@ describe('app router session guard', () => {
     await router.push('/admin/audit')
 
     expect(document.title).toBe('审计会话 - Agent Runtime')
+
+    await router.push('/admin/prompts')
+
+    expect(document.title).toBe('提示词管理 - Agent Runtime')
   })
 
   it('forces backend session validation before entering protected pages', async () => {
@@ -91,6 +95,36 @@ describe('app router session guard', () => {
     const router = createAppRouter(true)
 
     await router.push('/admin/audit')
+    await router.isReady()
+
+    expect(session.syncSession).toHaveBeenCalledWith(true)
+    expect(router.currentRoute.value.path).toBe('/chat')
+  })
+
+  it('allows admin users to enter the admin prompts route', async () => {
+    session.hasActiveSession.mockReturnValue(true)
+    session.syncSession.mockResolvedValue({ username: 'alice', role: 'admin' })
+
+    const { createAppRouter } = await import('./index')
+    const router = createAppRouter(true)
+
+    await router.push('/admin/prompts')
+    await router.isReady()
+
+    expect(session.syncSession).toHaveBeenCalledWith(true)
+    expect(router.currentRoute.value.path).toBe('/admin/prompts')
+    expect(router.currentRoute.value.meta.requiresSession).toBe(true)
+    expect(router.currentRoute.value.meta.requiresAdmin).toBe(true)
+  })
+
+  it('redirects non-admin users away from the admin prompts route', async () => {
+    session.hasActiveSession.mockReturnValue(true)
+    session.syncSession.mockResolvedValue({ username: 'alice', role: 'user' })
+
+    const { createAppRouter } = await import('./index')
+    const router = createAppRouter(true)
+
+    await router.push('/admin/prompts')
     await router.isReady()
 
     expect(session.syncSession).toHaveBeenCalledWith(true)

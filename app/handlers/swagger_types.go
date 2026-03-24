@@ -147,6 +147,130 @@ type AuthLoginSwaggerRequest struct {
 	Password string `json:"password"`
 }
 
+// PromptDocumentSwaggerDoc 描述提示词文档的文档结构。
+type PromptDocumentSwaggerDoc struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Content     string `json:"content"`
+	Scope       string `json:"scope"`
+	Status      string `json:"status"`
+	CreatedBy   string `json:"created_by"`
+	UpdatedBy   string `json:"updated_by"`
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
+}
+
+// PromptDocumentSwaggerResponse 描述提示词文档详情接口的成功响应结构。
+type PromptDocumentSwaggerResponse struct {
+	Code    int                      `json:"code"`
+	Message string                   `json:"message"`
+	Data    PromptDocumentSwaggerDoc `json:"data"`
+	OK      bool                     `json:"ok"`
+	Time    string                   `json:"time"`
+}
+
+// PromptDocumentListSwaggerResponse 描述提示词文档列表接口的成功响应结构。
+type PromptDocumentListSwaggerResponse struct {
+	Code    int                        `json:"code"`
+	Message string                     `json:"message"`
+	Data    []PromptDocumentSwaggerDoc `json:"data"`
+	OK      bool                       `json:"ok"`
+	Time    string                     `json:"time"`
+}
+
+// PromptDocumentCreateSwaggerRequest 描述创建提示词文档接口请求结构。
+type PromptDocumentCreateSwaggerRequest struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Content     string `json:"content"`
+	Scope       string `json:"scope"`
+	Status      string `json:"status"`
+}
+
+// PromptDocumentUpdateSwaggerRequest 描述更新提示词文档接口请求结构。
+type PromptDocumentUpdateSwaggerRequest struct {
+	Name        *string `json:"name"`
+	Description *string `json:"description"`
+	Content     *string `json:"content"`
+	Scope       *string `json:"scope"`
+	Status      *string `json:"status"`
+}
+
+// PromptBindingSwaggerDoc 描述提示词绑定的文档结构。
+type PromptBindingSwaggerDoc struct {
+	ID         uint64 `json:"id"`
+	PromptID   string `json:"prompt_id"`
+	Scene      string `json:"scene"`
+	Phase      string `json:"phase"`
+	IsDefault  bool   `json:"is_default"`
+	Priority   int    `json:"priority"`
+	ProviderID string `json:"provider_id"`
+	ModelID    string `json:"model_id"`
+	Status     string `json:"status"`
+	CreatedBy  string `json:"created_by"`
+	UpdatedBy  string `json:"updated_by"`
+	CreatedAt  string `json:"created_at"`
+	UpdatedAt  string `json:"updated_at"`
+}
+
+// PromptBindingSwaggerResponse 描述提示词绑定详情接口的成功响应结构。
+type PromptBindingSwaggerResponse struct {
+	Code    int                     `json:"code"`
+	Message string                  `json:"message"`
+	Data    PromptBindingSwaggerDoc `json:"data"`
+	OK      bool                    `json:"ok"`
+	Time    string                  `json:"time"`
+}
+
+// PromptBindingListSwaggerResponse 描述提示词绑定列表接口的成功响应结构。
+type PromptBindingListSwaggerResponse struct {
+	Code    int                       `json:"code"`
+	Message string                    `json:"message"`
+	Data    []PromptBindingSwaggerDoc `json:"data"`
+	OK      bool                      `json:"ok"`
+	Time    string                    `json:"time"`
+}
+
+// PromptBindingCreateSwaggerRequest 描述创建提示词绑定接口请求结构。
+type PromptBindingCreateSwaggerRequest struct {
+	PromptID   string `json:"prompt_id"`
+	Scene      string `json:"scene"`
+	Phase      string `json:"phase"`
+	IsDefault  bool   `json:"is_default"`
+	Priority   int    `json:"priority"`
+	ProviderID string `json:"provider_id"`
+	ModelID    string `json:"model_id"`
+	Status     string `json:"status"`
+}
+
+// PromptBindingUpdateSwaggerRequest 描述更新提示词绑定接口请求结构。
+type PromptBindingUpdateSwaggerRequest struct {
+	PromptID   *string `json:"prompt_id"`
+	Scene      *string `json:"scene"`
+	Phase      *string `json:"phase"`
+	IsDefault  *bool   `json:"is_default"`
+	Priority   *int    `json:"priority"`
+	ProviderID *string `json:"provider_id"`
+	ModelID    *string `json:"model_id"`
+	Status     *string `json:"status"`
+}
+
+// PromptDeleteSwaggerResponse 描述删除提示词绑定接口的成功响应结构。
+type PromptDeleteSwaggerResponse struct {
+	Code    int                     `json:"code"`
+	Message string                  `json:"message"`
+	Data    PromptDeleteSwaggerData `json:"data"`
+	OK      bool                    `json:"ok"`
+	Time    string                  `json:"time"`
+}
+
+// PromptDeleteSwaggerData 描述删除提示词绑定结果。
+type PromptDeleteSwaggerData struct {
+	Deleted bool `json:"deleted"`
+}
+
 // TaskSwaggerResponse 描述任务接口的成功响应结构。
 type TaskSwaggerResponse struct {
 	Code    int            `json:"code"`

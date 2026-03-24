@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
+import { normalizeConversationMessage } from './api'
 import { buildTranscriptEntries, summarizeToolResult, updateTranscriptFromStreamEvent } from './transcript'
 import type { TranscriptEntry } from '../types/api'
 
@@ -68,6 +69,58 @@ describe('buildTranscriptEntries', () => {
         total_tokens: 168,
       },
     })
+  })
+
+  it('ignores persisted system prompt messages in normal transcript rendering', () => {
+    const entries = buildTranscriptEntries([
+      { role: 'user', content: 'hello' },
+      {
+        role: 'system',
+        content: 'Run failed: hidden system text should still be ignored without explicit visibility metadata',
+      },
+      { role: 'assistant', content: 'hi' },
+    ])
+
+    expect(entries.map((entry) => entry.kind)).toEqual(['user', 'reply'])
+    expect(entries.some((entry) => (entry.content ?? '').includes('hidden system text'))).toBe(false)
+  })
+
+  it('renders visible persisted system failure messages using explicit metadata instead of content matching', () => {
+    const entries = buildTranscriptEntries([
+      {
+        role: 'system',
+        content: 'Upstream 502 while contacting provider',
+        provider_data: {
+          system_message: {
+            visible_to_user: true,
+            kind: 'failure',
+          },
+        },
+      },
+    ] as any)
+
+    expect(entries).toEqual([
+      expect.objectContaining({ kind: 'error', title: '运行失败', content: 'Upstream 502 while contacting provider' }),
+    ])
+  })
+
+  it('preserves explicit system visibility metadata through API normalization', () => {
+    const message = normalizeConversationMessage({
+      Role: 'system',
+      Content: 'Upstream 502 while contacting provider',
+      provider_data: {
+        system_message: {
+          visible_to_user: true,
+          kind: 'failure',
+        },
+      },
+    } as any)
+
+    const entries = buildTranscriptEntries([message])
+
+    expect(entries).toEqual([
+      expect.objectContaining({ kind: 'error', title: '运行失败', content: 'Upstream 502 while contacting provider' }),
+    ])
   })
 })
 
@@ -388,11 +441,76 @@ describe('updateTranscriptFromStreamEvent', () => {
     })
   })
 
-  it('renders persisted system failure messages as error entries', () => {
-    const entries = buildTranscriptEntries([{ role: 'system', content: 'Run failed: upstream 502' }])
+  it('ignores completed system prompt messages from the task stream', () => {
+    let entries: TranscriptEntry[] = [{ id: 'user-1', kind: 'user', title: '', content: 'hello' }]
+
+    entries = updateTranscriptFromStreamEvent(entries, {
+      type: 'log.message',
+      payload: {
+        Step: 4,
+        Kind: 'completed',
+        Message: {
+          Role: 'system',
+          Content: 'Run failed: hidden runtime-only instructions should still be ignored',
+        },
+      },
+    })
+
+    expect(entries).toEqual([{ id: 'user-1', kind: 'user', title: '', content: 'hello' }])
+  })
+
+  it('does not create transcript entries from system injections before a normal assistant reply completes', () => {
+    let entries: TranscriptEntry[] = []
+
+    entries = updateTranscriptFromStreamEvent(entries, {
+      type: 'log.message',
+      payload: {
+        Step: 5,
+        Kind: 'completed',
+        Message: {
+          Role: 'system',
+          Content: 'Run failed: hidden pre-model injection',
+        },
+      },
+    })
+    entries = updateTranscriptFromStreamEvent(entries, {
+      type: 'log.message',
+      payload: { Kind: 'text_delta', Text: 'Visible answer' },
+    })
+    entries = updateTranscriptFromStreamEvent(entries, {
+      type: 'log.message',
+      payload: {
+        Step: 5,
+        Kind: 'completed',
+        Message: {
+          Role: 'assistant',
+          Content: 'Visible answer',
+        },
+      },
+    })
+
+    expect(entries).toHaveLength(1)
+    expect(entries[0]).toMatchObject({ kind: 'reply', content: 'Visible answer' })
+    expect(entries.some((entry) => entry.kind === 'error')).toBe(false)
+    expect(entries.some((entry) => (entry.content ?? '').includes('hidden pre-model injection'))).toBe(false)
+  })
+
+  it('renders persisted system failure messages as error entries when explicitly marked visible', () => {
+    const entries = buildTranscriptEntries([
+      {
+        role: 'system',
+        content: 'run failed: upstream 502',
+        provider_data: {
+          system_message: {
+            visible_to_user: true,
+            kind: 'failure',
+          },
+        },
+      },
+    ] as any)
 
     expect(entries).toEqual([
-      expect.objectContaining({ kind: 'error', title: '运行失败', content: 'Run failed: upstream 502' }),
+      expect.objectContaining({ kind: 'error', title: '运行失败', content: 'run failed: upstream 502' }),
     ])
   })
 

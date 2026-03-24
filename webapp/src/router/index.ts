@@ -3,6 +3,7 @@ import { createMemoryHistory, createRouter, createWebHistory } from 'vue-router'
 import { formatDocumentTitle } from '../lib/chat'
 import { syncSession } from '../lib/session'
 import AdminAuditView from '../views/AdminAuditView.vue'
+import AdminPromptView from '../views/AdminPromptView.vue'
 import ChatView from '../views/ChatView.vue'
 import LoginView from '../views/LoginView.vue'
 
@@ -36,6 +37,16 @@ const routes = [
       requiresSession: true,
       requiresAdmin: true,
       title: '审计会话',
+    },
+  },
+  {
+    path: '/admin/prompts',
+    name: 'admin-prompts',
+    component: AdminPromptView,
+    meta: {
+      requiresSession: true,
+      requiresAdmin: true,
+      title: '提示词管理',
     },
   },
 ]

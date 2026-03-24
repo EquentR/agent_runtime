@@ -17,6 +17,14 @@ function compactWhitespace(value: string) {
   return value.replace(/\s+/g, ' ').trim()
 }
 
+function isRenderableSystemMessage(message: ConversationMessage) {
+  if (message.role !== 'system') {
+    return false
+  }
+
+  return message.provider_data?.system_message?.visible_to_user === true
+}
+
 function previewText(value: string, maxLength = 64) {
   const normalized = compactWhitespace(value)
   if (!normalized) {
@@ -454,8 +462,9 @@ function applyConversationMessage(
   let next = [...entries]
 
   if (message.role === 'system') {
-    if (message.content.trim()) {
-      next.push({ id: createEntryId('error'), kind: 'error', title: '运行失败', content: message.content })
+    const content = compactWhitespace(message.content)
+    if (content && isRenderableSystemMessage(message)) {
+      next.push({ id: createEntryId('error'), kind: 'error', title: '运行失败', content })
     }
     return next
   }

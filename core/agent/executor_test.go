@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -12,11 +14,14 @@ import (
 
 	coreaudit "github.com/EquentR/agent_runtime/core/audit"
 	"github.com/EquentR/agent_runtime/core/memory"
+	coreprompt "github.com/EquentR/agent_runtime/core/prompt"
 	model "github.com/EquentR/agent_runtime/core/providers/types"
 	coretasks "github.com/EquentR/agent_runtime/core/tasks"
 	coretools "github.com/EquentR/agent_runtime/core/tools"
 	coretypes "github.com/EquentR/agent_runtime/core/types"
+	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 func TestResolveConfiguredModelByProviderAndModelID(t *testing.T) {
@@ -94,7 +99,7 @@ func TestAgentExecutorCreatesConversationWhenMissing(t *testing.T) {
 			Type:      coretypes.LLMTypeOpenAIResponses,
 		}},
 	}}}
-	executor := NewTaskExecutor(ExecutorDependencies{
+	executor := newTaskExecutorForTest(t, ExecutorDependencies{
 		Resolver:          resolver,
 		ConversationStore: store,
 		ClientFactory: func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) {
@@ -144,7 +149,7 @@ func TestAgentExecutorLoadsConversationHistoryAndAppendsNewTurn(t *testing.T) {
 		BaseProvider: coretypes.BaseProvider{Name: "openai"},
 		Models:       []coretypes.LLMModel{{BaseModel: coretypes.BaseModel{ID: "gpt-5.4", Name: "GPT 5.4"}, Type: coretypes.LLMTypeOpenAIResponses}},
 	}}}
-	executor := NewTaskExecutor(ExecutorDependencies{
+	executor := newTaskExecutorForTest(t, ExecutorDependencies{
 		Resolver:          resolver,
 		ConversationStore: store,
 		ClientFactory:     func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return client, nil },
@@ -171,6 +176,312 @@ func TestAgentExecutorLoadsConversationHistoryAndAppendsNewTurn(t *testing.T) {
 	}
 }
 
+func TestAgentExecutorDoesNotReplayVisibleSystemFailureMessagesIntoNextModelRequest(t *testing.T) {
+	store := newConversationStoreForTest(t)
+	_, err := store.CreateConversation(context.Background(), CreateConversationInput{ID: "conv_1", ProviderID: "openai", ModelID: "gpt-5.4"})
+	if err != nil {
+		t.Fatalf("CreateConversation() error = %v", err)
+	}
+	if err := store.AppendMessages(context.Background(), "conv_1", "task_0", []model.Message{
+		{Role: model.RoleUser, Content: "first"},
+		{Role: model.RoleAssistant, Content: "answer"},
+		newVisibleFailureSystemMessage("Run failed: upstream 502"),
+	}); err != nil {
+		t.Fatalf("AppendMessages() error = %v", err)
+	}
+
+	client := &stubClient{streams: []model.Stream{newStubStream(
+		[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "second answer"}}},
+		model.Message{Role: model.RoleAssistant, Content: "second answer"},
+		nil,
+	)}}
+	executor := newTaskExecutorForTest(t, ExecutorDependencies{
+		Resolver:          newExecutorResolverForTest(),
+		ConversationStore: store,
+		ClientFactory:     func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return client, nil },
+	})
+	payload := marshalExecutorTaskInput(t, map[string]any{
+		"conversation_id": "conv_1",
+		"provider_id":     "openai",
+		"model_id":        "gpt-5.4",
+		"message":         "second",
+	})
+	task := &coretasks.Task{ID: "task_replay_visibility", TaskType: "agent.run", InputJSON: payload}
+
+	_, err = executor(context.Background(), task, nil)
+	if err != nil {
+		t.Fatalf("executor() error = %v", err)
+	}
+	if len(client.streamRequests) != 1 {
+		t.Fatalf("stream request count = %d, want 1", len(client.streamRequests))
+	}
+	requestMessages := client.streamRequests[0].Messages
+	if len(requestMessages) != 3 {
+		t.Fatalf("request messages = %#v, want prior user/assistant plus new user only", requestMessages)
+	}
+	if requestMessages[0].Role != model.RoleUser || requestMessages[1].Role != model.RoleAssistant || requestMessages[2].Role != model.RoleUser {
+		t.Fatalf("request messages = %#v, want no replayed visible system failure notice", requestMessages)
+	}
+	for _, message := range requestMessages {
+		if message.Role == model.RoleSystem {
+			t.Fatalf("request message = %#v, want UI-visible system failure excluded from replay history", message)
+		}
+	}
+
+	uiMessages, err := store.ListMessages(context.Background(), "conv_1")
+	if err != nil {
+		t.Fatalf("ListMessages() error = %v", err)
+	}
+	if len(uiMessages) < 3 || uiMessages[2].Role != model.RoleSystem {
+		t.Fatalf("ui messages = %#v, want visible system failure retained for UI history", uiMessages)
+	}
+}
+
+func TestAgentExecutorPromptSceneDefaultsToAgentRunDefault(t *testing.T) {
+	store := newConversationStoreForTest(t)
+	workspaceRoot := t.TempDir()
+	promptResolver := newExecutorPromptResolverForTest(t, func(store *coreprompt.Store) {
+		mustCreateExecutorPromptDocument(t, store, coreprompt.CreateDocumentInput{ID: "doc-default", Name: "Default", Content: "Default scene prompt", Scope: "admin", Status: "active"})
+		mustCreateExecutorPromptBinding(t, store, coreprompt.CreateBindingInput{PromptID: "doc-default", Scene: "agent.run.default", Phase: "session", IsDefault: true, Status: "active"})
+	})
+	client := &stubClient{streams: []model.Stream{newStubStream(
+		[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "hello"}}},
+		model.Message{Role: model.RoleAssistant, Content: "hello"},
+		nil,
+	)}}
+	executor := newTaskExecutorForTest(t, ExecutorDependencies{
+		Resolver:          newExecutorResolverForTest(),
+		ConversationStore: store,
+		PromptResolver:    promptResolver,
+		WorkspaceRoot:     workspaceRoot,
+		ClientFactory:     func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return client, nil },
+	})
+
+	payload := marshalExecutorTaskInput(t, map[string]any{
+		"provider_id": "openai",
+		"model_id":    "gpt-5.4",
+		"message":     "hi",
+	})
+	task := &coretasks.Task{ID: "task_prompt_default_scene", TaskType: "agent.run", InputJSON: payload}
+
+	_, err := executor(context.Background(), task, nil)
+	if err != nil {
+		t.Fatalf("executor() error = %v", err)
+	}
+	assertExecutorRequestSystemPrompt(t, client, "Default scene prompt")
+}
+
+func TestAgentExecutorPromptUsesExplicitScene(t *testing.T) {
+	store := newConversationStoreForTest(t)
+	workspaceRoot := t.TempDir()
+	promptResolver := newExecutorPromptResolverForTest(t, func(store *coreprompt.Store) {
+		mustCreateExecutorPromptDocument(t, store, coreprompt.CreateDocumentInput{ID: "doc-default", Name: "Default", Content: "Default scene prompt", Scope: "admin", Status: "active"})
+		mustCreateExecutorPromptDocument(t, store, coreprompt.CreateDocumentInput{ID: "doc-review", Name: "Review", Content: "Review scene prompt", Scope: "admin", Status: "active"})
+		mustCreateExecutorPromptBinding(t, store, coreprompt.CreateBindingInput{PromptID: "doc-default", Scene: "agent.run.default", Phase: "session", IsDefault: true, Status: "active"})
+		mustCreateExecutorPromptBinding(t, store, coreprompt.CreateBindingInput{PromptID: "doc-review", Scene: "agent.run.review", Phase: "session", IsDefault: true, Status: "active"})
+	})
+	client := &stubClient{streams: []model.Stream{newStubStream(
+		[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "hello"}}},
+		model.Message{Role: model.RoleAssistant, Content: "hello"},
+		nil,
+	)}}
+	executor := newTaskExecutorForTest(t, ExecutorDependencies{
+		Resolver:          newExecutorResolverForTest(),
+		ConversationStore: store,
+		PromptResolver:    promptResolver,
+		WorkspaceRoot:     workspaceRoot,
+		ClientFactory:     func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return client, nil },
+	})
+
+	payload := marshalExecutorTaskInput(t, map[string]any{
+		"provider_id": "openai",
+		"model_id":    "gpt-5.4",
+		"message":     "hi",
+		"scene":       "agent.run.review",
+	})
+	task := &coretasks.Task{ID: "task_prompt_explicit_scene", TaskType: "agent.run", InputJSON: payload}
+
+	_, err := executor(context.Background(), task, nil)
+	if err != nil {
+		t.Fatalf("executor() error = %v", err)
+	}
+	assertExecutorRequestSystemPrompt(t, client, "Review scene prompt")
+}
+
+func TestAgentExecutorPromptRoutesLegacySystemPromptThroughResolver(t *testing.T) {
+	store := newConversationStoreForTest(t)
+	workspaceRoot := t.TempDir()
+	writeExecutorWorkspacePrompt(t, workspaceRoot, "Workspace prompt")
+	promptResolver := newExecutorPromptResolverForTest(t, func(store *coreprompt.Store) {
+		mustCreateExecutorPromptDocument(t, store, coreprompt.CreateDocumentInput{ID: "doc-default", Name: "Default", Content: "DB prompt", Scope: "admin", Status: "active"})
+		mustCreateExecutorPromptBinding(t, store, coreprompt.CreateBindingInput{PromptID: "doc-default", Scene: "agent.run.default", Phase: "session", IsDefault: true, Status: "active"})
+	})
+	client := &stubClient{streams: []model.Stream{newStubStream(
+		[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "hello"}}},
+		model.Message{Role: model.RoleAssistant, Content: "hello"},
+		nil,
+	)}}
+	executor := newTaskExecutorForTest(t, ExecutorDependencies{
+		Resolver:          newExecutorResolverForTest(),
+		ConversationStore: store,
+		PromptResolver:    promptResolver,
+		WorkspaceRoot:     workspaceRoot,
+		ClientFactory:     func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return client, nil },
+	})
+
+	payload := marshalExecutorTaskInput(t, map[string]any{
+		"provider_id":   "openai",
+		"model_id":      "gpt-5.4",
+		"message":       "hi",
+		"system_prompt": "Legacy prompt",
+	})
+	task := &coretasks.Task{ID: "task_prompt_legacy_system_prompt", TaskType: "agent.run", InputJSON: payload}
+
+	_, err := executor(context.Background(), task, nil)
+	if err != nil {
+		t.Fatalf("executor() error = %v", err)
+	}
+	assertExecutorRequestSystemPrompt(t, client, "DB prompt\n\nLegacy prompt\n\nWorkspace prompt")
+}
+
+func TestAgentExecutorPromptUsesCanonicalResolvedProviderAndModelForPromptSelection(t *testing.T) {
+	store := newConversationStoreForTest(t)
+	workspaceRoot := t.TempDir()
+	promptResolver := newExecutorPromptResolverForTest(t, func(store *coreprompt.Store) {
+		mustCreateExecutorPromptDocument(t, store, coreprompt.CreateDocumentInput{ID: "doc-canonical", Name: "Canonical", Content: "Canonical prompt", Scope: "admin", Status: "active"})
+		mustCreateExecutorPromptBinding(t, store, coreprompt.CreateBindingInput{
+			PromptID:   "doc-canonical",
+			Scene:      "agent.run.default",
+			Phase:      "session",
+			IsDefault:  true,
+			ProviderID: "openai",
+			ModelID:    "gpt-5.4",
+			Status:     "active",
+		})
+	})
+	client := &stubClient{streams: []model.Stream{newStubStream(
+		[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "hello"}}},
+		model.Message{Role: model.RoleAssistant, Content: "hello"},
+		nil,
+	)}}
+	executor := newTaskExecutorForTest(t, ExecutorDependencies{
+		Resolver: &ModelResolver{Providers: []coretypes.LLMProvider{{
+			BaseProvider: coretypes.BaseProvider{Name: "openai"},
+			Models: []coretypes.LLMModel{{
+				BaseModel: coretypes.BaseModel{ID: "gpt-5.4", Name: "GPT 5.4"},
+				Type:      coretypes.LLMTypeOpenAIResponses,
+			}},
+		}}},
+		ConversationStore: store,
+		PromptResolver:    promptResolver,
+		WorkspaceRoot:     workspaceRoot,
+		ClientFactory:     func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return client, nil },
+	})
+
+	payload := marshalExecutorTaskInput(t, map[string]any{
+		"provider_id": " OPENAI ",
+		"model_id":    " GPT 5.4 ",
+		"message":     "hi",
+	})
+	task := &coretasks.Task{ID: "task_prompt_canonical_provider_model", TaskType: "agent.run", InputJSON: payload}
+
+	_, err := executor(context.Background(), task, nil)
+	if err != nil {
+		t.Fatalf("executor() error = %v", err)
+	}
+	assertExecutorRequestSystemPrompt(t, client, "Canonical prompt")
+}
+
+func TestTemporaryLegacySystemPromptBridgeUsesResolvedSessionOnly(t *testing.T) {
+	resolved := &coreprompt.ResolvedPrompt{
+		Scene: "agent.run.default",
+		Session: []model.Message{
+			{Role: model.RoleSystem, Content: "Session one"},
+			{Role: model.RoleSystem, Content: "Session two"},
+		},
+		StepPreModel: []model.Message{{Role: model.RoleSystem, Content: "Step only prompt"}},
+		ToolResult:   []model.Message{{Role: model.RoleSystem, Content: "Tool only prompt"}},
+		Segments: []coreprompt.ResolvedPromptSegment{
+			{Phase: "step_pre_model", Content: "Step only prompt"},
+			{Phase: "tool_result", Content: "Tool only prompt"},
+		},
+	}
+
+	got := bridgeLegacySystemPromptFromResolvedPromptSession(resolved)
+	if got != "Session one\n\nSession two" {
+		t.Fatalf("bridgeLegacySystemPromptFromResolvedPromptSession() = %q, want %q", got, "Session one\n\nSession two")
+	}
+}
+
+func TestAgentExecutorPromptRequiresPromptResolver(t *testing.T) {
+	store := newConversationStoreForTest(t)
+	workspaceRoot := t.TempDir()
+	clientFactoryCalls := 0
+	executor := NewTaskExecutor(ExecutorDependencies{
+		Resolver:          newExecutorResolverForTest(),
+		ConversationStore: store,
+		WorkspaceRoot:     workspaceRoot,
+		ClientFactory: func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) {
+			clientFactoryCalls++
+			return &stubClient{streams: []model.Stream{newStubStream(
+				[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "hello"}}},
+				model.Message{Role: model.RoleAssistant, Content: "hello"},
+				nil,
+			)}}, nil
+		},
+	})
+
+	payload := marshalExecutorTaskInput(t, map[string]any{
+		"provider_id": "openai",
+		"model_id":    "gpt-5.4",
+		"message":     "hi",
+	})
+	task := &coretasks.Task{ID: "task_prompt_missing_resolver", TaskType: "agent.run", InputJSON: payload}
+
+	_, err := executor(context.Background(), task, nil)
+	if err == nil || !strings.Contains(err.Error(), "prompt resolver is required") {
+		t.Fatalf("executor() error = %v, want missing prompt resolver error", err)
+	}
+	if clientFactoryCalls != 0 {
+		t.Fatalf("clientFactoryCalls = %d, want 0", clientFactoryCalls)
+	}
+}
+
+func TestAgentExecutorPromptResolutionFailureAbortsBeforeModelCall(t *testing.T) {
+	store := newConversationStoreForTest(t)
+	workspaceRoot := t.TempDir()
+	clientFactoryCalls := 0
+	executor := newTaskExecutorForTest(t, ExecutorDependencies{
+		Resolver:          newExecutorResolverForTest(),
+		ConversationStore: store,
+		PromptResolver:    coreprompt.NewResolver(nil),
+		WorkspaceRoot:     workspaceRoot,
+		ClientFactory: func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) {
+			clientFactoryCalls++
+			return &stubClient{streams: []model.Stream{newStubStream(
+				[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "hello"}}},
+				model.Message{Role: model.RoleAssistant, Content: "hello"},
+				nil,
+			)}}, nil
+		},
+	})
+
+	payload := marshalExecutorTaskInput(t, map[string]any{
+		"provider_id": "openai",
+		"model_id":    "gpt-5.4",
+		"message":     "hi",
+	})
+	task := &coretasks.Task{ID: "task_prompt_resolution_failure", TaskType: "agent.run", InputJSON: payload}
+
+	_, err := executor(context.Background(), task, nil)
+	if !errors.Is(err, coreprompt.ErrResolverStoreRequired) {
+		t.Fatalf("executor() error = %v, want ErrResolverStoreRequired", err)
+	}
+	if clientFactoryCalls != 0 {
+		t.Fatalf("clientFactoryCalls = %d, want 0", clientFactoryCalls)
+	}
+}
+
 func TestAgentExecutorPersistsFinalAssistantUsageInConversationHistory(t *testing.T) {
 	store := newConversationStoreForTest(t)
 	resolver := &ModelResolver{Providers: []coretypes.LLMProvider{{
@@ -180,7 +491,7 @@ func TestAgentExecutorPersistsFinalAssistantUsageInConversationHistory(t *testin
 			Type:      coretypes.LLMTypeOpenAIResponses,
 		}},
 	}}}
-	executor := NewTaskExecutor(ExecutorDependencies{
+	executor := newTaskExecutorForTest(t, ExecutorDependencies{
 		Resolver:          resolver,
 		ConversationStore: store,
 		ClientFactory: func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) {
@@ -241,7 +552,7 @@ func TestAgentExecutorAllowsConversationModelSwitchAndUsesSelectedModelMemory(t 
 		},
 	}}}
 	memoryModels := make([]string, 0, 1)
-	executor := NewTaskExecutor(ExecutorDependencies{
+	executor := newTaskExecutorForTest(t, ExecutorDependencies{
 		Resolver:          resolver,
 		ConversationStore: store,
 		ClientFactory:     func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return client, nil },
@@ -291,7 +602,7 @@ func TestAgentExecutorUsesTaskRuntimeSink(t *testing.T) {
 		Models:       []coretypes.LLMModel{{BaseModel: coretypes.BaseModel{ID: "gpt-5.4", Name: "GPT 5.4"}, Type: coretypes.LLMTypeOpenAIResponses}},
 	}}}
 	recorder := &recordingTaskRuntime{}
-	executor := NewTaskExecutor(ExecutorDependencies{
+	executor := newTaskExecutorForTest(t, ExecutorDependencies{
 		Resolver:          resolver,
 		ConversationStore: store,
 		ClientFactory: func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) {
@@ -332,7 +643,7 @@ func TestAgentExecutorPersistsPartialMessagesWhenLaterStepFails(t *testing.T) {
 			return "sunny", nil
 		},
 	})
-	executor := NewTaskExecutor(ExecutorDependencies{
+	executor := newTaskExecutorForTest(t, ExecutorDependencies{
 		Resolver:          resolver,
 		ConversationStore: store,
 		Registry:          registry,
@@ -390,7 +701,7 @@ func TestAgentExecutorRecordsConversationAuditEvents(t *testing.T) {
 			}
 		},
 	}
-	executor := NewTaskExecutor(ExecutorDependencies{
+	executor := newTaskExecutorForTest(t, ExecutorDependencies{
 		Resolver:          newExecutorResolverForTest(),
 		ConversationStore: store,
 		ClientFactory:     func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return client, nil },
@@ -461,7 +772,7 @@ func TestAgentExecutorWiresRunnerAuditEvidence(t *testing.T) {
 		model.Message{Role: model.RoleAssistant, Content: "hello from runner"},
 		nil,
 	)}}
-	executor := NewTaskExecutor(ExecutorDependencies{
+	executor := newTaskExecutorForTest(t, ExecutorDependencies{
 		Resolver:          newExecutorResolverForTest(),
 		ConversationStore: store,
 		ClientFactory:     func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return client, nil },
@@ -533,7 +844,7 @@ func TestAgentExecutorPassesTaskIDToToolRuntimeContext(t *testing.T) {
 			nil,
 		),
 	}}
-	executor := NewTaskExecutor(ExecutorDependencies{
+	executor := newTaskExecutorForTest(t, ExecutorDependencies{
 		Resolver:          newExecutorResolverForTest(),
 		ConversationStore: store,
 		Registry:          registry,
@@ -566,7 +877,7 @@ func TestAgentExecutorAttachesErrorSnapshotArtifactOnFailure(t *testing.T) {
 			return "sunny", nil
 		},
 	})
-	executor := NewTaskExecutor(ExecutorDependencies{
+	executor := newTaskExecutorForTest(t, ExecutorDependencies{
 		Resolver:          newExecutorResolverForTest(),
 		ConversationStore: store,
 		Registry:          registry,
@@ -624,7 +935,7 @@ func TestAgentExecutorAttachesErrorSnapshotArtifactWhenPersistingAssistantMessag
 		}
 	}()
 
-	executor := NewTaskExecutor(ExecutorDependencies{
+	executor := newTaskExecutorForTest(t, ExecutorDependencies{
 		Resolver:          newExecutorResolverForTest(),
 		ConversationStore: store,
 		ClientFactory: func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) {
@@ -906,4 +1217,98 @@ func cloneAuditArtifact(artifact *coreaudit.Artifact) *coreaudit.Artifact {
 		copy.BodyJSON = append([]byte(nil), artifact.BodyJSON...)
 	}
 	return &copy
+}
+
+func newTaskExecutorForTest(t *testing.T, deps ExecutorDependencies) coretasks.Executor {
+	t.Helper()
+
+	if deps.PromptResolver == nil {
+		deps.PromptResolver = newExecutorPromptResolverForTest(t, nil)
+	}
+	if strings.TrimSpace(deps.WorkspaceRoot) == "" {
+		deps.WorkspaceRoot = t.TempDir()
+	}
+	return NewTaskExecutor(deps)
+}
+
+func marshalExecutorTaskInput(t *testing.T, fields map[string]any) []byte {
+	t.Helper()
+
+	payload, err := json.Marshal(fields)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	return payload
+}
+
+func assertExecutorRequestSystemPrompt(t *testing.T, client *stubClient, want string) {
+	t.Helper()
+
+	if len(client.streamRequests) != 1 {
+		t.Fatalf("stream request count = %d, want 1", len(client.streamRequests))
+	}
+	request := client.streamRequests[0]
+	if len(request.Messages) < 2 {
+		t.Fatalf("request messages = %#v, want system and user messages", request.Messages)
+	}
+	if request.Messages[0].Role != model.RoleSystem {
+		t.Fatalf("request first role = %q, want %q", request.Messages[0].Role, model.RoleSystem)
+	}
+	if request.Messages[0].Content != want {
+		t.Fatalf("request system prompt = %q, want %q", request.Messages[0].Content, want)
+	}
+}
+
+func newExecutorPromptResolverForTest(t *testing.T, seed func(store *coreprompt.Store)) *coreprompt.Resolver {
+	t.Helper()
+
+	store := newExecutorPromptStoreForTest(t)
+	if seed != nil {
+		seed(store)
+	}
+	return coreprompt.NewResolver(store)
+}
+
+func newExecutorPromptStoreForTest(t *testing.T) *coreprompt.Store {
+	t.Helper()
+
+	dsn := fmt.Sprintf("file:%s_prompt?mode=memory&cache=shared", t.Name())
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	if err != nil {
+		t.Fatalf("gorm.Open() error = %v", err)
+	}
+	store := coreprompt.NewStore(db)
+	if err := store.AutoMigrate(); err != nil {
+		t.Fatalf("AutoMigrate() error = %v", err)
+	}
+	return store
+}
+
+func mustCreateExecutorPromptDocument(t *testing.T, store *coreprompt.Store, input coreprompt.CreateDocumentInput) *coreprompt.PromptDocument {
+	t.Helper()
+
+	document, err := store.CreateDocument(context.Background(), input)
+	if err != nil {
+		t.Fatalf("CreateDocument(%+v) error = %v", input, err)
+	}
+	return document
+}
+
+func mustCreateExecutorPromptBinding(t *testing.T, store *coreprompt.Store, input coreprompt.CreateBindingInput) *coreprompt.PromptBinding {
+	t.Helper()
+
+	binding, err := store.CreateBinding(context.Background(), input)
+	if err != nil {
+		t.Fatalf("CreateBinding(%+v) error = %v", input, err)
+	}
+	return binding
+}
+
+func writeExecutorWorkspacePrompt(t *testing.T, workspaceRoot string, content string) {
+	t.Helper()
+
+	path := filepath.Join(workspaceRoot, "AGENTS.md")
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("os.WriteFile(%q) error = %v", path, err)
+	}
 }

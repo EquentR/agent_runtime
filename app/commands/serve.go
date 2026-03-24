@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/EquentR/agent_runtime/app/config"
@@ -13,6 +14,7 @@ import (
 	"github.com/EquentR/agent_runtime/app/router"
 	coreagent "github.com/EquentR/agent_runtime/core/agent"
 	coreaudit "github.com/EquentR/agent_runtime/core/audit"
+	coreprompt "github.com/EquentR/agent_runtime/core/prompt"
 	googleclient "github.com/EquentR/agent_runtime/core/providers/client/google"
 	openaicompletions "github.com/EquentR/agent_runtime/core/providers/client/openai_completions"
 	openairesponses "github.com/EquentR/agent_runtime/core/providers/client/openai_responses"
@@ -58,22 +60,30 @@ func Serve(c *config.Config, version, commit string) {
 	if err := conversationStore.AutoMigrate(); err != nil {
 		log.Panicf("Failed to migrate conversation store: %v", err)
 	}
+	promptRuntime, err := initPromptRuntime(db.DB())
+	if err != nil {
+		log.Panicf("Failed to init prompt runtime: %v", err)
+	}
+	workspaceRoot, err := resolveEffectiveWorkspaceRoot(c.WorkspaceDir)
+	if err != nil {
+		log.Panicf("Failed to resolve workspace root: %v", err)
+	}
 	authLogic, err := logics.NewAuthLogic(db.DB(), logics.AuthConfig{})
 	if err != nil {
 		log.Panicf("Failed to init auth logic: %v", err)
 	}
-	toolRegistry, err := newDefaultToolRegistry(c.WorkspaceDir)
+	toolRegistry, err := newDefaultToolRegistry(workspaceRoot)
 	if err != nil {
 		log.Panicf("Failed to register builtin tools: %v", err)
 	}
 	resolver := &coreagent.ModelResolver{Providers: c.LLM}
-	if err := registerAgentRunExecutor(taskManager, resolver, conversationStore, toolRegistry, buildLLMClientFactory(), auditRuntime.RunRecorder); err != nil {
+	if err := registerAgentRunExecutor(taskManager, resolver, conversationStore, toolRegistry, promptRuntime.Resolver, workspaceRoot, buildLLMClientFactory(), auditRuntime.RunRecorder); err != nil {
 		log.Panicf("Failed to register agent.run executor: %v", err)
 	}
 	taskManager.Start(globalCtx)
 
 	// 将任务管理器作为依赖注入路由层。
-	router.Init(engine, c.Server.ApiBasePath, c.Server.StaticPaths, buildRouterDependencies(taskManager, conversationStore, auditRuntime.Store, resolver, authLogic))
+	router.Init(engine, c.Server.ApiBasePath, c.Server.StaticPaths, buildRouterDependencies(taskManager, conversationStore, auditRuntime.Store, resolver, promptRuntime.Store, promptRuntime.Resolver, authLogic))
 
 	addr := fmt.Sprintf("%s:%d", c.Server.Host, c.Server.Port)
 	ln, err := net.Listen("tcp", addr)
@@ -114,26 +124,70 @@ func buildLLMClientFactory() coreagent.ClientFactory {
 	}
 }
 
-func registerAgentRunExecutor(taskManager *coretasks.Manager, resolver *coreagent.ModelResolver, conversationStore *coreagent.ConversationStore, toolRegistry *coretools.Registry, clientFactory coreagent.ClientFactory, auditRecorder coreaudit.Recorder) error {
+func registerAgentRunExecutor(taskManager *coretasks.Manager, resolver *coreagent.ModelResolver, conversationStore *coreagent.ConversationStore, toolRegistry *coretools.Registry, promptResolver *coreprompt.Resolver, workspaceRoot string, clientFactory coreagent.ClientFactory, auditRecorder coreaudit.Recorder) error {
 	if taskManager == nil {
 		return fmt.Errorf("task manager is required")
 	}
-	return taskManager.RegisterExecutor("agent.run", coreagent.NewTaskExecutor(coreagent.ExecutorDependencies{
-		Resolver:          resolver,
-		ConversationStore: conversationStore,
-		Registry:          toolRegistry,
-		ClientFactory:     clientFactory,
-		AuditRecorder:     auditRecorder,
-	}))
+	return taskManager.RegisterExecutor("agent.run", coreagent.NewTaskExecutor(buildAgentRunExecutorDependencies(resolver, conversationStore, toolRegistry, promptResolver, workspaceRoot, clientFactory, auditRecorder)))
 }
 
-func buildRouterDependencies(taskManager *coretasks.Manager, conversationStore *coreagent.ConversationStore, auditStore *coreaudit.Store, resolver *coreagent.ModelResolver, authLogic *logics.AuthLogic) router.Dependencies {
+func buildRouterDependencies(taskManager *coretasks.Manager, conversationStore *coreagent.ConversationStore, auditStore *coreaudit.Store, resolver *coreagent.ModelResolver, promptStore *coreprompt.Store, promptResolver *coreprompt.Resolver, authLogic *logics.AuthLogic) router.Dependencies {
 	return router.Dependencies{
 		TaskManager:       taskManager,
 		ConversationStore: conversationStore,
 		AuditStore:        auditStore,
 		ModelResolver:     resolver,
+		PromptStore:       promptStore,
+		PromptResolver:    promptResolver,
 		AuthLogic:         authLogic,
+	}
+}
+
+type promptRuntime struct {
+	Store    *coreprompt.Store
+	Resolver *coreprompt.Resolver
+}
+
+func initPromptRuntime(database *gorm.DB) (*promptRuntime, error) {
+	if database == nil {
+		return nil, fmt.Errorf("prompt runtime db is required")
+	}
+	store := coreprompt.NewStore(database)
+	return &promptRuntime{
+		Store:    store,
+		Resolver: coreprompt.NewResolver(store),
+	}, nil
+}
+
+func resolveEffectiveWorkspaceRoot(configuredRoot string) (string, error) {
+	workspaceRoot := configuredRoot
+	if workspaceRoot == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("resolve workspace root: %w", err)
+		}
+		workspaceRoot = cwd
+	} else {
+		if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
+			return "", fmt.Errorf("create workspace root %q: %w", workspaceRoot, err)
+		}
+	}
+	workspaceRoot, err := filepath.Abs(workspaceRoot)
+	if err != nil {
+		return "", fmt.Errorf("resolve workspace root: %w", err)
+	}
+	return filepath.Clean(workspaceRoot), nil
+}
+
+func buildAgentRunExecutorDependencies(resolver *coreagent.ModelResolver, conversationStore *coreagent.ConversationStore, toolRegistry *coretools.Registry, promptResolver *coreprompt.Resolver, workspaceRoot string, clientFactory coreagent.ClientFactory, auditRecorder coreaudit.Recorder) coreagent.ExecutorDependencies {
+	return coreagent.ExecutorDependencies{
+		Resolver:          resolver,
+		ConversationStore: conversationStore,
+		Registry:          toolRegistry,
+		PromptResolver:    promptResolver,
+		WorkspaceRoot:     workspaceRoot,
+		ClientFactory:     clientFactory,
+		AuditRecorder:     auditRecorder,
 	}
 }
 
@@ -158,18 +212,6 @@ func initAuditRuntime(database *gorm.DB) (*auditRuntime, error) {
 
 func newDefaultToolRegistry(workspaceRoot string) (*coretools.Registry, error) {
 	registry := coretools.NewRegistry()
-	// 检查 workspace 是否为空；为空时使用当前工作目录；有值时确保目录存在，不存在则创建。
-	if workspaceRoot == "" {
-		var err error
-		workspaceRoot, err = os.Getwd()
-		if err != nil {
-			return nil, fmt.Errorf("get current working directory: %w", err)
-		}
-	} else {
-		if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
-			return nil, fmt.Errorf("create workspace root %q: %w", workspaceRoot, err)
-		}
-	}
 	if err := builtin.Register(registry, builtin.Options{WorkspaceRoot: workspaceRoot}); err != nil {
 		return nil, err
 	}

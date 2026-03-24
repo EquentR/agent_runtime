@@ -421,6 +421,198 @@ definitions:
       name:
         type: string
     type: object
+  handlers.PromptBindingCreateSwaggerRequest:
+    properties:
+      is_default:
+        type: boolean
+      model_id:
+        type: string
+      phase:
+        type: string
+      priority:
+        type: integer
+      prompt_id:
+        type: string
+      provider_id:
+        type: string
+      scene:
+        type: string
+      status:
+        type: string
+    type: object
+  handlers.PromptBindingListSwaggerResponse:
+    properties:
+      code:
+        type: integer
+      data:
+        items:
+          $ref: '#/definitions/handlers.PromptBindingSwaggerDoc'
+        type: array
+      message:
+        type: string
+      ok:
+        type: boolean
+      time:
+        type: string
+    type: object
+  handlers.PromptBindingSwaggerDoc:
+    properties:
+      created_at:
+        type: string
+      created_by:
+        type: string
+      id:
+        type: integer
+      is_default:
+        type: boolean
+      model_id:
+        type: string
+      phase:
+        type: string
+      priority:
+        type: integer
+      prompt_id:
+        type: string
+      provider_id:
+        type: string
+      scene:
+        type: string
+      status:
+        type: string
+      updated_at:
+        type: string
+      updated_by:
+        type: string
+    type: object
+  handlers.PromptBindingSwaggerResponse:
+    properties:
+      code:
+        type: integer
+      data:
+        $ref: '#/definitions/handlers.PromptBindingSwaggerDoc'
+      message:
+        type: string
+      ok:
+        type: boolean
+      time:
+        type: string
+    type: object
+  handlers.PromptBindingUpdateSwaggerRequest:
+    properties:
+      is_default:
+        type: boolean
+      model_id:
+        type: string
+      phase:
+        type: string
+      priority:
+        type: integer
+      prompt_id:
+        type: string
+      provider_id:
+        type: string
+      scene:
+        type: string
+      status:
+        type: string
+    type: object
+  handlers.PromptDeleteSwaggerData:
+    properties:
+      deleted:
+        type: boolean
+    type: object
+  handlers.PromptDeleteSwaggerResponse:
+    properties:
+      code:
+        type: integer
+      data:
+        $ref: '#/definitions/handlers.PromptDeleteSwaggerData'
+      message:
+        type: string
+      ok:
+        type: boolean
+      time:
+        type: string
+    type: object
+  handlers.PromptDocumentCreateSwaggerRequest:
+    properties:
+      content:
+        type: string
+      description:
+        type: string
+      id:
+        type: string
+      name:
+        type: string
+      scope:
+        type: string
+      status:
+        type: string
+    type: object
+  handlers.PromptDocumentListSwaggerResponse:
+    properties:
+      code:
+        type: integer
+      data:
+        items:
+          $ref: '#/definitions/handlers.PromptDocumentSwaggerDoc'
+        type: array
+      message:
+        type: string
+      ok:
+        type: boolean
+      time:
+        type: string
+    type: object
+  handlers.PromptDocumentSwaggerDoc:
+    properties:
+      content:
+        type: string
+      created_at:
+        type: string
+      created_by:
+        type: string
+      description:
+        type: string
+      id:
+        type: string
+      name:
+        type: string
+      scope:
+        type: string
+      status:
+        type: string
+      updated_at:
+        type: string
+      updated_by:
+        type: string
+    type: object
+  handlers.PromptDocumentSwaggerResponse:
+    properties:
+      code:
+        type: integer
+      data:
+        $ref: '#/definitions/handlers.PromptDocumentSwaggerDoc'
+      message:
+        type: string
+      ok:
+        type: boolean
+      time:
+        type: string
+    type: object
+  handlers.PromptDocumentUpdateSwaggerRequest:
+    properties:
+      content:
+        type: string
+      description:
+        type: string
+      name:
+        type: string
+      scope:
+        type: string
+      status:
+        type: string
+    type: object
   handlers.TaskSwaggerDoc:
     properties:
       created_at:
@@ -762,6 +954,305 @@ paths:
       summary: 获取模型目录
       tags:
       - models
+  /prompts/bindings:
+    get:
+      description: 仅管理员可读取提示词绑定列表，可按 scene、phase、status、prompt_id、provider_id、model_id
+        过滤。
+      parameters:
+      - description: 场景
+        in: query
+        name: scene
+        type: string
+      - description: 阶段
+        in: query
+        name: phase
+        type: string
+      - description: 状态
+        in: query
+        name: status
+        type: string
+      - description: 提示词文档 ID
+        in: query
+        name: prompt_id
+        type: string
+      - description: Provider ID
+        in: query
+        name: provider_id
+        type: string
+      - description: Model ID
+        in: query
+        name: model_id
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.PromptBindingListSwaggerResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+      summary: 获取提示词绑定列表
+      tags:
+      - prompts
+    post:
+      consumes:
+      - application/json
+      description: 仅管理员可创建提示词绑定。
+      parameters:
+      - description: 提示词绑定请求
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.PromptBindingCreateSwaggerRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.PromptBindingSwaggerResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+      summary: 创建提示词绑定
+      tags:
+      - prompts
+  /prompts/bindings/{id}:
+    delete:
+      description: 仅管理员可删除指定提示词绑定。
+      parameters:
+      - description: 提示词绑定 ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.PromptDeleteSwaggerResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+      summary: 删除提示词绑定
+      tags:
+      - prompts
+    get:
+      description: 仅管理员可读取指定提示词绑定。
+      parameters:
+      - description: 提示词绑定 ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.PromptBindingSwaggerResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+      summary: 获取提示词绑定详情
+      tags:
+      - prompts
+    put:
+      consumes:
+      - application/json
+      description: 仅管理员可更新指定提示词绑定。
+      parameters:
+      - description: 提示词绑定 ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: 提示词绑定更新请求
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.PromptBindingUpdateSwaggerRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.PromptBindingSwaggerResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+      summary: 更新提示词绑定
+      tags:
+      - prompts
+  /prompts/documents:
+    get:
+      description: 仅管理员可读取平台提示词文档列表，可按 status 和 scope 过滤。
+      parameters:
+      - description: 状态
+        in: query
+        name: status
+        type: string
+      - description: 作用域
+        in: query
+        name: scope
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.PromptDocumentListSwaggerResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+      summary: 获取提示词文档列表
+      tags:
+      - prompts
+    post:
+      consumes:
+      - application/json
+      description: 仅管理员可创建平台提示词文档。
+      parameters:
+      - description: 提示词文档请求
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.PromptDocumentCreateSwaggerRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.PromptDocumentSwaggerResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+      summary: 创建提示词文档
+      tags:
+      - prompts
+  /prompts/documents/{id}:
+    get:
+      description: 仅管理员可读取指定提示词文档。
+      parameters:
+      - description: 提示词文档 ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.PromptDocumentSwaggerResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+      summary: 获取提示词文档详情
+      tags:
+      - prompts
+    put:
+      consumes:
+      - application/json
+      description: 仅管理员可更新指定提示词文档。
+      parameters:
+      - description: 提示词文档 ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: 提示词文档更新请求
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.PromptDocumentUpdateSwaggerRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.PromptDocumentSwaggerResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+      summary: 更新提示词文档
+      tags:
+      - prompts
   /swagger:
     get:
       description: 将 `/swagger` 与 `/swagger/` 重定向到可直接访问的 Swagger UI 页面。

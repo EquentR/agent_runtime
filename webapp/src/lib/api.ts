@@ -7,12 +7,18 @@ import type {
   Conversation,
   ConversationMessage,
   ModelCatalog,
+  CreatePromptDocumentInput,
+  PromptBinding,
+  PromptBindingInput,
+  PromptDeleteResult,
+  PromptDocument,
   TaskDetails,
   RunTaskRequest,
   RunTaskResult,
   TaskStreamEvent,
   TaskSnapshot,
   TranscriptTokenUsage,
+  UpdatePromptDocumentInput,
   UserRole,
 } from '../types/api'
 
@@ -76,6 +82,9 @@ export function normalizeConversationMessage(
     Content?: string
     ProviderID?: string
     ModelID?: string
+    ProviderData?: unknown
+    providerData?: unknown
+    provider_data?: unknown
     Usage?: unknown
     Reasoning?: string
     ToolCallId?: string
@@ -94,6 +103,7 @@ export function normalizeConversationMessage(
     content: message.content ?? message.Content ?? '',
     provider_id: normalizeStringValue(message.provider_id ?? message.providerId ?? message.ProviderID),
     model_id: normalizeStringValue(message.model_id ?? message.modelId ?? message.ModelID),
+    provider_data: normalizeConversationProviderData(message.provider_data ?? message.providerData ?? message.ProviderData),
     usage: normalizeTranscriptTokenUsage(message.usage ?? message.Usage),
     reasoning: message.reasoning ?? message.Reasoning,
     tool_call_id: message.tool_call_id ?? message.ToolCallId ?? message.ToolCallID ?? message.toolCallId,
@@ -115,6 +125,32 @@ export function normalizeConversationMessage(
         arguments: toolCall.arguments ?? toolCall.Arguments ?? '',
       })),
   }
+}
+
+function normalizeConversationProviderData(value: unknown): ConversationMessage['provider_data'] | undefined {
+  if (!value || typeof value !== 'object') {
+    return undefined
+  }
+
+  const raw = value as Record<string, unknown>
+  const rawSystemMessage = raw.system_message
+  if (!rawSystemMessage || typeof rawSystemMessage !== 'object') {
+    return undefined
+  }
+
+  const systemMessage = rawSystemMessage as Record<string, unknown>
+  const providerData: NonNullable<ConversationMessage['provider_data']> = {
+    system_message: {
+      visible_to_user: typeof systemMessage.visible_to_user === 'boolean' ? systemMessage.visible_to_user : undefined,
+      kind: normalizeStringValue(systemMessage.kind),
+    },
+  }
+
+  if (!providerData.system_message?.visible_to_user && !providerData.system_message?.kind) {
+    return undefined
+  }
+
+  return providerData
 }
 
 export function normalizeRunTaskResult(
@@ -255,6 +291,54 @@ export async function fetchAuditRunEvents(runId: string) {
 
 export async function fetchAuditRunReplay(runId: string) {
   return request<AuditReplayBundle>(`/audit/runs/${runId}/replay`)
+}
+
+export async function fetchPromptDocuments() {
+  return request<PromptDocument[]>('/prompts/documents')
+}
+
+export async function createPromptDocument(input: CreatePromptDocumentInput) {
+  return request<PromptDocument>('/prompts/documents', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export async function updatePromptDocument(documentId: string, input: UpdatePromptDocumentInput) {
+  return request<PromptDocument>(`/prompts/documents/${encodeURIComponent(documentId)}`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  })
+}
+
+export async function deletePromptDocument(documentId: string) {
+  return request<PromptDeleteResult>(`/prompts/documents/${encodeURIComponent(documentId)}`, {
+    method: 'DELETE',
+  })
+}
+
+export async function fetchPromptBindings() {
+  return request<PromptBinding[]>('/prompts/bindings')
+}
+
+export async function createPromptBinding(input: PromptBindingInput) {
+  return request<PromptBinding>('/prompts/bindings', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export async function updatePromptBinding(bindingId: number, input: PromptBindingInput) {
+  return request<PromptBinding>(`/prompts/bindings/${bindingId}`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  })
+}
+
+export async function deletePromptBinding(bindingId: number) {
+  return request<PromptDeleteResult>(`/prompts/bindings/${bindingId}`, {
+    method: 'DELETE',
+  })
 }
 
 export async function createRunTask(input: {

@@ -4,6 +4,7 @@ import (
 	"github.com/EquentR/agent_runtime/app/logics"
 	coreagent "github.com/EquentR/agent_runtime/core/agent"
 	coreaudit "github.com/EquentR/agent_runtime/core/audit"
+	coreprompt "github.com/EquentR/agent_runtime/core/prompt"
 	coretasks "github.com/EquentR/agent_runtime/core/tasks"
 )
 
@@ -13,5 +14,7 @@ type Dependencies struct {
 	ConversationStore *coreagent.ConversationStore
 	AuditStore        *coreaudit.Store
 	ModelResolver     *coreagent.ModelResolver
+	PromptStore       *coreprompt.Store
+	PromptResolver    *coreprompt.Resolver
 	AuthLogic         *logics.AuthLogic
 }

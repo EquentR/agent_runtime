@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -25,7 +27,97 @@ type serveRouterEnvelope struct {
 	OK   bool `json:"ok"`
 }
 
-func TestBuildRouterDependenciesExposesAuditRoutes(t *testing.T) {
+func TestPromptBuildRouterDependenciesExposePromptRuntime(t *testing.T) {
+	db := newServeTestDB(t)
+	promptRuntime, err := initPromptRuntime(db)
+	if err != nil {
+		t.Fatalf("initPromptRuntime() error = %v", err)
+	}
+
+	deps := buildRouterDependencies(nil, nil, nil, nil, promptRuntime.Store, promptRuntime.Resolver, nil)
+	if deps.PromptStore != promptRuntime.Store {
+		t.Fatalf("PromptStore = %#v, want %#v", deps.PromptStore, promptRuntime.Store)
+	}
+	if deps.PromptResolver != promptRuntime.Resolver {
+		t.Fatalf("PromptResolver = %#v, want %#v", deps.PromptResolver, promptRuntime.Resolver)
+	}
+}
+
+func TestInitPromptRuntimeBuildsPromptDependenciesWithoutAutoMigratingTables(t *testing.T) {
+	db := newServeTestDB(t)
+
+	runtime, err := initPromptRuntime(db)
+	if err != nil {
+		t.Fatalf("initPromptRuntime() error = %v", err)
+	}
+	if runtime.Store == nil {
+		t.Fatal("runtime.Store = nil, want prompt store")
+	}
+	if runtime.Resolver == nil {
+		t.Fatal("runtime.Resolver = nil, want prompt resolver")
+	}
+	if db.Migrator().HasTable("prompt_documents") {
+		t.Fatal("prompt_documents table exists, want prompt runtime init to leave schema untouched")
+	}
+	if db.Migrator().HasTable("prompt_bindings") {
+		t.Fatal("prompt_bindings table exists, want prompt runtime init to leave schema untouched")
+	}
+}
+
+func TestResolveEffectiveWorkspaceRootUsesCurrentDirectoryWhenEmpty(t *testing.T) {
+	originalWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	tempDir := t.TempDir()
+	if err := os.Chdir(tempDir); err != nil {
+		t.Fatalf("Chdir(%q) error = %v", tempDir, err)
+	}
+	t.Cleanup(func() {
+		if chdirErr := os.Chdir(originalWD); chdirErr != nil {
+			t.Errorf("restore working directory error = %v", chdirErr)
+		}
+	})
+
+	resolved, err := resolveEffectiveWorkspaceRoot("")
+	if err != nil {
+		t.Fatalf("resolveEffectiveWorkspaceRoot() error = %v", err)
+	}
+	want := filepath.Clean(tempDir)
+	if resolved != want {
+		t.Fatalf("resolved workspace root = %q, want %q", resolved, want)
+	}
+}
+
+func TestResolveEffectiveWorkspaceRootCreatesCanonicalConfiguredDirectory(t *testing.T) {
+	baseDir := t.TempDir()
+	configured := filepath.Join(baseDir, "nested", "..", "workspace")
+
+	resolved, err := resolveEffectiveWorkspaceRoot(configured)
+	if err != nil {
+		t.Fatalf("resolveEffectiveWorkspaceRoot() error = %v", err)
+	}
+	want := filepath.Clean(filepath.Join(baseDir, "workspace"))
+	if resolved != want {
+		t.Fatalf("resolved workspace root = %q, want %q", resolved, want)
+	}
+	info, err := os.Stat(want)
+	if err != nil {
+		t.Fatalf("Stat(%q) error = %v", want, err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("workspace root %q is not a directory", want)
+	}
+	registry, err := newDefaultToolRegistry(resolved)
+	if err != nil {
+		t.Fatalf("newDefaultToolRegistry() error = %v", err)
+	}
+	if len(registry.List()) == 0 {
+		t.Fatal("registry.List() = empty, want builtin tools registered")
+	}
+}
+
+func TestPromptBuildRouterDependenciesPreservesAuditRoutes(t *testing.T) {
 	db := newServeTestDB(t)
 	auditStore := coreaudit.NewStore(db)
 	if err := auditStore.AutoMigrate(); err != nil {
@@ -33,7 +125,7 @@ func TestBuildRouterDependenciesExposesAuditRoutes(t *testing.T) {
 	}
 
 	engine := rest.Init()
-	router.Init(engine, "/api/v1", nil, buildRouterDependencies(nil, nil, auditStore, nil, nil))
+	router.Init(engine, "/api/v1", nil, router.Dependencies{AuditStore: auditStore})
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/audit/runs/run_1", nil)
@@ -78,7 +170,45 @@ func TestInitAuditRuntimeSharesRecorderAcrossTaskAndAgentPaths(t *testing.T) {
 	}
 }
 
-func TestRegisterAgentRunExecutorWiresExecutorAuditRecorder(t *testing.T) {
+func TestBuildAgentRunExecutorDependenciesThreadPromptRuntimeAndWorkspaceRoot(t *testing.T) {
+	db := newServeTestDB(t)
+	promptRuntime, err := initPromptRuntime(db)
+	if err != nil {
+		t.Fatalf("initPromptRuntime() error = %v", err)
+	}
+	workspaceRoot, err := resolveEffectiveWorkspaceRoot(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolveEffectiveWorkspaceRoot() error = %v", err)
+	}
+	resolver := &coreagent.ModelResolver{}
+	conversationStore := coreagent.NewConversationStore(db)
+	recorder := coreaudit.NewRecorder(coreaudit.NewStore(db))
+	clientFactory := func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) {
+		return &serveStubClient{answer: "hello"}, nil
+	}
+
+	deps := buildAgentRunExecutorDependencies(resolver, conversationStore, nil, promptRuntime.Resolver, workspaceRoot, clientFactory, recorder)
+	if deps.Resolver != resolver {
+		t.Fatalf("deps.Resolver = %#v, want %#v", deps.Resolver, resolver)
+	}
+	if deps.ConversationStore != conversationStore {
+		t.Fatalf("deps.ConversationStore = %#v, want %#v", deps.ConversationStore, conversationStore)
+	}
+	if deps.PromptResolver != promptRuntime.Resolver {
+		t.Fatalf("deps.PromptResolver = %#v, want %#v", deps.PromptResolver, promptRuntime.Resolver)
+	}
+	if deps.WorkspaceRoot != workspaceRoot {
+		t.Fatalf("deps.WorkspaceRoot = %q, want %q", deps.WorkspaceRoot, workspaceRoot)
+	}
+	if deps.ClientFactory == nil {
+		t.Fatal("deps.ClientFactory = nil, want client factory")
+	}
+	if deps.AuditRecorder != recorder {
+		t.Fatalf("deps.AuditRecorder = %#v, want %#v", deps.AuditRecorder, recorder)
+	}
+}
+
+func TestRegisterAgentRunExecutorPromptWiringKeepsAuditRecorder(t *testing.T) {
 	db := newServeTestDB(t)
 	taskStore := coretasks.NewStore(db)
 	if err := taskStore.AutoMigrate(); err != nil {
@@ -94,6 +224,23 @@ func TestRegisterAgentRunExecutorWiresExecutorAuditRecorder(t *testing.T) {
 	}
 
 	recorder := coreaudit.NewRecorder(auditStore)
+	promptRuntime, err := initPromptRuntime(db)
+	if err != nil {
+		t.Fatalf("initPromptRuntime() error = %v", err)
+	}
+	if db.Migrator().HasTable("prompt_documents") || db.Migrator().HasTable("prompt_bindings") {
+		t.Fatal("prompt tables exist before explicit test migration, want initPromptRuntime to leave schema untouched")
+	}
+	if err := promptRuntime.Store.AutoMigrate(); err != nil {
+		t.Fatalf("prompt store migrate error = %v", err)
+	}
+	if !db.Migrator().HasTable("prompt_documents") || !db.Migrator().HasTable("prompt_bindings") {
+		t.Fatal("prompt tables missing after explicit test migration")
+	}
+	workspaceRoot, err := resolveEffectiveWorkspaceRoot(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolveEffectiveWorkspaceRoot() error = %v", err)
+	}
 	manager := coretasks.NewManager(taskStore, coretasks.ManagerOptions{
 		RunnerID:          "serve-test",
 		PollInterval:      5 * time.Millisecond,
@@ -104,7 +251,7 @@ func TestRegisterAgentRunExecutorWiresExecutorAuditRecorder(t *testing.T) {
 	if err := registerAgentRunExecutor(manager, &coreagent.ModelResolver{Providers: []coretypes.LLMProvider{{
 		BaseProvider: coretypes.BaseProvider{Name: "openai"},
 		Models:       []coretypes.LLMModel{{BaseModel: coretypes.BaseModel{ID: "gpt-5.4", Name: "GPT 5.4"}, Type: coretypes.LLMTypeOpenAIResponses}},
-	}}}, conversationStore, nil, func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) {
+	}}}, conversationStore, nil, promptRuntime.Resolver, workspaceRoot, func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) {
 		return &serveStubClient{answer: "hello"}, nil
 	}, recorder); err != nil {
 		t.Fatalf("registerAgentRunExecutor() error = %v", err)

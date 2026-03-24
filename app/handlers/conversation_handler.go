@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 
 	"github.com/EquentR/agent_runtime/app/models"
 	coreagent "github.com/EquentR/agent_runtime/core/agent"
@@ -224,6 +225,25 @@ func (h *ConversationHandler) enrichConversations(ctx context.Context, conversat
 	for _, conversation := range conversations {
 		enriched = append(enriched, h.enrichConversation(ctx, &conversation))
 	}
+	sort.SliceStable(enriched, func(i, j int) bool {
+		left := enriched[i]
+		right := enriched[j]
+
+		leftHasVisible := left.LastMessageAt != nil
+		rightHasVisible := right.LastMessageAt != nil
+		if leftHasVisible != rightHasVisible {
+			return leftHasVisible
+		}
+		if leftHasVisible && rightHasVisible {
+			if !left.LastMessageAt.Equal(*right.LastMessageAt) {
+				return left.LastMessageAt.After(*right.LastMessageAt)
+			}
+		}
+		if !left.CreatedAt.Equal(right.CreatedAt) {
+			return left.CreatedAt.After(right.CreatedAt)
+		}
+		return left.ID > right.ID
+	})
 	return enriched
 }
 
@@ -232,6 +252,15 @@ func (h *ConversationHandler) enrichConversation(ctx context.Context, conversati
 		return coreagent.Conversation{}
 	}
 	enriched := *conversation
+	if h.store != nil && conversation.ID != "" {
+		title, lastMessage, messageCount, lastMessageAt, err := h.store.BuildVisibleConversationSummary(ctx, conversation.ID)
+		if err == nil {
+			enriched.Title = title
+			enriched.LastMessage = lastMessage
+			enriched.MessageCount = messageCount
+			enriched.LastMessageAt = lastMessageAt
+		}
+	}
 	if h.auditStore == nil || conversation.ID == "" {
 		return enriched
 	}

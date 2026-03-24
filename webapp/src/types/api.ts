@@ -14,6 +14,70 @@ export interface AuthUser {
   role: UserRole
 }
 
+export type PromptStatus = 'active' | 'disabled'
+export type PromptPhase = 'session' | 'step_pre_model' | 'tool_result'
+
+export interface PromptDocument {
+  id: string
+  name: string
+  description: string
+  content: string
+  scope: string
+  status: PromptStatus | string
+  created_by: string
+  updated_by: string
+  created_at: string
+  updated_at: string
+}
+
+export interface CreatePromptDocumentInput {
+  id: string
+  name: string
+  description: string
+  content: string
+  scope: string
+  status: PromptStatus | string
+}
+
+export interface UpdatePromptDocumentInput {
+  name: string
+  description: string
+  content: string
+  scope: string
+  status: PromptStatus | string
+}
+
+export interface PromptBinding {
+  id: number
+  prompt_id: string
+  scene: string
+  phase: PromptPhase | string
+  is_default: boolean
+  priority: number
+  provider_id: string
+  model_id: string
+  status: PromptStatus | string
+  created_by: string
+  updated_by: string
+  created_at: string
+  updated_at: string
+}
+
+export interface PromptBindingInput {
+  prompt_id: string
+  scene: string
+  phase: PromptPhase | string
+  is_default: boolean
+  priority: number
+  provider_id: string
+  model_id: string
+  status: PromptStatus | string
+}
+
+export interface PromptDeleteResult {
+  deleted: boolean
+}
+
 export interface SessionUser {
   username: string
   role: UserRole
@@ -107,6 +171,12 @@ export interface ConversationMessage {
   content: string
   provider_id?: string
   model_id?: string
+  provider_data?: {
+    system_message?: {
+      visible_to_user?: boolean
+      kind?: string
+    }
+  }
   usage?: TranscriptTokenUsage
   reasoning?: string
   tool_call_id?: string

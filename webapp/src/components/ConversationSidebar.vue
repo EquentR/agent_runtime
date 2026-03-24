@@ -5,7 +5,7 @@ import {
   Close,
   DataAnalysis,
   Delete,
-  Fold,
+  Fold, Memo,
   Menu,
   Plus,
   Remove
@@ -239,6 +239,11 @@ onBeforeUnmount(() => {
             <span class="sidebar-user-menu-option-check" aria-hidden="true"></span>
             <DataAnalysis />
             <span class="sidebar-user-menu-option-label">审计</span>
+          </RouterLink>
+          <RouterLink v-if="isAdmin" class="sidebar-user-menu-option sidebar-admin-link" to="/admin/prompts" @click="closeUserMenu">
+            <span class="sidebar-user-menu-option-check" aria-hidden="true"></span>
+            <Memo />
+            <span class="sidebar-user-menu-option-label">提示词管理</span>
           </RouterLink>
           <button class="sidebar-user-menu-option sidebar-user-menu-logout" type="button" @click="requestLogout">
             <span class="sidebar-user-menu-option-check" aria-hidden="true"></span>

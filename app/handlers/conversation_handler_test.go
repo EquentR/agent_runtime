@@ -7,14 +7,17 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/EquentR/agent_runtime/app/logics"
 	coreagent "github.com/EquentR/agent_runtime/core/agent"
 	coreaudit "github.com/EquentR/agent_runtime/core/audit"
+	coreprompt "github.com/EquentR/agent_runtime/core/prompt"
 	model "github.com/EquentR/agent_runtime/core/providers/types"
 	coretasks "github.com/EquentR/agent_runtime/core/tasks"
+	coretypes "github.com/EquentR/agent_runtime/core/types"
 	"github.com/EquentR/agent_runtime/pkg/rest"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
@@ -79,6 +82,297 @@ func TestConversationHandlerGetConversationMessages(t *testing.T) {
 	}
 	if got[0].Role != model.RoleUser || got[1].Role != model.RoleAssistant {
 		t.Fatalf("messages = %#v, want ordered user/assistant messages", got)
+	}
+}
+
+func TestConversationHandlerGetConversationMessagesDoesNotExposePromptArtifacts(t *testing.T) {
+	store, auditStore, server := newConversationHandlerTestServer(t)
+	ctx := context.Background()
+	_, err := store.CreateConversation(ctx, coreagent.CreateConversationInput{ID: "conv_1", ProviderID: "openai", ModelID: "gpt-5.4"})
+	if err != nil {
+		t.Fatalf("CreateConversation() error = %v", err)
+	}
+	if err := store.AppendMessages(ctx, "conv_1", "task_1", []model.Message{{Role: model.RoleUser, Content: "hello"}, {Role: model.RoleAssistant, Content: "hi"}}); err != nil {
+		t.Fatalf("AppendMessages() error = %v", err)
+	}
+
+	run, err := auditStore.CreateRun(ctx, coreaudit.StartRunInput{
+		RunID:          "run_prompt_1",
+		TaskID:         "task_1",
+		ConversationID: "conv_1",
+		TaskType:       "agent.run",
+		CreatedBy:      "tester",
+		Status:         coreaudit.StatusSucceeded,
+		SchemaVersion:  coreaudit.SchemaVersionV1,
+		Replayable:     true,
+	})
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	artifact, err := auditStore.CreateArtifact(ctx, run.ID, coreaudit.CreateArtifactInput{
+		ArtifactID:     "art_prompt_1",
+		Kind:           coreaudit.ArtifactKindResolvedPrompt,
+		MimeType:       "application/json",
+		Encoding:       "utf-8",
+		RedactionState: "raw",
+		Body: map[string]any{
+			"scene": "agent.run.default",
+			"session": []map[string]any{{
+				"role":    "system",
+				"content": "SECRET PROMPT: hidden audit-only instructions",
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateArtifact() error = %v", err)
+	}
+	if _, err := auditStore.AppendEvent(ctx, run.ID, coreaudit.AppendEventInput{
+		Phase:         coreaudit.PhasePrompt,
+		EventType:     "prompt.resolved",
+		RefArtifactID: artifact.ID,
+		Payload:       map[string]any{"prompt_count": 1},
+	}); err != nil {
+		t.Fatalf("AppendEvent() error = %v", err)
+	}
+
+	resp, err := http.Get(server.URL + "/api/v1/conversations/conv_1/messages")
+	if err != nil {
+		t.Fatalf("http.Get() error = %v", err)
+	}
+	defer resp.Body.Close()
+
+	got := decodeConversationMessagesResponse(t, resp.Body)
+	if len(got) != 2 {
+		t.Fatalf("len(messages) = %d, want 2 persisted chat messages only", len(got))
+	}
+	if got[0].Role != model.RoleUser || got[1].Role != model.RoleAssistant {
+		t.Fatalf("messages = %#v, want only persisted user/assistant messages", got)
+	}
+	for _, message := range got {
+		if message.Role == model.RoleSystem {
+			t.Fatalf("message = %#v, want no system prompt entries in conversation API", message)
+		}
+		if strings.Contains(message.Content, "SECRET PROMPT") {
+			t.Fatalf("message = %#v, want audit prompt content excluded from conversation API", message)
+		}
+	}
+}
+
+func TestConversationHandlerGetConversationHidesHiddenSystemMessagesFromSummary(t *testing.T) {
+	store, _, server := newConversationHandlerTestServer(t)
+	ctx := context.Background()
+	_, err := store.CreateConversation(ctx, coreagent.CreateConversationInput{ID: "conv_1", ProviderID: "openai", ModelID: "gpt-5.4"})
+	if err != nil {
+		t.Fatalf("CreateConversation() error = %v", err)
+	}
+	if err := store.AppendMessages(ctx, "conv_1", "task_1", []model.Message{
+		{Role: model.RoleUser, Content: "hello"},
+		{Role: model.RoleSystem, Content: "Run failed: hidden prompt text should not be used as summary"},
+	}); err != nil {
+		t.Fatalf("AppendMessages() error = %v", err)
+	}
+
+	resp, err := http.Get(server.URL + "/api/v1/conversations/conv_1")
+	if err != nil {
+		t.Fatalf("http.Get() error = %v", err)
+	}
+	defer resp.Body.Close()
+
+	got := decodeConversationResponse(t, resp.Body)
+	if got.Title != "hello" {
+		t.Fatalf("conversation.Title = %q, want hello", got.Title)
+	}
+	if got.LastMessage != "hello" {
+		t.Fatalf("conversation.LastMessage = %q, want hello without hidden system override", got.LastMessage)
+	}
+	if got.MessageCount != 1 {
+		t.Fatalf("conversation.MessageCount = %d, want 1 visible message only", got.MessageCount)
+	}
+}
+
+func TestConversationHandlerGetConversationMessagesFiltersHiddenPersistedSystemMessages(t *testing.T) {
+	store, _, server := newConversationHandlerTestServer(t)
+	ctx := context.Background()
+	_, err := store.CreateConversation(ctx, coreagent.CreateConversationInput{ID: "conv_1", ProviderID: "openai", ModelID: "gpt-5.4"})
+	if err != nil {
+		t.Fatalf("CreateConversation() error = %v", err)
+	}
+	if err := store.AppendMessages(ctx, "conv_1", "task_1", []model.Message{
+		{Role: model.RoleUser, Content: "hello"},
+		{Role: model.RoleSystem, Content: "Run failed: hidden prompt text should never reach chat history"},
+		{Role: model.RoleAssistant, Content: "hi"},
+		{Role: model.RoleSystem, Content: "Upstream 502", ProviderData: visibleFailureProviderData()},
+	}); err != nil {
+		t.Fatalf("AppendMessages() error = %v", err)
+	}
+
+	resp, err := http.Get(server.URL + "/api/v1/conversations/conv_1/messages")
+	if err != nil {
+		t.Fatalf("http.Get() error = %v", err)
+	}
+	defer resp.Body.Close()
+
+	got := decodeConversationMessagesResponseAsMaps(t, resp.Body)
+	if len(got) != 3 {
+		t.Fatalf("len(messages) = %d, want 3 visible messages only", len(got))
+	}
+	if got[0]["Role"] != model.RoleUser || got[1]["Role"] != model.RoleAssistant || got[2]["Role"] != model.RoleSystem {
+		t.Fatalf("messages = %#v, want user/assistant/visible-system ordering", got)
+	}
+	for _, message := range got {
+		content, _ := message["Content"].(string)
+		if strings.Contains(content, "hidden prompt text") {
+			t.Fatalf("message = %#v, want hidden system message filtered out", message)
+		}
+	}
+	providerData, ok := got[2]["provider_data"].(map[string]any)
+	if !ok {
+		t.Fatalf("system message = %#v, want provider_data visibility metadata", got[2])
+	}
+	systemMessage, ok := providerData["system_message"].(map[string]any)
+	if !ok {
+		t.Fatalf("provider_data = %#v, want system_message metadata", providerData)
+	}
+	if systemMessage["visible_to_user"] != true {
+		t.Fatalf("system_message.visible_to_user = %#v, want true", systemMessage["visible_to_user"])
+	}
+	if systemMessage["kind"] != "failure" {
+		t.Fatalf("system_message.kind = %#v, want failure", systemMessage["kind"])
+	}
+}
+
+func TestConversationHandlerGetConversationMessagesIncludesExecutorFailureVisibilityMetadata(t *testing.T) {
+	store, _, db, server := newConversationHandlerTestServerWithDB(t)
+	promptStore := coreprompt.NewStore(db)
+	if err := promptStore.AutoMigrate(); err != nil {
+		t.Fatalf("prompt AutoMigrate() error = %v", err)
+	}
+
+	executor := coreagent.NewTaskExecutor(coreagent.ExecutorDependencies{
+		Resolver: &coreagent.ModelResolver{Providers: []coretypes.LLMProvider{{
+			BaseProvider: coretypes.BaseProvider{Name: "openai"},
+			Models:       []coretypes.LLMModel{{BaseModel: coretypes.BaseModel{ID: "gpt-5.4", Name: "GPT 5.4"}, Type: coretypes.LLMTypeOpenAIResponses}},
+		}}},
+		ConversationStore: store,
+		PromptResolver:    coreprompt.NewResolver(promptStore),
+		ClientFactory: func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) {
+			return &conversationHandlerExecutorFailingClient{err: fmt.Errorf("upstream 502")}, nil
+		},
+	})
+	payload, err := json.Marshal(coreagent.RunTaskInput{ConversationID: "conv_1", ProviderID: "openai", ModelID: "gpt-5.4", Message: "hello"})
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+
+	_, err = executor(context.Background(), &coretasks.Task{ID: "task_1", TaskType: "agent.run", InputJSON: payload}, nil)
+	if err == nil {
+		t.Fatal("executor() error = nil, want upstream failure")
+	}
+
+	resp, err := http.Get(server.URL + "/api/v1/conversations/conv_1/messages")
+	if err != nil {
+		t.Fatalf("http.Get() error = %v", err)
+	}
+	defer resp.Body.Close()
+
+	got := decodeConversationMessagesResponseAsMaps(t, resp.Body)
+	if len(got) != 2 {
+		t.Fatalf("len(messages) = %d, want 2 persisted messages", len(got))
+	}
+	if got[1]["Role"] != model.RoleSystem {
+		t.Fatalf("failure message = %#v, want persisted visible system message", got[1])
+	}
+	providerData, ok := got[1]["provider_data"].(map[string]any)
+	if !ok {
+		t.Fatalf("failure message = %#v, want provider_data metadata", got[1])
+	}
+	systemMessage, ok := providerData["system_message"].(map[string]any)
+	if !ok {
+		t.Fatalf("provider_data = %#v, want system_message metadata", providerData)
+	}
+	if systemMessage["visible_to_user"] != true || systemMessage["kind"] != "failure" {
+		t.Fatalf("system_message = %#v, want explicit visible failure marker", systemMessage)
+	}
+}
+
+func TestConversationHandlerConversationDetailRecomputesStaleHiddenSystemSummary(t *testing.T) {
+	_, _, db, server := newConversationHandlerTestServerWithDB(t)
+	if err := db.Create(&coreagent.Conversation{
+		ID:           "conv_1",
+		ProviderID:   "openai",
+		ModelID:      "gpt-5.4",
+		Title:        "Run failed: hidden stale title",
+		LastMessage:  "Run failed: hidden stale summary",
+		MessageCount: 9,
+	}).Error; err != nil {
+		t.Fatalf("create conversation error = %v", err)
+	}
+	userEnvelope := []byte(`{"version":"v1","message":{"Role":"user","Content":"hello again"}}`)
+	if err := db.Create(&coreagent.ConversationMessage{ConversationID: "conv_1", Seq: 1, Role: model.RoleUser, Content: "hello again", MessageJSON: userEnvelope, TaskID: "task_1"}).Error; err != nil {
+		t.Fatalf("insert visible message error = %v", err)
+	}
+	hiddenEnvelope := []byte(`{"version":"v1","message":{"Role":"system","Content":"Run failed: hidden stale prompt"}}`)
+	if err := db.Create(&coreagent.ConversationMessage{ConversationID: "conv_1", Seq: 2, Role: model.RoleSystem, Content: "Run failed: hidden stale prompt", MessageJSON: hiddenEnvelope, TaskID: "task_1"}).Error; err != nil {
+		t.Fatalf("insert hidden system message error = %v", err)
+	}
+
+	resp, err := http.Get(server.URL + "/api/v1/conversations/conv_1")
+	if err != nil {
+		t.Fatalf("http.Get() error = %v", err)
+	}
+	defer resp.Body.Close()
+
+	got := decodeConversationResponse(t, resp.Body)
+	if got.Title != "hello again" {
+		t.Fatalf("conversation.Title = %q, want recomputed visible title", got.Title)
+	}
+	if got.LastMessage != "hello again" {
+		t.Fatalf("conversation.LastMessage = %q, want recomputed visible last message", got.LastMessage)
+	}
+	if got.MessageCount != 1 {
+		t.Fatalf("conversation.MessageCount = %d, want recomputed visible message count", got.MessageCount)
+	}
+}
+
+func TestConversationHandlerConversationListRecomputesStaleHiddenSystemSummaries(t *testing.T) {
+	_, _, db, server := newConversationHandlerTestServerWithDB(t)
+	if err := db.Create(&coreagent.Conversation{
+		ID:           "conv_1",
+		ProviderID:   "openai",
+		ModelID:      "gpt-5.4",
+		Title:        "Run failed: hidden stale title",
+		LastMessage:  "Run failed: hidden stale summary",
+		MessageCount: 12,
+	}).Error; err != nil {
+		t.Fatalf("create conversation error = %v", err)
+	}
+	userEnvelope := []byte(`{"version":"v1","message":{"Role":"assistant","Content":"visible answer"}}`)
+	if err := db.Create(&coreagent.ConversationMessage{ConversationID: "conv_1", Seq: 1, Role: model.RoleAssistant, Content: "visible answer", MessageJSON: userEnvelope, TaskID: "task_1"}).Error; err != nil {
+		t.Fatalf("insert visible assistant message error = %v", err)
+	}
+	hiddenEnvelope := []byte(`{"version":"v1","message":{"Role":"system","Content":"Run failed: hidden stale prompt"}}`)
+	if err := db.Create(&coreagent.ConversationMessage{ConversationID: "conv_1", Seq: 2, Role: model.RoleSystem, Content: "Run failed: hidden stale prompt", MessageJSON: hiddenEnvelope, TaskID: "task_1"}).Error; err != nil {
+		t.Fatalf("insert hidden system message error = %v", err)
+	}
+
+	resp, err := http.Get(server.URL + "/api/v1/conversations")
+	if err != nil {
+		t.Fatalf("http.Get() error = %v", err)
+	}
+	defer resp.Body.Close()
+
+	got := decodeConversationListResponse(t, resp.Body)
+	if len(got) != 1 {
+		t.Fatalf("len(conversations) = %d, want 1", len(got))
+	}
+	if got[0].Title != "visible answer" {
+		t.Fatalf("conversation.Title = %q, want recomputed visible title", got[0].Title)
+	}
+	if got[0].LastMessage != "visible answer" {
+		t.Fatalf("conversation.LastMessage = %q, want recomputed visible last message", got[0].LastMessage)
+	}
+	if got[0].MessageCount != 1 {
+		t.Fatalf("conversation.MessageCount = %d, want recomputed visible count", got[0].MessageCount)
 	}
 }
 
@@ -217,6 +511,82 @@ func TestConversationHandlerListConversations(t *testing.T) {
 	}
 	if got[0].AuditRunID != "run_new" {
 		t.Fatalf("conversation audit_run_id = %q, want run_new", got[0].AuditRunID)
+	}
+}
+
+func TestConversationHandlerListConversationsOrdersByVisibleRecencyNotHiddenSystemRecency(t *testing.T) {
+	_, _, db, server := newConversationHandlerTestServerWithDB(t)
+	now := time.Date(2026, time.March, 24, 14, 0, 0, 0, time.UTC)
+	visibleRecent := now.Add(-1 * time.Minute)
+	hiddenLater := now.Add(5 * time.Minute)
+
+	if err := db.Create(&coreagent.Conversation{
+		ID:            "conv_hidden_only",
+		ProviderID:    "openai",
+		ModelID:       "gpt-5.4",
+		Title:         "Run failed: hidden stale title",
+		LastMessage:   "Run failed: hidden stale summary",
+		MessageCount:  9,
+		LastMessageAt: &hiddenLater,
+		UpdatedAt:     hiddenLater,
+		CreatedAt:     now.Add(-10 * time.Minute),
+	}).Error; err != nil {
+		t.Fatalf("create hidden-only conversation error = %v", err)
+	}
+	hiddenEnvelope := []byte(`{"version":"v1","message":{"Role":"system","Content":"Run failed: hidden prompt"}}`)
+	if err := db.Create(&coreagent.ConversationMessage{
+		ConversationID: "conv_hidden_only",
+		Seq:            1,
+		Role:           model.RoleSystem,
+		Content:        "Run failed: hidden prompt",
+		MessageJSON:    hiddenEnvelope,
+		TaskID:         "task_hidden",
+		CreatedAt:      hiddenLater,
+	}).Error; err != nil {
+		t.Fatalf("insert hidden-only system message error = %v", err)
+	}
+
+	if err := db.Create(&coreagent.Conversation{
+		ID:            "conv_visible_recent",
+		ProviderID:    "openai",
+		ModelID:       "gpt-5.4",
+		Title:         "visible stale title",
+		LastMessage:   "visible stale summary",
+		MessageCount:  1,
+		LastMessageAt: &visibleRecent,
+		UpdatedAt:     visibleRecent,
+		CreatedAt:     now.Add(-20 * time.Minute),
+	}).Error; err != nil {
+		t.Fatalf("create visible conversation error = %v", err)
+	}
+	visibleEnvelope := []byte(`{"version":"v1","message":{"Role":"assistant","Content":"visible answer"}}`)
+	if err := db.Create(&coreagent.ConversationMessage{
+		ConversationID: "conv_visible_recent",
+		Seq:            1,
+		Role:           model.RoleAssistant,
+		Content:        "visible answer",
+		MessageJSON:    visibleEnvelope,
+		TaskID:         "task_visible",
+		CreatedAt:      visibleRecent,
+	}).Error; err != nil {
+		t.Fatalf("insert visible assistant message error = %v", err)
+	}
+
+	resp, err := http.Get(server.URL + "/api/v1/conversations")
+	if err != nil {
+		t.Fatalf("http.Get() error = %v", err)
+	}
+	defer resp.Body.Close()
+
+	got := decodeConversationListResponse(t, resp.Body)
+	if len(got) != 2 {
+		t.Fatalf("len(conversations) = %d, want 2", len(got))
+	}
+	if got[0].ID != "conv_visible_recent" {
+		t.Fatalf("first conversation = %q, want conv_visible_recent ordered by visible recency", got[0].ID)
+	}
+	if got[1].ID != "conv_hidden_only" {
+		t.Fatalf("second conversation = %q, want conv_hidden_only after visible conversation", got[1].ID)
 	}
 }
 
@@ -582,4 +952,23 @@ func decodeConversationListResponse(t *testing.T, body io.Reader) []coreagent.Co
 		t.Fatalf("json.Unmarshal() error = %v", err)
 	}
 	return got
+}
+
+func visibleFailureProviderData() map[string]any {
+	return map[string]any{
+		"system_message": map[string]any{
+			"visible_to_user": true,
+			"kind":            "failure",
+		},
+	}
+}
+
+type conversationHandlerExecutorFailingClient struct{ err error }
+
+func (c *conversationHandlerExecutorFailingClient) Chat(context.Context, model.ChatRequest) (model.ChatResponse, error) {
+	panic("unexpected Chat call")
+}
+
+func (c *conversationHandlerExecutorFailingClient) ChatStream(context.Context, model.ChatRequest) (model.Stream, error) {
+	return nil, c.err
 }

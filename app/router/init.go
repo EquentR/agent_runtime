@@ -14,6 +14,7 @@ func Init(e *gin.Engine, baseUrl string, staticPath []rest.Static, deps Dependen
 		handlers.NewAuthHandler(deps.AuthLogic),
 		handlers.NewExampleHandler(),
 		handlers.NewModelCatalogHandler(deps.ModelResolver, authMiddleware.RequireSession()),
+		handlers.NewPromptHandler(deps.PromptStore, authMiddleware.RequireSession()),
 		handlers.NewTaskHandler(deps.TaskManager, deps.ConversationStore, authMiddleware.RequireSession()),
 		handlers.NewConversationHandler(deps.ConversationStore, deps.AuditStore, authMiddleware.RequireSession()),
 		handlers.NewAuditHandler(deps.AuditStore, authMiddleware.RequireSession()),

@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 
 	coreaudit "github.com/EquentR/agent_runtime/core/audit"
+	coreprompt "github.com/EquentR/agent_runtime/core/prompt"
 	model "github.com/EquentR/agent_runtime/core/providers/types"
 	coretypes "github.com/EquentR/agent_runtime/core/types"
 )
@@ -131,8 +133,28 @@ func TestRunnerRunStreamRecordsPromptAndModelAuditArtifacts(t *testing.T) {
 	if _, ok := promptPayload["messages"]; ok {
 		t.Fatalf("prompt payload = %#v, want compact payload without messages", promptPayload)
 	}
+	if _, ok := promptPayload["segments"]; ok {
+		t.Fatalf("prompt payload = %#v, want compact payload without segments", promptPayload)
+	}
 	if promptPayload["message_count"] != float64(2) {
 		t.Fatalf("prompt payload = %#v, want message_count=2", promptPayload)
+	}
+	if promptPayload["prompt_message_count"] != float64(1) {
+		t.Fatalf("prompt payload = %#v, want prompt_message_count=1", promptPayload)
+	}
+	if promptPayload["segment_count"] != float64(1) {
+		t.Fatalf("prompt payload = %#v, want segment_count=1", promptPayload)
+	}
+	phaseCounts := requireAuditCountMap(t, promptPayload, "phase_segment_counts")
+	if phaseCounts["session"] != 1 {
+		t.Fatalf("phase_segment_counts = %#v, want session=1", phaseCounts)
+	}
+	sourceCounts := requireAuditCountMap(t, promptPayload, "source_counts")
+	if sourceCounts["legacy_system_prompt"] != 1 {
+		t.Fatalf("source_counts = %#v, want legacy_system_prompt=1", sourceCounts)
+	}
+	if strings.Contains(string(promptEvent.PayloadJSON), "You are helpful.") {
+		t.Fatalf("prompt payload json = %s, want compact payload without prompt body", string(promptEvent.PayloadJSON))
 	}
 
 	promptArtifact := recorder.requireArtifactByKind(t, "run_stream_1", coreaudit.ArtifactKindResolvedPrompt)
@@ -140,8 +162,23 @@ func TestRunnerRunStreamRecordsPromptAndModelAuditArtifacts(t *testing.T) {
 	if len(prompt.Messages) != 2 {
 		t.Fatalf("resolved prompt message count = %d, want 2", len(prompt.Messages))
 	}
+	if len(prompt.Segments) != 1 {
+		t.Fatalf("resolved prompt segment count = %d, want 1", len(prompt.Segments))
+	}
+	if prompt.PhaseSegmentCounts["session"] != 1 {
+		t.Fatalf("resolved prompt phase counts = %#v, want session=1", prompt.PhaseSegmentCounts)
+	}
+	if prompt.SourceCounts["legacy_system_prompt"] != 1 {
+		t.Fatalf("resolved prompt source counts = %#v, want legacy_system_prompt=1", prompt.SourceCounts)
+	}
 	if prompt.Messages[0].Role != model.RoleSystem || prompt.Messages[0].Content != "You are helpful." {
 		t.Fatalf("resolved prompt first message = %#v, want system prompt", prompt.Messages[0])
+	}
+	if len(prompt.Session) != 1 || prompt.Session[0].Content != "You are helpful." {
+		t.Fatalf("resolved prompt session = %#v, want exact injected legacy system prompt", prompt.Session)
+	}
+	if prompt.Segments[0].Phase != "session" || prompt.Segments[0].SourceKind != "legacy_system_prompt" || prompt.Segments[0].SourceRef != "system_prompt" {
+		t.Fatalf("resolved prompt legacy segment = %#v, want session legacy system prompt metadata", prompt.Segments[0])
 	}
 
 	requestArtifact := recorder.requireArtifactByKind(t, "run_stream_1", coreaudit.ArtifactKindModelRequest)
@@ -169,6 +206,216 @@ func TestRunnerRunStreamRecordsPromptAndModelAuditArtifacts(t *testing.T) {
 	}
 	if response.Usage.TotalTokens != 15 {
 		t.Fatalf("response usage = %#v, want total tokens 15", response.Usage)
+	}
+}
+
+func TestRunnerRunStreamLegacyPromptArtifactPreservesExactInjectedString(t *testing.T) {
+	recorder := newRecordingRunnerAuditRecorder()
+	client := &stubClient{
+		streams: []model.Stream{newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "hello"}}},
+			model.Message{Role: model.RoleAssistant, Content: "hello"},
+			nil,
+		)},
+	}
+	legacyPrompt := "  Keep exact spacing\n\n"
+	runner, err := NewRunner(client, nil, Options{
+		Model:         "test-model",
+		SystemPrompt:  legacyPrompt,
+		AuditRecorder: recorder,
+		AuditRunID:    "run_stream_legacy_exact",
+	})
+	if err != nil {
+		t.Fatalf("NewRunner() error = %v", err)
+	}
+
+	streamResult, err := runner.RunStream(context.Background(), RunInput{Messages: []model.Message{{Role: model.RoleUser, Content: "say hi"}}})
+	if err != nil {
+		t.Fatalf("RunStream() error = %v", err)
+	}
+	for range streamResult.Events {
+	}
+	_, err = streamResult.Wait()
+	if err != nil {
+		t.Fatalf("Wait() error = %v", err)
+	}
+
+	promptArtifact := recorder.requireArtifactByKind(t, "run_stream_legacy_exact", coreaudit.ArtifactKindResolvedPrompt)
+	prompt := decodeResolvedPromptArtifact(t, promptArtifact)
+	if len(prompt.Session) != 1 || prompt.Session[0].Content != legacyPrompt {
+		t.Fatalf("resolved prompt session = %#v, want exact legacy string %q", prompt.Session, legacyPrompt)
+	}
+	if len(prompt.Segments) != 1 || prompt.Segments[0].Content != legacyPrompt {
+		t.Fatalf("resolved prompt segments = %#v, want exact legacy segment content %q", prompt.Segments, legacyPrompt)
+	}
+	if len(prompt.Messages) < 1 || prompt.Messages[0].Content != legacyPrompt {
+		t.Fatalf("resolved prompt messages = %#v, want first injected message to preserve exact legacy string %q", prompt.Messages, legacyPrompt)
+	}
+
+	requestArtifact := recorder.requireArtifactByKind(t, "run_stream_legacy_exact", coreaudit.ArtifactKindModelRequest)
+	request := decodeModelRequestArtifact(t, requestArtifact)
+	if len(request.Messages) < 1 || request.Messages[0].Content != legacyPrompt {
+		t.Fatalf("model request messages = %#v, want first request message to preserve exact legacy string %q", request.Messages, legacyPrompt)
+	}
+}
+
+func TestRunnerRunStreamRecordsPromptArtifactsPerStepWithPhaseAwareInjection(t *testing.T) {
+	registry := newTestRegistry(t, map[string]func(context.Context, map[string]interface{}) (string, error){
+		"lookup_weather": func(context.Context, map[string]interface{}) (string, error) {
+			return "sunny", nil
+		},
+	})
+	recorder := newRecordingRunnerAuditRecorder()
+	client := &stubClient{streams: []model.Stream{
+		newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "lookup_weather", Arguments: `{"city":"Shanghai"}`}}}}},
+			model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "lookup_weather", Arguments: `{"city":"Shanghai"}`}}},
+			nil,
+		),
+		newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "done"}}},
+			model.Message{Role: model.RoleAssistant, Content: "done"},
+			nil,
+		),
+	}}
+	runner, err := NewRunner(client, registry, Options{
+		Model: "test-model",
+		ResolvedPrompt: &coreprompt.ResolvedPrompt{
+			Scene: "agent.run.review",
+			Segments: []coreprompt.ResolvedPromptSegment{
+				{Order: 1, Phase: "session", Content: "Session prompt", SourceKind: "db_default_binding", SourceRef: "binding:101", BindingID: 101, PromptID: "doc-session", PromptName: "Session prompt", PromptScope: "admin", Priority: 10},
+				{Order: 2, Phase: "step_pre_model", Content: "Step prompt", SourceKind: "legacy_system_prompt", SourceRef: "system_prompt"},
+				{Order: 3, Phase: "tool_result", Content: "Tool-result prompt", SourceKind: "workspace_file", SourceRef: "AGENTS.md", RuntimeOnly: true},
+			},
+			Session:      []model.Message{{Role: model.RoleSystem, Content: "Session prompt"}},
+			StepPreModel: []model.Message{{Role: model.RoleSystem, Content: "Step prompt"}},
+			ToolResult:   []model.Message{{Role: model.RoleSystem, Content: "Tool-result prompt"}},
+		},
+		AuditRecorder: recorder,
+		AuditRunID:    "run_stream_prompt_steps",
+	})
+	if err != nil {
+		t.Fatalf("NewRunner() error = %v", err)
+	}
+
+	streamResult, err := runner.RunStream(context.Background(), RunInput{Messages: []model.Message{{Role: model.RoleUser, Content: "weather?"}}, Tools: registry.List()})
+	if err != nil {
+		t.Fatalf("RunStream() error = %v", err)
+	}
+	for range streamResult.Events {
+	}
+	_, err = streamResult.Wait()
+	if err != nil {
+		t.Fatalf("Wait() error = %v", err)
+	}
+
+	promptArtifacts := recorder.requireArtifactsByKind(t, "run_stream_prompt_steps", coreaudit.ArtifactKindResolvedPrompt)
+	if len(promptArtifacts) != 2 {
+		t.Fatalf("resolved prompt artifact count = %d, want 2", len(promptArtifacts))
+	}
+	stepOnePromptEvent := recorder.requireEventForStep(t, "run_stream_prompt_steps", "prompt.resolved", 1)
+	stepOnePromptPayload := decodeAuditPayload(t, stepOnePromptEvent)
+	if stepOnePromptPayload["scene"] != "agent.run.review" {
+		t.Fatalf("step 1 prompt payload = %#v, want scene=agent.run.review", stepOnePromptPayload)
+	}
+	if stepOnePromptPayload["message_count"] != float64(3) {
+		t.Fatalf("step 1 prompt payload = %#v, want message_count=3", stepOnePromptPayload)
+	}
+	if stepOnePromptPayload["prompt_message_count"] != float64(2) {
+		t.Fatalf("step 1 prompt payload = %#v, want prompt_message_count=2", stepOnePromptPayload)
+	}
+	if stepOnePromptPayload["segment_count"] != float64(2) {
+		t.Fatalf("step 1 prompt payload = %#v, want segment_count=2", stepOnePromptPayload)
+	}
+	stepOnePhaseCounts := requireAuditCountMap(t, stepOnePromptPayload, "phase_segment_counts")
+	if len(stepOnePhaseCounts) != 2 || stepOnePhaseCounts["session"] != 1 || stepOnePhaseCounts["step_pre_model"] != 1 {
+		t.Fatalf("step 1 phase_segment_counts = %#v, want only session=1 and step_pre_model=1", stepOnePhaseCounts)
+	}
+	stepOneSourceCounts := requireAuditCountMap(t, stepOnePromptPayload, "source_counts")
+	if len(stepOneSourceCounts) != 2 || stepOneSourceCounts["db_default_binding"] != 1 || stepOneSourceCounts["legacy_system_prompt"] != 1 {
+		t.Fatalf("step 1 source_counts = %#v, want only db_default_binding=1 and legacy_system_prompt=1", stepOneSourceCounts)
+	}
+	if strings.Contains(string(stepOnePromptEvent.PayloadJSON), "Session prompt") || strings.Contains(string(stepOnePromptEvent.PayloadJSON), "Tool-result prompt") {
+		t.Fatalf("step 1 prompt payload json = %s, want compact payload without prompt bodies", string(stepOnePromptEvent.PayloadJSON))
+	}
+	stepTwoPromptEvent := recorder.requireEventForStep(t, "run_stream_prompt_steps", "prompt.resolved", 2)
+	stepTwoPromptPayload := decodeAuditPayload(t, stepTwoPromptEvent)
+	if stepTwoPromptPayload["message_count"] != float64(6) {
+		t.Fatalf("step 2 prompt payload = %#v, want message_count=6", stepTwoPromptPayload)
+	}
+	if stepTwoPromptPayload["prompt_message_count"] != float64(3) {
+		t.Fatalf("step 2 prompt payload = %#v, want prompt_message_count=3", stepTwoPromptPayload)
+	}
+	if stepTwoPromptPayload["segment_count"] != float64(3) {
+		t.Fatalf("step 2 prompt payload = %#v, want segment_count=3", stepTwoPromptPayload)
+	}
+	stepTwoPhaseCounts := requireAuditCountMap(t, stepTwoPromptPayload, "phase_segment_counts")
+	if len(stepTwoPhaseCounts) != 3 || stepTwoPhaseCounts["session"] != 1 || stepTwoPhaseCounts["step_pre_model"] != 1 || stepTwoPhaseCounts["tool_result"] != 1 {
+		t.Fatalf("step 2 phase_segment_counts = %#v, want all three injected phases", stepTwoPhaseCounts)
+	}
+	stepTwoSourceCounts := requireAuditCountMap(t, stepTwoPromptPayload, "source_counts")
+	if len(stepTwoSourceCounts) != 3 || stepTwoSourceCounts["db_default_binding"] != 1 || stepTwoSourceCounts["legacy_system_prompt"] != 1 || stepTwoSourceCounts["workspace_file"] != 1 {
+		t.Fatalf("step 2 source_counts = %#v, want all three injected source kinds", stepTwoSourceCounts)
+	}
+
+	firstPrompt := decodeResolvedPromptArtifact(t, promptArtifacts[0])
+	if firstPrompt.Scene != "agent.run.review" {
+		t.Fatalf("step 1 resolved prompt scene = %q, want agent.run.review", firstPrompt.Scene)
+	}
+	if len(firstPrompt.Segments) != 2 {
+		t.Fatalf("step 1 resolved prompt segment count = %d, want 2", len(firstPrompt.Segments))
+	}
+	if firstPrompt.Segments[0].SourceKind != "db_default_binding" || firstPrompt.Segments[0].SourceRef != "binding:101" {
+		t.Fatalf("step 1 first segment = %#v, want db binding metadata", firstPrompt.Segments[0])
+	}
+	if firstPrompt.Segments[1].SourceKind != "legacy_system_prompt" || firstPrompt.Segments[1].SourceRef != "system_prompt" {
+		t.Fatalf("step 1 second segment = %#v, want legacy metadata", firstPrompt.Segments[1])
+	}
+	if len(firstPrompt.PhaseSegmentCounts) != 2 || firstPrompt.PhaseSegmentCounts["session"] != 1 || firstPrompt.PhaseSegmentCounts["step_pre_model"] != 1 {
+		t.Fatalf("step 1 phase counts = %#v, want only session=1 and step_pre_model=1", firstPrompt.PhaseSegmentCounts)
+	}
+	if len(firstPrompt.SourceCounts) != 2 || firstPrompt.SourceCounts["db_default_binding"] != 1 || firstPrompt.SourceCounts["legacy_system_prompt"] != 1 {
+		t.Fatalf("step 1 source counts = %#v, want only db_default_binding=1 and legacy_system_prompt=1", firstPrompt.SourceCounts)
+	}
+	if len(firstPrompt.Messages) != 3 {
+		t.Fatalf("step 1 resolved prompt message count = %d, want 3", len(firstPrompt.Messages))
+	}
+	if firstPrompt.Messages[0].Content != "Session prompt" || firstPrompt.Messages[1].Content != "Step prompt" || firstPrompt.Messages[2].Content != "weather?" {
+		t.Fatalf("step 1 resolved prompt messages = %#v, want session+step+user", firstPrompt.Messages)
+	}
+
+	secondPrompt := decodeResolvedPromptArtifact(t, promptArtifacts[1])
+	if secondPrompt.Scene != "agent.run.review" {
+		t.Fatalf("step 2 resolved prompt scene = %q, want agent.run.review", secondPrompt.Scene)
+	}
+	if len(secondPrompt.Messages) != 6 {
+		t.Fatalf("step 2 resolved prompt message count = %d, want 6", len(secondPrompt.Messages))
+	}
+	if secondPrompt.Messages[0].Content != "Session prompt" || secondPrompt.Messages[1].Content != "Step prompt" || secondPrompt.Messages[2].Content != "Tool-result prompt" {
+		t.Fatalf("step 2 resolved prompt prefix = %#v, want session+step+tool-result", secondPrompt.Messages[:3])
+	}
+	if len(secondPrompt.Segments) != 3 {
+		t.Fatalf("step 2 resolved prompt segment count = %d, want 3", len(secondPrompt.Segments))
+	}
+	if secondPrompt.Segments[2].SourceKind != "workspace_file" || secondPrompt.Segments[2].SourceRef != "AGENTS.md" {
+		t.Fatalf("step 2 third segment = %#v, want workspace metadata", secondPrompt.Segments[2])
+	}
+	if len(secondPrompt.PhaseSegmentCounts) != 3 || secondPrompt.PhaseSegmentCounts["tool_result"] != 1 {
+		t.Fatalf("step 2 phase counts = %#v, want tool_result phase present only on step 2", secondPrompt.PhaseSegmentCounts)
+	}
+	if len(secondPrompt.SourceCounts) != 3 || secondPrompt.SourceCounts["workspace_file"] != 1 {
+		t.Fatalf("step 2 source counts = %#v, want workspace_file source present only on step 2", secondPrompt.SourceCounts)
+	}
+
+	requestArtifacts := recorder.requireArtifactsByKind(t, "run_stream_prompt_steps", coreaudit.ArtifactKindModelRequest)
+	if len(requestArtifacts) != 2 {
+		t.Fatalf("model request artifact count = %d, want 2", len(requestArtifacts))
+	}
+	firstRequest := decodeModelRequestArtifact(t, requestArtifacts[0])
+	assertMessagesDoNotContainContent(t, firstRequest.Messages, "Tool-result prompt")
+	secondRequest := decodeModelRequestArtifact(t, requestArtifacts[1])
+	if secondRequest.Messages[2].Content != "Tool-result prompt" {
+		t.Fatalf("step 2 request prompt prefix = %#v, want tool-result prompt at index 2", secondRequest.Messages)
 	}
 }
 
@@ -489,7 +736,14 @@ func TestRunnerRunStreamMergesRegistryToolsWithInputTools(t *testing.T) {
 }
 
 type resolvedPromptAuditArtifact struct {
-	Messages []model.Message `json:"messages"`
+	Scene              string                             `json:"scene,omitempty"`
+	Session            []model.Message                    `json:"session,omitempty"`
+	StepPreModel       []model.Message                    `json:"step_pre_model,omitempty"`
+	ToolResult         []model.Message                    `json:"tool_result,omitempty"`
+	Messages           []model.Message                    `json:"messages"`
+	Segments           []coreprompt.ResolvedPromptSegment `json:"segments,omitempty"`
+	PhaseSegmentCounts map[string]int                     `json:"phase_segment_counts,omitempty"`
+	SourceCounts       map[string]int                     `json:"source_counts,omitempty"`
 }
 
 type modelResponseAuditArtifact struct {
@@ -505,6 +759,28 @@ func decodeResolvedPromptArtifact(t *testing.T, artifact *coreaudit.Artifact) re
 		t.Fatalf("decode resolved_prompt artifact error = %v", err)
 	}
 	return snapshot
+}
+
+func requireAuditCountMap(t *testing.T, payload map[string]any, key string) map[string]int {
+	t.Helper()
+
+	raw, ok := payload[key]
+	if !ok {
+		t.Fatalf("payload = %#v, want key %q", payload, key)
+	}
+	countMap, ok := raw.(map[string]any)
+	if !ok {
+		t.Fatalf("payload[%q] = %#v, want map[string]any", key, raw)
+	}
+	counts := make(map[string]int, len(countMap))
+	for name, value := range countMap {
+		count, ok := value.(float64)
+		if !ok {
+			t.Fatalf("payload[%q][%q] = %#v, want float64", key, name, value)
+		}
+		counts[name] = int(count)
+	}
+	return counts
 }
 
 func decodeModelResponseArtifact(t *testing.T, artifact *coreaudit.Artifact) modelResponseAuditArtifact {
