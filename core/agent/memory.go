@@ -35,11 +35,11 @@ func (r *Runner) prepareConversationMessagesWithPersistedCount(ctx context.Conte
 func (r *Runner) buildRequestMessages(conversation []model.Message, afterToolTurn bool) []model.Message {
 	base := cloneMessages(conversation)
 	if r.options.ResolvedPrompt != nil {
-		request := make([]model.Message, 0, len(base)+3)
-		request = appendCombinedPromptMessage(request, r.options.ResolvedPrompt.Session)
-		request = appendCombinedPromptMessage(request, r.options.ResolvedPrompt.StepPreModel)
+		request := make([]model.Message, 0, len(base)+len(r.options.ResolvedPrompt.Session)+len(r.options.ResolvedPrompt.StepPreModel)+len(r.options.ResolvedPrompt.ToolResult))
+		request = appendPromptMessages(request, r.options.ResolvedPrompt.Session)
+		request = appendPromptMessages(request, r.options.ResolvedPrompt.StepPreModel)
 		if afterToolTurn {
-			request = appendCombinedPromptMessage(request, r.options.ResolvedPrompt.ToolResult)
+			base = injectToolResultPromptMessages(base, r.options.ResolvedPrompt.ToolResult)
 		}
 		request = append(request, base...)
 		return request
@@ -59,24 +59,37 @@ func prependSystemPrompt(systemPrompt string, messages []model.Message) []model.
 	return conversation
 }
 
-func appendCombinedPromptMessage(dst []model.Message, prompts []model.Message) []model.Message {
-	content := joinPromptContents(prompts)
-	if content == "" {
-		return dst
-	}
-	return append(dst, model.Message{Role: model.RoleSystem, Content: content})
-}
-
-func joinPromptContents(prompts []model.Message) string {
-	parts := make([]string, 0, len(prompts))
+func appendPromptMessages(dst []model.Message, prompts []model.Message) []model.Message {
 	for _, prompt := range prompts {
-		content := strings.TrimSpace(prompt.Content)
-		if content == "" {
+		if strings.TrimSpace(prompt.Content) == "" {
 			continue
 		}
-		parts = append(parts, content)
+		dst = append(dst, cloneMessage(prompt))
 	}
-	return strings.Join(parts, "\n\n")
+	return dst
+}
+
+func injectToolResultPromptMessages(conversation []model.Message, prompts []model.Message) []model.Message {
+	if len(conversation) == 0 {
+		return appendPromptMessages(conversation, prompts)
+	}
+
+	firstTrailingTool := len(conversation)
+	for firstTrailingTool > 0 && conversation[firstTrailingTool-1].Role == model.RoleTool {
+		firstTrailingTool--
+	}
+	if firstTrailingTool == len(conversation) {
+		return appendPromptMessages(conversation, prompts)
+	}
+	if firstTrailingTool == 0 || conversation[firstTrailingTool-1].Role != model.RoleAssistant {
+		return appendPromptMessages(conversation, prompts)
+	}
+
+	result := make([]model.Message, 0, len(conversation)+len(prompts))
+	result = append(result, conversation[:firstTrailingTool]...)
+	result = appendPromptMessages(result, prompts)
+	result = append(result, conversation[firstTrailingTool:]...)
+	return result
 }
 
 func unpersistedConversationTail(messages []model.Message, persistedCount int) []model.Message {

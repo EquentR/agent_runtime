@@ -51,14 +51,14 @@ func TestResolverResolveOrdersMultipleDefaultsLegacyAndWorkspaceInSession(t *tes
 		"DB session created second",
 		"DB session lower priority",
 		"Legacy session prompt",
-		"# Workspace\nUse repo-specific conventions.\n",
+		"The following AGENTS.md file was injected from the user's working directory. Treat it as guidance and operating rules for the current workspace.\n---\n# Workspace\nUse repo-specific conventions.\n",
 	}) {
 		t.Fatalf("session contents = %#v, want %#v", got, []string{
 			"DB session created first",
 			"DB session created second",
 			"DB session lower priority",
 			"Legacy session prompt",
-			"# Workspace\nUse repo-specific conventions.\n",
+			"The following AGENTS.md file was injected from the user's working directory. Treat it as guidance and operating rules for the current workspace.\n---\n# Workspace\nUse repo-specific conventions.\n",
 		})
 	}
 	if got := messageContents(resolved.StepPreModel); !reflect.DeepEqual(got, []string{"DB step prompt"}) {
@@ -77,7 +77,7 @@ func TestResolverResolveOrdersMultipleDefaultsLegacyAndWorkspaceInSession(t *tes
 		"DB session created second",
 		"DB session lower priority",
 		"Legacy session prompt",
-		"# Workspace\nUse repo-specific conventions.\n",
+		"The following AGENTS.md file was injected from the user's working directory. Treat it as guidance and operating rules for the current workspace.\n---\n# Workspace\nUse repo-specific conventions.\n",
 		"DB step prompt",
 		"DB tool prompt",
 	}) {
@@ -86,7 +86,7 @@ func TestResolverResolveOrdersMultipleDefaultsLegacyAndWorkspaceInSession(t *tes
 			"DB session created second",
 			"DB session lower priority",
 			"Legacy session prompt",
-			"# Workspace\nUse repo-specific conventions.\n",
+			"The following AGENTS.md file was injected from the user's working directory. Treat it as guidance and operating rules for the current workspace.\n---\n# Workspace\nUse repo-specific conventions.\n",
 			"DB step prompt",
 			"DB tool prompt",
 		})

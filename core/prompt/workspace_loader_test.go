@@ -20,8 +20,9 @@ func TestLoadWorkspacePromptsLoadsAgentsFileFromWorkspaceRoot(t *testing.T) {
 	if len(segments) != 1 {
 		t.Fatalf("len(segments) = %d, want 1", len(segments))
 	}
-	if segments[0].Content != content {
-		t.Fatalf("segment content = %q, want %q", segments[0].Content, content)
+	want := "The following AGENTS.md file was injected from the user's working directory. Treat it as guidance and operating rules for the current workspace.\n---\n" + content
+	if segments[0].Content != want {
+		t.Fatalf("segment content = %q, want %q", segments[0].Content, want)
 	}
 }
 
@@ -60,8 +61,9 @@ func TestLoadWorkspacePromptsEmptyWorkspaceRootUsesCurrentWorkingDirectory(t *te
 	if len(segments) != 1 {
 		t.Fatalf("len(segments) = %d, want 1", len(segments))
 	}
-	if segments[0].Content != "Use the working directory agents file." {
-		t.Fatalf("segment content = %q, want %q", segments[0].Content, "Use the working directory agents file.")
+	want := "The following AGENTS.md file was injected from the user's working directory. Treat it as guidance and operating rules for the current workspace.\n---\nUse the working directory agents file."
+	if segments[0].Content != want {
+		t.Fatalf("segment content = %q, want %q", segments[0].Content, want)
 	}
 	if segments[0].SourceRef != workspacePromptFileName {
 		t.Fatalf("segment source ref = %q, want %q", segments[0].SourceRef, workspacePromptFileName)
@@ -162,6 +164,10 @@ func TestLoadWorkspacePromptsReturnsSessionWorkspaceMetadata(t *testing.T) {
 	}
 	if !segments[0].RuntimeOnly {
 		t.Fatal("segment RuntimeOnly = false, want true")
+	}
+	want := "The following AGENTS.md file was injected from the user's working directory. Treat it as guidance and operating rules for the current workspace.\n---\nUse concise answers."
+	if segments[0].Content != want {
+		t.Fatalf("segment content = %q, want %q", segments[0].Content, want)
 	}
 }
 

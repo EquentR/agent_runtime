@@ -13,6 +13,7 @@ const (
 	workspacePromptPhaseSession            = "session"
 	workspacePromptSourceKindWorkspaceFile = "workspace_file"
 	workspacePromptMaxBytes                = 32 * 1024
+	workspacePromptPrefix                  = "The following AGENTS.md file was injected from the user's working directory. Treat it as guidance and operating rules for the current workspace.\n---\n"
 )
 
 type WorkspacePromptSegment struct {
@@ -43,6 +44,7 @@ func LoadWorkspacePrompts(ctx context.Context, workspaceRoot string) ([]Workspac
 	if strings.TrimSpace(content) == "" {
 		return nil, nil
 	}
+	content = workspacePromptPrefix + content
 
 	return []WorkspacePromptSegment{{
 		Phase:       workspacePromptPhaseSession,

@@ -125,17 +125,20 @@ func TestRunnerUsesResolvedSessionPromptsBeforeHistoryAndIgnoresLegacySystemProm
 		t.Fatalf("request count = %d, want 1", len(client.streamRequests))
 	}
 	got := client.streamRequests[0].Messages
-	if len(got) != 3 {
-		t.Fatalf("len(Messages) = %d, want 3", len(got))
+	if len(got) != 4 {
+		t.Fatalf("len(Messages) = %d, want 4", len(got))
 	}
-	if got[0].Role != model.RoleSystem || got[0].Content != "Session one\n\nSession two" {
-		t.Fatalf("first message = %#v, want combined resolved session prompt", got[0])
+	if got[0].Role != model.RoleSystem || got[0].Content != "Session one" {
+		t.Fatalf("first message = %#v, want first resolved session prompt", got[0])
 	}
-	if got[1].Content != "remembered" {
-		t.Fatalf("second message = %q, want remembered", got[1].Content)
+	if got[1].Role != model.RoleSystem || got[1].Content != "Session two" {
+		t.Fatalf("second message = %#v, want second resolved session prompt", got[1])
 	}
-	if got[2].Content != "new request" {
-		t.Fatalf("third message = %q, want new request", got[2].Content)
+	if got[2].Content != "remembered" {
+		t.Fatalf("third message = %q, want remembered", got[2].Content)
+	}
+	if got[3].Content != "new request" {
+		t.Fatalf("fourth message = %q, want new request", got[3].Content)
 	}
 }
 

@@ -341,7 +341,12 @@ func TestAgentExecutorPromptRoutesLegacySystemPromptThroughResolver(t *testing.T
 	if err != nil {
 		t.Fatalf("executor() error = %v", err)
 	}
-	assertExecutorRequestSystemPrompt(t, client, "DB prompt\n\nLegacy prompt\n\nWorkspace prompt")
+	assertExecutorRequestMessages(t, client, []model.Message{
+		{Role: model.RoleSystem, Content: "DB prompt"},
+		{Role: model.RoleSystem, Content: "Legacy prompt"},
+		{Role: model.RoleSystem, Content: "The following AGENTS.md file was injected from the user's working directory. Treat it as guidance and operating rules for the current workspace.\n---\nWorkspace prompt"},
+		{Role: model.RoleUser, Content: "hi"},
+	})
 }
 
 func TestAgentExecutorPromptUsesCanonicalResolvedProviderAndModelForPromptSelection(t *testing.T) {
@@ -1256,6 +1261,23 @@ func assertExecutorRequestSystemPrompt(t *testing.T, client *stubClient, want st
 	}
 	if request.Messages[0].Content != want {
 		t.Fatalf("request system prompt = %q, want %q", request.Messages[0].Content, want)
+	}
+}
+
+func assertExecutorRequestMessages(t *testing.T, client *stubClient, want []model.Message) {
+	t.Helper()
+
+	if len(client.streamRequests) != 1 {
+		t.Fatalf("stream request count = %d, want 1", len(client.streamRequests))
+	}
+	request := client.streamRequests[0]
+	if len(request.Messages) != len(want) {
+		t.Fatalf("request messages = %#v, want %#v", request.Messages, want)
+	}
+	for i := range want {
+		if request.Messages[i].Role != want[i].Role || request.Messages[i].Content != want[i].Content {
+			t.Fatalf("request.Messages[%d] = %#v, want %#v", i, request.Messages[i], want[i])
+		}
 	}
 }
 
