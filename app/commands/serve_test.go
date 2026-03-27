@@ -7,14 +7,19 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/EquentR/agent_runtime/app/config"
 	"github.com/EquentR/agent_runtime/app/router"
 	coreagent "github.com/EquentR/agent_runtime/core/agent"
 	coreaudit "github.com/EquentR/agent_runtime/core/audit"
 	model "github.com/EquentR/agent_runtime/core/providers/types"
 	coretasks "github.com/EquentR/agent_runtime/core/tasks"
+	coretools "github.com/EquentR/agent_runtime/core/tools"
+	builtin "github.com/EquentR/agent_runtime/core/tools/builtin"
 	coretypes "github.com/EquentR/agent_runtime/core/types"
 	"github.com/EquentR/agent_runtime/pkg/rest"
 	"github.com/glebarez/sqlite"
@@ -108,13 +113,134 @@ func TestResolveEffectiveWorkspaceRootCreatesCanonicalConfiguredDirectory(t *tes
 	if !info.IsDir() {
 		t.Fatalf("workspace root %q is not a directory", want)
 	}
-	registry, err := newDefaultToolRegistry(resolved)
+	registry, err := newDefaultToolRegistry(resolved, builtin.WebSearchOptions{})
 	if err != nil {
 		t.Fatalf("newDefaultToolRegistry() error = %v", err)
 	}
 	if len(registry.List()) == 0 {
 		t.Fatal("registry.List() = empty, want builtin tools registered")
 	}
+}
+
+func TestNewDefaultToolRegistryUsesConfiguredWebSearchOptions(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/search" {
+			t.Fatalf("request path = %q, want %q", r.URL.Path, "/search")
+		}
+		_, _ = w.Write([]byte(`{"results":[{"title":"Tavily Result","url":"https://example.com/tavily","content":"snippet"}]}`))
+	}))
+	defer server.Close()
+
+	fn := reflect.ValueOf(newDefaultToolRegistry)
+	if fn.Type().NumIn() != 2 {
+		t.Fatalf("newDefaultToolRegistry arg count = %d, want 2", fn.Type().NumIn())
+	}
+	if fn.Type().In(1) != reflect.TypeOf(builtin.WebSearchOptions{}) {
+		t.Fatalf("newDefaultToolRegistry second arg = %s, want %s", fn.Type().In(1), reflect.TypeOf(builtin.WebSearchOptions{}))
+	}
+
+	results := fn.Call([]reflect.Value{
+		reflect.ValueOf(t.TempDir()),
+		reflect.ValueOf(builtin.WebSearchOptions{
+			DefaultProvider: "tavily",
+			Tavily:          &builtin.TavilyConfig{APIKey: "tavily-key", BaseURL: server.URL},
+		}),
+	})
+	if len(results) != 2 {
+		t.Fatalf("newDefaultToolRegistry return count = %d, want 2", len(results))
+	}
+	if errValue := results[1].Interface(); errValue != nil {
+		t.Fatalf("newDefaultToolRegistry() error = %v", errValue)
+	}
+	registry, ok := results[0].Interface().(*coretools.Registry)
+	if !ok {
+		t.Fatalf("newDefaultToolRegistry() registry type = %T, want *coretools.Registry", results[0].Interface())
+	}
+
+	raw, err := registry.Execute(context.Background(), "web_search", map[string]any{"query": "golang"})
+	if err != nil {
+		t.Fatalf("registry.Execute(web_search) error = %v", err)
+	}
+	var result struct {
+		Provider string `json:"provider"`
+		Results  []struct {
+			Title string `json:"title"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error = %v", raw, err)
+	}
+	if result.Provider != "tavily" {
+		t.Fatalf("result.Provider = %q, want %q", result.Provider, "tavily")
+	}
+	if len(result.Results) != 1 || result.Results[0].Title != "Tavily Result" {
+		t.Fatalf("result.Results = %#v, want one Tavily Result", result.Results)
+	}
+}
+
+func TestNewTaskManagerUsesConfiguredWorkerCountAndRunnerID(t *testing.T) {
+	db := newServeTestDB(t)
+	store := coretasks.NewStore(db)
+	if err := store.AutoMigrate(); err != nil {
+		t.Fatalf("task store migrate error = %v", err)
+	}
+
+	manager := newTaskManager(store, config.TaskManagerConfig{
+		WorkerCount: 2,
+		RunnerID:    "configured-runner",
+	}, nil)
+
+	started := make(chan string, 2)
+	release := make(chan struct{})
+	var once sync.Once
+	if err := manager.RegisterExecutor("blocking", func(ctx context.Context, task *coretasks.Task, runtime *coretasks.Runtime) (any, error) {
+		started <- task.ID
+		<-release
+		return map[string]any{"task_id": task.ID}, nil
+	}); err != nil {
+		t.Fatalf("RegisterExecutor() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	manager.Start(ctx)
+
+	first, err := manager.CreateTask(ctx, coretasks.CreateTaskInput{TaskType: "blocking", CreatedBy: "tester"})
+	if err != nil {
+		t.Fatalf("CreateTask(first) error = %v", err)
+	}
+	second, err := manager.CreateTask(ctx, coretasks.CreateTaskInput{TaskType: "blocking", CreatedBy: "tester"})
+	if err != nil {
+		t.Fatalf("CreateTask(second) error = %v", err)
+	}
+
+	seen := map[string]bool{}
+	deadline := time.After(2 * time.Second)
+	for len(seen) < 2 {
+		select {
+		case taskID := <-started:
+			seen[taskID] = true
+		case <-deadline:
+			t.Fatalf("started tasks = %v, want both tasks to start with workerCount=2", seen)
+		}
+	}
+
+	for _, taskID := range []string{first.ID, second.ID} {
+		task, err := manager.GetTask(ctx, taskID)
+		if err != nil {
+			t.Fatalf("GetTask(%q) error = %v", taskID, err)
+		}
+		if task.RunnerID != "configured-runner" {
+			t.Fatalf("task %s runner_id = %q, want %q", taskID, task.RunnerID, "configured-runner")
+		}
+		if task.Status != coretasks.StatusRunning {
+			t.Fatalf("task %s status = %q, want %q while blocked", taskID, task.Status, coretasks.StatusRunning)
+		}
+	}
+
+	once.Do(func() { close(release) })
+	waitForServeTestTaskStatus(t, ctx, manager, first.ID, coretasks.StatusSucceeded)
+	waitForServeTestTaskStatus(t, ctx, manager, second.ID, coretasks.StatusSucceeded)
 }
 
 func TestPromptBuildRouterDependenciesPreservesAuditRoutes(t *testing.T) {

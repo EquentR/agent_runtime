@@ -486,7 +486,16 @@ func applyStartRunMetadata(run *Run, input StartRunInput) bool {
 }
 
 func shouldPromoteRunStatus(current Status, next Status) bool {
-	return current == StatusQueued && next == StatusRunning
+	switch current {
+	case StatusQueued:
+		return next == StatusRunning || next == StatusWaiting
+	case StatusWaiting:
+		return next == StatusRunning
+	case StatusRunning:
+		return next == StatusWaiting
+	default:
+		return false
+	}
 }
 
 func marshalJSON(value any, objectDefault bool) (json.RawMessage, error) {

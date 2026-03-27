@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	coreagent "github.com/EquentR/agent_runtime/core/agent"
@@ -92,6 +93,7 @@ func (h *TaskHandler) handleCreateTask() (method, relativePath string, wrapper r
 			Metadata:       request.Metadata,
 			CreatedBy:      request.CreatedBy,
 			IdempotencyKey: request.IdempotencyKey,
+			ConcurrencyKey: conversationConcurrencyKey(request.Input),
 		})
 		if err != nil {
 			return nil, nil, err
@@ -106,6 +108,21 @@ func (h *TaskHandler) canonicalizeTaskInputCreatedBy(input map[string]any, creat
 	}
 	input["created_by"] = createdBy
 	input["CreatedBy"] = createdBy
+}
+
+func conversationConcurrencyKey(input map[string]any) string {
+	if len(input) == 0 {
+		return ""
+	}
+	rawConversationID, ok := input["conversation_id"]
+	if !ok {
+		return ""
+	}
+	conversationID, ok := rawConversationID.(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(conversationID)
 }
 
 func (h *TaskHandler) ensureConversationOwnership(c *gin.Context, input map[string]any) error {

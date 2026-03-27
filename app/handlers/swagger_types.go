@@ -284,7 +284,7 @@ type TaskSwaggerResponse struct {
 type TaskSwaggerDoc struct {
 	ID               string `json:"id"`
 	TaskType         string `json:"task_type"`
-	Status           string `json:"status"`
+	Status           string `json:"status" enums:"queued,running,waiting,cancel_requested,cancelled,succeeded,failed"`
 	CurrentStepKey   string `json:"current_step_key"`
 	CurrentStepTitle string `json:"current_step_title"`
 	CreatedBy        string `json:"created_by"`
@@ -311,7 +311,7 @@ type AuditRunSwaggerDoc struct {
 	ProviderID     string `json:"provider_id"`
 	ModelID        string `json:"model_id"`
 	RunnerID       string `json:"runner_id"`
-	Status         string `json:"status" enums:"queued,running,cancel_requested,cancelled,succeeded,failed"`
+	Status         string `json:"status" enums:"queued,running,waiting,cancel_requested,cancelled,succeeded,failed"`
 	CreatedBy      string `json:"created_by"`
 	Replayable     bool   `json:"replayable"`
 	SchemaVersion  string `json:"schema_version"`

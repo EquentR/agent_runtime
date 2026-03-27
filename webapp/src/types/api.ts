@@ -205,7 +205,7 @@ export interface ModelCatalogEntry {
 export interface TaskSnapshot {
   id: string
   task_type: string
-  status: 'queued' | 'running' | 'cancel_requested' | 'cancelled' | 'succeeded' | 'failed'
+  status: 'queued' | 'running' | 'waiting' | 'cancel_requested' | 'cancelled' | 'succeeded' | 'failed'
   created_by: string
   created_at: string
   updated_at: string

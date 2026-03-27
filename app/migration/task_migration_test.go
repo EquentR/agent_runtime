@@ -154,6 +154,69 @@ func TestBootstrapMigratesPromptTables(t *testing.T) {
 	assertTableHasForeignKey(t, "prompt_bindings", "prompt_documents", "prompt_id", "id")
 }
 
+func TestBootstrapMigratesTaskConcurrencyKeyColumn(t *testing.T) {
+	log.Init(&log.Config{Level: "error"})
+
+	db.Init(&db.Database{
+		Name:     "task_concurrency_key_migration_test",
+		DbDir:    t.TempDir(),
+		InMemory: true,
+		LogLevel: "silent",
+	})
+
+	rawDB := db.DB()
+	if err := rawDB.Migrator().DropTable("tasks", &migrate.DataVersion{}); err != nil {
+		t.Fatalf("reset task migration tables error = %v", err)
+	}
+	if err := rawDB.AutoMigrate(&migrate.DataVersion{}); err != nil {
+		t.Fatalf("AutoMigrate(data_versions) error = %v", err)
+	}
+	if err := rawDB.Exec(`CREATE TABLE tasks (
+		id varchar(64) primary key,
+		task_type varchar(128) not null,
+		status varchar(32) not null,
+		input_json blob not null,
+		config_json blob not null,
+		metadata_json blob not null,
+		result_json blob,
+		error_json blob,
+		current_step_key varchar(128),
+		current_step_title varchar(255),
+		step_seq integer not null default 0,
+		execution_mode varchar(32) not null,
+		root_task_id varchar(64) not null,
+		parent_task_id varchar(64),
+		child_index integer not null default 0,
+		retry_of_task_id varchar(64),
+		waiting_on_task_id varchar(64),
+		suspend_reason varchar(255),
+		runner_id varchar(128),
+		heartbeat_at datetime,
+		lease_expires_at datetime,
+		cancel_requested_at datetime,
+		started_at datetime,
+		finished_at datetime,
+		created_by varchar(128),
+		idempotency_key varchar(128),
+		created_at datetime,
+		updated_at datetime
+	)`).Error; err != nil {
+		t.Fatalf("create legacy tasks table error = %v", err)
+	}
+	if rawDB.Migrator().HasColumn("tasks", "concurrency_key") {
+		t.Fatal("legacy tasks table unexpectedly has concurrency_key column")
+	}
+	if err := rawDB.Create(&migrate.DataVersion{ID: 1, Version: "0.0.8"}).Error; err != nil {
+		t.Fatalf("seed data version error = %v", err)
+	}
+
+	Bootstrap("0.0.9")
+
+	if !rawDB.Migrator().HasColumn("tasks", "concurrency_key") {
+		t.Fatal("tasks.concurrency_key column was not created")
+	}
+}
+
 func assertTableHasColumns(t *testing.T, table string, columns ...string) {
 	t.Helper()
 

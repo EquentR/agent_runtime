@@ -209,7 +209,7 @@ function resolveTaskConversationId(task: TaskDetails | null | undefined) {
 }
 
 function isTaskActive(task: TaskDetails | null | undefined) {
-  return task?.status === 'queued' || task?.status === 'running' || task?.status === 'cancel_requested'
+  return task?.status === 'queued' || task?.status === 'running' || task?.status === 'waiting' || task?.status === 'cancel_requested'
 }
 
 function stopActiveStream() {

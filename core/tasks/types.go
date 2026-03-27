@@ -13,6 +13,8 @@ const (
 	StatusQueued Status = "queued"
 	// StatusRunning 表示任务已经被 runner 领取并正在执行。
 	StatusRunning Status = "running"
+	// StatusWaiting 表示任务已暂停，等待外部条件满足后再继续入队。
+	StatusWaiting Status = "waiting"
 	// StatusCancelRequested 表示外部已经发起取消，请求正在传递到执行流。
 	StatusCancelRequested Status = "cancel_requested"
 	// StatusCancelled 表示任务已被协作式取消并完成收尾。
@@ -48,6 +50,10 @@ const (
 	EventTaskStarted = "task.started"
 	// EventTaskCancelRequested 表示任务已收到取消请求。
 	EventTaskCancelRequested = "task.cancel_requested"
+	// EventTaskWaiting 表示任务已暂停并释放当前执行租约。
+	EventTaskWaiting = "task.waiting"
+	// EventTaskResumed 表示等待中的任务已恢复为 queued。
+	EventTaskResumed = "task.resumed"
 	// EventTaskFinished 表示任务进入终态。
 	EventTaskFinished = "task.finished"
 	// EventStepStarted 表示任务内部某个步骤开始执行。
@@ -79,6 +85,7 @@ type CreateTaskInput struct {
 	RetryOfTaskID   string
 	WaitingOnTaskID string
 	SuspendReason   string
+	ConcurrencyKey  string
 }
 
 // TaskResult 表示任务终态时的聚合结果快照。

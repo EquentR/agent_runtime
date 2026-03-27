@@ -154,6 +154,7 @@ definitions:
         enum:
         - queued
         - running
+        - waiting
         - cancel_requested
         - cancelled
         - succeeded
@@ -628,6 +629,14 @@ definitions:
       retry_of_task_id:
         type: string
       status:
+        enum:
+        - queued
+        - running
+        - waiting
+        - cancel_requested
+        - cancelled
+        - succeeded
+        - failed
         type: string
       task_type:
         type: string
@@ -1189,6 +1198,32 @@ paths:
       tags:
       - prompts
   /prompts/documents/{id}:
+    delete:
+      description: 仅管理员可删除指定提示词文档，并清理关联绑定。
+      parameters:
+      - description: 提示词文档 ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.PromptDeleteSwaggerResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+      summary: 删除提示词文档
+      tags:
+      - prompts
     get:
       description: 仅管理员可读取指定提示词文档。
       parameters:

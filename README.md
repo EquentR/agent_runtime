@@ -7,9 +7,11 @@
 ## 当前可用能力
 
 - 任务系统支持创建、查询、取消、重试和事件订阅，可用于承载可观察的长执行流程。
+- 任务系统已支持 worker pool 并行调度、按 `concurrency_key` 的串行隔离、`waiting` 挂起/恢复，以及父子任务 fan-out / fan-in 的基础编排能力。
 - conversation 和 message 支持持久化，并自动维护 title、last message、message count 等展示字段。
 - 统一的 `ChatRequest` / `ChatResponse` / `Stream` 抽象已接入 Gemini、OpenAI-compatible chat completions 和 OpenAI Responses API。
 - 本地内建工具覆盖文件、命令、HTTP、web search 等常见场景，并限制在 workspace 边界内；可继续接入 MCP tools / prompts。
+- `core/prompt` 已提供提示词文档与绑定管理能力，支持按 scene / phase / provider / model 做提示词分发，并通过 HTTP API 进行增删改查。
 - `core/memory` 支持在上下文接近预算时压缩 short-term messages，并保留后续对话所需的工作记忆。
 - `cmd/example_agent` 与 `app/*` 已串起配置、migration、auth、model catalog、task manager、conversation store 和 API router，可作为参考实现。
 
@@ -19,8 +21,9 @@
 
 - `auth`：注册、登录、退出、获取当前用户
 - `models`：读取当前服务加载的 provider / model 目录，方便前端直接渲染模型选择器
-- `tasks`：创建任务、读取任务详情、取消、重试、订阅 SSE 事件流
+- `tasks`：创建任务、读取任务详情、取消、重试、订阅 SSE 事件流；同 conversation 默认串行，不同 conversation 可并行执行
 - `conversations`：读取会话列表、会话详情、历史消息、删除会话
+- `prompts`：管理员侧提示词文档与绑定管理，可维护 prompt document、binding 以及模型/阶段定向分发规则
 - `swagger`：浏览器内直接调试 API
 
 ## Quick Start
@@ -57,11 +60,12 @@ go build -o bin/example_agent ./cmd/example_agent
 - `cmd/example_agent`：参考二进制入口，负责读取配置并启动示例服务
 - `app`：参考应用装配层，包含 auth、models、tasks、conversations、swagger 等 HTTP handler
 - `core/agent`：stream-first agent loop、`agent.run` executor、conversation store、usage / cost 聚合
+- `core/prompt`：提示词文档、绑定关系与解析器，负责把 prompts 管理能力接到运行时边界
 - `core/providers`：统一模型抽象与 provider adapter
 - `core/tools`：本地工具注册表，以及 MCP tools / prompts 的接入桥梁
 - `core/mcp`：MCP 抽象边界与 adapter
 - `core/memory`：上下文预算管理与压缩记忆
-- `core/tasks`：持久化任务、事件流、runner、取消 / 重试基础能力
+- `core/tasks`：持久化任务、事件流、worker pool、挂起/恢复、父子任务恢复与取消 / 重试基础能力
 - `pkg`：SQLite、migration、REST、logging 等基础设施封装
 
 ## 当前阶段
@@ -69,7 +73,7 @@ go build -o bin/example_agent ./cmd/example_agent
 这个仓库当前处于可运行的 agent backend runtime skeleton 阶段。
 
 - 已经落地并可直接使用的重点在 `core/agent`、`core/providers`、`core/tools`、`core/mcp`、`core/memory`、`core/tasks` 与 `app/*`
-- 当前参考实现聚焦单线程、多轮对话型 agent runtime；`agent.run` 是默认打通的执行入口
+- 当前参考实现已从单线程任务执行演进到持久化并行调度；`agent.run` 仍是默认打通的执行入口，并为后续 subagent 扇出/汇聚保留了运行时基础能力
 - `core/rag` 仍是占位目录，multi-agent、approval workflow、完整 product UI 也还不是当前仓库的主目标
 
 ## 验证

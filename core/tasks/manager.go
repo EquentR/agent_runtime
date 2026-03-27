@@ -14,6 +14,7 @@ type Executor func(ctx context.Context, task *Task, runtime *Runtime) (any, erro
 // ManagerOptions 定义任务管理器的后台轮询与租约参数。
 type ManagerOptions struct {
 	RunnerID          string
+	WorkerCount       int
 	PollInterval      time.Duration
 	LeaseDuration     time.Duration
 	HeartbeatInterval time.Duration
@@ -55,6 +56,8 @@ type AuditRecorder interface {
 	FinishRun(ctx context.Context, runID string, input AuditFinishRunInput) error
 }
 
+var ErrTaskSuspended = errors.New("task suspended")
+
 // Manager 负责任务的创建、领取、串行执行、取消与事件发布。
 type Manager struct {
 	store *Store
@@ -62,6 +65,7 @@ type Manager struct {
 	audit AuditRecorder
 
 	runnerID          string
+	workerCount       int
 	pollInterval      time.Duration
 	leaseDuration     time.Duration
 	heartbeatInterval time.Duration
@@ -77,6 +81,10 @@ func NewManager(store *Store, options ManagerOptions) *Manager {
 	runnerID := options.RunnerID
 	if runnerID == "" {
 		runnerID = "local-runner"
+	}
+	workerCount := options.WorkerCount
+	if workerCount <= 0 {
+		workerCount = 1
 	}
 	pollInterval := options.PollInterval
 	if pollInterval <= 0 {
@@ -99,6 +107,7 @@ func NewManager(store *Store, options ManagerOptions) *Manager {
 		hub:               NewEventHub(),
 		audit:             options.AuditRecorder,
 		runnerID:          runnerID,
+		workerCount:       workerCount,
 		pollInterval:      pollInterval,
 		leaseDuration:     leaseDuration,
 		heartbeatInterval: heartbeatInterval,
@@ -125,10 +134,12 @@ func (m *Manager) RegisterExecutor(taskType string, executor Executor) error {
 	return nil
 }
 
-// Start 启动后台领取循环；重复调用只会生效一次。
+// Start 启动后台 worker 池；重复调用只会生效一次。
 func (m *Manager) Start(ctx context.Context) {
 	m.startOnce.Do(func() {
-		go m.run(ctx)
+		for workerIndex := 0; workerIndex < m.workerCount; workerIndex++ {
+			go m.runWorker(ctx, workerIndex)
+		}
 	})
 }
 
@@ -172,7 +183,13 @@ func (m *Manager) CancelTask(ctx context.Context, id string) (*Task, error) {
 	if err != nil {
 		return nil, err
 	}
-	if current.Status.IsTerminal() || current.Status == StatusCancelRequested {
+	if current.Status.IsTerminal() {
+		return current, nil
+	}
+	if current.Status == StatusCancelRequested {
+		if cancel := m.lookupCancel(id); cancel != nil {
+			cancel()
+		}
 		return current, nil
 	}
 
@@ -184,17 +201,28 @@ func (m *Manager) CancelTask(ctx context.Context, id string) (*Task, error) {
 	if updated.Status.IsTerminal() {
 		return updated, nil
 	}
+	if updated.Status == StatusCancelRequested {
+		if cancel := m.lookupCancel(id); cancel != nil {
+			cancel()
+			return updated, nil
+		}
+	}
 
-	// 尚未执行的任务可直接在管理器层完成终态转换。
-	if updated.Status == StatusCancelRequested && taskIsQueuedBeforeExecution(updated) {
-		cancelled, finishEvents, err := m.store.MarkCancelled(ctx, id, map[string]any{"message": "task cancelled before execution"})
+	// 没有活动执行器的任务可直接在管理器层完成终态转换。
+	if updated.Status == StatusCancelRequested && taskHasNoActiveExecutor(updated) {
+		reason := map[string]any{"message": "task cancelled without active executor"}
+		if taskIsQueuedBeforeExecution(updated) {
+			reason = map[string]any{"message": "task cancelled before execution"}
+		}
+		cancelled, finishEvents, err := m.store.MarkCancelled(ctx, id, reason)
 		if err != nil {
 			return nil, err
 		}
 		if len(finishEvents) > 0 {
-			m.recordTaskFinished(cancelled, map[string]any{"message": "task cancelled before execution"})
+			m.recordTaskFinished(cancelled, reason)
 		}
 		m.publish(finishEvents...)
+		m.tryResumeParentAfterChild(cancelled)
 		return cancelled, nil
 	}
 
@@ -216,8 +244,9 @@ func (m *Manager) RetryTask(ctx context.Context, id string) (*Task, error) {
 	return task, nil
 }
 
-// run 持续轮询并串行执行后台任务。
-func (m *Manager) run(ctx context.Context) {
+// runWorker 持续轮询并执行单个 worker 领取到的任务。
+func (m *Manager) runWorker(ctx context.Context, workerIndex int) {
+	_ = workerIndex
 	for {
 		select {
 		case <-ctx.Done():
@@ -257,6 +286,7 @@ func (m *Manager) executeTask(ctx context.Context, task *Task) {
 				m.recordTaskFinished(failed, map[string]any{"message": "executor not found"})
 			}
 			m.publish(events...)
+			m.tryResumeParentAfterChild(failed)
 		}
 		return
 	}
@@ -284,6 +314,10 @@ func (m *Manager) executeTask(ctx context.Context, task *Task) {
 	case errors.Is(execErr, context.Canceled) || errors.Is(taskCtx.Err(), context.Canceled):
 		reason = map[string]any{"message": "task cancelled"}
 		finished, events, execErr = m.store.MarkCancelled(context.Background(), task.ID, reason)
+	case runtime.isSuspended() && m.taskStatusIs(context.Background(), task.ID, StatusWaiting):
+		return
+	case errors.Is(execErr, ErrTaskSuspended):
+		return
 	case execErr != nil:
 		reason = map[string]any{"message": execErr.Error()}
 		finished, events, execErr = m.store.MarkFailed(context.Background(), task.ID, reason)
@@ -295,7 +329,19 @@ func (m *Manager) executeTask(ctx context.Context, task *Task) {
 			m.recordTaskFinished(finished, reason)
 		}
 		m.publish(events...)
+		m.tryResumeParentAfterChild(finished)
 	}
+}
+
+func (m *Manager) taskStatusIs(ctx context.Context, taskID string, want Status) bool {
+	if m == nil || m.store == nil {
+		return false
+	}
+	task, err := m.store.GetTask(ctx, taskID)
+	if err != nil || task == nil {
+		return false
+	}
+	return task.Status == want
 }
 
 // heartbeatLoop 在任务运行期间定期刷新租约信息。
@@ -360,6 +406,30 @@ func (m *Manager) recordTaskStarted(task *Task) {
 		Payload: map[string]any{
 			"status":    task.Status,
 			"runner_id": task.RunnerID,
+		},
+	})
+}
+
+func (m *Manager) recordTaskWaiting(task *Task) {
+	if m == nil || m.audit == nil || task == nil {
+		return
+	}
+	run, err := m.audit.StartRun(context.Background(), AuditStartRunInput{
+		TaskID:    task.ID,
+		TaskType:  task.TaskType,
+		RunnerID:  task.RunnerID,
+		CreatedBy: task.CreatedBy,
+		Status:    StatusWaiting,
+		StartedAt: derefTime(task.StartedAt),
+	})
+	if err != nil || run == nil {
+		return
+	}
+	_, _ = m.audit.AppendEvent(context.Background(), run.ID, AuditAppendEventInput{
+		EventType: "run.waiting",
+		Payload: map[string]any{
+			"status":         task.Status,
+			"suspend_reason": task.SuspendReason,
 		},
 	})
 }
@@ -457,4 +527,23 @@ func taskIsQueuedBeforeExecution(task *Task) bool {
 		return false
 	}
 	return task.RunnerID == "" && task.StartedAt == nil
+}
+
+func taskHasNoActiveExecutor(task *Task) bool {
+	if task == nil {
+		return false
+	}
+	return task.RunnerID == ""
+}
+
+func (m *Manager) tryResumeParentAfterChild(task *Task) {
+	if m == nil || m.store == nil || task == nil || task.ParentTaskID == "" {
+		return
+	}
+
+	_, events, err := m.store.TryResumeParentTask(context.Background(), task.ParentTaskID)
+	if err != nil {
+		return
+	}
+	m.publish(events...)
 }

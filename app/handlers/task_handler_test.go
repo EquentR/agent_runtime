@@ -154,6 +154,32 @@ func TestTaskHandlerCreateAgentRunTaskWithConversationInput(t *testing.T) {
 	}
 }
 
+func TestCreateTaskPersistsConversationConcurrencyKey(t *testing.T) {
+	manager, server := newTaskHandlerTestServer(t, nil, false)
+
+	created := createTaskViaHTTP(t, server.URL, map[string]any{
+		"task_type": "agent.run",
+		"input": map[string]any{
+			"conversation_id": "  conv_1  ",
+			"provider_id":     "openai",
+			"model_id":        "gpt-5.4",
+			"message":         "hello",
+		},
+	})
+
+	if created.ConcurrencyKey != "conv_1" {
+		t.Fatalf("created concurrency key = %q, want %q", created.ConcurrencyKey, "conv_1")
+	}
+
+	persisted, err := manager.GetTask(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("GetTask() error = %v", err)
+	}
+	if persisted.ConcurrencyKey != "conv_1" {
+		t.Fatalf("persisted concurrency key = %q, want %q", persisted.ConcurrencyKey, "conv_1")
+	}
+}
+
 func TestTaskHandlerAgentRunEndToEndAppendsConversationHistory(t *testing.T) {
 	manager, server := newAgentRunTaskTestServer(t)
 	first := createTaskViaHTTP(t, server.URL, map[string]any{

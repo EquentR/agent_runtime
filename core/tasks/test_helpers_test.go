@@ -5,12 +5,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 )
+
+type transientWriteErrorContextKey struct{}
+
+var transientWriteErrorMarkerKey transientWriteErrorContextKey
 
 // newTestStore 为任务测试构造独立的内存数据库与 Store。
 func newTestStore(t *testing.T) *Store {
@@ -28,6 +33,69 @@ func newTestStore(t *testing.T) *Store {
 	}
 
 	return store
+}
+
+type transientWriteErrorCallback struct {
+	injected bool
+	remove   func() error
+}
+
+func withTransientWriteErrorContext(ctx context.Context, marker string) context.Context {
+	return context.WithValue(ctx, transientWriteErrorMarkerKey, marker)
+}
+
+func registerTransientWriteErrorOnce(t *testing.T, db *gorm.DB, marker string, operation string, table string, message string) *transientWriteErrorCallback {
+	t.Helper()
+
+	callbackName := fmt.Sprintf("test:tasks:%s:%s:%s", strings.ReplaceAll(t.Name(), "/", "_"), operation, table)
+	callback := &transientWriteErrorCallback{}
+	hook := func(tx *gorm.DB) {
+		if callback.injected || tx.Statement == nil || tx.Statement.Schema == nil {
+			return
+		}
+		if tx.Statement.Schema.Table != table {
+			return
+		}
+		if tx.Statement.Context == nil || tx.Statement.Context.Value(transientWriteErrorMarkerKey) != marker {
+			return
+		}
+		callback.injected = true
+		tx.AddError(fmt.Errorf("sqlite transient write failure: %s", message))
+	}
+
+	switch operation {
+	case "create":
+		if err := db.Callback().Create().Before("gorm:create").Register(callbackName, hook); err != nil {
+			t.Fatalf("register create callback: %v", err)
+		}
+		callback.remove = func() error {
+			return db.Callback().Create().Remove(callbackName)
+		}
+	case "update":
+		if err := db.Callback().Update().Before("gorm:update").Register(callbackName, hook); err != nil {
+			t.Fatalf("register update callback: %v", err)
+		}
+		callback.remove = func() error {
+			return db.Callback().Update().Remove(callbackName)
+		}
+	default:
+		t.Fatalf("unsupported callback operation %q", operation)
+	}
+
+	t.Cleanup(func() {
+		if err := callback.remove(); err != nil {
+			t.Fatalf("remove %s callback: %v", operation, err)
+		}
+	})
+
+	return callback
+}
+
+func (c *transientWriteErrorCallback) AssertInjected(t *testing.T) {
+	t.Helper()
+	if c == nil || !c.injected {
+		t.Fatal("transient write error was not injected")
+	}
 }
 
 // decodeJSONRaw 将原始 JSON 解码为 map，便于测试断言。

@@ -90,6 +90,12 @@ var to008 = migrate.NewMigration("0.0.8", func(tx *gorm.DB) error {
 	return tx.AutoMigrate(&prompt.PromptDocument{}, &prompt.PromptBinding{})
 })
 
+// to009 为旧版 tasks 表补齐 concurrency_key 列，兼容已部署 SQLite 数据库。
+var to009 = migrate.NewMigration("0.0.9", func(tx *gorm.DB) error {
+	return tx.AutoMigrate(&coretasks.Task{})
+})
+
 func init() {
 	versionMigrations = append(versionMigrations, to008)
+	versionMigrations = append(versionMigrations, to009)
 }

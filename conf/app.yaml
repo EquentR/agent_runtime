@@ -28,6 +28,23 @@ log:
   maxBackups: 7
   compress: true
 
+tasks:
+  workerCount: 16
+  runnerId: example-agent
+
+tools:
+  webSearch:
+    defaultProvider: tavily
+    tavily:
+      apiKey: ${TAVILY_API_KEY}
+      baseUrl: https://api.tavily.com
+    # serpApi:
+    #   apiKey: ${SERPAPI_API_KEY}
+    #   baseUrl: https://serpapi.com
+    # bing:
+    #   apiKey: ${BING_SEARCH_API_KEY}
+    #   baseUrl: https://api.bing.microsoft.com
+
 llmProviders:
   # UI 侧会通过 provider_id + model_id 选择具体模型，
   # 其中 provider_id 对应这里的 name，model_id 对应 models[].id。

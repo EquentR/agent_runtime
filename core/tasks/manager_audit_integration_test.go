@@ -61,6 +61,41 @@ func TestManagerStoreBackedAuditRecorderMarksRunRunningOnStart(t *testing.T) {
 	_ = waitForTaskStatus(t, ctx, manager, created.ID, coretasks.StatusSucceeded)
 }
 
+func TestManagerStoreBackedAuditRecorderMarksRunWaitingOnSuspend(t *testing.T) {
+	taskStore, auditStore, db := newTaskAndAuditStores(t)
+	manager := coretasks.NewManager(taskStore, coretasks.ManagerOptions{
+		RunnerID:          "runner-1",
+		PollInterval:      5 * time.Millisecond,
+		LeaseDuration:     100 * time.Millisecond,
+		HeartbeatInterval: 20 * time.Millisecond,
+		AuditRecorder:     newTaskAuditRecorder(coreaudit.NewRecorder(auditStore)),
+	})
+	if err := manager.RegisterExecutor("agent.run", func(ctx context.Context, task *coretasks.Task, runtime *coretasks.Runtime) (any, error) {
+		if err := runtime.Suspend(ctx, "waiting_for_child_tasks"); err != nil {
+			return nil, err
+		}
+		return nil, coretasks.ErrTaskSuspended
+	}); err != nil {
+		t.Fatalf("RegisterExecutor() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	manager.Start(ctx)
+
+	created, err := manager.CreateTask(ctx, coretasks.CreateTaskInput{TaskType: "agent.run", CreatedBy: "user-1"})
+	if err != nil {
+		t.Fatalf("CreateTask() error = %v", err)
+	}
+
+	_ = waitForTaskStatus(t, ctx, manager, created.ID, coretasks.StatusWaiting)
+	run := waitForAuditRunStatus(t, ctx, auditStore, created.ID, coreaudit.Status(coretasks.StatusWaiting))
+	if run.StartedAt == nil {
+		t.Fatalf("waiting audit run started_at = nil for task %q", created.ID)
+	}
+	waitForAuditEvent(t, db, created.ID, "run.waiting")
+}
+
 type taskAuditRecorder struct {
 	recorder coreaudit.Recorder
 }

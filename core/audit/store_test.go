@@ -320,6 +320,50 @@ func TestRecorderStartRunEnrichesExistingRunMetadata(t *testing.T) {
 	}
 }
 
+func TestRecorderStartRunPromotesWaitingRunToRunning(t *testing.T) {
+	db := newTestDB(t)
+	store := NewStore(db)
+	if err := store.AutoMigrate(); err != nil {
+		t.Fatalf("AutoMigrate() error = %v", err)
+	}
+
+	recorder := NewRecorder(store)
+	ctx := context.Background()
+	startedAt := time.Date(2026, time.March, 22, 12, 0, 0, 0, time.UTC)
+
+	if _, err := recorder.StartRun(ctx, StartRunInput{
+		RunID:     "run_1",
+		TaskID:    "task_1",
+		TaskType:  "agent.run",
+		Status:    StatusWaiting,
+		StartedAt: startedAt,
+	}); err != nil {
+		t.Fatalf("StartRun(waiting) error = %v", err)
+	}
+
+	promoted, err := recorder.StartRun(ctx, StartRunInput{
+		RunID:     "run_1",
+		TaskID:    "task_1",
+		TaskType:  "agent.run",
+		Status:    StatusRunning,
+		StartedAt: startedAt.Add(5 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("StartRun(running) error = %v", err)
+	}
+	if promoted.Status != StatusRunning {
+		t.Fatalf("promoted status = %q, want %q", promoted.Status, StatusRunning)
+	}
+
+	persisted, err := store.GetRun(ctx, "run_1")
+	if err != nil {
+		t.Fatalf("GetRun() error = %v", err)
+	}
+	if persisted.Status != StatusRunning {
+		t.Fatalf("persisted status = %q, want %q", persisted.Status, StatusRunning)
+	}
+}
+
 func TestRecorderStartRunRejectsRunIDDriftForExistingTask(t *testing.T) {
 	db := newTestDB(t)
 	store := NewStore(db)

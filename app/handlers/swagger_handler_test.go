@@ -122,6 +122,7 @@ func TestSwaggerUIRoutesExposeAuditStatusEnumInGeneratedDocs(t *testing.T) {
 	want := []string{
 		string(coretasks.StatusQueued),
 		string(coretasks.StatusRunning),
+		string(coretasks.StatusWaiting),
 		string(coretasks.StatusCancelRequested),
 		string(coretasks.StatusCancelled),
 		string(coretasks.StatusSucceeded),
@@ -130,6 +131,56 @@ func TestSwaggerUIRoutesExposeAuditStatusEnumInGeneratedDocs(t *testing.T) {
 	if !equalSwaggerStringSlices(got, want) {
 		t.Fatalf("audit status enum = %v, want %v", got, want)
 	}
+}
+
+func TestSwaggerJSONIncludesWaitingTaskStatus(t *testing.T) {
+	engine := rest.Init()
+	NewSwaggerHandler().Register(engine.Group("/api/v1"))
+	server := httptest.NewServer(engine)
+	t.Cleanup(server.Close)
+
+	response, err := http.Get(server.URL + "/api/v1/swagger/swagger.json")
+	if err != nil {
+		t.Fatalf("GET /swagger/swagger.json error = %v", err)
+	}
+	defer response.Body.Close()
+
+	var document map[string]any
+	if err := json.NewDecoder(response.Body).Decode(&document); err != nil {
+		t.Fatalf("Decode(swagger.json) error = %v", err)
+	}
+	definitions, ok := document["definitions"].(map[string]any)
+	if !ok {
+		t.Fatalf("definitions = %#v, want object", document["definitions"])
+	}
+
+	assertSwaggerStatusEnumContainsWaiting(t, definitions, "handlers.AuditRunSwaggerDoc")
+	assertSwaggerStatusEnumContainsWaiting(t, definitions, "handlers.TaskSwaggerDoc")
+}
+
+func assertSwaggerStatusEnumContainsWaiting(t *testing.T, definitions map[string]any, name string) {
+	t.Helper()
+
+	definition, ok := definitions[name].(map[string]any)
+	if !ok {
+		t.Fatalf("%s = %#v, want object", name, definitions[name])
+	}
+	properties, ok := definition["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("%s.properties = %#v, want object", name, definition["properties"])
+	}
+	statusSchema, ok := properties["status"].(map[string]any)
+	if !ok {
+		t.Fatalf("%s.status = %#v, want object", name, properties["status"])
+	}
+
+	got := swaggerEnumValues(t, statusSchema["enum"])
+	for _, value := range got {
+		if value == string(coretasks.StatusWaiting) {
+			return
+		}
+	}
+	t.Fatalf("%s status enum = %v, want to include %q", name, got, coretasks.StatusWaiting)
 }
 
 func swaggerEnumValues(t *testing.T, raw any) []string {

@@ -52,10 +52,7 @@ func Serve(c *config.Config, version, commit string) {
 	if err != nil {
 		log.Panicf("Failed to init audit runtime: %v", err)
 	}
-	taskManager := coretasks.NewManager(taskStore, coretasks.ManagerOptions{
-		RunnerID:      "example-agent",
-		AuditRecorder: auditRuntime.TaskRecorder,
-	})
+	taskManager := newTaskManager(taskStore, c.Tasks, auditRuntime.TaskRecorder)
 	conversationStore := coreagent.NewConversationStore(db.DB())
 	if err := conversationStore.AutoMigrate(); err != nil {
 		log.Panicf("Failed to migrate conversation store: %v", err)
@@ -72,7 +69,7 @@ func Serve(c *config.Config, version, commit string) {
 	if err != nil {
 		log.Panicf("Failed to init auth logic: %v", err)
 	}
-	toolRegistry, err := newDefaultToolRegistry(workspaceRoot)
+	toolRegistry, err := newDefaultToolRegistry(workspaceRoot, c.Tools.WebSearch.BuiltinOptions())
 	if err != nil {
 		log.Panicf("Failed to register builtin tools: %v", err)
 	}
@@ -210,9 +207,13 @@ func initAuditRuntime(database *gorm.DB) (*auditRuntime, error) {
 	}, nil
 }
 
-func newDefaultToolRegistry(workspaceRoot string) (*coretools.Registry, error) {
+func newTaskManager(store *coretasks.Store, cfg config.TaskManagerConfig, auditRecorder coretasks.AuditRecorder) *coretasks.Manager {
+	return coretasks.NewManager(store, cfg.ManagerOptions(auditRecorder))
+}
+
+func newDefaultToolRegistry(workspaceRoot string, webSearch builtin.WebSearchOptions) (*coretools.Registry, error) {
 	registry := coretools.NewRegistry()
-	if err := builtin.Register(registry, builtin.Options{WorkspaceRoot: workspaceRoot}); err != nil {
+	if err := builtin.Register(registry, builtin.Options{WorkspaceRoot: workspaceRoot, WebSearch: webSearch}); err != nil {
 		return nil, err
 	}
 	return registry, nil

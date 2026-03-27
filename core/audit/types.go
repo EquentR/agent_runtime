@@ -26,6 +26,7 @@ type Status = coretasks.Status
 const (
 	StatusQueued          = coretasks.StatusQueued
 	StatusRunning         = coretasks.StatusRunning
+	StatusWaiting         = coretasks.StatusWaiting
 	StatusCancelRequested = coretasks.StatusCancelRequested
 	StatusCancelled       = coretasks.StatusCancelled
 	StatusSucceeded       = coretasks.StatusSucceeded

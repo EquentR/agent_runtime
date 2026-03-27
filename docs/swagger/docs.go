@@ -923,6 +923,45 @@ const docTemplate = `{
                         }
                     }
                 }
+            },
+            "delete": {
+                "description": "仅管理员可删除指定提示词文档，并清理关联绑定。",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "prompts"
+                ],
+                "summary": "删除提示词文档",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "提示词文档 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.PromptDeleteSwaggerResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    }
+                }
             }
         },
         "/swagger": {
@@ -1454,6 +1493,7 @@ const docTemplate = `{
                     "enum": [
                         "queued",
                         "running",
+                        "waiting",
                         "cancel_requested",
                         "cancelled",
                         "succeeded",
@@ -2178,7 +2218,16 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "status": {
-                    "type": "string"
+                    "type": "string",
+                    "enum": [
+                        "queued",
+                        "running",
+                        "waiting",
+                        "cancel_requested",
+                        "cancelled",
+                        "succeeded",
+                        "failed"
+                    ]
                 },
                 "task_type": {
                     "type": "string"

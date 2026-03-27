@@ -13,6 +13,7 @@ type Task struct {
 	ID                string          `json:"id" gorm:"type:varchar(64);primaryKey"`
 	TaskType          string          `json:"task_type" gorm:"type:varchar(128);not null;index"`
 	Status            Status          `json:"status" gorm:"type:varchar(32);not null;index"`
+	ConcurrencyKey    string          `json:"concurrency_key" gorm:"type:varchar(255);index"`
 	InputJSON         json.RawMessage `json:"input" gorm:"column:input_json;type:blob;not null"`
 	ConfigJSON        json.RawMessage `json:"config" gorm:"column:config_json;type:blob;not null"`
 	MetadataJSON      json.RawMessage `json:"metadata" gorm:"column:metadata_json;type:blob;not null"`
