@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -77,8 +78,14 @@ func (h *TaskHandler) handleCreateTask() (method, relativePath string, wrapper r
 		if err := c.ShouldBindJSON(&request); err != nil {
 			return nil, nil, err
 		}
+		if request.Input == nil {
+			request.Input = map[string]any{}
+		}
 		request.CreatedBy = h.resolveCreatedBy(c, request.CreatedBy)
 		h.canonicalizeTaskInputCreatedBy(request.Input, request.CreatedBy)
+		if err := h.ensureAgentRunConversation(c.Request.Context(), &request); err != nil {
+			return nil, nil, err
+		}
 		if err := h.ensureConversationOwnership(c, request.Input); err != nil {
 			if errors.Is(err, errConversationAccessDenied) {
 				return gin.H{}, []resp.ResOpt{resp.WithCode(http.StatusUnauthorized)}, err
@@ -100,6 +107,32 @@ func (h *TaskHandler) handleCreateTask() (method, relativePath string, wrapper r
 		}
 		return task, nil, nil
 	}, nil
+}
+
+func (h *TaskHandler) ensureAgentRunConversation(ctx context.Context, request *CreateTaskRequest) error {
+	if h == nil || request == nil || h.conversations == nil || request.TaskType != "agent.run" {
+		return nil
+	}
+	if request.Input == nil {
+		request.Input = map[string]any{}
+	}
+	if conversationID, ok := request.Input["conversation_id"].(string); ok && strings.TrimSpace(conversationID) != "" {
+		request.Input["conversation_id"] = strings.TrimSpace(conversationID)
+		return nil
+	}
+
+	providerID, _ := request.Input["provider_id"].(string)
+	modelID, _ := request.Input["model_id"].(string)
+	conversation, err := h.conversations.CreateConversation(ctx, coreagent.CreateConversationInput{
+		ProviderID: providerID,
+		ModelID:    modelID,
+		CreatedBy:  request.CreatedBy,
+	})
+	if err != nil {
+		return err
+	}
+	request.Input["conversation_id"] = conversation.ID
+	return nil
 }
 
 func (h *TaskHandler) canonicalizeTaskInputCreatedBy(input map[string]any, createdBy string) {

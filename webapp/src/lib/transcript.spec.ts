@@ -601,6 +601,52 @@ describe('updateTranscriptFromStreamEvent', () => {
 
     expect(comparableEntries(streamed)).toEqual(comparableEntries(persisted))
   })
+
+  it('keeps streamed tool calls from different rounds in separate tool groups when tool events omit step', () => {
+    let entries: TranscriptEntry[] = [{ id: 'user-1', kind: 'user', title: '', content: 'first question' }]
+
+    entries = updateTranscriptFromStreamEvent(entries, {
+      type: 'tool.started',
+      payload: {
+        ToolCallID: 'call_1',
+        ToolName: 'read_file',
+        Arguments: '{"path":"README.md"}',
+      },
+    })
+    entries = updateTranscriptFromStreamEvent(entries, {
+      type: 'tool.finished',
+      payload: {
+        ToolCallID: 'call_1',
+        ToolName: 'read_file',
+        Output: 'README line 1',
+      },
+    })
+    entries = updateTranscriptFromStreamEvent(entries, {
+      type: 'log.message',
+      payload: { Kind: 'text_delta', Text: 'first answer' },
+    })
+    entries = updateTranscriptFromStreamEvent(entries, {
+      type: 'task.finished',
+      payload: { status: 'succeeded' },
+    })
+
+    entries = [...entries, { id: 'user-2', kind: 'user', title: '', content: 'second question' }]
+    entries = updateTranscriptFromStreamEvent(entries, {
+      type: 'tool.started',
+      payload: {
+        ToolCallID: 'call_2',
+        ToolName: 'glob',
+        Arguments: '{"pattern":"src/**/*.ts"}',
+      },
+    })
+
+    const toolEntries = entries.filter((entry) => entry.kind === 'tool')
+
+    expect(toolEntries).toHaveLength(2)
+    expect(toolEntries[0].details?.map((detail) => detail.key)).toEqual(['call_1'])
+    expect(toolEntries[1].details?.map((detail) => detail.key)).toEqual(['call_2'])
+    expect(toolEntries[1].status).toBe('running')
+  })
 })
 
 describe('summarizeToolResult', () => {

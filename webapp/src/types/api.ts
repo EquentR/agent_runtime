@@ -206,6 +206,7 @@ export interface TaskSnapshot {
   id: string
   task_type: string
   status: 'queued' | 'running' | 'waiting' | 'cancel_requested' | 'cancelled' | 'succeeded' | 'failed'
+  input?: TaskInput
   created_by: string
   created_at: string
   updated_at: string
@@ -223,7 +224,6 @@ export interface TaskInput {
 }
 
 export interface TaskDetails extends TaskSnapshot {
-  input?: TaskInput
   result?: RunTaskResult
   result_json?: RunTaskResult
   error?: unknown

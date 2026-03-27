@@ -39,6 +39,16 @@ function makeRouter() {
   })
 }
 
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
+
 describe('ChatView', () => {
   beforeEach(() => {
     setViewportWidth(1280)
@@ -407,7 +417,20 @@ describe('ChatView', () => {
           updated_at: '',
         },
       ])
-    api.createRunTask.mockResolvedValue({ id: 'task_1' })
+      .mockResolvedValueOnce([
+        {
+          id: 'conv_new',
+          title: 'Newest chat',
+          last_message: 'assistant answer',
+          message_count: 2,
+          provider_id: 'openai',
+          model_id: 'gpt-5.4',
+          created_by: 'demo-user',
+          created_at: '',
+          updated_at: '',
+        },
+      ])
+    api.createRunTask.mockResolvedValue({ id: 'task_1', input: { conversation_id: 'conv_new' } })
     api.streamRunTask.mockResolvedValue({ conversation_id: 'conv_new' })
     api.fetchConversationMessages.mockResolvedValue([{ role: 'assistant', content: 'assistant answer' }])
 
@@ -426,10 +449,185 @@ describe('ChatView', () => {
     await wrapper.find('form').trigger('submit.prevent')
     await flushPromises()
 
-    expect(api.fetchConversations).toHaveBeenCalledTimes(2)
+    expect(api.fetchConversations).toHaveBeenCalledTimes(3)
     expect(api.fetchConversationMessages).not.toHaveBeenCalled()
     expect(wrapper.text()).toContain('Newest chat')
     expect(wrapper.find('.conversation-card.active').text()).toContain('Newest chat')
+  })
+
+  it('shows and selects the new conversation immediately after send before the task finishes', async () => {
+    const runningStream = createDeferred<{ conversation_id: string }>()
+
+    api.fetchConversations
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          id: 'conv_new',
+          title: 'Pending new chat',
+          last_message: 'hello',
+          message_count: 1,
+          provider_id: 'openai',
+          model_id: 'gpt-5.4',
+          created_by: 'demo-user',
+          created_at: '',
+          updated_at: '',
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          id: 'conv_new',
+          title: 'Pending new chat',
+          last_message: 'hello',
+          message_count: 1,
+          provider_id: 'openai',
+          model_id: 'gpt-5.4',
+          created_by: 'demo-user',
+          created_at: '',
+          updated_at: '',
+        },
+      ])
+    api.createRunTask.mockResolvedValue({ id: 'task_1', input: { conversation_id: 'conv_new' } })
+    api.streamRunTask.mockImplementation(() => runningStream.promise)
+    api.fetchConversationMessages.mockResolvedValue([])
+
+    const router = makeRouter()
+    await router.push('/chat')
+    await router.isReady()
+
+    const wrapper = mount(ChatView, {
+      global: {
+        plugins: [router],
+      },
+    })
+
+    await flushPromises()
+    await wrapper.find('textarea').setValue('hello')
+    await wrapper.find('form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(api.fetchConversations).toHaveBeenCalledTimes(2)
+    expect(wrapper.find('.conversation-card.active').text()).toContain('Pending new chat')
+    expect(wrapper.find('.topbar-conversation-title').text()).toBe('Pending new chat')
+
+    runningStream.resolve({ conversation_id: 'conv_new' })
+    await flushPromises()
+  })
+
+  it('keeps a pending conversation visible in the sidebar even if the refreshed list has not included it yet', async () => {
+    const runningStream = createDeferred<{ conversation_id: string }>()
+
+    api.fetchConversations
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+    api.createRunTask.mockResolvedValue({ id: 'task_1', input: { conversation_id: 'conv_new' } })
+    api.streamRunTask.mockImplementation(() => runningStream.promise)
+
+    const router = makeRouter()
+    await router.push('/chat')
+    await router.isReady()
+
+    const wrapper = mount(ChatView, {
+      global: {
+        plugins: [router],
+      },
+    })
+
+    await flushPromises()
+    await wrapper.find('textarea').setValue('hello')
+    await wrapper.find('form').trigger('submit.prevent')
+    await flushPromises()
+
+    const cards = wrapper.findAll('.conversation-card')
+    expect(cards).toHaveLength(1)
+    expect(cards[0].text()).toContain('未命名对话')
+    expect(cards[0].classes()).toContain('active')
+
+    runningStream.resolve({ conversation_id: 'conv_new' })
+    await flushPromises()
+  })
+
+  it('refreshes the conversation list again on the first streamed text chunk for a new conversation', async () => {
+    const runningStream = createDeferred<{ conversation_id: string }>()
+    let emitStreamEvent: ((event: any) => void) | null = null
+
+    api.fetchConversations
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          id: 'conv_new',
+          title: 'Pending new chat',
+          last_message: 'hello',
+          message_count: 1,
+          provider_id: 'openai',
+          model_id: 'gpt-5.4',
+          created_by: 'demo-user',
+          created_at: '',
+          updated_at: '',
+        },
+      ])
+    api.createRunTask.mockResolvedValue({ id: 'task_1', input: { conversation_id: 'conv_new' } })
+    api.streamRunTask.mockImplementation(async (_taskId: string, _onOpen: () => void, onEvent: (event: any) => void) => {
+      emitStreamEvent = onEvent
+      return runningStream.promise
+    })
+
+    const router = makeRouter()
+    await router.push('/chat')
+    await router.isReady()
+
+    const wrapper = mount(ChatView, {
+      global: {
+        plugins: [router],
+      },
+    })
+
+    await flushPromises()
+    await wrapper.find('textarea').setValue('hello')
+    await wrapper.find('form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(wrapper.findAll('.conversation-card')).toHaveLength(1)
+    expect(wrapper.find('.conversation-card').text()).toContain('未命名对话')
+
+    emitStreamEvent?.({ type: 'log.message', seq: 1, payload: { Kind: 'text_delta', Text: 'assistant' } })
+    await flushPromises()
+
+    expect(api.fetchConversations).toHaveBeenCalledTimes(3)
+    expect(wrapper.find('.conversation-card').text()).toContain('Pending new chat')
+
+    runningStream.resolve({ conversation_id: 'conv_new' })
+    await flushPromises()
+  })
+
+  it('does not show a user-facing error when the task stream disconnects while the task is still running', async () => {
+    api.fetchConversations.mockResolvedValue([])
+    api.createRunTask.mockResolvedValue({ id: 'task_1', input: { conversation_id: 'conv_new' } })
+    api.streamRunTask.mockRejectedValue(new Error('Task event stream disconnected'))
+    api.fetchTaskDetails.mockResolvedValue({
+      id: 'task_1',
+      status: 'running',
+      input: { conversation_id: 'conv_new' },
+    })
+
+    const router = makeRouter()
+    await router.push('/chat')
+    await router.isReady()
+
+    const wrapper = mount(ChatView, {
+      global: {
+        plugins: [router],
+      },
+    })
+
+    await flushPromises()
+    await wrapper.find('textarea').setValue('hello')
+    await wrapper.find('form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(api.fetchTaskDetails).toHaveBeenCalledWith('task_1')
+    expect(wrapper.find('.error-banner').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('Task event stream disconnected')
   })
 
   it('sends the currently selected provider/model instead of a hardcoded default', async () => {
@@ -547,6 +745,227 @@ describe('ChatView', () => {
     expect(usage.text()).toContain('321')
     expect(usage.text()).toContain('54')
     expect(usage.text()).toContain('375')
+  })
+
+  it('keeps a background new-conversation stream out of the currently selected history conversation', async () => {
+    const runningStream = createDeferred<{ conversation_id: string }>()
+    let emitStreamEvent: ((event: any) => void) | null = null
+
+    api.fetchConversations.mockResolvedValue([
+      {
+        id: 'conv_old',
+        title: 'Old chat',
+        last_message: 'old history',
+        message_count: 2,
+        provider_id: 'openai',
+        model_id: 'gpt-5.4',
+        created_by: 'demo-user',
+        created_at: '',
+        updated_at: '',
+      },
+    ])
+    api.fetchConversationMessages.mockImplementation(async (conversationId: string) => {
+      if (conversationId === 'conv_old') {
+        return [{ role: 'assistant', content: 'old history' }]
+      }
+      return []
+    })
+    api.createRunTask.mockResolvedValue({ id: 'task_new', input: { conversation_id: 'conv_new' } })
+    api.streamRunTask.mockImplementation(async (_taskId: string, _onOpen: () => void, onEvent: (event: any) => void) => {
+      emitStreamEvent = onEvent
+      return runningStream.promise
+    })
+
+    const router = makeRouter()
+    await router.push('/chat')
+    await router.isReady()
+
+    const wrapper = mount(ChatView, {
+      global: {
+        plugins: [router],
+      },
+    })
+
+    await flushPromises()
+    await wrapper.find('textarea').setValue('hello from new chat')
+    await wrapper.find('form').trigger('submit.prevent')
+    await flushPromises()
+
+    const conversations = wrapper.findAll('.conversation-card')
+    expect(conversations).toHaveLength(2)
+    await conversations[1].trigger('click')
+    await flushPromises()
+
+    emitStreamEvent?.({ type: 'log.message', payload: { Kind: 'text_delta', Text: 'background partial' } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('old history')
+    expect(wrapper.text()).not.toContain('background partial')
+
+    runningStream.resolve({ conversation_id: 'conv_new' })
+    await flushPromises()
+  })
+
+  it('replays buffered stream content after reopening and selecting the pending conversation before completion', async () => {
+    const runningStream = createDeferred<{ conversation_id: string }>()
+    const streamListeners: Array<(event: any) => void> = []
+
+    api.fetchConversations
+      .mockResolvedValueOnce([
+        {
+          id: 'conv_old',
+          title: 'Old chat',
+          last_message: 'old history',
+          message_count: 2,
+          provider_id: 'openai',
+          model_id: 'gpt-5.4',
+          created_by: 'demo-user',
+          created_at: '',
+          updated_at: '',
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          id: 'conv_old',
+          title: 'Old chat',
+          last_message: 'old history',
+          message_count: 2,
+          provider_id: 'openai',
+          model_id: 'gpt-5.4',
+          created_by: 'demo-user',
+          created_at: '',
+          updated_at: '',
+        },
+        {
+          id: 'conv_new',
+          title: 'Pending new chat',
+          last_message: '',
+          message_count: 1,
+          provider_id: 'openai',
+          model_id: 'gpt-5.4',
+          created_by: 'demo-user',
+          created_at: '',
+          updated_at: '',
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          id: 'conv_old',
+          title: 'Old chat',
+          last_message: 'old history',
+          message_count: 2,
+          provider_id: 'openai',
+          model_id: 'gpt-5.4',
+          created_by: 'demo-user',
+          created_at: '',
+          updated_at: '',
+        },
+        {
+          id: 'conv_new',
+          title: 'Pending new chat',
+          last_message: '',
+          message_count: 1,
+          provider_id: 'openai',
+          model_id: 'gpt-5.4',
+          created_by: 'demo-user',
+          created_at: '',
+          updated_at: '',
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          id: 'conv_old',
+          title: 'Old chat',
+          last_message: 'old history',
+          message_count: 2,
+          provider_id: 'openai',
+          model_id: 'gpt-5.4',
+          created_by: 'demo-user',
+          created_at: '',
+          updated_at: '',
+        },
+        {
+          id: 'conv_new',
+          title: 'Pending new chat',
+          last_message: '',
+          message_count: 1,
+          provider_id: 'openai',
+          model_id: 'gpt-5.4',
+          created_by: 'demo-user',
+          created_at: '',
+          updated_at: '',
+        },
+      ])
+    api.fetchConversationMessages.mockImplementation(async (conversationId: string) => {
+      if (conversationId === 'conv_old') {
+        return [{ role: 'assistant', content: 'old history' }]
+      }
+      if (conversationId === 'conv_new') {
+        return []
+      }
+      return []
+    })
+    api.createRunTask.mockResolvedValue({ id: 'task_new', input: { conversation_id: 'conv_new' } })
+    api.fetchTaskDetails.mockResolvedValue({
+      id: 'task_new',
+      status: 'running',
+      input: { conversation_id: 'conv_new' },
+    })
+    api.streamRunTask.mockImplementation(async (_taskId: string, _onOpen: () => void, onEvent: (event: any) => void) => {
+      streamListeners.push(onEvent)
+      return runningStream.promise
+    })
+
+    const firstRouter = makeRouter()
+    await firstRouter.push('/chat')
+    await firstRouter.isReady()
+
+    const firstWrapper = mount(ChatView, {
+      global: {
+        plugins: [firstRouter],
+      },
+    })
+
+    await flushPromises()
+    await firstWrapper.find('textarea').setValue('hello from new chat')
+    await firstWrapper.find('form').trigger('submit.prevent')
+    await flushPromises()
+
+    const firstConversationButtons = firstWrapper.findAll('.conversation-card')
+    await firstConversationButtons[0].trigger('click')
+    await flushPromises()
+
+    streamListeners[0]?.({ type: 'log.message', payload: { Kind: 'text_delta', Text: 'background partial' } })
+    await flushPromises()
+
+    firstWrapper.unmount()
+    await flushPromises()
+
+    const secondRouter = makeRouter()
+    await secondRouter.push('/chat')
+    await secondRouter.isReady()
+
+    const secondWrapper = mount(ChatView, {
+      global: {
+        plugins: [secondRouter],
+      },
+    })
+
+    await flushPromises()
+    const conversationButtons = secondWrapper.findAll('.conversation-card')
+    expect(conversationButtons).toHaveLength(2)
+    await conversationButtons[1].trigger('click')
+    await flushPromises()
+
+    expect(secondWrapper.text()).toContain('background partial')
+
+    streamListeners[1]?.({ type: 'log.message', payload: { Kind: 'text_delta', Text: ' continued' } })
+    await flushPromises()
+
+    expect(secondWrapper.text()).toContain('background partial continued')
+
+    runningStream.resolve({ conversation_id: 'conv_new' })
+    await flushPromises()
   })
 
   it('uses a drawer sidebar on narrow screens and removes the redundant conversation eyebrow', async () => {

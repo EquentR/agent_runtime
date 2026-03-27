@@ -5,13 +5,17 @@ const CHAT_STATE_KEY = 'agent-runtime.chat-state'
 interface ChatState {
   activeConversationId: string
   activeTaskId: string
+  activeTaskEventSeq: number
   entries: TranscriptEntry[]
+  draftEntriesByConversation: Record<string, TranscriptEntry[]>
 }
 
 const EMPTY_STATE: ChatState = {
   activeConversationId: '',
   activeTaskId: '',
+  activeTaskEventSeq: 0,
   entries: [],
+  draftEntriesByConversation: {},
 }
 
 export function loadChatState(): ChatState {
@@ -25,7 +29,16 @@ export function loadChatState(): ChatState {
     return {
       activeConversationId: typeof parsed.activeConversationId === 'string' ? parsed.activeConversationId : '',
       activeTaskId: typeof parsed.activeTaskId === 'string' ? parsed.activeTaskId : '',
+      activeTaskEventSeq: typeof parsed.activeTaskEventSeq === 'number' && Number.isFinite(parsed.activeTaskEventSeq) ? parsed.activeTaskEventSeq : 0,
       entries: Array.isArray(parsed.entries) ? parsed.entries : [],
+      draftEntriesByConversation:
+        parsed.draftEntriesByConversation && typeof parsed.draftEntriesByConversation === 'object'
+          ? Object.fromEntries(
+              Object.entries(parsed.draftEntriesByConversation).filter(
+                ([conversationId, entries]) => typeof conversationId === 'string' && Array.isArray(entries),
+              ),
+            )
+          : {},
     }
   } catch {
     return EMPTY_STATE

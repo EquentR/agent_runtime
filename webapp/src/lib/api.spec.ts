@@ -6,6 +6,7 @@ import {
   formatTaskError,
   normalizeConversationMessage,
   normalizeRunTaskResult,
+  streamRunTask,
   unwrapEnvelope,
 } from './api'
 
@@ -696,5 +697,79 @@ describe('formatTaskError', () => {
 
   it('falls back to task status text when error is empty', () => {
     expect(formatTaskError(undefined, 'failed')).toBe('Task failed')
+  })
+})
+
+describe('streamRunTask', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('uses the provided after_seq when opening the SSE stream', async () => {
+    class MockEventSource {
+      static instances: MockEventSource[] = []
+
+      url: string
+      withCredentials: boolean
+      onerror: (() => void) | null = null
+      private readonly listeners = new Map<string, Array<(event: MessageEvent<string>) => void>>()
+
+      constructor(url: string, options?: { withCredentials?: boolean }) {
+        this.url = url
+        this.withCredentials = options?.withCredentials ?? false
+        MockEventSource.instances.push(this)
+      }
+
+      addEventListener(type: string, handler: (event: MessageEvent<string>) => void) {
+        this.listeners.set(type, [...(this.listeners.get(type) ?? []), handler])
+      }
+
+      close() {
+        void 0
+      }
+
+      emit(type: string, data: unknown) {
+        for (const handler of this.listeners.get(type) ?? []) {
+          handler({ data: JSON.stringify(data) } as MessageEvent<string>)
+        }
+      }
+    }
+
+    vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource)
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        code: 200,
+        message: 'OK',
+        data: {
+          id: 'task_1',
+          task_type: 'agent.run',
+          status: 'succeeded',
+          input: { conversation_id: 'conv_new' },
+          result: {
+            conversation_id: 'conv_new',
+            provider_id: 'openai',
+            model_id: 'gpt-5.4',
+            messages_appended: 2,
+            final_message: { Role: 'assistant', Content: 'done' },
+          },
+        },
+      }),
+    } as Response))
+
+    const promise = streamRunTask('task_1', () => void 0, undefined, { afterSeq: 7 })
+
+    expect(MockEventSource.instances).toHaveLength(1)
+    expect(MockEventSource.instances[0]?.url).toContain('/api/v1/tasks/task_1/events?after_seq=7')
+
+    MockEventSource.instances[0]?.emit('task.finished', {
+      task_id: 'task_1',
+      seq: 8,
+      type: 'task.finished',
+      payload: { status: 'succeeded' },
+    })
+
+    await expect(promise).resolves.toMatchObject({ conversation_id: 'conv_new' })
   })
 })

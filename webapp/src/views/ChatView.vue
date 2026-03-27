@@ -27,7 +27,6 @@ import type {
   ModelCatalogEntry,
   ModelCatalogProvider,
   TaskDetails,
-  TaskStreamEvent,
   TranscriptEntry,
   TranscriptTokenUsage,
 } from '../types/api'
@@ -43,8 +42,11 @@ const sidebarDrawerOpen = ref(false)
 const username = ref(getSessionName())
 const activeConversationId = ref('')
 const activeTaskId = ref('')
+const activeTaskEventSeq = ref(0)
 const conversations = ref<Conversation[]>([])
 const entries = ref<TranscriptEntry[]>([])
+const draftEntriesByConversation = ref<Record<string, TranscriptEntry[]>>({})
+const pendingConversationById = ref<Record<string, Conversation>>({})
 const errorMessage = ref('')
 const modelCatalog = ref<ModelCatalog | null>(null)
 const catalogLoading = ref(false)
@@ -55,6 +57,15 @@ const modelMenuRef = ref<HTMLElement | null>(null)
 let activeStreamAbortController: AbortController | null = null
 let activeStreamingTaskId = ''
 const isAdmin = computed(() => getSessionRole() === 'admin')
+const sidebarConversations = computed(() => {
+  const merged = [...conversations.value]
+  for (const pendingConversation of Object.values(pendingConversationById.value)) {
+    if (!merged.some((conversation) => conversation.id === pendingConversation.id)) {
+      merged.unshift(pendingConversation)
+    }
+  }
+  return merged
+})
 
 const chatShellClass = computed(() => ({
   'sidebar-hidden': !sidebarMobile.value && sidebarCollapsed.value,
@@ -99,17 +110,68 @@ function syncChatState() {
   saveChatState({
     activeConversationId: activeConversationId.value,
     activeTaskId: activeTaskId.value,
+    activeTaskEventSeq: activeTaskEventSeq.value,
     entries: entries.value,
+    draftEntriesByConversation: draftEntriesByConversation.value,
   })
 }
 
-watch([activeConversationId, entries], syncChatState, { deep: true })
+watch([activeConversationId, activeTaskId, activeTaskEventSeq, entries, draftEntriesByConversation], syncChatState, { deep: true })
+
+function setDraftEntries(conversationId: string, nextEntries: TranscriptEntry[]) {
+  if (!conversationId) {
+    return
+  }
+  draftEntriesByConversation.value = {
+    ...draftEntriesByConversation.value,
+    [conversationId]: nextEntries,
+  }
+}
+
+function dropDraftEntries(conversationId: string) {
+  if (!conversationId || !(conversationId in draftEntriesByConversation.value)) {
+    return
+  }
+  const nextDrafts = { ...draftEntriesByConversation.value }
+  delete nextDrafts[conversationId]
+  draftEntriesByConversation.value = nextDrafts
+}
+
+function applyEntriesForConversation(conversationId: string, nextEntries: TranscriptEntry[]) {
+  if (conversationId) {
+    setDraftEntries(conversationId, nextEntries)
+  }
+  if (conversationId && activeConversationId.value && conversationId !== activeConversationId.value) {
+    return
+  }
+  entries.value = nextEntries
+}
+
+function upsertPendingConversation(conversation: Conversation) {
+  pendingConversationById.value = {
+    ...pendingConversationById.value,
+    [conversation.id]: conversation,
+  }
+}
+
+function dropPendingConversation(conversationId: string) {
+  if (!conversationId || !(conversationId in pendingConversationById.value)) {
+    return
+  }
+  const nextPending = { ...pendingConversationById.value }
+  delete nextPending[conversationId]
+  pendingConversationById.value = nextPending
+}
 
 async function loadConversations(preferredConversationId = '') {
   sidebarLoading.value = true
 
   try {
-    conversations.value = await fetchConversations()
+    const loadedConversations = await fetchConversations()
+    conversations.value = Array.isArray(loadedConversations) ? loadedConversations : []
+    for (const conversation of conversations.value) {
+      dropPendingConversation(conversation.id)
+    }
 
     if (preferredConversationId) {
       activeConversationId.value = preferredConversationId
@@ -143,9 +205,16 @@ async function selectConversation(conversationId: string) {
   messagesLoading.value = true
   errorMessage.value = ''
 
+  const draftEntries = draftEntriesByConversation.value[conversationId]
+  if (draftEntries) {
+    entries.value = draftEntries
+  }
+
   try {
-    const messages = await fetchConversationMessages(conversationId)
-    entries.value = buildTranscriptEntries(messages)
+    if (!draftEntries) {
+      const messages = await fetchConversationMessages(conversationId)
+      entries.value = buildTranscriptEntries(messages)
+    }
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '加载消息失败'
   } finally {
@@ -200,10 +269,6 @@ async function handleDeleteConversation(conversationId: string) {
   }
 }
 
-function applyStreamEvent(event: TaskStreamEvent) {
-  entries.value = updateTranscriptFromStreamEvent(entries.value, event)
-}
-
 function resolveTaskConversationId(task: TaskDetails | null | undefined) {
   return task?.result?.conversation_id ?? task?.result_json?.conversation_id ?? task?.input?.conversation_id ?? ''
 }
@@ -232,15 +297,19 @@ function toggleModelMenu() {
 function clearActiveTask() {
   activeTaskId.value = ''
   activeStreamingTaskId = ''
+  activeTaskEventSeq.value = 0
 }
 
 async function completeTaskConversation(conversationId: string, usage?: TranscriptTokenUsage, providerId = '', modelId = '') {
   activeConversationId.value = conversationId
-  entries.value = attachReplyMetaToLatestReply(entries.value, {
+  const nextEntries = attachReplyMetaToLatestReply(draftEntriesByConversation.value[conversationId] ?? entries.value, {
     provider_id: providerId || selectedProviderId.value,
     model_id: modelId || selectedModelId.value,
     token_usage: usage,
   })
+  dropDraftEntries(conversationId)
+  dropPendingConversation(conversationId)
+  entries.value = nextEntries
   await loadConversations(conversationId)
   syncSelectionFromConversation(conversationId)
 }
@@ -317,7 +386,7 @@ function handleGlobalKeydown(event: KeyboardEvent) {
   }
 }
 
-async function attachTaskStream(taskId: string) {
+async function attachTaskStream(taskId: string, conversationId = '') {
   if (!taskId || activeStreamingTaskId === taskId) {
     return
   }
@@ -329,6 +398,9 @@ async function attachTaskStream(taskId: string) {
   activeTaskId.value = taskId
   sending.value = true
 
+  let streamConversationId = conversationId || activeConversationId.value
+  let firstVisibleChunkSeen = false
+
   try {
     const result = await streamRunTask(
       taskId,
@@ -336,11 +408,30 @@ async function attachTaskStream(taskId: string) {
         void 0
       },
       (event) => {
-        applyStreamEvent(event)
+        activeTaskEventSeq.value = Math.max(activeTaskEventSeq.value, event.seq ?? 0)
+        const currentEntries = streamConversationId
+          ? draftEntriesByConversation.value[streamConversationId] ?? (streamConversationId === activeConversationId.value ? entries.value : [])
+          : entries.value
+        const nextEntries = updateTranscriptFromStreamEvent(currentEntries, event)
+        applyEntriesForConversation(streamConversationId, nextEntries)
+
+        const isVisibleTextChunk =
+          !firstVisibleChunkSeen &&
+          !!streamConversationId &&
+          event.type === 'log.message' &&
+          typeof event.payload?.Kind === 'string' &&
+          event.payload.Kind === 'text_delta' &&
+          typeof event.payload?.Text === 'string' &&
+          event.payload.Text.length > 0
+        if (isVisibleTextChunk) {
+          firstVisibleChunkSeen = true
+          void loadConversations(streamConversationId)
+        }
       },
-      { signal: abortController.signal },
+      { signal: abortController.signal, afterSeq: activeTaskEventSeq.value },
     )
 
+    streamConversationId = result.conversation_id || streamConversationId
     clearActiveTask()
     await completeTaskConversation(result.conversation_id, result.usage, result.provider_id, result.model_id)
   } catch (error) {
@@ -349,19 +440,28 @@ async function attachTaskStream(taskId: string) {
     }
 
     const taskError = error instanceof Error ? error.message : '发送消息失败'
-    errorMessage.value = taskError
-    entries.value = updateTranscriptFromStreamEvent(entries.value, {
-      type: 'task.failed',
-      payload: { error: taskError },
-    })
-
     try {
       const task = await fetchTaskDetails(taskId)
       if (!isTaskActive(task)) {
+        errorMessage.value = taskError
+        const currentEntries = streamConversationId ? draftEntriesByConversation.value[streamConversationId] ?? [] : entries.value
+        const nextEntries = updateTranscriptFromStreamEvent(currentEntries, {
+          type: 'task.failed',
+          payload: { error: taskError },
+        })
+        applyEntriesForConversation(streamConversationId, nextEntries)
         clearActiveTask()
       }
     } catch {
-      void 0
+      if (taskError !== 'Task event stream disconnected') {
+        errorMessage.value = taskError
+        const currentEntries = streamConversationId ? draftEntriesByConversation.value[streamConversationId] ?? [] : entries.value
+        const nextEntries = updateTranscriptFromStreamEvent(currentEntries, {
+          type: 'task.failed',
+          payload: { error: taskError },
+        })
+        applyEntriesForConversation(streamConversationId, nextEntries)
+      }
     }
   } finally {
     if (activeStreamAbortController === abortController) {
@@ -387,7 +487,7 @@ async function resumeTask(task: TaskDetails | null | undefined, conversationId =
     return
   }
 
-  await attachTaskStream(task.id)
+  await attachTaskStream(task.id, taskConversationId || conversationId)
 }
 
 async function resumeSavedTask() {
@@ -430,19 +530,40 @@ async function resumeStreamForConversation(conversationId: string) {
 async function handleSend(message: string) {
   sending.value = true
   errorMessage.value = ''
+  const previousConversationId = activeConversationId.value
 
   entries.value = [...entries.value, { id: `user-${Date.now()}`, kind: 'user', title: 'You', content: message }]
+  if (previousConversationId) {
+    setDraftEntries(previousConversationId, entries.value)
+  }
 
   try {
     const task = await createRunTask({
       createdBy: username.value,
-      conversationId: activeConversationId.value || undefined,
+      conversationId: previousConversationId || undefined,
       providerId: selectedProviderId.value,
       modelId: selectedModelId.value,
       message,
     })
+    const createdConversationId = task.input?.conversation_id ?? ''
+    if (createdConversationId && !previousConversationId) {
+      setDraftEntries(createdConversationId, entries.value)
+      upsertPendingConversation({
+        id: createdConversationId,
+        title: '',
+        last_message: '',
+        message_count: 0,
+        provider_id: selectedProviderId.value,
+        model_id: selectedModelId.value,
+        created_by: username.value,
+        created_at: '',
+        updated_at: '',
+      })
+      activeConversationId.value = createdConversationId
+      await loadConversations(createdConversationId)
+    }
     activeTaskId.value = task.id
-    await attachTaskStream(task.id)
+    await attachTaskStream(task.id, createdConversationId || previousConversationId)
   } catch (error) {
     if (!(error instanceof Error) || error.message !== TASK_STREAM_ABORTED_MESSAGE) {
       const taskError = error instanceof Error ? error.message : '发送消息失败'
@@ -474,7 +595,9 @@ onMounted(async () => {
   const saved = loadChatState()
   activeConversationId.value = saved.activeConversationId
   activeTaskId.value = saved.activeTaskId
+  activeTaskEventSeq.value = saved.activeTaskEventSeq
   entries.value = saved.entries
+  draftEntriesByConversation.value = saved.draftEntriesByConversation
   await loadCatalog()
   await loadConversations()
   if (!activeConversationId.value || !syncSelectionFromConversation(activeConversationId.value)) {
@@ -508,7 +631,7 @@ onBeforeUnmount(() => {
     <ConversationSidebar
       :active-conversation-id="activeConversationId"
       :collapsed="sidebarCollapsed"
-      :conversations="conversations"
+      :conversations="sidebarConversations"
       :desktop-hidden="sidebarDesktopHidden"
       :is-admin="isAdmin"
       :loading="sidebarLoading"

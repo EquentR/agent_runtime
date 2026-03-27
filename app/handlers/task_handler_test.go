@@ -154,6 +154,52 @@ func TestTaskHandlerCreateAgentRunTaskWithConversationInput(t *testing.T) {
 	}
 }
 
+func TestTaskHandlerCreateAgentRunTaskCreatesConversationWhenMissing(t *testing.T) {
+	manager, conversationStore, server := newTaskHandlerTestServerWithConversationStore(t, nil, false)
+
+	created := createTaskViaHTTP(t, server.URL, map[string]any{
+		"task_type":  "agent.run",
+		"created_by": "demo-user",
+		"input": map[string]any{
+			"provider_id": "openai",
+			"model_id":    "gpt-5.4",
+			"message":     "hello",
+		},
+	})
+
+	decodedInput := decodeJSONRaw(t, created.InputJSON)
+	conversationID, ok := decodedInput["conversation_id"].(string)
+	if !ok || conversationID == "" {
+		t.Fatalf("input.conversation_id = %#v, want generated conversation id", decodedInput["conversation_id"])
+	}
+	if created.ConcurrencyKey != conversationID {
+		t.Fatalf("created concurrency key = %q, want %q", created.ConcurrencyKey, conversationID)
+	}
+
+	persisted, err := manager.GetTask(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("GetTask() error = %v", err)
+	}
+	persistedInput := decodeJSONRaw(t, persisted.InputJSON)
+	if persistedInput["conversation_id"] != conversationID {
+		t.Fatalf("persisted input.conversation_id = %#v, want %q", persistedInput["conversation_id"], conversationID)
+	}
+
+	conversation, err := conversationStore.GetConversation(context.Background(), conversationID)
+	if err != nil {
+		t.Fatalf("GetConversation() error = %v", err)
+	}
+	if conversation.ProviderID != "openai" {
+		t.Fatalf("conversation provider = %q, want openai", conversation.ProviderID)
+	}
+	if conversation.ModelID != "gpt-5.4" {
+		t.Fatalf("conversation model = %q, want gpt-5.4", conversation.ModelID)
+	}
+	if conversation.CreatedBy != "demo-user" {
+		t.Fatalf("conversation created_by = %q, want demo-user", conversation.CreatedBy)
+	}
+}
+
 func TestCreateTaskPersistsConversationConcurrencyKey(t *testing.T) {
 	manager, server := newTaskHandlerTestServer(t, nil, false)
 
@@ -255,6 +301,12 @@ func TestTaskHandlerFindsRunningTaskByConversation(t *testing.T) {
 // newTaskHandlerTestServer 构造带任务路由的测试 HTTP 服务。
 func newTaskHandlerTestServer(t *testing.T, executor coretasks.Executor, startManager bool) (*coretasks.Manager, *httptest.Server) {
 	t.Helper()
+	manager, _, server := newTaskHandlerTestServerWithConversationStore(t, executor, startManager)
+	return manager, server
+}
+
+func newTaskHandlerTestServerWithConversationStore(t *testing.T, executor coretasks.Executor, startManager bool) (*coretasks.Manager, *coreagent.ConversationStore, *httptest.Server) {
+	t.Helper()
 
 	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
@@ -264,6 +316,10 @@ func newTaskHandlerTestServer(t *testing.T, executor coretasks.Executor, startMa
 	store := coretasks.NewStore(db)
 	if err := store.AutoMigrate(); err != nil {
 		t.Fatalf("AutoMigrate() error = %v", err)
+	}
+	conversationStore := coreagent.NewConversationStore(db)
+	if err := conversationStore.AutoMigrate(); err != nil {
+		t.Fatalf("conversation AutoMigrate() error = %v", err)
 	}
 
 	manager := coretasks.NewManager(store, coretasks.ManagerOptions{
@@ -284,12 +340,12 @@ func newTaskHandlerTestServer(t *testing.T, executor coretasks.Executor, startMa
 	}
 
 	engine := rest.Init()
-	handler := NewTaskHandler(manager, nil)
+	handler := NewTaskHandler(manager, conversationStore)
 	handler.Register(engine.Group("/api/v1"))
 
 	server := httptest.NewServer(engine)
 	t.Cleanup(server.Close)
-	return manager, server
+	return manager, conversationStore, server
 }
 
 // createTaskViaHTTP 通过 HTTP 调用创建任务接口。

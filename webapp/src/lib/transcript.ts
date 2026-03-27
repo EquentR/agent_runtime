@@ -328,6 +328,39 @@ function findToolGroupIndex(entries: TranscriptEntry[], groupKey: string) {
   return entries.findIndex((entry) => entry.kind === 'tool' && entry.group_key === groupKey)
 }
 
+function findReusableLiveToolGroupKey(entries: TranscriptEntry[]) {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index]
+    if (entry.kind === 'tool' && entry.group_key) {
+      return entry.group_key
+    }
+    if (entry.kind === 'reasoning') {
+      continue
+    }
+    if (entry.kind === 'user' || entry.kind === 'reply' || entry.kind === 'error') {
+      break
+    }
+  }
+
+  return ''
+}
+
+function makeLiveToolGroupKey(entries: TranscriptEntry[]) {
+  const liveGroupCount = entries.filter(
+    (entry) => entry.kind === 'tool' && typeof entry.group_key === 'string' && entry.group_key.startsWith('step-live-'),
+  ).length
+  return `step-live-${liveGroupCount + 1}`
+}
+
+function resolveStreamGroupKey(entries: TranscriptEntry[], payload: Record<string, unknown>) {
+  const step = payload.Step
+  if (typeof step === 'string' || typeof step === 'number') {
+    return `step-${String(step)}`
+  }
+
+  return findReusableLiveToolGroupKey(entries) || makeLiveToolGroupKey(entries)
+}
+
 function findToolEntryByCallId(entries: TranscriptEntry[], toolCallId: string) {
   if (!toolCallId) {
     return null
@@ -626,8 +659,7 @@ export function buildTranscriptEntries(messages: ConversationMessage[]): Transcr
 
 export function updateTranscriptFromStreamEvent(entries: TranscriptEntry[], event: Partial<TaskStreamEvent>): TranscriptEntry[] {
   const payload = event.payload ?? {}
-  const step = String(payload.Step ?? 'live')
-  const groupKey = `step-${step}`
+  const groupKey = resolveStreamGroupKey(entries, payload)
 
   if (event.type === 'log.message') {
     const kind = typeof payload.Kind === 'string' ? payload.Kind : ''

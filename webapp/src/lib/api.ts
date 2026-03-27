@@ -199,6 +199,7 @@ export function normalizeTranscriptTokenUsage(value: unknown): TranscriptTokenUs
 export function normalizeTaskDetails(task: TaskDetails): TaskDetails {
   return {
     ...task,
+    input: task.input,
     result: task.result ? normalizeRunTaskResult(task.result) : undefined,
     result_json: task.result_json ? normalizeRunTaskResult(task.result_json) : undefined,
   }
@@ -407,10 +408,11 @@ export async function streamRunTask(
   taskId: string,
   onTextDelta: (chunk: string) => void,
   onEvent?: (event: TaskStreamEvent) => void,
-  options?: { signal?: AbortSignal },
+  options?: { signal?: AbortSignal; afterSeq?: number },
 ) {
   return new Promise<RunTaskResult>((resolve, reject) => {
-    const stream = new EventSource(`${API_BASE}/tasks/${taskId}/events?after_seq=0`, { withCredentials: true })
+    const afterSeq = typeof options?.afterSeq === 'number' && Number.isFinite(options.afterSeq) ? Math.max(0, options.afterSeq) : 0
+    const stream = new EventSource(`${API_BASE}/tasks/${taskId}/events?after_seq=${afterSeq}`, { withCredentials: true })
     let settled = false
 
     const cleanupAbort = () => {

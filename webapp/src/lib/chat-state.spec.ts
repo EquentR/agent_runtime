@@ -11,21 +11,35 @@ describe('chat-state', () => {
     saveChatState({
       activeConversationId: 'conv_1',
       activeTaskId: 'task_1',
+      activeTaskEventSeq: 12,
       entries: [{ id: 'a', kind: 'error', title: 'Failed', content: 'boom' }],
+      draftEntriesByConversation: {
+        conv_1: [{ id: 'b', kind: 'reply', title: '', content: 'partial' }],
+      },
     })
 
     expect(loadChatState()).toEqual({
       activeConversationId: 'conv_1',
       activeTaskId: 'task_1',
+      activeTaskEventSeq: 12,
       entries: [{ id: 'a', kind: 'error', title: 'Failed', content: 'boom' }],
+      draftEntriesByConversation: {
+        conv_1: [{ id: 'b', kind: 'reply', title: '', content: 'partial' }],
+      },
     })
   })
 
   it('clears stored chat state', () => {
-    saveChatState({ activeConversationId: '', activeTaskId: 'task_1', entries: [{ id: 'a', kind: 'user', title: 'You', content: 'hi' }] })
+    saveChatState({
+      activeConversationId: '',
+      activeTaskId: 'task_1',
+      activeTaskEventSeq: 4,
+      entries: [{ id: 'a', kind: 'user', title: 'You', content: 'hi' }],
+      draftEntriesByConversation: { conv_1: [{ id: 'b', kind: 'reply', title: '', content: 'partial' }] },
+    })
 
     clearChatState()
 
-    expect(loadChatState()).toEqual({ activeConversationId: '', activeTaskId: '', entries: [] })
+    expect(loadChatState()).toEqual({ activeConversationId: '', activeTaskId: '', activeTaskEventSeq: 0, entries: [], draftEntriesByConversation: {} })
   })
 })
