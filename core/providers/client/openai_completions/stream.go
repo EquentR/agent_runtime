@@ -163,7 +163,12 @@ func newStreamToolCallAccumulator() *streamToolCallAccumulator {
 	}
 }
 
-func (a *streamToolCallAccumulator) Append(toolCalls []openai.ToolCall) {
+func (a *streamToolCallAccumulator) Append(toolCalls []openai.ToolCall) []types.ToolCall {
+	if len(toolCalls) == 0 {
+		return nil
+	}
+
+	updated := make([]types.ToolCall, 0, len(toolCalls))
 	for _, tc := range toolCalls {
 		// OpenAI streaming tool call 会按 index 拆成多个 delta，需要逐块拼接。
 		idx := len(a.calls)
@@ -182,7 +187,9 @@ func (a *streamToolCallAccumulator) Append(toolCalls []openai.ToolCall) {
 			current.Arguments += tc.Function.Arguments
 		}
 		a.calls[idx] = current
+		updated = append(updated, current)
 	}
+	return updated
 }
 
 func (a *streamToolCallAccumulator) ToolCalls() []types.ToolCall {

@@ -219,16 +219,11 @@ func (c *Client) ChatStream(ctx context.Context, req model.ChatRequest) (model.S
 					nativeMessage.FunctionCall = appendFunctionCall(nativeMessage.FunctionCall, choice.Delta.FunctionCall)
 
 					if len(choice.Delta.ToolCalls) > 0 {
-						toolCallAccumulator.Append(choice.Delta.ToolCalls)
+						accumulatedToolCalls := toolCallAccumulator.Append(choice.Delta.ToolCalls)
 						nativeToolCallAccumulator.Append(choice.Delta.ToolCalls)
-						for _, tc := range choice.Delta.ToolCalls {
-							assembled := newStreamToolCallAccumulator()
-							assembled.Append([]openai.ToolCall{tc})
-							calls := assembled.ToolCalls()
-							if len(calls) > 0 {
-								if !emitStreamEvent(streamCtx, events, model.StreamEvent{Type: model.StreamEventToolCallDelta, ToolCall: calls[0]}) {
-									return
-								}
+						for _, call := range accumulatedToolCalls {
+							if !emitStreamEvent(streamCtx, events, model.StreamEvent{Type: model.StreamEventToolCallDelta, ToolCall: call}) {
+								return
 							}
 						}
 					}

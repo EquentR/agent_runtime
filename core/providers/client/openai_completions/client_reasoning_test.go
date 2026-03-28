@@ -225,3 +225,59 @@ func TestClientChat_StreamProviderStateRoundTripsIntoReplay(t *testing.T) {
 		t.Fatalf("provider state payload = %s, want tool_calls preserved", string(resp.Message.ProviderState.Payload))
 	}
 }
+
+func TestClientChatStream_ToolCallDeltaKeepsIdentityAcrossArgumentChunks(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			http.NotFound(w, r)
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-4o-mini\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"lookup_weather\",\"arguments\":\"{\\\"city\\\":\"}}]}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-4o-mini\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\"Shanghai\\\"}\"}}]}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-4o-mini\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":3,\"total_tokens\":13}}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	client := NewOpenAiCompletionsClient(server.URL+"/v1", "test-key")
+	stream, err := client.ChatStream(context.Background(), model.ChatRequest{
+		Model: "gpt-4o-mini",
+		Messages: []model.Message{{
+			Role:    model.RoleUser,
+			Content: "What is the weather in Shanghai?",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("ChatStream() error = %v", err)
+	}
+	defer stream.Close()
+
+	var toolEvents []model.StreamEvent
+	for {
+		event, err := stream.RecvEvent()
+		if err != nil {
+			t.Fatalf("RecvEvent() error = %v", err)
+		}
+		if event.Type == "" {
+			break
+		}
+		if event.Type == model.StreamEventToolCallDelta {
+			toolEvents = append(toolEvents, event)
+		}
+	}
+
+	if len(toolEvents) != 2 {
+		t.Fatalf("len(toolEvents) = %d, want 2", len(toolEvents))
+	}
+	if toolEvents[0].ToolCall.ID != "call_1" || toolEvents[0].ToolCall.Name != "lookup_weather" {
+		t.Fatalf("first tool delta = %#v, want stable id/name", toolEvents[0].ToolCall)
+	}
+	if toolEvents[1].ToolCall.ID != "call_1" || toolEvents[1].ToolCall.Name != "lookup_weather" {
+		t.Fatalf("second tool delta = %#v, want stable id/name", toolEvents[1].ToolCall)
+	}
+	if toolEvents[1].ToolCall.Arguments != `{"city":"Shanghai"}` {
+		t.Fatalf("second tool delta arguments = %q, want %q", toolEvents[1].ToolCall.Arguments, `{"city":"Shanghai"}`)
+	}
+}
