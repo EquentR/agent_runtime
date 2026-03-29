@@ -12,12 +12,20 @@ import (
 func newKillProcessTool(_ runtimeEnv) coretools.Tool {
 	return coretools.Tool{
 		Name:        "kill_process",
-		Description: "Terminate a process after explicit confirmation",
+		Description: "Terminate a process by PID",
 		Source:      "builtin",
-		Parameters: objectSchema([]string{"pid", "confirm"}, map[string]types.SchemaProperty{
-			"pid":     {Type: "integer", Description: "Process ID to terminate"},
-			"confirm": {Type: "boolean", Description: "Must be true to confirm termination"},
+		Parameters: objectSchema([]string{"pid"}, map[string]types.SchemaProperty{
+			"pid": {Type: "integer", Description: "Process ID to terminate"},
 		}),
+		ApprovalMode: types.ToolApprovalModeAlways,
+		ApprovalEvaluator: func(arguments map[string]any) coretools.ApprovalRequirement {
+			pid, _ := intArg(arguments, "pid", 0)
+			return coretools.ApprovalRequirement{
+				ArgumentsSummary: fmt.Sprintf("pid=%d", pid),
+				RiskLevel:        coretools.RiskLevelHigh,
+				Reason:           "terminates a running process",
+			}
+		},
 		Handler: func(_ context.Context, arguments map[string]any) (string, error) {
 			pid, err := intArg(arguments, "pid", 0)
 			if err != nil {
@@ -25,13 +33,6 @@ func newKillProcessTool(_ runtimeEnv) coretools.Tool {
 			}
 			if pid <= 0 {
 				return "", fmt.Errorf("pid must be > 0")
-			}
-			confirm, err := boolArg(arguments, "confirm", false)
-			if err != nil {
-				return "", err
-			}
-			if !confirm {
-				return "", fmt.Errorf("kill_process requires confirm=true")
 			}
 
 			process, err := os.FindProcess(pid)

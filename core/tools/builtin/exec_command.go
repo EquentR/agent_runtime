@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os/exec"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -15,9 +17,11 @@ import (
 
 func newExecCommandTool(env runtimeEnv) coretools.Tool {
 	return coretools.Tool{
-		Name:        "exec_command",
-		Description: "Execute a command in the workspace",
-		Source:      "builtin",
+		Name:              "exec_command",
+		Description:       "Execute a command in the workspace",
+		Source:            "builtin",
+		ApprovalMode:      types.ToolApprovalModeConditional,
+		ApprovalEvaluator: evaluateExecCommandApproval,
 		Parameters: objectSchema([]string{"command"}, map[string]types.SchemaProperty{
 			"command":           {Type: "string", Description: "Command to execute"},
 			"args":              stringArrayProperty("Optional command arguments"),
@@ -105,6 +109,259 @@ func newExecCommandTool(env runtimeEnv) coretools.Tool {
 			return jsonResult(result)
 		},
 	}
+}
+
+func evaluateExecCommandApproval(arguments map[string]any) coretools.ApprovalRequirement {
+	command, _ := arguments["command"].(string)
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return coretools.ApprovalRequirement{}
+	}
+
+	args, err := stringSliceArg(arguments, "args")
+	if err != nil {
+		args = nil
+	}
+	commandLine := strings.TrimSpace(strings.Join(append([]string{command}, args...), " "))
+	tokens := unwrapCommandTokens(command, args)
+	if len(tokens) == 0 {
+		return coretools.ApprovalRequirement{}
+	}
+
+	head := tokens[0]
+	switch {
+	case isDeletionCommand(head, tokens[1:]):
+		return coretools.ApprovalRequirement{
+			Required:         true,
+			ArgumentsSummary: fmt.Sprintf("command=%s", commandLine),
+			RiskLevel:        coretools.RiskLevelHigh,
+			Reason:           fmt.Sprintf("command may delete files or directories: %s", commandLine),
+		}
+	case isProcessKillCommand(head):
+		return coretools.ApprovalRequirement{
+			Required:         true,
+			ArgumentsSummary: fmt.Sprintf("command=%s", commandLine),
+			RiskLevel:        coretools.RiskLevelHigh,
+			Reason:           fmt.Sprintf("command may terminate processes: %s", commandLine),
+		}
+	case isSystemMutationCommand(head, tokens[1:]):
+		return coretools.ApprovalRequirement{
+			Required:         true,
+			ArgumentsSummary: fmt.Sprintf("command=%s", commandLine),
+			RiskLevel:        coretools.RiskLevelHigh,
+			Reason:           fmt.Sprintf("command may mutate the system outside the workspace: %s", commandLine),
+		}
+	default:
+		return coretools.ApprovalRequirement{}
+	}
+}
+
+func commandTokens(command string, args []string) []string {
+	combined := append([]string{command}, args...)
+	tokens := make([]string, 0, len(combined))
+	for _, part := range combined {
+		for _, token := range strings.Fields(strings.ToLower(strings.TrimSpace(part))) {
+			if token != "" {
+				tokens = append(tokens, token)
+			}
+		}
+	}
+	return tokens
+}
+
+func unwrapCommandTokens(command string, args []string) []string {
+	tokens := commandTokens(command, args)
+	if len(tokens) == 0 {
+		return nil
+	}
+
+	if wrapped, ok := wrappedCommandTokens(tokens[0], args); ok {
+		tokens = wrapped
+	}
+	return stripCommandPrefixes(tokens)
+}
+
+func wrappedCommandTokens(head string, args []string) ([]string, bool) {
+	if commandString, ok := shellWrappedCommand(head, args); ok {
+		return commandTokens(commandString, nil), true
+	}
+	return nil, false
+}
+
+func shellWrappedCommand(head string, args []string) (string, bool) {
+	if len(args) < 2 {
+		return "", false
+	}
+
+	switch strings.ToLower(strings.TrimSpace(head)) {
+	case "sh", "bash", "zsh", "ksh", "dash":
+		for i := 0; i < len(args)-1; i++ {
+			switch strings.ToLower(strings.TrimSpace(args[i])) {
+			case "-c", "-lc":
+				return strings.TrimSpace(args[i+1]), true
+			}
+		}
+	case "cmd":
+		for i := 0; i < len(args)-1; i++ {
+			switch strings.ToLower(strings.TrimSpace(args[i])) {
+			case "/c", "/k":
+				return strings.TrimSpace(args[i+1]), true
+			}
+		}
+	case "powershell", "pwsh":
+		for i := 0; i < len(args)-1; i++ {
+			switch strings.ToLower(strings.TrimSpace(args[i])) {
+			case "-command", "-c":
+				return strings.TrimSpace(args[i+1]), true
+			}
+		}
+	}
+
+	return "", false
+}
+
+func stripCommandPrefixes(tokens []string) []string {
+	current := append([]string(nil), tokens...)
+	for {
+		next, changed := trimKnownPrefix(current)
+		if !changed {
+			return current
+		}
+		current = next
+		if len(current) == 0 {
+			return current
+		}
+	}
+}
+
+func trimKnownPrefix(tokens []string) ([]string, bool) {
+	if len(tokens) == 0 {
+		return tokens, false
+	}
+
+	switch tokens[0] {
+	case "sudo":
+		return trimSudoPrefix(tokens)
+	case "env":
+		return trimEnvPrefix(tokens)
+	case "nohup":
+		if len(tokens) == 1 {
+			return []string{}, true
+		}
+		return tokens[1:], true
+	case "start-process":
+		return trimStartProcessPrefix(tokens)
+	default:
+		return tokens, false
+	}
+}
+
+func trimSudoPrefix(tokens []string) ([]string, bool) {
+	if len(tokens) == 1 {
+		return []string{}, true
+	}
+	index := 1
+	for index < len(tokens) {
+		token := tokens[index]
+		if token == "--" {
+			if index+1 >= len(tokens) {
+				return []string{}, true
+			}
+			return tokens[index+1:], true
+		}
+		if !strings.HasPrefix(token, "-") {
+			return tokens[index:], true
+		}
+		if token == "-u" || token == "-g" || token == "-h" || token == "-p" || token == "-c" || token == "-r" || token == "-t" || token == "-a" {
+			index += 2
+			continue
+		}
+		index++
+	}
+	return []string{}, true
+}
+
+func trimEnvPrefix(tokens []string) ([]string, bool) {
+	if len(tokens) == 1 {
+		return []string{}, true
+	}
+	index := 1
+	for index < len(tokens) {
+		token := tokens[index]
+		if token == "--" {
+			if index+1 >= len(tokens) {
+				return []string{}, true
+			}
+			return tokens[index+1:], true
+		}
+		if strings.Contains(token, "=") && !strings.HasPrefix(token, "=") {
+			index++
+			continue
+		}
+		if strings.HasPrefix(token, "-") {
+			index++
+			continue
+		}
+		return tokens[index:], true
+	}
+	return []string{}, true
+}
+
+func trimStartProcessPrefix(tokens []string) ([]string, bool) {
+	if len(tokens) == 1 {
+		return []string{}, true
+	}
+	command := ""
+	argumentTokens := []string{}
+	for index := 1; index < len(tokens); index++ {
+		token := tokens[index]
+		if token == "-argumentlist" {
+			if index+1 < len(tokens) {
+				argumentTokens = append(argumentTokens, commandTokens(trimShellQuotes(tokens[index+1]), nil)...)
+				index++
+			}
+			continue
+		}
+		if strings.HasPrefix(token, "-") {
+			continue
+		}
+		if command == "" {
+			command = trimShellQuotes(token)
+			continue
+		}
+	}
+	if command == "" {
+		return []string{}, true
+	}
+	return append([]string{strings.ToLower(command)}, argumentTokens...), true
+}
+
+func trimShellQuotes(value string) string {
+	return strings.Trim(value, `"'`)
+}
+
+func isDeletionCommand(head string, args []string) bool {
+	if slices.Contains([]string{"rm", "rmdir", "del", "erase", "rd", "unlink", "remove-item", "shred"}, head) {
+		return true
+	}
+	return head == "git" && len(args) > 0 && args[0] == "clean"
+}
+
+func isProcessKillCommand(head string) bool {
+	return slices.Contains([]string{"kill", "pkill", "killall", "taskkill", "stop-process"}, head)
+}
+
+func isSystemMutationCommand(head string, args []string) bool {
+	if slices.Contains([]string{"shutdown", "reboot", "halt", "poweroff", "mount", "umount", "mkfs", "diskpart", "useradd", "userdel", "usermod", "groupadd", "groupdel"}, head) {
+		return true
+	}
+	if slices.Contains([]string{"apt", "apt-get", "yum", "dnf", "zypper", "apk", "pacman", "brew", "pip", "pip3", "npm", "pnpm"}, head) {
+		return len(args) > 0 && slices.Contains([]string{"install", "uninstall", "remove", "upgrade", "update", "add"}, args[0])
+	}
+	if slices.Contains([]string{"systemctl", "service", "sc", "launchctl"}, head) {
+		return len(args) > 0 && slices.Contains([]string{"start", "stop", "restart", "reload", "enable", "disable", "mask", "unmask", "delete"}, args[0])
+	}
+	return false
 }
 
 func buildExecCommand(ctx context.Context, command string, args []string, useShell bool) *exec.Cmd {

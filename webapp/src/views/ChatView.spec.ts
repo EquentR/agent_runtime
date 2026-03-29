@@ -9,19 +9,42 @@ const chatStyles = readFileSync(resolve(process.cwd(), 'src/style.css'), 'utf8')
 
 const api = vi.hoisted(() => ({
   TASK_STREAM_ABORTED_MESSAGE: 'Task event stream aborted',
+  cancelTask: vi.fn(),
   createRunTask: vi.fn(),
+  decideTaskApproval: vi.fn(),
   deleteConversation: vi.fn(),
   fetchModelCatalog: vi.fn(),
   fetchConversationMessages: vi.fn(),
   fetchConversations: vi.fn(),
+  fetchTaskApprovals: vi.fn(),
   findRunningTaskByConversation: vi.fn(),
   fetchTaskDetails: vi.fn(),
+  normalizeToolApproval: vi.fn((approval: any) => ({
+    id: approval.id ?? approval.approval_id ?? '',
+    task_id: approval.task_id ?? '',
+    conversation_id: approval.conversation_id ?? '',
+    step_index: approval.step_index ?? approval.step,
+    tool_call_id: approval.tool_call_id ?? '',
+    tool_name: approval.tool_name ?? '',
+    arguments_summary: approval.arguments_summary ?? '',
+    risk_level: approval.risk_level ?? '',
+    reason: approval.reason,
+    status: approval.status ?? '',
+    decision: approval.decision,
+    decision_by: approval.decision_by,
+    decision_reason: approval.decision_reason,
+    decision_at: approval.decision_at,
+    created_at: approval.created_at,
+    updated_at: approval.updated_at,
+  })),
+  normalizeTranscriptTokenUsage: vi.fn((usage: any) => usage),
   streamRunTask: vi.fn(),
 }))
 
 vi.mock('../lib/api', () => api)
 
 import ChatView from './ChatView.vue'
+import MessageList from '../components/MessageList.vue'
 
 function setViewportWidth(width: number) {
   Object.defineProperty(window, 'innerWidth', {
@@ -57,10 +80,13 @@ describe('ChatView', () => {
     api.fetchModelCatalog.mockReset()
     api.fetchConversations.mockReset()
     api.fetchConversationMessages.mockReset()
+    api.cancelTask.mockReset()
     api.createRunTask.mockReset()
+    api.decideTaskApproval.mockReset()
     api.deleteConversation.mockReset()
     api.findRunningTaskByConversation.mockReset()
     api.fetchTaskDetails.mockReset()
+    api.fetchTaskApprovals.mockReset()
     api.streamRunTask.mockReset()
     api.fetchModelCatalog.mockResolvedValue({
       default_provider_id: 'openai',
@@ -128,6 +154,127 @@ describe('ChatView', () => {
     expect(api.fetchTaskDetails).toHaveBeenCalledWith('task_1')
     expect(api.streamRunTask).toHaveBeenCalledWith(
       'task_1',
+      expect.any(Function),
+      expect.any(Function),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    )
+  })
+
+  it('hydrates pending approvals when reopening a waiting task even if SSE does not replay approval.requested', async () => {
+    localStorage.setItem(
+      'agent-runtime.chat-state',
+      JSON.stringify({
+        activeConversationId: 'conv_waiting',
+        activeTaskId: 'task_waiting',
+        activeTaskEventSeq: 0,
+        entries: [],
+        draftEntriesByConversation: {},
+      }),
+    )
+    api.fetchConversations.mockResolvedValue([
+      {
+        id: 'conv_waiting',
+        title: 'Waiting chat',
+        last_message: 'hello',
+        message_count: 1,
+        provider_id: 'openai',
+        model_id: 'gpt-5.4',
+        created_by: 'demo-user',
+        created_at: '',
+        updated_at: '',
+      },
+    ])
+    api.fetchConversationMessages.mockResolvedValue([{ role: 'user', content: 'hello' }])
+    api.fetchTaskDetails.mockResolvedValue({
+      id: 'task_waiting',
+      status: 'waiting',
+      input: { conversation_id: 'conv_waiting' },
+      suspend_reason: 'waiting_for_tool_approval',
+    })
+    api.fetchTaskApprovals.mockResolvedValue([
+      {
+        id: 'approval_waiting',
+        task_id: 'task_waiting',
+        conversation_id: 'conv_waiting',
+        step_index: 4,
+        tool_call_id: 'call_waiting',
+        tool_name: 'bash',
+        arguments_summary: 'rm -rf /tmp/demo',
+        risk_level: 'high',
+        reason: 'dangerous filesystem mutation',
+        status: 'pending',
+      },
+    ])
+    api.streamRunTask.mockRejectedValue(new Error('Task event stream disconnected'))
+
+    const router = makeRouter()
+    await router.push('/chat')
+    await router.isReady()
+
+    const wrapper = mount(ChatView, {
+      global: {
+        plugins: [router],
+      },
+    })
+
+    await flushPromises()
+
+    expect(api.fetchTaskDetails).toHaveBeenCalledWith('task_waiting')
+    expect(api.fetchTaskApprovals).toHaveBeenCalledWith('task_waiting')
+    expect(wrapper.find('.approval-card').exists()).toBe(true)
+    expect(wrapper.text()).toContain('bash')
+    expect(wrapper.text()).not.toContain('运行失败')
+  })
+
+  it('still reattaches SSE when waiting-task approval hydration fails', async () => {
+    localStorage.setItem(
+      'agent-runtime.chat-state',
+      JSON.stringify({
+        activeConversationId: 'conv_waiting',
+        activeTaskId: 'task_waiting',
+        activeTaskEventSeq: 0,
+        entries: [],
+        draftEntriesByConversation: {},
+      }),
+    )
+    api.fetchConversations.mockResolvedValue([
+      {
+        id: 'conv_waiting',
+        title: 'Waiting chat',
+        last_message: 'hello',
+        message_count: 1,
+        provider_id: 'openai',
+        model_id: 'gpt-5.4',
+        created_by: 'demo-user',
+        created_at: '',
+        updated_at: '',
+      },
+    ])
+    api.fetchConversationMessages.mockResolvedValue([{ role: 'user', content: 'hello' }])
+    api.fetchTaskDetails.mockResolvedValue({
+      id: 'task_waiting',
+      status: 'waiting',
+      input: { conversation_id: 'conv_waiting' },
+      suspend_reason: 'waiting_for_tool_approval',
+    })
+    api.fetchTaskApprovals.mockRejectedValue(new Error('approval list unavailable'))
+    api.streamRunTask.mockResolvedValue({ conversation_id: 'conv_waiting' })
+
+    const router = makeRouter()
+    await router.push('/chat')
+    await router.isReady()
+
+    mount(ChatView, {
+      global: {
+        plugins: [router],
+      },
+    })
+
+    await flushPromises()
+
+    expect(api.fetchTaskApprovals).toHaveBeenCalledWith('task_waiting')
+    expect(api.streamRunTask).toHaveBeenCalledWith(
+      'task_waiting',
       expect.any(Function),
       expect.any(Function),
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
@@ -628,6 +775,328 @@ describe('ChatView', () => {
     expect(api.fetchTaskDetails).toHaveBeenCalledWith('task_1')
     expect(wrapper.find('.error-banner').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('Task event stream disconnected')
+  })
+
+  it('turns the send button into a stop button while syncing and cancels the active task', async () => {
+    const runningStream = createDeferred<{ conversation_id: string }>()
+
+    api.fetchConversations.mockResolvedValue([])
+    api.createRunTask.mockResolvedValue({ id: 'task_1', input: { conversation_id: 'conv_new' } })
+    api.streamRunTask.mockImplementation(() => runningStream.promise)
+    api.cancelTask
+      .mockResolvedValueOnce({
+        id: 'task_1',
+        status: 'cancel_requested',
+        input: { conversation_id: 'conv_new' },
+      })
+      .mockResolvedValueOnce({
+        id: 'task_1',
+        status: 'cancelled',
+        input: { conversation_id: 'conv_new' },
+      })
+
+    const router = makeRouter()
+    await router.push('/chat')
+    await router.isReady()
+
+    const wrapper = mount(ChatView, {
+      global: {
+        plugins: [router],
+      },
+    })
+
+    await flushPromises()
+    await wrapper.find('textarea').setValue('hello')
+    await wrapper.find('form').trigger('submit.prevent')
+    await flushPromises()
+
+    const stopButton = wrapper.find('.composer-submit')
+    expect(stopButton.attributes('aria-label')).toBe('停止')
+
+    await wrapper.find('form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(api.cancelTask).toHaveBeenNthCalledWith(1, 'task_1')
+    expect(api.cancelTask).toHaveBeenNthCalledWith(2, 'task_1')
+
+    runningStream.resolve({ conversation_id: 'conv_new' })
+    await flushPromises()
+  })
+
+  it('submits approval decisions from the inline approval card through shared API helpers', async () => {
+    const runningStream = createDeferred<{ conversation_id: string }>()
+
+    api.fetchConversations.mockResolvedValue([])
+    api.createRunTask.mockResolvedValue({ id: 'task_1', input: { conversation_id: 'conv_new' } })
+    api.streamRunTask.mockImplementation(async (_taskId: string, _onTextDelta: () => void, onEvent: (event: any) => void) => {
+      onEvent({
+        type: 'approval.requested',
+        seq: 1,
+        payload: {
+          approval_id: 'approval_1',
+          task_id: 'task_1',
+          conversation_id: 'conv_new',
+          step: 4,
+          tool_call_id: 'call_1',
+          tool_name: 'bash',
+          arguments_summary: 'rm -rf /tmp/demo',
+          risk_level: 'high',
+          reason: 'dangerous filesystem mutation',
+          status: 'pending',
+        },
+      })
+      return runningStream.promise
+    })
+    api.decideTaskApproval.mockResolvedValue({
+      id: 'approval_1',
+      task_id: 'task_1',
+      conversation_id: 'conv_new',
+      step_index: 4,
+      tool_call_id: 'call_1',
+      tool_name: 'bash',
+      arguments_summary: 'rm -rf /tmp/demo',
+      risk_level: 'high',
+      status: 'approved',
+      decision_reason: 'approved inline',
+      decision_by: 'demo-user',
+      created_at: '2026-03-29T09:00:00Z',
+      updated_at: '2026-03-29T09:01:00Z',
+    })
+
+    const router = makeRouter()
+    await router.push('/chat')
+    await router.isReady()
+
+    const wrapper = mount(ChatView, {
+      global: {
+        plugins: [router],
+      },
+    })
+
+    await flushPromises()
+    await wrapper.find('textarea').setValue('hello')
+    await wrapper.find('form').trigger('submit.prevent')
+    await flushPromises()
+
+    wrapper.findComponent(MessageList).vm.$emit('approval-decision', {
+      taskId: 'task_1',
+      approvalId: 'approval_1',
+      decision: 'approve',
+      reason: 'approved inline',
+    })
+    await flushPromises()
+
+    expect(api.decideTaskApproval).toHaveBeenCalledWith('task_1', 'approval_1', {
+      decision: 'approve',
+      reason: 'approved inline',
+    })
+
+    runningStream.resolve({ conversation_id: 'conv_new' })
+    await flushPromises()
+  })
+
+  it('resumes live streaming after approving a waiting task so resumed events appear in transcript', async () => {
+    const resumedStream = createDeferred<{ conversation_id: string; provider_id?: string; model_id?: string }>()
+    let streamCallCount = 0
+
+    api.fetchConversations.mockResolvedValue([])
+    api.createRunTask.mockResolvedValue({ id: 'task_resume', input: { conversation_id: 'conv_resume' } })
+    api.fetchTaskDetails.mockResolvedValue({
+      id: 'task_resume',
+      status: 'waiting',
+      input: { conversation_id: 'conv_resume' },
+      suspend_reason: 'waiting_for_tool_approval',
+    })
+    api.streamRunTask.mockImplementation(async (_taskId: string, _onTextDelta: () => void, onEvent: (event: any) => void) => {
+      streamCallCount += 1
+      if (streamCallCount === 1) {
+        onEvent({
+          type: 'approval.requested',
+          seq: 1,
+          payload: {
+            approval_id: 'approval_resume',
+            task_id: 'task_resume',
+            conversation_id: 'conv_resume',
+            step: 4,
+            tool_call_id: 'call_resume',
+            tool_name: 'bash',
+            arguments_summary: 'rm -rf /tmp/demo',
+            risk_level: 'high',
+            reason: 'dangerous filesystem mutation',
+            status: 'pending',
+          },
+        })
+        throw new Error('Task event stream disconnected')
+      }
+
+      onEvent({
+        type: 'log.message',
+        seq: 2,
+        payload: { Kind: 'text_delta', Text: 'resumed output' },
+      })
+      onEvent({
+        type: 'task.finished',
+        seq: 3,
+        payload: { status: 'succeeded' },
+      })
+      return resumedStream.promise
+    })
+    api.decideTaskApproval.mockResolvedValue({
+      id: 'approval_resume',
+      task_id: 'task_resume',
+      conversation_id: 'conv_resume',
+      step_index: 4,
+      tool_call_id: 'call_resume',
+      tool_name: 'bash',
+      arguments_summary: 'rm -rf /tmp/demo',
+      risk_level: 'high',
+      status: 'approved',
+      decision_reason: 'resume it',
+      decision_by: 'demo-user',
+      created_at: '2026-03-29T09:00:00Z',
+      updated_at: '2026-03-29T09:01:00Z',
+    })
+
+    const router = makeRouter()
+    await router.push('/chat')
+    await router.isReady()
+
+    const wrapper = mount(ChatView, {
+      global: {
+        plugins: [router],
+      },
+    })
+
+    await flushPromises()
+    await wrapper.find('textarea').setValue('hello')
+    await wrapper.find('form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(api.streamRunTask).toHaveBeenCalledTimes(1)
+
+    wrapper.findComponent(MessageList).vm.$emit('approval-decision', {
+      taskId: 'task_resume',
+      approvalId: 'approval_resume',
+      decision: 'approve',
+      reason: 'resume it',
+    })
+    await flushPromises()
+
+    expect(api.decideTaskApproval).toHaveBeenCalledWith('task_resume', 'approval_resume', {
+      decision: 'approve',
+      reason: 'resume it',
+    })
+    expect(api.streamRunTask).toHaveBeenCalledTimes(2)
+    expect(wrapper.text()).toContain('resumed output')
+
+    resumedStream.resolve({ conversation_id: 'conv_resume' })
+    await flushPromises()
+  })
+
+  it('submits reject decisions from the inline approval card through shared API helpers', async () => {
+    const runningStream = createDeferred<{ conversation_id: string }>()
+
+    api.fetchConversations.mockResolvedValue([])
+    api.createRunTask.mockResolvedValue({ id: 'task_2', input: { conversation_id: 'conv_reject' } })
+    api.streamRunTask.mockImplementation(async (_taskId: string, _onTextDelta: () => void, onEvent: (event: any) => void) => {
+      onEvent({
+        type: 'approval.requested',
+        seq: 1,
+        payload: {
+          approval_id: 'approval_2',
+          task_id: 'task_2',
+          conversation_id: 'conv_reject',
+          step: 5,
+          tool_call_id: 'call_2',
+          tool_name: 'delete_file',
+          arguments_summary: '{"path":"danger.txt"}',
+          risk_level: 'high',
+          reason: 'dangerous file mutation',
+          status: 'pending',
+        },
+      })
+      return runningStream.promise
+    })
+    api.decideTaskApproval.mockResolvedValue({
+      id: 'approval_2',
+      task_id: 'task_2',
+      conversation_id: 'conv_reject',
+      step_index: 5,
+      tool_call_id: 'call_2',
+      tool_name: 'delete_file',
+      arguments_summary: '{"path":"danger.txt"}',
+      risk_level: 'high',
+      status: 'rejected',
+      decision_reason: 'not safe',
+      decision_by: 'demo-user',
+      created_at: '2026-03-29T09:00:00Z',
+      updated_at: '2026-03-29T09:01:00Z',
+    })
+
+    const router = makeRouter()
+    await router.push('/chat')
+    await router.isReady()
+
+    const wrapper = mount(ChatView, {
+      global: {
+        plugins: [router],
+      },
+    })
+
+    await flushPromises()
+    await wrapper.find('textarea').setValue('hello')
+    await wrapper.find('form').trigger('submit.prevent')
+    await flushPromises()
+
+    wrapper.findComponent(MessageList).vm.$emit('approval-decision', {
+      taskId: 'task_2',
+      approvalId: 'approval_2',
+      decision: 'reject',
+      reason: 'not safe',
+    })
+    await flushPromises()
+
+    expect(api.decideTaskApproval).toHaveBeenCalledWith('task_2', 'approval_2', {
+      decision: 'reject',
+      reason: 'not safe',
+    })
+    expect(wrapper.find('.error-banner').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('运行失败')
+
+    runningStream.resolve({ conversation_id: 'conv_reject' })
+    await flushPromises()
+  })
+
+  it('does not render waiting_for_tool_approval as a failure state after stream interruption', async () => {
+    api.fetchConversations.mockResolvedValue([])
+    api.createRunTask.mockResolvedValue({ id: 'task_waiting', input: { conversation_id: 'conv_waiting' } })
+    api.streamRunTask.mockRejectedValue(new Error('Task event stream disconnected'))
+    api.fetchTaskDetails.mockResolvedValue({
+      id: 'task_waiting',
+      status: 'waiting',
+      input: { conversation_id: 'conv_waiting' },
+      suspend_reason: 'waiting_for_tool_approval',
+    })
+
+    const router = makeRouter()
+    await router.push('/chat')
+    await router.isReady()
+
+    const wrapper = mount(ChatView, {
+      global: {
+        plugins: [router],
+      },
+    })
+
+    await flushPromises()
+    await wrapper.find('textarea').setValue('hello')
+    await wrapper.find('form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(api.fetchTaskDetails).toHaveBeenCalledWith('task_waiting')
+    expect(wrapper.find('.error-banner').exists()).toBe(false)
+    expect(wrapper.find('.trace-block.error').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('运行失败')
   })
 
   it('sends the currently selected provider/model instead of a hardcoded default', async () => {

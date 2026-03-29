@@ -105,9 +105,9 @@ func TestSwaggerUIRoutesExposeAuditStatusEnumInGeneratedDocs(t *testing.T) {
 	if !ok {
 		t.Fatalf("definitions = %#v, want object", document["definitions"])
 	}
-	auditRun, ok := definitions["handlers.AuditRunSwaggerDoc"].(map[string]any)
+	auditRun, ok := definitions["app_handlers.AuditRunSwaggerDoc"].(map[string]any)
 	if !ok {
-		t.Fatalf("handlers.AuditRunSwaggerDoc = %#v, want object", definitions["handlers.AuditRunSwaggerDoc"])
+		t.Fatalf("app_handlers.AuditRunSwaggerDoc = %#v, want object", definitions["app_handlers.AuditRunSwaggerDoc"])
 	}
 	properties, ok := auditRun["properties"].(map[string]any)
 	if !ok {
@@ -154,8 +154,68 @@ func TestSwaggerJSONIncludesWaitingTaskStatus(t *testing.T) {
 		t.Fatalf("definitions = %#v, want object", document["definitions"])
 	}
 
-	assertSwaggerStatusEnumContainsWaiting(t, definitions, "handlers.AuditRunSwaggerDoc")
-	assertSwaggerStatusEnumContainsWaiting(t, definitions, "handlers.TaskSwaggerDoc")
+	assertSwaggerStatusEnumContainsWaiting(t, definitions, "app_handlers.AuditRunSwaggerDoc")
+	assertSwaggerStatusEnumContainsWaiting(t, definitions, "app_handlers.TaskSwaggerDoc")
+}
+
+func TestSwaggerJSONIncludesApprovalPathsAndDefinitions(t *testing.T) {
+	engine := rest.Init()
+	NewSwaggerHandler().Register(engine.Group("/api/v1"))
+	server := httptest.NewServer(engine)
+	t.Cleanup(server.Close)
+
+	response, err := http.Get(server.URL + "/api/v1/swagger/swagger.json")
+	if err != nil {
+		t.Fatalf("GET /swagger/swagger.json error = %v", err)
+	}
+	defer response.Body.Close()
+
+	var document map[string]any
+	if err := json.NewDecoder(response.Body).Decode(&document); err != nil {
+		t.Fatalf("Decode(swagger.json) error = %v", err)
+	}
+	paths, ok := document["paths"].(map[string]any)
+	if !ok {
+		t.Fatalf("paths = %#v, want object", document["paths"])
+	}
+	for _, path := range []string{"/tasks/{id}/approvals", "/tasks/{id}/approvals/{approvalID}/decision"} {
+		if _, ok := paths[path]; !ok {
+			t.Fatalf("swagger paths missing %q", path)
+		}
+	}
+	definitions, ok := document["definitions"].(map[string]any)
+	if !ok {
+		t.Fatalf("definitions = %#v, want object", document["definitions"])
+	}
+	for _, definition := range []string{"app_handlers.ApprovalSwaggerDoc", "app_handlers.ApprovalDecisionSwaggerRequest", "app_handlers.ApprovalListSwaggerResponse", "app_handlers.ApprovalSwaggerResponse"} {
+		if _, ok := definitions[definition]; !ok {
+			t.Fatalf("swagger definitions missing %q", definition)
+		}
+	}
+}
+
+func TestSwaggerJSONIncludesApprovalFailureCodes(t *testing.T) {
+	engine := rest.Init()
+	NewSwaggerHandler().Register(engine.Group("/api/v1"))
+	server := httptest.NewServer(engine)
+	t.Cleanup(server.Close)
+
+	response, err := http.Get(server.URL + "/api/v1/swagger/swagger.json")
+	if err != nil {
+		t.Fatalf("GET /swagger/swagger.json error = %v", err)
+	}
+	defer response.Body.Close()
+
+	var document map[string]any
+	if err := json.NewDecoder(response.Body).Decode(&document); err != nil {
+		t.Fatalf("Decode(swagger.json) error = %v", err)
+	}
+	paths, ok := document["paths"].(map[string]any)
+	if !ok {
+		t.Fatalf("paths = %#v, want object", document["paths"])
+	}
+	assertSwaggerPathHasResponses(t, paths, "/tasks/{id}/approvals", "get", "200", "401", "404")
+	assertSwaggerPathHasResponses(t, paths, "/tasks/{id}/approvals/{approvalID}/decision", "post", "200", "400", "401", "404")
 }
 
 func assertSwaggerStatusEnumContainsWaiting(t *testing.T, definitions map[string]any, name string) {
@@ -210,4 +270,25 @@ func equalSwaggerStringSlices(got []string, want []string) bool {
 		}
 	}
 	return true
+}
+
+func assertSwaggerPathHasResponses(t *testing.T, paths map[string]any, path string, method string, wantCodes ...string) {
+	t.Helper()
+	rawPath, ok := paths[path].(map[string]any)
+	if !ok {
+		t.Fatalf("paths[%q] = %#v, want object", path, paths[path])
+	}
+	rawMethod, ok := rawPath[method].(map[string]any)
+	if !ok {
+		t.Fatalf("paths[%q][%q] = %#v, want object", path, method, rawPath[method])
+	}
+	responses, ok := rawMethod["responses"].(map[string]any)
+	if !ok {
+		t.Fatalf("responses for %s %s = %#v, want object", method, path, rawMethod["responses"])
+	}
+	for _, code := range wantCodes {
+		if _, ok := responses[code]; !ok {
+			t.Fatalf("responses for %s %s missing %s", method, path, code)
+		}
+	}
 }

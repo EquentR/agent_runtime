@@ -602,6 +602,27 @@ p {
   padding: 0.9rem;
 }
 
+.approval-shell {
+  min-height: 100svh;
+}
+
+.approval-sidebar-body {
+  display: grid;
+  gap: 0.7rem;
+  align-content: start;
+}
+
+.approval-card-list {
+  display: grid;
+  gap: 0.9rem;
+  padding: 1.1rem;
+  overflow: auto;
+}
+
+.approval-topbar .status-pill {
+  text-transform: none;
+}
+
 .admin-audit-panel {
   background: rgba(255, 255, 255, 0.8);
   border: 1px solid rgba(25, 50, 59, 0.1);

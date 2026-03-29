@@ -3,15 +3,19 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
 
+	"github.com/EquentR/agent_runtime/core/approvals"
 	coreaudit "github.com/EquentR/agent_runtime/core/audit"
 	coreprompt "github.com/EquentR/agent_runtime/core/prompt"
 	model "github.com/EquentR/agent_runtime/core/providers/types"
 	coretypes "github.com/EquentR/agent_runtime/core/types"
 )
+
+var ErrToolApprovalPending = errors.New("tool approval pending")
 
 type StreamEventKind string
 
@@ -122,6 +126,34 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 		}
 
 		for step := 1; step <= r.options.MaxSteps; step++ {
+			if step == 1 && input.ToolApprovalResume != nil {
+				resume := cloneToolApprovalResume(input.ToolApprovalResume)
+				checkpointMessages := cloneMessages(resume.Checkpoint.ProducedMessagesBeforeCheckpoint)
+				baseConversation = append(baseConversation, checkpointMessages...)
+				produced = append(produced, checkpointMessages...)
+				if r.options.Memory != nil && len(checkpointMessages) > 0 {
+					r.options.Memory.AddMessages(checkpointMessages)
+					memoryInsertedCount += len(checkpointMessages)
+				}
+				title := fmt.Sprintf("Agent step %d", resume.Checkpoint.Step)
+				suspended, execErr := r.executeAssistantToolCalls(ctx, resume.Checkpoint.Step, title, resume.Checkpoint.AssistantMessage, resume.Checkpoint.ToolCallIndex, resume, &baseConversation, &produced, &memoryInsertedCount, &toolCalls)
+				if execErr != nil {
+					r.emitStepFinish(ctx, resume.Checkpoint.Step, title, map[string]any{"error": execErr.Error()})
+					snapshotResult(resume.Checkpoint.Step)
+					runErr = execErr
+					return
+				}
+				if suspended {
+					snapshotResult(resume.Checkpoint.Step)
+					result.StopReason = "waiting_for_tool_approval"
+					runErr = ErrToolApprovalPending
+					return
+				}
+				afterToolTurn = len(resume.Checkpoint.AssistantMessage.ToolCalls) > 0
+				r.emitStepFinish(ctx, resume.Checkpoint.Step, title, map[string]any{"tool_calls": len(resume.Checkpoint.AssistantMessage.ToolCalls)})
+				step = resume.Checkpoint.Step
+				continue
+			}
 			if err := ctx.Err(); err != nil {
 				snapshotResult(step - 1)
 				runErr = err
@@ -269,42 +301,18 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 				return
 			}
 
-			for _, call := range assistant.ToolCalls {
-				if err := ctx.Err(); err != nil {
-					snapshotResult(step)
-					runErr = err
-					return
-				}
-				toolCalls++
-				r.emitToolStart(ctx, step, call)
-				arguments := make(map[string]interface{})
-				if call.Arguments != "" {
-					if err := json.Unmarshal([]byte(call.Arguments), &arguments); err != nil {
-						wrapped := fmt.Errorf("decode tool arguments for %q: %w", call.Name, err)
-						r.emitToolFinish(ctx, step, call, "", wrapped)
-						r.emitStepFinish(ctx, step, title, map[string]any{"error": wrapped.Error()})
-						snapshotResult(step)
-						runErr = wrapped
-						return
-					}
-				}
-				output, err := r.registry.Execute(r.toolContext(ctx, step), call.Name, arguments)
-				if err != nil {
-					wrapped := fmt.Errorf("execute tool %q: %w", call.Name, err)
-					r.emitToolFinish(ctx, step, call, "", wrapped)
-					r.emitStepFinish(ctx, step, title, map[string]any{"error": wrapped.Error()})
-					snapshotResult(step)
-					runErr = wrapped
-					return
-				}
-				toolMessage := model.Message{Role: model.RoleTool, ToolCallId: call.ID, Content: output}
-				baseConversation = append(baseConversation, toolMessage)
-				produced = append(produced, toolMessage)
-				if r.options.Memory != nil {
-					r.options.Memory.AddMessage(toolMessage)
-					memoryInsertedCount++
-				}
-				r.emitToolFinish(ctx, step, call, output, nil)
+			suspended, execErr := r.executeAssistantToolCalls(ctx, step, title, assistant, 0, nil, &baseConversation, &produced, &memoryInsertedCount, &toolCalls)
+			if execErr != nil {
+				r.emitStepFinish(ctx, step, title, map[string]any{"error": execErr.Error()})
+				snapshotResult(step)
+				runErr = execErr
+				return
+			}
+			if suspended {
+				snapshotResult(step)
+				result.StopReason = "waiting_for_tool_approval"
+				runErr = ErrToolApprovalPending
+				return
 			}
 			afterToolTurn = len(assistant.ToolCalls) > 0
 
@@ -340,6 +348,173 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 			return closeErr
 		},
 	}, nil
+}
+
+func (r *Runner) executeAssistantToolCalls(ctx context.Context, step int, title string, assistant model.Message, startIndex int, resume *toolApprovalResume, baseConversation *[]model.Message, produced *[]model.Message, memoryInsertedCount *int, toolCalls *int) (bool, error) {
+	if startIndex < 0 || startIndex > len(assistant.ToolCalls) {
+		return false, fmt.Errorf("resume tool call index %d out of range", startIndex)
+	}
+	for callIndex := startIndex; callIndex < len(assistant.ToolCalls); callIndex++ {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		call := assistant.ToolCalls[callIndex]
+		*toolCalls = *toolCalls + 1
+		arguments, err := decodeToolArguments(call)
+		if err != nil {
+			wrapped := fmt.Errorf("decode tool arguments for %q: %w", call.Name, err)
+			r.emitToolFinish(ctx, step, call, "", wrapped)
+			return false, wrapped
+		}
+
+		syntheticOutput := ""
+		resumeCurrentCall := resume != nil && callIndex == startIndex
+		if resumeCurrentCall {
+			syntheticOutput = strings.TrimSpace(resume.SyntheticOutput)
+		} else {
+			required, suspendErr := r.maybeSuspendForToolApproval(ctx, step, callIndex, assistant, call, arguments, *produced)
+			if suspendErr != nil {
+				return false, suspendErr
+			}
+			if required {
+				return true, nil
+			}
+		}
+
+		if syntheticOutput != "" {
+			toolMessage := model.Message{Role: model.RoleTool, ToolCallId: call.ID, Content: syntheticOutput}
+			*baseConversation = append(*baseConversation, toolMessage)
+			*produced = append(*produced, toolMessage)
+			if r.options.Memory != nil {
+				r.options.Memory.AddMessage(toolMessage)
+				*memoryInsertedCount = *memoryInsertedCount + 1
+			}
+			continue
+		}
+
+		r.emitToolStart(ctx, step, call)
+		output, err := r.registry.Execute(r.executionToolContext(ctx, step), call.Name, arguments)
+		if err != nil {
+			wrapped := fmt.Errorf("execute tool %q: %w", call.Name, err)
+			r.emitToolFinish(ctx, step, call, "", wrapped)
+			return false, wrapped
+		}
+		toolMessage := model.Message{Role: model.RoleTool, ToolCallId: call.ID, Content: output}
+		*baseConversation = append(*baseConversation, toolMessage)
+		*produced = append(*produced, toolMessage)
+		if r.options.Memory != nil {
+			r.options.Memory.AddMessage(toolMessage)
+			*memoryInsertedCount = *memoryInsertedCount + 1
+		}
+		r.emitToolFinish(ctx, step, call, output, nil)
+	}
+	return false, nil
+}
+
+func (r *Runner) maybeSuspendForToolApproval(ctx context.Context, step int, toolCallIndex int, assistant model.Message, call coretypes.ToolCall, arguments map[string]interface{}, produced []model.Message) (bool, error) {
+	if r == nil || r.registry == nil {
+		return false, nil
+	}
+	policy, ok := r.registry.ApprovalPolicy(call.Name)
+	if !ok {
+		return false, nil
+	}
+	requirement := policy.Evaluate(arguments)
+	if !requirement.Required {
+		return false, nil
+	}
+	runtime := r.taskRuntime()
+	if runtime == nil {
+		return false, fmt.Errorf("tool %q requires approval but task runtime is not available", call.Name)
+	}
+	approval, err := runtime.CreateApproval(ctx, approvals.CreateApprovalInput{
+		TaskID:           runtime.TaskID(),
+		ConversationID:   firstNonEmpty(r.options.Metadata["conversation_id"]),
+		StepIndex:        step,
+		ToolCallID:       call.ID,
+		ToolName:         call.Name,
+		ArgumentsSummary: requirement.ArgumentsSummary,
+		RiskLevel:        string(requirement.RiskLevel),
+		Reason:           requirement.Reason,
+	})
+	if err != nil {
+		return false, err
+	}
+	task, err := runtime.GetTask(ctx)
+	if err != nil {
+		return false, err
+	}
+	metadata, err := metadataWithToolApprovalCheckpoint(task.MetadataJSON, toolApprovalCheckpoint{
+		ApprovalID:                       approval.ID,
+		Step:                             step,
+		AssistantMessage:                 cloneMessage(assistant),
+		ToolCallIndex:                    toolCallIndex,
+		ProducedMessagesBeforeCheckpoint: cloneMessages(produced),
+	})
+	if err != nil {
+		return false, err
+	}
+	if err := runtime.UpdateMetadata(ctx, metadata); err != nil {
+		return false, err
+	}
+	if err := runtime.Suspend(ctx, "waiting_for_tool_approval"); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (r *Runner) taskRuntime() taskRuntime {
+	if r == nil || r.options.EventSink == nil {
+		return nil
+	}
+	bridge, ok := r.options.EventSink.(taskRuntimeBridge)
+	if !ok {
+		return nil
+	}
+	return bridge.TaskRuntime()
+}
+
+func (r *Runner) executionToolContext(ctx context.Context, step int) context.Context {
+	runtime := r.taskRuntime()
+	if runtime != nil {
+		return runtime.ToolContext(ctx, fmt.Sprintf("step-%d", step))
+	}
+	return r.toolContext(ctx, step)
+}
+
+func decodeToolArguments(call coretypes.ToolCall) (map[string]interface{}, error) {
+	arguments := make(map[string]interface{})
+	if call.Arguments == "" {
+		return arguments, nil
+	}
+	if err := json.Unmarshal([]byte(call.Arguments), &arguments); err != nil {
+		return nil, err
+	}
+	return arguments, nil
+}
+
+func metadataWithToolApprovalCheckpoint(metadataJSON []byte, checkpoint toolApprovalCheckpoint) (map[string]any, error) {
+	metadata := map[string]any{}
+	if len(metadataJSON) > 0 {
+		if err := json.Unmarshal(metadataJSON, &metadata); err != nil {
+			return nil, fmt.Errorf("decode task metadata: %w", err)
+		}
+	}
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	metadata[toolApprovalCheckpointMetadataKey] = checkpoint
+	return metadata, nil
+}
+
+func cloneToolApprovalResume(resume *toolApprovalResume) *toolApprovalResume {
+	if resume == nil {
+		return nil
+	}
+	cloned := *resume
+	cloned.Checkpoint.AssistantMessage = cloneMessage(resume.Checkpoint.AssistantMessage)
+	cloned.Checkpoint.ProducedMessagesBeforeCheckpoint = cloneMessages(resume.Checkpoint.ProducedMessagesBeforeCheckpoint)
+	return &cloned
 }
 
 type streamCloser interface {

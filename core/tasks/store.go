@@ -845,6 +845,22 @@ func isTransientSQLiteWriteError(err error) bool {
 		strings.Contains(message, "busy")
 }
 
+func stripTaskMetadataKey(metadataJSON []byte, key string) json.RawMessage {
+	if len(metadataJSON) == 0 {
+		return cloneRawMessage(metadataJSON)
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(metadataJSON, &metadata); err != nil {
+		return cloneRawMessage(metadataJSON)
+	}
+	delete(metadata, key)
+	cleaned, err := marshalJSON(metadata, true)
+	if err != nil {
+		return cloneRawMessage(metadataJSON)
+	}
+	return cloneRawMessage(cleaned)
+}
+
 func countActiveChildTasksTx(tx *gorm.DB, parentTaskID string) (int64, error) {
 	trimmedParentTaskID := strings.TrimSpace(parentTaskID)
 	if trimmedParentTaskID == "" {

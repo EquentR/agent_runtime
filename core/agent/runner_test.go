@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/EquentR/agent_runtime/core/approvals"
 	coreaudit "github.com/EquentR/agent_runtime/core/audit"
 	"github.com/EquentR/agent_runtime/core/memory"
 	coreprompt "github.com/EquentR/agent_runtime/core/prompt"
@@ -823,6 +824,158 @@ func TestRunnerPassesRuntimeMetadataToToolContext(t *testing.T) {
 	}
 }
 
+func TestRunnerSuspendsGuardedToolCallForApprovalBeforeToolStart(t *testing.T) {
+	var executed bool
+	registry := coretools.NewRegistry()
+	if err := registry.Register(coretools.Tool{
+		Name:         "delete_file",
+		ApprovalMode: coretypes.ToolApprovalModeAlways,
+		ApprovalEvaluator: func(arguments map[string]any) coretools.ApprovalRequirement {
+			return coretools.ApprovalRequirement{
+				Required:         true,
+				ArgumentsSummary: "danger.txt",
+				RiskLevel:        coretools.RiskLevelHigh,
+				Reason:           "dangerous delete",
+			}
+		},
+		Handler: func(context.Context, map[string]interface{}) (string, error) {
+			executed = true
+			return "deleted", nil
+		},
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	client := &stubClient{streams: []model.Stream{newStubStream(
+		[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "delete_file", Arguments: `{"path":"danger.txt"}`}}}}},
+		model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "delete_file", Arguments: `{"path":"danger.txt"}`}}},
+		nil,
+	)}}
+	runtime := &recordingTaskRuntime{taskID: "task-approval", metadata: map[string]any{"existing": "value"}}
+	runner, err := NewRunner(client, registry, Options{
+		Model:     "test-model",
+		TaskID:    "task-approval",
+		Metadata:  map[string]string{"conversation_id": "conv-approval"},
+		EventSink: &taskRuntimeSink{runtime: runtime},
+	})
+	if err != nil {
+		t.Fatalf("NewRunner() error = %v", err)
+	}
+
+	result, err := runner.Run(context.Background(), RunInput{Messages: []model.Message{{Role: model.RoleUser, Content: "delete it"}}, Tools: registry.List()})
+	if !errors.Is(err, ErrToolApprovalPending) {
+		t.Fatalf("Run() error = %v, want ErrToolApprovalPending", err)
+	}
+	if executed {
+		t.Fatal("guarded tool executed before approval")
+	}
+	if runtime.suspendReason != "waiting_for_tool_approval" {
+		t.Fatalf("suspend reason = %q, want waiting_for_tool_approval", runtime.suspendReason)
+	}
+	if len(runtime.approvals) != 1 {
+		t.Fatalf("approval count = %d, want 1", len(runtime.approvals))
+	}
+	if result.StopReason != "waiting_for_tool_approval" {
+		t.Fatalf("StopReason = %q, want waiting_for_tool_approval", result.StopReason)
+	}
+	if len(result.Messages) != 1 || result.Messages[0].Role != model.RoleAssistant {
+		t.Fatalf("result.Messages = %#v, want assistant checkpoint message only", result.Messages)
+	}
+	approvalRequested := 0
+	for _, emit := range runtime.emits {
+		if emit.eventType == coretasks.EventApprovalRequested {
+			approvalRequested++
+		}
+		if emit.eventType == coretasks.EventToolStarted {
+			t.Fatalf("runtime emits = %#v, want no tool.started before approval", runtime.emits)
+		}
+	}
+	if approvalRequested != 1 {
+		t.Fatalf("approval.requested count = %d, want 1; emits = %#v", approvalRequested, runtime.emits)
+	}
+	checkpointValue, ok := runtime.metadata[toolApprovalCheckpointMetadataKey]
+	if !ok {
+		t.Fatalf("runtime metadata = %#v, want %q checkpoint key", runtime.metadata, toolApprovalCheckpointMetadataKey)
+	}
+	checkpointJSON, err := json.Marshal(checkpointValue)
+	if err != nil {
+		t.Fatalf("json.Marshal(checkpoint) error = %v", err)
+	}
+	var checkpoint toolApprovalCheckpoint
+	if err := json.Unmarshal(checkpointJSON, &checkpoint); err != nil {
+		t.Fatalf("json.Unmarshal(checkpoint) error = %v", err)
+	}
+	if checkpoint.ApprovalID != runtime.approvals[0].ID {
+		t.Fatalf("checkpoint approval id = %q, want %q", checkpoint.ApprovalID, runtime.approvals[0].ID)
+	}
+	if checkpoint.Step != 1 {
+		t.Fatalf("checkpoint step = %d, want 1", checkpoint.Step)
+	}
+	if checkpoint.ToolCallIndex != 0 {
+		t.Fatalf("checkpoint tool_call_index = %d, want 0", checkpoint.ToolCallIndex)
+	}
+	if checkpoint.AssistantMessage.Role != model.RoleAssistant || len(checkpoint.AssistantMessage.ToolCalls) != 1 {
+		t.Fatalf("checkpoint assistant_message = %#v, want assistant tool-call message", checkpoint.AssistantMessage)
+	}
+	if len(checkpoint.ProducedMessagesBeforeCheckpoint) != 1 || checkpoint.ProducedMessagesBeforeCheckpoint[0].Role != model.RoleAssistant {
+		t.Fatalf("checkpoint produced_messages_before_checkpoint = %#v, want assistant message", checkpoint.ProducedMessagesBeforeCheckpoint)
+	}
+	if runtime.metadata["existing"] != "value" {
+		t.Fatalf("runtime metadata = %#v, want existing metadata preserved", runtime.metadata)
+	}
+	if len(client.streamRequests) != 1 {
+		t.Fatalf("stream request count = %d, want 1", len(client.streamRequests))
+	}
+}
+
+func TestRunnerSuspendsGuardedToolCallWhenTaskMetadataIsJSONNull(t *testing.T) {
+	registry := coretools.NewRegistry()
+	if err := registry.Register(coretools.Tool{
+		Name:         "delete_file",
+		ApprovalMode: coretypes.ToolApprovalModeAlways,
+		Handler: func(context.Context, map[string]interface{}) (string, error) {
+			t.Fatal("guarded tool should not execute before approval")
+			return "", nil
+		},
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	client := &stubClient{streams: []model.Stream{newStubStream(
+		[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "delete_file", Arguments: `{"path":"danger.txt"}`}}}}},
+		model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "delete_file", Arguments: `{"path":"danger.txt"}`}}},
+		nil,
+	)}}
+	runtime := &recordingTaskRuntime{taskID: "task_approval_null_metadata"}
+	runner, err := NewRunner(client, registry, Options{
+		Model:     "test-model",
+		EventSink: &taskRuntimeSink{runtime: runtime},
+		Metadata:  map[string]string{"conversation_id": "conv_1"},
+	})
+	if err != nil {
+		t.Fatalf("NewRunner() error = %v", err)
+	}
+
+	result, err := runner.Run(context.Background(), RunInput{Messages: []model.Message{{Role: model.RoleUser, Content: "delete it"}}, Tools: registry.List()})
+	if err == nil {
+		t.Fatal("Run() error = nil, want task suspended")
+	}
+	if !errors.Is(err, ErrToolApprovalPending) {
+		t.Fatalf("Run() error = %v, want ErrToolApprovalPending", err)
+	}
+	if runtime.suspendReason != "waiting_for_tool_approval" {
+		t.Fatalf("suspend reason = %q, want waiting_for_tool_approval", runtime.suspendReason)
+	}
+	if result.StopReason != "waiting_for_tool_approval" {
+		t.Fatalf("StopReason = %q, want waiting_for_tool_approval", result.StopReason)
+	}
+	if _, ok := runtime.metadata[toolApprovalCheckpointMetadataKey]; !ok {
+		t.Fatalf("runtime metadata = %#v, want checkpoint key", runtime.metadata)
+	}
+	if len(runtime.approvals) != 1 {
+		t.Fatalf("approval count = %d, want 1", len(runtime.approvals))
+	}
+}
+
 func TestRunnerAggregatesUsageAcrossMultipleSteps(t *testing.T) {
 	registry := newTestRegistry(t, map[string]func(context.Context, map[string]interface{}) (string, error){
 		"lookup_weather": func(context.Context, map[string]interface{}) (string, error) {
@@ -1030,9 +1183,13 @@ func (r *recordingEventSink) OnLog(context.Context, LogEvent) error {
 }
 
 type recordingTaskRuntime struct {
-	started  []string
-	finished []any
-	emits    []recordedEmit
+	taskID        string
+	started       []string
+	finished      []any
+	emits         []recordedEmit
+	metadata      map[string]any
+	suspendReason string
+	approvals     []*approvals.ToolApproval
 }
 
 type toolArgumentsAuditArtifact struct {
@@ -1238,6 +1395,76 @@ func (r *recordingTaskRuntime) FinishStep(_ context.Context, payload any) error 
 func (r *recordingTaskRuntime) Emit(_ context.Context, eventType string, level string, payload any) error {
 	r.emits = append(r.emits, recordedEmit{eventType: eventType, level: level, payload: payload})
 	return nil
+}
+
+func (r *recordingTaskRuntime) TaskID() string {
+	return r.taskID
+}
+
+func (r *recordingTaskRuntime) GetTask(context.Context) (*coretasks.Task, error) {
+	metadataJSON, err := json.Marshal(r.metadata)
+	if err != nil {
+		return nil, err
+	}
+	return &coretasks.Task{ID: r.taskID, MetadataJSON: metadataJSON}, nil
+}
+
+func (r *recordingTaskRuntime) UpdateMetadata(_ context.Context, metadata any) error {
+	raw, err := json.Marshal(metadata)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(raw, &r.metadata)
+}
+
+func (r *recordingTaskRuntime) Suspend(_ context.Context, reason string) error {
+	r.suspendReason = reason
+	return nil
+}
+
+func (r *recordingTaskRuntime) CreateApproval(_ context.Context, input approvals.CreateApprovalInput) (*approvals.ToolApproval, error) {
+	approval := &approvals.ToolApproval{
+		ID:               fmt.Sprintf("approval_%d", len(r.approvals)+1),
+		TaskID:           input.TaskID,
+		ConversationID:   input.ConversationID,
+		StepIndex:        input.StepIndex,
+		ToolCallID:       input.ToolCallID,
+		ToolName:         input.ToolName,
+		ArgumentsSummary: input.ArgumentsSummary,
+		RiskLevel:        input.RiskLevel,
+		Reason:           input.Reason,
+		Status:           approvals.StatusPending,
+	}
+	r.approvals = append(r.approvals, approval)
+	r.emits = append(r.emits, recordedEmit{eventType: coretasks.EventApprovalRequested, level: "info", payload: approval})
+	return approval, nil
+}
+
+func (r *recordingTaskRuntime) GetApproval(_ context.Context, approvalID string) (*approvals.ToolApproval, error) {
+	for _, approval := range r.approvals {
+		if approval.ID == approvalID {
+			copy := *approval
+			return &copy, nil
+		}
+	}
+	return nil, fmt.Errorf("approval %q not found", approvalID)
+}
+
+func (r *recordingTaskRuntime) ExpireApproval(_ context.Context, approvalID string, reason string) (*approvals.ToolApproval, error) {
+	for _, approval := range r.approvals {
+		if approval.ID != approvalID {
+			continue
+		}
+		approval.Status = approvals.StatusExpired
+		approval.DecisionReason = reason
+		copy := *approval
+		return &copy, nil
+	}
+	return nil, fmt.Errorf("approval %q not found", approvalID)
+}
+
+func (r *recordingTaskRuntime) ToolContext(ctx context.Context, stepID string) context.Context {
+	return coretools.WithRuntime(ctx, &coretools.Runtime{TaskID: r.taskID, StepID: stepID, Actor: "runner-test"})
 }
 
 func newTestRegistry(t *testing.T, handlers map[string]func(context.Context, map[string]interface{}) (string, error)) *coretools.Registry {

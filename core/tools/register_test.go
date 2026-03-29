@@ -3,9 +3,11 @@ package tools
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	coremcp "github.com/EquentR/agent_runtime/core/mcp"
+	"github.com/EquentR/agent_runtime/core/types"
 )
 
 type fakeMCPClient struct {
@@ -163,5 +165,79 @@ func TestRegistry_RegisterMCPPrompts(t *testing.T) {
 	}
 	if fakeClient.promptArgs["tone"] != "concise" {
 		t.Fatalf("prompt args tone = %q, want %q", fakeClient.promptArgs["tone"], "concise")
+	}
+}
+
+func TestRegisterStoresApprovalPolicyAndDefinition(t *testing.T) {
+	registry := NewRegistry()
+
+	if err := registry.Register(Tool{
+		Name:         "delete_file",
+		Description:  "Delete a file",
+		Parameters:   types.JSONSchema{},
+		ApprovalMode: types.ToolApprovalModeConditional,
+		ApprovalEvaluator: func(arguments map[string]any) ApprovalRequirement {
+			if fmt.Sprint(arguments["path"]) == "danger.txt" {
+				return ApprovalRequirement{
+					Required:         true,
+					RiskLevel:        RiskLevelHigh,
+					ArgumentsSummary: "path=danger.txt",
+					Reason:           "deletes danger.txt",
+				}
+			}
+			return ApprovalRequirement{}
+		},
+		Handler: func(_ context.Context, _ map[string]any) (string, error) {
+			return "ok", nil
+		},
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	definitions := registry.List()
+	if len(definitions) != 1 {
+		t.Fatalf("List() length = %d, want 1", len(definitions))
+	}
+	if definitions[0].ApprovalMode != types.ToolApprovalModeConditional {
+		t.Fatalf("ApprovalMode = %q, want %q", definitions[0].ApprovalMode, types.ToolApprovalModeConditional)
+	}
+
+	policy, ok := registry.ApprovalPolicy("delete_file")
+	if !ok {
+		t.Fatal("ApprovalPolicy(delete_file) ok = false, want true")
+	}
+	requirement := policy.Evaluate(map[string]any{"path": "danger.txt"})
+	if !requirement.Required {
+		t.Fatal("policy.Evaluate(danger.txt) Required = false, want true")
+	}
+	if requirement.RiskLevel != RiskLevelHigh {
+		t.Fatalf("policy.Evaluate(danger.txt) RiskLevel = %q, want %q", requirement.RiskLevel, RiskLevelHigh)
+	}
+	if requirement.ArgumentsSummary != "path=danger.txt" {
+		t.Fatalf("policy.Evaluate(danger.txt) ArgumentsSummary = %q, want %q", requirement.ArgumentsSummary, "path=danger.txt")
+	}
+	if requirement.Reason != "deletes danger.txt" {
+		t.Fatalf("policy.Evaluate(danger.txt) Reason = %q, want %q", requirement.Reason, "deletes danger.txt")
+	}
+
+	if _, ok := registry.ApprovalPolicy("missing"); ok {
+		t.Fatal("ApprovalPolicy(missing) ok = true, want false")
+	}
+}
+
+func TestRegisterRejectsInvalidApprovalMode(t *testing.T) {
+	registry := NewRegistry()
+	err := registry.Register(Tool{
+		Name:         "invalid_tool",
+		ApprovalMode: types.ToolApprovalMode("bogus"),
+		Handler: func(_ context.Context, _ map[string]any) (string, error) {
+			return "ok", nil
+		},
+	})
+	if err == nil {
+		t.Fatal("Register() error = nil, want invalid approval mode error")
+	}
+	if !strings.Contains(err.Error(), "approval mode") {
+		t.Fatalf("Register() error = %q, want approval mode message", err)
 	}
 }

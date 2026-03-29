@@ -9,8 +9,718 @@ import (
 	"testing"
 	"time"
 
+	"github.com/EquentR/agent_runtime/core/approvals"
+	coretypes "github.com/EquentR/agent_runtime/core/types"
 	"gorm.io/gorm"
 )
+
+func TestApprovalEventConstants(t *testing.T) {
+	if EventApprovalRequested != "approval.requested" {
+		t.Fatalf("EventApprovalRequested = %q, want %q", EventApprovalRequested, "approval.requested")
+	}
+	if EventApprovalResolved != "approval.resolved" {
+		t.Fatalf("EventApprovalResolved = %q, want %q", EventApprovalResolved, "approval.resolved")
+	}
+}
+
+func TestManagerResolveTaskApprovalResumesWaitingTaskExactlyOnce(t *testing.T) {
+	store := newTestStore(t)
+	approvalStore := approvals.NewStore(store.db)
+	if err := approvalStore.AutoMigrate(); err != nil {
+		t.Fatalf("approvalStore.AutoMigrate() error = %v", err)
+	}
+	manager := NewManager(store, ManagerOptions{ApprovalStore: approvalStore})
+
+	task, err := manager.CreateTask(context.Background(), CreateTaskInput{TaskType: "agent.run", CreatedBy: "alice"})
+	if err != nil {
+		t.Fatalf("CreateTask() error = %v", err)
+	}
+	claimed, _, err := store.ClaimNextTask(context.Background(), "runner-1", time.Minute)
+	if err != nil {
+		t.Fatalf("ClaimNextTask() error = %v", err)
+	}
+	if claimed == nil || claimed.ID != task.ID {
+		t.Fatalf("claimed task = %#v, want %q", claimed, task.ID)
+	}
+	if _, _, err := store.MarkWaiting(context.Background(), task.ID, "waiting_for_tool_approval"); err != nil {
+		t.Fatalf("MarkWaiting() error = %v", err)
+	}
+	approval, err := manager.CreateApproval(context.Background(), approvals.CreateApprovalInput{
+		TaskID:           task.ID,
+		ConversationID:   "conv-1",
+		StepIndex:        4,
+		ToolCallID:       "call-1",
+		ToolName:         "bash",
+		ArgumentsSummary: "rm -rf /tmp/demo",
+		RiskLevel:        "high",
+		Reason:           "dangerous filesystem mutation",
+	})
+	if err != nil {
+		t.Fatalf("CreateApproval() error = %v", err)
+	}
+
+	resolved, err := manager.ResolveTaskApproval(context.Background(), task.ID, approval.ID, approvals.ResolveApprovalInput{
+		Decision:   approvals.DecisionApprove,
+		Reason:     "safe",
+		DecisionBy: "alice",
+	})
+	if err != nil {
+		t.Fatalf("ResolveTaskApproval() error = %v", err)
+	}
+	if resolved.Status != approvals.StatusApproved {
+		t.Fatalf("resolved status = %q, want %q", resolved.Status, approvals.StatusApproved)
+	}
+
+	queued := waitForTaskStatus(t, context.Background(), manager, task.ID, StatusQueued)
+	if queued.SuspendReason != "" {
+		t.Fatalf("queued suspend_reason = %q, want empty", queued.SuspendReason)
+	}
+
+	resolvedAgain, err := manager.ResolveTaskApproval(context.Background(), task.ID, approval.ID, approvals.ResolveApprovalInput{
+		Decision:   approvals.DecisionApprove,
+		Reason:     "still safe",
+		DecisionBy: "bob",
+	})
+	if err != nil {
+		t.Fatalf("ResolveTaskApproval() second error = %v", err)
+	}
+	if resolvedAgain.DecisionBy != "alice" {
+		t.Fatalf("resolvedAgain decision_by = %q, want %q", resolvedAgain.DecisionBy, "alice")
+	}
+
+	events, err := manager.ListEvents(context.Background(), task.ID, 0, 20)
+	if err != nil {
+		t.Fatalf("ListEvents() error = %v", err)
+	}
+	resumedCount := 0
+	approvalResolvedCount := 0
+	for _, event := range events {
+		switch event.EventType {
+		case EventTaskResumed:
+			resumedCount++
+		case EventApprovalResolved:
+			approvalResolvedCount++
+		}
+	}
+	if resumedCount != 1 {
+		t.Fatalf("task.resumed count = %d, want 1", resumedCount)
+	}
+	if approvalResolvedCount != 1 {
+		t.Fatalf("approval.resolved count = %d, want 1", approvalResolvedCount)
+	}
+}
+
+func TestManagerResolveTaskApprovalRetriesAfterResolvedEventWriteFailure(t *testing.T) {
+	store := newTestStore(t)
+	approvalStore := approvals.NewStore(store.db)
+	if err := approvalStore.AutoMigrate(); err != nil {
+		t.Fatalf("approvalStore.AutoMigrate() error = %v", err)
+	}
+	manager := NewManager(store, ManagerOptions{ApprovalStore: approvalStore})
+
+	task, err := manager.CreateTask(context.Background(), CreateTaskInput{TaskType: "agent.run", CreatedBy: "alice"})
+	if err != nil {
+		t.Fatalf("CreateTask() error = %v", err)
+	}
+	claimed, _, err := store.ClaimNextTask(context.Background(), "runner-1", time.Minute)
+	if err != nil {
+		t.Fatalf("ClaimNextTask() error = %v", err)
+	}
+	if claimed == nil || claimed.ID != task.ID {
+		t.Fatalf("claimed task = %#v, want %q", claimed, task.ID)
+	}
+	if _, _, err := store.MarkWaiting(context.Background(), task.ID, "waiting_for_tool_approval"); err != nil {
+		t.Fatalf("MarkWaiting() error = %v", err)
+	}
+	approval, err := manager.CreateApproval(context.Background(), approvals.CreateApprovalInput{
+		TaskID:           task.ID,
+		ConversationID:   "conv-1",
+		StepIndex:        1,
+		ToolCallID:       "call-1",
+		ToolName:         "bash",
+		ArgumentsSummary: "rm -rf /tmp/demo",
+		RiskLevel:        "high",
+		Reason:           "dangerous filesystem mutation",
+	})
+	if err != nil {
+		t.Fatalf("CreateApproval() error = %v", err)
+	}
+
+	callback := registerTransientWriteErrorOnce(t, store.db, "approval-resolved-event", "create", "task_events", "approval resolved event failure")
+	_, err = manager.ResolveTaskApproval(withTransientWriteErrorContext(context.Background(), "approval-resolved-event"), task.ID, approval.ID, approvals.ResolveApprovalInput{
+		Decision:   approvals.DecisionApprove,
+		Reason:     "safe",
+		DecisionBy: "alice",
+	})
+	if err == nil {
+		t.Fatal("ResolveTaskApproval() first call error = nil, want error")
+	}
+	callback.AssertInjected(t)
+
+	stillWaiting, err := manager.GetTask(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("GetTask() after failed resolve error = %v", err)
+	}
+	if stillWaiting.Status != StatusWaiting {
+		t.Fatalf("task status after failed resolve = %q, want %q", stillWaiting.Status, StatusWaiting)
+	}
+
+	resolved, err := approvalStore.GetApproval(context.Background(), task.ID, approval.ID)
+	if err != nil {
+		t.Fatalf("GetApproval() error = %v", err)
+	}
+	if resolved.Status != approvals.StatusApproved {
+		t.Fatalf("approval status after failed resolve = %q, want %q", resolved.Status, approvals.StatusApproved)
+	}
+
+	resolved, err = manager.ResolveTaskApproval(context.Background(), task.ID, approval.ID, approvals.ResolveApprovalInput{
+		Decision:   approvals.DecisionApprove,
+		Reason:     "safe",
+		DecisionBy: "alice",
+	})
+	if err != nil {
+		t.Fatalf("ResolveTaskApproval() retry error = %v", err)
+	}
+	if resolved.Status != approvals.StatusApproved {
+		t.Fatalf("resolved retry status = %q, want %q", resolved.Status, approvals.StatusApproved)
+	}
+
+	queued := waitForTaskStatus(t, context.Background(), manager, task.ID, StatusQueued)
+	if queued.SuspendReason != "" {
+		t.Fatalf("queued suspend_reason = %q, want empty", queued.SuspendReason)
+	}
+
+	events, err := manager.ListEvents(context.Background(), task.ID, 0, 20)
+	if err != nil {
+		t.Fatalf("ListEvents() error = %v", err)
+	}
+	resumedCount := 0
+	approvalResolvedCount := 0
+	for _, event := range events {
+		switch event.EventType {
+		case EventTaskResumed:
+			resumedCount++
+		case EventApprovalResolved:
+			approvalResolvedCount++
+		}
+	}
+	if resumedCount != 1 {
+		t.Fatalf("task.resumed count = %d, want 1", resumedCount)
+	}
+	if approvalResolvedCount != 1 {
+		t.Fatalf("approval.resolved count = %d, want 1", approvalResolvedCount)
+	}
+}
+
+func TestManagerReconcilesWaitingToolApprovalAfterPostSuspendFinalizeFailure(t *testing.T) {
+	store := newTestStore(t)
+	approvalStore := approvals.NewStore(store.db)
+	if err := approvalStore.AutoMigrate(); err != nil {
+		t.Fatalf("approvalStore.AutoMigrate() error = %v", err)
+	}
+	manager := NewManager(store, ManagerOptions{
+		RunnerID:          "runner-1",
+		PollInterval:      5 * time.Millisecond,
+		LeaseDuration:     100 * time.Millisecond,
+		HeartbeatInterval: 20 * time.Millisecond,
+		ApprovalStore:     approvalStore,
+	})
+
+	var mu sync.Mutex
+	runs := 0
+	callback := registerTransientWriteErrorOnce(t, store.db, "post-suspend-approval-finalize", "update", "tool_approvals", "post suspend approval finalize failure")
+	if err := manager.RegisterExecutor("agent.run", func(ctx context.Context, task *Task, runtime *Runtime) (any, error) {
+		mu.Lock()
+		runs++
+		currentRun := runs
+		mu.Unlock()
+		if currentRun == 1 {
+			approval, err := runtime.CreateApproval(ctx, approvals.CreateApprovalInput{
+				TaskID:           task.ID,
+				ConversationID:   "conv-race",
+				StepIndex:        1,
+				ToolCallID:       "call-1",
+				ToolName:         "bash",
+				ArgumentsSummary: "dangerous",
+				RiskLevel:        "high",
+				Reason:           "dangerous mutation",
+			})
+			if err != nil {
+				return nil, err
+			}
+			if err := runtime.UpdateMetadata(withTransientWriteErrorContext(ctx, "post-suspend-approval-finalize"), map[string]any{coretypes.TaskMetadataKeyToolApprovalCheckpoint: map[string]any{"approval_id": approval.ID}}); err != nil {
+				return nil, err
+			}
+			if _, _, err := approvalStore.ResolveApproval(ctx, task.ID, approval.ID, approvals.ResolveApprovalInput{Decision: approvals.DecisionApprove, Reason: "safe", DecisionBy: "alice"}); err != nil {
+				return nil, err
+			}
+			if err := runtime.Suspend(withTransientWriteErrorContext(ctx, "post-suspend-approval-finalize"), "waiting_for_tool_approval"); err != nil {
+				return nil, err
+			}
+			return nil, ErrTaskSuspended
+		}
+		return map[string]any{"ok": true}, nil
+	}); err != nil {
+		t.Fatalf("RegisterExecutor() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	manager.Start(ctx)
+
+	created, err := manager.CreateTask(ctx, CreateTaskInput{TaskType: "agent.run", CreatedBy: "alice"})
+	if err != nil {
+		t.Fatalf("CreateTask() error = %v", err)
+	}
+
+	completed := waitForTaskStatus(t, ctx, manager, created.ID, StatusSucceeded)
+	if completed.SuspendReason != "" {
+		t.Fatalf("completed suspend reason = %q, want empty", completed.SuspendReason)
+	}
+	callback.AssertInjected(t)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if runs != 2 {
+		t.Fatalf("executor runs = %d, want 2", runs)
+	}
+}
+
+func TestManagerResolveTaskApprovalDoesNotResumeNonToolWaitingTask(t *testing.T) {
+	store := newTestStore(t)
+	approvalStore := approvals.NewStore(store.db)
+	if err := approvalStore.AutoMigrate(); err != nil {
+		t.Fatalf("approvalStore.AutoMigrate() error = %v", err)
+	}
+	manager := NewManager(store, ManagerOptions{ApprovalStore: approvalStore})
+
+	task, err := manager.CreateTask(context.Background(), CreateTaskInput{TaskType: "agent.run", CreatedBy: "alice"})
+	if err != nil {
+		t.Fatalf("CreateTask() error = %v", err)
+	}
+	claimed, _, err := store.ClaimNextTask(context.Background(), "runner-1", time.Minute)
+	if err != nil {
+		t.Fatalf("ClaimNextTask() error = %v", err)
+	}
+	if claimed == nil || claimed.ID != task.ID {
+		t.Fatalf("claimed task = %#v, want %q", claimed, task.ID)
+	}
+	if _, _, err := store.MarkWaiting(context.Background(), task.ID, "waiting_for_child_tasks"); err != nil {
+		t.Fatalf("MarkWaiting() error = %v", err)
+	}
+	approval, err := manager.CreateApproval(context.Background(), approvals.CreateApprovalInput{TaskID: task.ID, ToolCallID: "call-1", ToolName: "bash"})
+	if err != nil {
+		t.Fatalf("CreateApproval() error = %v", err)
+	}
+
+	resolved, err := manager.ResolveTaskApproval(context.Background(), task.ID, approval.ID, approvals.ResolveApprovalInput{
+		Decision:   approvals.DecisionReject,
+		Reason:     "no",
+		DecisionBy: "alice",
+	})
+	if err != nil {
+		t.Fatalf("ResolveTaskApproval() error = %v", err)
+	}
+	if resolved.Status != approvals.StatusRejected {
+		t.Fatalf("resolved status = %q, want %q", resolved.Status, approvals.StatusRejected)
+	}
+
+	stillWaiting, err := manager.GetTask(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("GetTask() error = %v", err)
+	}
+	if stillWaiting.Status != StatusWaiting {
+		t.Fatalf("task status = %q, want %q", stillWaiting.Status, StatusWaiting)
+	}
+	if stillWaiting.SuspendReason != "waiting_for_child_tasks" {
+		t.Fatalf("task suspend_reason = %q, want %q", stillWaiting.SuspendReason, "waiting_for_child_tasks")
+	}
+
+	events, err := manager.ListEvents(context.Background(), task.ID, 0, 20)
+	if err != nil {
+		t.Fatalf("ListEvents() error = %v", err)
+	}
+	for _, event := range events {
+		if event.EventType == EventTaskResumed {
+			t.Fatal("task unexpectedly resumed for non-tool waiting task")
+		}
+	}
+}
+
+func TestManagerAvoidsResolveBeforeSuspendRaceForToolApprovalWaitingTask(t *testing.T) {
+	store := newTestStore(t)
+	approvalStore := approvals.NewStore(store.db)
+	if err := approvalStore.AutoMigrate(); err != nil {
+		t.Fatalf("approvalStore.AutoMigrate() error = %v", err)
+	}
+	manager := NewManager(store, ManagerOptions{
+		RunnerID:          "runner-1",
+		PollInterval:      5 * time.Millisecond,
+		LeaseDuration:     100 * time.Millisecond,
+		HeartbeatInterval: 20 * time.Millisecond,
+		ApprovalStore:     approvalStore,
+	})
+
+	var mu sync.Mutex
+	runs := 0
+	if err := manager.RegisterExecutor("agent.run", func(ctx context.Context, task *Task, runtime *Runtime) (any, error) {
+		mu.Lock()
+		runs++
+		currentRun := runs
+		mu.Unlock()
+		if currentRun == 1 {
+			approval, err := runtime.CreateApproval(ctx, approvals.CreateApprovalInput{
+				TaskID:           task.ID,
+				ConversationID:   "conv-race",
+				StepIndex:        1,
+				ToolCallID:       "call-1",
+				ToolName:         "bash",
+				ArgumentsSummary: "dangerous",
+				RiskLevel:        "high",
+				Reason:           "dangerous mutation",
+			})
+			if err != nil {
+				return nil, err
+			}
+			if err := runtime.UpdateMetadata(ctx, map[string]any{coretypes.TaskMetadataKeyToolApprovalCheckpoint: map[string]any{"approval_id": approval.ID}}); err != nil {
+				return nil, err
+			}
+			if _, err := manager.ResolveTaskApproval(ctx, task.ID, approval.ID, approvals.ResolveApprovalInput{Decision: approvals.DecisionApprove, Reason: "safe", DecisionBy: "alice"}); err != nil {
+				return nil, err
+			}
+			if err := runtime.Suspend(ctx, "waiting_for_tool_approval"); err != nil {
+				return nil, err
+			}
+			return nil, ErrTaskSuspended
+		}
+		return map[string]any{"ok": true}, nil
+	}); err != nil {
+		t.Fatalf("RegisterExecutor() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	manager.Start(ctx)
+
+	created, err := manager.CreateTask(ctx, CreateTaskInput{TaskType: "agent.run", CreatedBy: "alice"})
+	if err != nil {
+		t.Fatalf("CreateTask() error = %v", err)
+	}
+
+	completed := waitForTaskStatus(t, ctx, manager, created.ID, StatusSucceeded)
+	if completed.SuspendReason != "" {
+		t.Fatalf("completed suspend reason = %q, want empty", completed.SuspendReason)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if runs != 2 {
+		t.Fatalf("executor runs = %d, want 2", runs)
+	}
+	events, err := manager.ListEvents(ctx, created.ID, 0, 20)
+	if err != nil {
+		t.Fatalf("ListEvents() error = %v", err)
+	}
+	approvalResolvedCount := 0
+	resumedCount := 0
+	for _, event := range events {
+		switch event.EventType {
+		case EventApprovalResolved:
+			approvalResolvedCount++
+		case EventTaskResumed:
+			resumedCount++
+		}
+	}
+	if approvalResolvedCount != 1 {
+		t.Fatalf("approval.resolved count = %d, want 1", approvalResolvedCount)
+	}
+	if resumedCount != 1 {
+		t.Fatalf("task.resumed count = %d, want 1", resumedCount)
+	}
+}
+
+func TestApprovalEventPayloadsMatchTaskOneContract(t *testing.T) {
+	store := newTestStore(t)
+	approvalStore := approvals.NewStore(store.db)
+	if err := approvalStore.AutoMigrate(); err != nil {
+		t.Fatalf("approvalStore.AutoMigrate() error = %v", err)
+	}
+	manager := NewManager(store, ManagerOptions{ApprovalStore: approvalStore})
+
+	task, err := manager.CreateTask(context.Background(), CreateTaskInput{TaskType: "agent.run", CreatedBy: "alice"})
+	if err != nil {
+		t.Fatalf("CreateTask() error = %v", err)
+	}
+	claimed, _, err := store.ClaimNextTask(context.Background(), "runner-1", time.Minute)
+	if err != nil {
+		t.Fatalf("ClaimNextTask() error = %v", err)
+	}
+	if claimed == nil || claimed.ID != task.ID {
+		t.Fatalf("claimed task = %#v, want %q", claimed, task.ID)
+	}
+	if _, _, err := store.MarkWaiting(context.Background(), task.ID, "waiting_for_tool_approval"); err != nil {
+		t.Fatalf("MarkWaiting() error = %v", err)
+	}
+	approval, err := manager.CreateApproval(context.Background(), approvals.CreateApprovalInput{
+		TaskID:           task.ID,
+		ConversationID:   "conv-1",
+		StepIndex:        7,
+		ToolCallID:       "call-1",
+		ToolName:         "bash",
+		ArgumentsSummary: "rm -rf /tmp/demo",
+		RiskLevel:        "high",
+		Reason:           "dangerous filesystem mutation",
+	})
+	if err != nil {
+		t.Fatalf("CreateApproval() error = %v", err)
+	}
+	if _, err := manager.ResolveTaskApproval(context.Background(), task.ID, approval.ID, approvals.ResolveApprovalInput{
+		Decision:   approvals.DecisionApprove,
+		Reason:     "safe",
+		DecisionBy: "alice",
+	}); err != nil {
+		t.Fatalf("ResolveTaskApproval() error = %v", err)
+	}
+
+	events, err := manager.ListEvents(context.Background(), task.ID, 0, 20)
+	if err != nil {
+		t.Fatalf("ListEvents() error = %v", err)
+	}
+	requested := mustFindTaskEvent(t, events, EventApprovalRequested)
+	resolved := mustFindTaskEvent(t, events, EventApprovalResolved)
+
+	assertExactMapKeys(t, decodeJSONRaw(t, requested.PayloadJSON), "approval_id", "task_id", "conversation_id", "step", "tool_call_id", "tool_name", "arguments_summary", "risk_level", "reason", "status")
+	assertExactMapKeys(t, decodeJSONRaw(t, resolved.PayloadJSON), "approval_id", "task_id", "conversation_id", "step", "tool_call_id", "tool_name", "arguments_summary", "risk_level", "reason", "decision", "decision_reason", "decision_by", "status")
+}
+
+func TestManagerCreateApprovalRetriesAfterRequestedEventWriteFailure(t *testing.T) {
+	store := newTestStore(t)
+	approvalStore := approvals.NewStore(store.db)
+	if err := approvalStore.AutoMigrate(); err != nil {
+		t.Fatalf("approvalStore.AutoMigrate() error = %v", err)
+	}
+	manager := NewManager(store, ManagerOptions{ApprovalStore: approvalStore})
+
+	task, err := manager.CreateTask(context.Background(), CreateTaskInput{TaskType: "agent.run", CreatedBy: "alice"})
+	if err != nil {
+		t.Fatalf("CreateTask() error = %v", err)
+	}
+	callback := registerTransientWriteErrorOnce(t, store.db, "approval-requested-event", "create", "task_events", "approval requested event failure")
+	_, err = manager.CreateApproval(withTransientWriteErrorContext(context.Background(), "approval-requested-event"), approvals.CreateApprovalInput{
+		TaskID:           task.ID,
+		ConversationID:   "conv-1",
+		StepIndex:        1,
+		ToolCallID:       "call-1",
+		ToolName:         "bash",
+		ArgumentsSummary: "rm -rf /tmp/demo",
+		RiskLevel:        "high",
+		Reason:           "dangerous filesystem mutation",
+	})
+	if err == nil {
+		t.Fatal("CreateApproval() first call error = nil, want error")
+	}
+	callback.AssertInjected(t)
+
+	listed, err := approvalStore.ListTaskApprovals(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("ListTaskApprovals() error = %v", err)
+	}
+	if len(listed) != 1 {
+		t.Fatalf("len(listed) after failed create = %d, want 1", len(listed))
+	}
+	if listed[0].RequestedEventPublishedAt != nil {
+		t.Fatal("approval requested_event_published_at != nil after failed create, want nil")
+	}
+
+	created, err := manager.CreateApproval(context.Background(), approvals.CreateApprovalInput{
+		TaskID:           task.ID,
+		ConversationID:   "conv-1",
+		StepIndex:        1,
+		ToolCallID:       "call-1",
+		ToolName:         "bash",
+		ArgumentsSummary: "rm -rf /tmp/demo",
+		RiskLevel:        "high",
+		Reason:           "dangerous filesystem mutation",
+	})
+	if err != nil {
+		t.Fatalf("CreateApproval() retry error = %v", err)
+	}
+	if created.ID != listed[0].ID {
+		t.Fatalf("created retry id = %q, want existing %q", created.ID, listed[0].ID)
+	}
+
+	events, err := manager.ListEvents(context.Background(), task.ID, 0, 20)
+	if err != nil {
+		t.Fatalf("ListEvents() error = %v", err)
+	}
+	requestedCount := 0
+	for _, event := range events {
+		if event.EventType == EventApprovalRequested {
+			requestedCount++
+		}
+	}
+	if requestedCount != 1 {
+		t.Fatalf("approval.requested count = %d, want 1", requestedCount)
+	}
+}
+
+func mustFindTaskEvent(t *testing.T, events []TaskEvent, want string) TaskEvent {
+	t.Helper()
+	for _, event := range events {
+		if event.EventType == want {
+			return event
+		}
+	}
+	t.Fatalf("event %q not found", want)
+	return TaskEvent{}
+}
+
+func assertExactMapKeys(t *testing.T, got map[string]any, want ...string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("map key count = %d, want %d; got = %#v", len(got), len(want), got)
+	}
+	for _, key := range want {
+		if _, ok := got[key]; !ok {
+			t.Fatalf("missing key %q in map %#v", key, got)
+		}
+	}
+}
+
+func TestManagerCancelWaitingTaskCancelsPendingApprovals(t *testing.T) {
+	store := newTestStore(t)
+	approvalStore := approvals.NewStore(store.db)
+	if err := approvalStore.AutoMigrate(); err != nil {
+		t.Fatalf("approvalStore.AutoMigrate() error = %v", err)
+	}
+	manager := NewManager(store, ManagerOptions{ApprovalStore: approvalStore})
+
+	task, err := manager.CreateTask(context.Background(), CreateTaskInput{TaskType: "agent.run", CreatedBy: "alice"})
+	if err != nil {
+		t.Fatalf("CreateTask() error = %v", err)
+	}
+	claimed, _, err := store.ClaimNextTask(context.Background(), "runner-1", time.Minute)
+	if err != nil {
+		t.Fatalf("ClaimNextTask() error = %v", err)
+	}
+	if claimed == nil || claimed.ID != task.ID {
+		t.Fatalf("claimed task = %#v, want %q", claimed, task.ID)
+	}
+	if _, _, err := store.MarkWaiting(context.Background(), task.ID, "waiting_for_tool_approval"); err != nil {
+		t.Fatalf("MarkWaiting() error = %v", err)
+	}
+	pending, err := approvalStore.CreateApproval(context.Background(), approvals.CreateApprovalInput{TaskID: task.ID, ToolCallID: "call-pending", ToolName: "bash"})
+	if err != nil {
+		t.Fatalf("CreateApproval() pending error = %v", err)
+	}
+	resolved, err := approvalStore.CreateApproval(context.Background(), approvals.CreateApprovalInput{TaskID: task.ID, ToolCallID: "call-resolved", ToolName: "delete_file"})
+	if err != nil {
+		t.Fatalf("CreateApproval() resolved error = %v", err)
+	}
+	if _, _, err := approvalStore.ResolveApproval(context.Background(), task.ID, resolved.ID, approvals.ResolveApprovalInput{
+		Decision:   approvals.DecisionReject,
+		Reason:     "no",
+		DecisionBy: "alice",
+	}); err != nil {
+		t.Fatalf("ResolveApproval() error = %v", err)
+	}
+
+	updated, err := manager.CancelTask(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("CancelTask() error = %v", err)
+	}
+	if updated.Status != StatusCancelled {
+		t.Fatalf("updated status = %q, want %q", updated.Status, StatusCancelled)
+	}
+
+	loadedPending, err := approvalStore.GetApproval(context.Background(), task.ID, pending.ID)
+	if err != nil {
+		t.Fatalf("GetApproval() pending error = %v", err)
+	}
+	if loadedPending.Status != approvals.StatusCancelled {
+		t.Fatalf("pending approval status = %q, want %q", loadedPending.Status, approvals.StatusCancelled)
+	}
+	loadedResolved, err := approvalStore.GetApproval(context.Background(), task.ID, resolved.ID)
+	if err != nil {
+		t.Fatalf("GetApproval() resolved error = %v", err)
+	}
+	if loadedResolved.Status != approvals.StatusRejected {
+		t.Fatalf("resolved approval status = %q, want %q", loadedResolved.Status, approvals.StatusRejected)
+	}
+
+	events, err := manager.ListEvents(context.Background(), task.ID, 0, 20)
+	if err != nil {
+		t.Fatalf("ListEvents() error = %v", err)
+	}
+	approvalResolvedEvents := 0
+	for _, event := range events {
+		if event.EventType != EventApprovalResolved {
+			continue
+		}
+		payload := decodeJSONRaw(t, event.PayloadJSON)
+		if payload["approval_id"] == pending.ID {
+			approvalResolvedEvents++
+			if payload["status"] != string(approvals.StatusCancelled) {
+				t.Fatalf("cancelled approval resolved status = %#v, want %q", payload["status"], approvals.StatusCancelled)
+			}
+			if payload["decision_reason"] != "task cancelled" {
+				t.Fatalf("cancelled approval resolved decision_reason = %#v, want %q", payload["decision_reason"], "task cancelled")
+			}
+		}
+	}
+	if approvalResolvedEvents != 1 {
+		t.Fatalf("cancelled pending approval resolved events = %d, want 1", approvalResolvedEvents)
+	}
+}
+
+func TestManagerCancelTaskRetriesFinalizationForWaitingTaskAfterCleanupFailure(t *testing.T) {
+	store := newTestStore(t)
+	approvalStore := approvals.NewStore(store.db)
+	if err := approvalStore.AutoMigrate(); err != nil {
+		t.Fatalf("approvalStore.AutoMigrate() error = %v", err)
+	}
+	manager := NewManager(store, ManagerOptions{ApprovalStore: approvalStore})
+
+	task, err := manager.CreateTask(context.Background(), CreateTaskInput{TaskType: "agent.run", CreatedBy: "alice"})
+	if err != nil {
+		t.Fatalf("CreateTask() error = %v", err)
+	}
+	claimed, _, err := store.ClaimNextTask(context.Background(), "runner-1", time.Minute)
+	if err != nil {
+		t.Fatalf("ClaimNextTask() error = %v", err)
+	}
+	if claimed == nil || claimed.ID != task.ID {
+		t.Fatalf("claimed task = %#v, want %q", claimed, task.ID)
+	}
+	if _, _, err := store.MarkWaiting(context.Background(), task.ID, "waiting_for_tool_approval"); err != nil {
+		t.Fatalf("MarkWaiting() error = %v", err)
+	}
+	if _, err := approvalStore.CreateApproval(context.Background(), approvals.CreateApprovalInput{TaskID: task.ID, ToolCallID: "call-1", ToolName: "bash"}); err != nil {
+		t.Fatalf("CreateApproval() error = %v", err)
+	}
+
+	callback := registerTransientWriteErrorOnce(t, store.db, "cancel-cleanup", "update", "tool_approvals", "approval cleanup failure")
+	_, err = manager.CancelTask(withTransientWriteErrorContext(context.Background(), "cancel-cleanup"), task.ID)
+	if err == nil {
+		t.Fatal("CancelTask() first call error = nil, want error")
+	}
+	callback.AssertInjected(t)
+
+	intermediate, err := manager.GetTask(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("GetTask() intermediate error = %v", err)
+	}
+	if intermediate.Status != StatusCancelRequested {
+		t.Fatalf("intermediate status = %q, want %q", intermediate.Status, StatusCancelRequested)
+	}
+
+	final, err := manager.CancelTask(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("CancelTask() retry error = %v", err)
+	}
+	if final.Status != StatusCancelled {
+		t.Fatalf("final status = %q, want %q", final.Status, StatusCancelled)
+	}
+}
 
 // TestManagerExecutesQueuedTaskWithRegisteredExecutor 验证后台管理器可以领取并成功执行任务。
 func TestManagerExecutesQueuedTaskWithRegisteredExecutor(t *testing.T) {
@@ -235,6 +945,65 @@ func TestManagerCancelQueuedTaskTransitionsDirectlyToCancelled(t *testing.T) {
 	}
 	if events[2].EventType != EventTaskFinished {
 		t.Fatalf("last event = %q, want %q", events[2].EventType, EventTaskFinished)
+	}
+}
+
+func TestManagerCancelOrphanedCancelRequestedTaskTransitionsDirectlyToCancelled(t *testing.T) {
+	store := newTestStore(t)
+	manager := NewManager(store, ManagerOptions{})
+
+	ctx := context.Background()
+	created, err := manager.CreateTask(ctx, CreateTaskInput{TaskType: "agent.run"})
+	if err != nil {
+		t.Fatalf("CreateTask() error = %v", err)
+	}
+	claimed, _, err := store.ClaimNextTask(ctx, "stale-runner", time.Minute)
+	if err != nil {
+		t.Fatalf("ClaimNextTask() error = %v", err)
+	}
+	if claimed == nil || claimed.Status != StatusRunning {
+		t.Fatalf("claimed task = %#v, want running task", claimed)
+	}
+
+	updated, err := manager.CancelTask(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("CancelTask() error = %v", err)
+	}
+	if updated.Status != StatusCancelRequested {
+		t.Fatalf("first cancel status = %q, want %q", updated.Status, StatusCancelRequested)
+	}
+
+	updated, err = manager.CancelTask(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("second CancelTask() error = %v", err)
+	}
+	if updated.Status != StatusCancelled {
+		t.Fatalf("second cancel status = %q, want %q", updated.Status, StatusCancelled)
+	}
+
+	persisted, err := manager.GetTask(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetTask() error = %v", err)
+	}
+	if persisted.Status != StatusCancelled {
+		t.Fatalf("persisted status = %q, want %q", persisted.Status, StatusCancelled)
+	}
+
+	events, err := manager.ListEvents(ctx, created.ID, 0, 10)
+	if err != nil {
+		t.Fatalf("ListEvents() error = %v", err)
+	}
+	if len(events) != 4 {
+		t.Fatalf("event count = %d, want 4", len(events))
+	}
+	if events[1].EventType != EventTaskStarted {
+		t.Fatalf("second event = %q, want %q", events[1].EventType, EventTaskStarted)
+	}
+	if events[2].EventType != EventTaskCancelRequested {
+		t.Fatalf("third event = %q, want %q", events[2].EventType, EventTaskCancelRequested)
+	}
+	if events[3].EventType != EventTaskFinished {
+		t.Fatalf("fourth event = %q, want %q", events[3].EventType, EventTaskFinished)
 	}
 }
 

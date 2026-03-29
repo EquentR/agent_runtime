@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { normalizeConversationMessage } from './api'
-import { buildTranscriptEntries, summarizeToolResult, updateTranscriptFromStreamEvent } from './transcript'
+import { buildApprovalStreamEvent, buildTranscriptEntries, summarizeToolResult, updateTranscriptFromStreamEvent } from './transcript'
 import type { TranscriptEntry } from '../types/api'
 
 function comparableEntries(entries: TranscriptEntry[]) {
@@ -9,6 +9,85 @@ function comparableEntries(entries: TranscriptEntry[]) {
 }
 
 describe('buildTranscriptEntries', () => {
+  it('builds a shared approval requested event payload from an approval record', () => {
+    expect(
+      buildApprovalStreamEvent({
+        id: 'approval_1',
+        task_id: 'task_1',
+        conversation_id: 'conv_1',
+        step_index: 4,
+        tool_call_id: 'call_1',
+        tool_name: 'bash',
+        arguments_summary: 'rm -rf /tmp/demo',
+        risk_level: 'high',
+        reason: 'dangerous filesystem mutation',
+        status: 'pending',
+      }),
+    ).toEqual({
+      type: 'approval.requested',
+      payload: {
+        approval_id: 'approval_1',
+        task_id: 'task_1',
+        conversation_id: 'conv_1',
+        step: 4,
+        tool_call_id: 'call_1',
+        tool_name: 'bash',
+        arguments_summary: 'rm -rf /tmp/demo',
+        risk_level: 'high',
+        reason: 'dangerous filesystem mutation',
+        status: 'pending',
+        decision: undefined,
+        decision_reason: undefined,
+        decision_by: undefined,
+        decision_at: undefined,
+        created_at: undefined,
+        updated_at: undefined,
+      },
+    })
+  })
+
+  it('builds a shared approval resolved event payload from an approval record', () => {
+    expect(
+      buildApprovalStreamEvent(
+        {
+          id: 'approval_2',
+          task_id: 'task_2',
+          conversation_id: 'conv_2',
+          step_index: 5,
+          tool_call_id: 'call_2',
+          tool_name: 'delete_file',
+          arguments_summary: '{"path":"danger.txt"}',
+          risk_level: 'high',
+          reason: 'dangerous file mutation',
+          status: 'rejected',
+          decision_reason: 'not safe',
+          decision_by: 'alice',
+        },
+        { type: 'approval.resolved', decision: 'reject' },
+      ),
+    ).toEqual({
+      type: 'approval.resolved',
+      payload: {
+        approval_id: 'approval_2',
+        task_id: 'task_2',
+        conversation_id: 'conv_2',
+        step: 5,
+        tool_call_id: 'call_2',
+        tool_name: 'delete_file',
+        arguments_summary: '{"path":"danger.txt"}',
+        risk_level: 'high',
+        reason: 'dangerous file mutation',
+        status: 'rejected',
+        decision: 'reject',
+        decision_reason: 'not safe',
+        decision_by: 'alice',
+        decision_at: undefined,
+        created_at: undefined,
+        updated_at: undefined,
+      },
+    })
+  })
+
   it('rebuilds reasoning, merged tool detail, and final reply from persisted conversation messages', () => {
     const entries = buildTranscriptEntries([
       { role: 'user', content: 'Check weather' },
@@ -439,6 +518,223 @@ describe('updateTranscriptFromStreamEvent', () => {
         total_tokens: 320,
       },
     })
+  })
+
+  it('does not append a failure entry when a task is cancelled', () => {
+    let entries: TranscriptEntry[] = []
+
+    entries = updateTranscriptFromStreamEvent(entries, {
+      type: 'tool.started',
+      payload: { ToolCallID: 'call_1', ToolName: 'bash', Arguments: '{"command":"sleep"}' },
+    })
+    entries = updateTranscriptFromStreamEvent(entries, {
+      type: 'task.finished',
+      payload: { status: 'cancelled' },
+    })
+
+    expect(entries).toHaveLength(1)
+    expect(entries[0]).toMatchObject({ kind: 'tool', status: 'done' })
+  })
+
+  it('renders pending approval requests as approval transcript entries instead of failures', () => {
+    let entries: TranscriptEntry[] = []
+
+    entries = updateTranscriptFromStreamEvent(entries, {
+      type: 'approval.requested',
+      payload: {
+        approval_id: 'approval_1',
+        task_id: 'task_1',
+        conversation_id: 'conv_1',
+        step: 4,
+        tool_call_id: 'call_1',
+        tool_name: 'bash',
+        arguments_summary: 'rm -rf /tmp/demo',
+        risk_level: 'high',
+        reason: 'dangerous filesystem mutation',
+        status: 'pending',
+      },
+    })
+
+    expect(entries).toEqual([
+      expect.objectContaining({
+        kind: 'approval',
+        title: '等待审批',
+        approval: expect.objectContaining({
+          id: 'approval_1',
+          tool_name: 'bash',
+          risk_level: 'high',
+          reason: 'dangerous filesystem mutation',
+          status: 'pending',
+        }),
+      }),
+    ])
+    expect(entries.some((entry) => entry.kind === 'error')).toBe(false)
+  })
+
+  it('updates an existing approval entry when the approval is resolved', () => {
+    let entries: TranscriptEntry[] = []
+
+    entries = updateTranscriptFromStreamEvent(entries, {
+      type: 'approval.requested',
+      payload: {
+        approval_id: 'approval_1',
+        task_id: 'task_1',
+        conversation_id: 'conv_1',
+        step: 4,
+        tool_call_id: 'call_1',
+        tool_name: 'bash',
+        arguments_summary: 'rm -rf /tmp/demo',
+        risk_level: 'high',
+        reason: 'dangerous filesystem mutation',
+        status: 'pending',
+      },
+    })
+    entries = updateTranscriptFromStreamEvent(entries, {
+      type: 'approval.resolved',
+      payload: {
+        approval_id: 'approval_1',
+        task_id: 'task_1',
+        decision: 'reject',
+        decision_reason: 'not safe',
+        decision_by: 'demo-user',
+        status: 'rejected',
+      },
+    })
+
+    expect(entries).toHaveLength(1)
+    expect(entries[0]).toMatchObject({
+      kind: 'approval',
+      approval: expect.objectContaining({
+        id: 'approval_1',
+        status: 'rejected',
+        decision: 'reject',
+        decision_reason: 'not safe',
+        decision_by: 'demo-user',
+      }),
+    })
+  })
+
+  it('renders a complete approval entry when approval.resolved arrives before approval.requested', () => {
+    let entries: TranscriptEntry[] = []
+
+    entries = updateTranscriptFromStreamEvent(entries, {
+      type: 'approval.resolved',
+      payload: {
+        approval_id: 'approval_2',
+        task_id: 'task_2',
+        conversation_id: 'conv_2',
+        step: 9,
+        tool_call_id: 'call_2',
+        tool_name: 'delete_file',
+        arguments_summary: '{"path":"danger.txt"}',
+        risk_level: 'high',
+        reason: 'dangerous file mutation',
+        decision: 'reject',
+        decision_reason: 'not safe',
+        decision_by: 'demo-user',
+        status: 'rejected',
+      },
+    })
+
+    expect(entries).toHaveLength(1)
+    expect(entries[0]).toMatchObject({
+      kind: 'approval',
+      title: '审批已处理',
+      approval: expect.objectContaining({
+        id: 'approval_2',
+        tool_name: 'delete_file',
+        arguments_summary: '{"path":"danger.txt"}',
+        risk_level: 'high',
+        reason: 'dangerous file mutation',
+        decision: 'reject',
+        decision_reason: 'not safe',
+        status: 'rejected',
+      }),
+    })
+  })
+
+  it('does not regress an approval entry from resolved back to pending when events arrive out of order', () => {
+    let entries: TranscriptEntry[] = []
+
+    entries = updateTranscriptFromStreamEvent(entries, {
+      type: 'approval.resolved',
+      payload: {
+        approval_id: 'approval_3',
+        task_id: 'task_3',
+        conversation_id: 'conv_3',
+        step: 10,
+        tool_call_id: 'call_3',
+        tool_name: 'bash',
+        arguments_summary: 'rm -rf /tmp/demo',
+        risk_level: 'high',
+        reason: 'dangerous mutation',
+        decision: 'approve',
+        decision_reason: 'safe',
+        decision_by: 'demo-user',
+        status: 'approved',
+      },
+    })
+    entries = updateTranscriptFromStreamEvent(entries, {
+      type: 'approval.requested',
+      payload: {
+        approval_id: 'approval_3',
+        task_id: 'task_3',
+        conversation_id: 'conv_3',
+        step: 10,
+        tool_call_id: 'call_3',
+        tool_name: 'bash',
+        arguments_summary: 'rm -rf /tmp/demo',
+        risk_level: 'high',
+        reason: 'dangerous mutation',
+        status: 'pending',
+      },
+    })
+
+    expect(entries).toHaveLength(1)
+    expect(entries[0]).toMatchObject({
+      title: '审批已处理',
+      status: 'done',
+      approval: expect.objectContaining({
+        id: 'approval_3',
+        status: 'approved',
+        decision: 'approve',
+        decision_reason: 'safe',
+      }),
+    })
+  })
+
+  it('does not convert waiting_for_tool_approval completion into an error entry', () => {
+    let entries: TranscriptEntry[] = []
+
+    entries = updateTranscriptFromStreamEvent(entries, {
+      type: 'approval.requested',
+      payload: {
+        approval_id: 'approval_waiting',
+        task_id: 'task_waiting',
+        conversation_id: 'conv_waiting',
+        step: 7,
+        tool_call_id: 'call_waiting',
+        tool_name: 'bash',
+        arguments_summary: 'rm -rf /tmp/demo',
+        risk_level: 'high',
+        reason: 'dangerous mutation',
+        status: 'pending',
+      },
+    })
+    entries = updateTranscriptFromStreamEvent(entries, {
+      type: 'task.finished',
+      payload: {
+        status: 'waiting',
+        suspend_reason: 'waiting_for_tool_approval',
+      },
+    })
+
+    expect(entries).toHaveLength(1)
+    expect(entries[0]).toMatchObject({
+      kind: 'approval',
+      approval: expect.objectContaining({ id: 'approval_waiting', status: 'pending' }),
+    })
+    expect(entries.some((entry) => entry.kind === 'error')).toBe(false)
   })
 
   it('ignores completed system prompt messages from the task stream', () => {

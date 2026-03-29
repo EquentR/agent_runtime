@@ -3,6 +3,7 @@ package migration
 import (
 	"github.com/EquentR/agent_runtime/app/models"
 	"github.com/EquentR/agent_runtime/core/agent"
+	"github.com/EquentR/agent_runtime/core/approvals"
 	"github.com/EquentR/agent_runtime/core/audit"
 	"github.com/EquentR/agent_runtime/core/memory"
 	"github.com/EquentR/agent_runtime/core/prompt"
@@ -95,7 +96,7 @@ var to009 = migrate.NewMigration("0.0.9", func(tx *gorm.DB) error {
 	return tx.AutoMigrate(&coretasks.Task{})
 })
 
-func init() {
-	versionMigrations = append(versionMigrations, to008)
-	versionMigrations = append(versionMigrations, to009)
-}
+// to010 创建工具审批表，为 tool approval 模式提供持久化支持。
+var to010 = migrate.NewMigration("0.1.0", func(tx *gorm.DB) error {
+	return tx.AutoMigrate(&approvals.ToolApproval{})
+})

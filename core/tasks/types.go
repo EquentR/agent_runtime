@@ -64,6 +64,10 @@ const (
 	EventToolStarted = "tool.started"
 	// EventToolFinished 预留给后续工具调用结束事件。
 	EventToolFinished = "tool.finished"
+	// EventApprovalRequested 表示工具调用已暂停并等待人工审批。
+	EventApprovalRequested = "approval.requested"
+	// EventApprovalResolved 表示人工审批已经完成。
+	EventApprovalResolved = "approval.resolved"
 	// EventLogMessage 表示任务运行过程中的日志事件。
 	EventLogMessage = "log.message"
 	// EventChildTaskSpawned 预留给未来父子任务模型。

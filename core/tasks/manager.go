@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/EquentR/agent_runtime/core/approvals"
+	"gorm.io/gorm"
 )
 
 // Executor 定义单个 task_type 的执行器签名。
@@ -19,6 +22,7 @@ type ManagerOptions struct {
 	LeaseDuration     time.Duration
 	HeartbeatInterval time.Duration
 	AuditRecorder     AuditRecorder
+	ApprovalStore     *approvals.Store
 }
 
 type AuditRun struct {
@@ -60,9 +64,10 @@ var ErrTaskSuspended = errors.New("task suspended")
 
 // Manager 负责任务的创建、领取、串行执行、取消与事件发布。
 type Manager struct {
-	store *Store
-	hub   *EventHub
-	audit AuditRecorder
+	store     *Store
+	hub       *EventHub
+	audit     AuditRecorder
+	approvals *approvals.Store
 
 	runnerID          string
 	workerCount       int
@@ -106,6 +111,7 @@ func NewManager(store *Store, options ManagerOptions) *Manager {
 		store:             store,
 		hub:               NewEventHub(),
 		audit:             options.AuditRecorder,
+		approvals:         options.ApprovalStore,
 		runnerID:          runnerID,
 		workerCount:       workerCount,
 		pollInterval:      pollInterval,
@@ -169,6 +175,77 @@ func (m *Manager) ListEvents(ctx context.Context, taskID string, afterSeq int64,
 	return m.store.ListEvents(ctx, taskID, afterSeq, limit)
 }
 
+// ListTaskApprovals 返回任务下的审批记录。
+func (m *Manager) ListTaskApprovals(ctx context.Context, taskID string) ([]approvals.ToolApproval, error) {
+	if m == nil || m.approvals == nil {
+		return nil, fmt.Errorf("approval store is not configured")
+	}
+	return m.approvals.ListTaskApprovals(ctx, taskID)
+}
+
+// CreateApproval 创建审批记录并追加 approval.requested 事件。
+func (m *Manager) CreateApproval(ctx context.Context, input approvals.CreateApprovalInput) (*approvals.ToolApproval, error) {
+	if m == nil || m.approvals == nil || m.store == nil {
+		return nil, fmt.Errorf("approval store is not configured")
+	}
+	approval, err := m.approvals.FindApprovalByToolCall(ctx, input.TaskID, input.ToolCallID)
+	if err != nil {
+		return nil, err
+	}
+	if approval == nil {
+		approval, err = m.approvals.CreateApproval(ctx, input)
+		if err != nil {
+			return nil, err
+		}
+	}
+	approval, events, err := m.finalizeCreatedApproval(ctx, approval)
+	if err != nil {
+		return nil, err
+	}
+	if len(events) > 0 {
+		m.publish(events...)
+	}
+	return approval, nil
+}
+
+// ResolveTaskApproval 解析审批并在 waiting 任务上安全恢复一次。
+func (m *Manager) ResolveTaskApproval(ctx context.Context, taskID string, approvalID string, input approvals.ResolveApprovalInput) (*approvals.ToolApproval, error) {
+	if m == nil || m.approvals == nil || m.store == nil {
+		return nil, fmt.Errorf("approval store is not configured")
+	}
+	approval, _, err := m.approvals.ResolveApproval(ctx, taskID, approvalID, input)
+	if err != nil {
+		return nil, err
+	}
+	approval, events, err := m.finalizeResolvedApproval(ctx, approval)
+	if err != nil {
+		return nil, err
+	}
+	if len(events) > 0 {
+		m.publish(events...)
+	}
+	return approval, nil
+}
+
+// ExpireTaskApproval 将 pending 审批标记为 expired，并按 resolved 路径安全恢复一次 waiting 任务。
+func (m *Manager) ExpireTaskApproval(ctx context.Context, taskID string, approvalID string, reason string) (*approvals.ToolApproval, error) {
+	if m == nil || m.approvals == nil || m.store == nil {
+		return nil, fmt.Errorf("approval store is not configured")
+	}
+	approval, _, err := m.approvals.ExpireApproval(ctx, taskID, approvalID, reason)
+	if err != nil {
+		return nil, err
+	}
+	approval, events, err := m.finalizeResolvedApproval(ctx, approval)
+	if err != nil {
+		return nil, err
+	}
+	if len(events) > 0 {
+		m.publish(events...)
+	}
+	return approval, nil
+}
+
 // Subscribe 订阅某个任务的实时事件。
 func (m *Manager) Subscribe(taskID string) (<-chan TaskEvent, func()) {
 	return m.hub.Subscribe(taskID)
@@ -189,8 +266,9 @@ func (m *Manager) CancelTask(ctx context.Context, id string) (*Task, error) {
 	if current.Status == StatusCancelRequested {
 		if cancel := m.lookupCancel(id); cancel != nil {
 			cancel()
+			return current, nil
 		}
-		return current, nil
+		return m.forceFinalizeCancelledTask(ctx, current)
 	}
 
 	updated, events, err := m.store.RequestCancel(ctx, id)
@@ -210,20 +288,7 @@ func (m *Manager) CancelTask(ctx context.Context, id string) (*Task, error) {
 
 	// 没有活动执行器的任务可直接在管理器层完成终态转换。
 	if updated.Status == StatusCancelRequested && taskHasNoActiveExecutor(updated) {
-		reason := map[string]any{"message": "task cancelled without active executor"}
-		if taskIsQueuedBeforeExecution(updated) {
-			reason = map[string]any{"message": "task cancelled before execution"}
-		}
-		cancelled, finishEvents, err := m.store.MarkCancelled(ctx, id, reason)
-		if err != nil {
-			return nil, err
-		}
-		if len(finishEvents) > 0 {
-			m.recordTaskFinished(cancelled, reason)
-		}
-		m.publish(finishEvents...)
-		m.tryResumeParentAfterChild(cancelled)
-		return cancelled, nil
+		return m.finalizeCancelledTask(ctx, updated)
 	}
 
 	// 已在执行中的任务依赖协作式取消，由执行上下文感知并退出。
@@ -261,6 +326,9 @@ func (m *Manager) runWorker(ctx context.Context, workerIndex int) {
 			continue
 		}
 		if task == nil {
+			if m.reconcileResolvedWaitingToolApprovalTasks(ctx) {
+				continue
+			}
 			select {
 			case <-ctx.Done():
 				return
@@ -274,6 +342,47 @@ func (m *Manager) runWorker(ctx context.Context, workerIndex int) {
 		m.publish(events...)
 		m.executeTask(ctx, task)
 	}
+}
+
+func (m *Manager) reconcileResolvedWaitingToolApprovalTasks(ctx context.Context) bool {
+	if m == nil || m.store == nil || m.store.db == nil || m.approvals == nil {
+		return false
+	}
+
+	var waitingTasks []Task
+	if err := m.store.db.WithContext(ctx).
+		Where("status = ?", StatusWaiting).
+		Where("suspend_reason = ?", "waiting_for_tool_approval").
+		Order("updated_at asc").
+		Limit(max(1, m.workerCount)).
+		Find(&waitingTasks).Error; err != nil {
+		return false
+	}
+
+	recoveredAny := false
+	for i := range waitingTasks {
+		task := waitingTasks[i]
+		approvalID, ok, err := taskApprovalCheckpointID(task.MetadataJSON)
+		if err != nil || !ok {
+			continue
+		}
+		approval, err := m.approvals.GetApproval(ctx, task.ID, approvalID)
+		if err != nil || approval.Status == approvals.StatusPending {
+			continue
+		}
+		finalized, events, err := m.finalizeResolvedApproval(ctx, approval)
+		if err != nil {
+			continue
+		}
+		if finalized != nil && task.Status == StatusWaiting && finalized.Status != approvals.StatusPending {
+			recoveredAny = true
+		}
+		if len(events) > 0 {
+			m.publish(events...)
+		}
+	}
+
+	return recoveredAny
 }
 
 // executeTask 执行单个已领取任务，并根据结果写入终态。
@@ -546,4 +655,272 @@ func (m *Manager) tryResumeParentAfterChild(task *Task) {
 		return
 	}
 	m.publish(events...)
+}
+
+func (m *Manager) cancelPendingApprovals(ctx context.Context, taskID string) error {
+	if m == nil || m.approvals == nil {
+		return nil
+	}
+	listed, err := m.approvals.ListTaskApprovals(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	pendingIDs := make([]string, 0, len(listed))
+	for _, approval := range listed {
+		if approval.Status == approvals.StatusPending {
+			pendingIDs = append(pendingIDs, approval.ID)
+		}
+	}
+	if len(pendingIDs) == 0 {
+		return nil
+	}
+	if _, err := m.approvals.CancelPendingApprovalsByTask(ctx, taskID); err != nil {
+		return err
+	}
+	for _, approvalID := range pendingIDs {
+		approval, err := m.approvals.GetApproval(ctx, taskID, approvalID)
+		if err != nil {
+			return err
+		}
+		_, events, err := m.finalizeResolvedApproval(ctx, approval)
+		if err != nil {
+			return err
+		}
+		if len(events) > 0 {
+			m.publish(events...)
+		}
+	}
+	return nil
+}
+
+func (m *Manager) finalizeCreatedApproval(ctx context.Context, approval *approvals.ToolApproval) (*approvals.ToolApproval, []TaskEvent, error) {
+	if m == nil || m.store == nil || approval == nil {
+		return approval, nil, nil
+	}
+
+	var events []TaskEvent
+	var finalized approvals.ToolApproval
+	err := m.store.withWriteRetry(ctx, func() error {
+		return m.store.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			loaded, err := loadApprovalTx(tx, approval.TaskID, approval.ID)
+			if err != nil {
+				return err
+			}
+			if loaded.RequestedEventPublishedAt == nil {
+				event, err := appendEventTx(tx, loaded.TaskID, EventApprovalRequested, "info", map[string]any{
+					"approval_id":       loaded.ID,
+					"task_id":           loaded.TaskID,
+					"conversation_id":   loaded.ConversationID,
+					"step":              loaded.StepIndex,
+					"tool_call_id":      loaded.ToolCallID,
+					"tool_name":         loaded.ToolName,
+					"arguments_summary": loaded.ArgumentsSummary,
+					"risk_level":        loaded.RiskLevel,
+					"reason":            loaded.Reason,
+					"status":            loaded.Status,
+				})
+				if err != nil {
+					return err
+				}
+				now := time.Now().UTC()
+				if err := tx.Model(&approvals.ToolApproval{}).
+					Where("id = ? AND task_id = ?", loaded.ID, loaded.TaskID).
+					Update("requested_event_published_at", now).Error; err != nil {
+					return err
+				}
+				loaded.RequestedEventPublishedAt = &now
+				events = append(events, event)
+			}
+			finalized = *loaded
+			return nil
+		})
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return &finalized, events, nil
+}
+
+func (m *Manager) finalizeCancelledTask(ctx context.Context, task *Task) (*Task, error) {
+	if m == nil || m.store == nil || task == nil {
+		return task, nil
+	}
+	if task.Status != StatusCancelRequested || !taskHasNoActiveExecutor(task) {
+		return task, nil
+	}
+	if err := m.cancelPendingApprovals(ctx, task.ID); err != nil {
+		return nil, err
+	}
+	reason := map[string]any{"message": "task cancelled without active executor"}
+	if taskIsQueuedBeforeExecution(task) {
+		reason = map[string]any{"message": "task cancelled before execution"}
+	}
+	cancelled, finishEvents, err := m.store.MarkCancelled(ctx, task.ID, reason)
+	if err != nil {
+		return nil, err
+	}
+	if len(finishEvents) > 0 {
+		m.recordTaskFinished(cancelled, reason)
+	}
+	m.publish(finishEvents...)
+	m.tryResumeParentAfterChild(cancelled)
+	return cancelled, nil
+}
+
+func (m *Manager) forceFinalizeCancelledTask(ctx context.Context, task *Task) (*Task, error) {
+	if m == nil || m.store == nil || task == nil {
+		return task, nil
+	}
+	if task.Status != StatusCancelRequested {
+		return task, nil
+	}
+	if taskHasNoActiveExecutor(task) {
+		return m.finalizeCancelledTask(ctx, task)
+	}
+	if err := m.cancelPendingApprovals(ctx, task.ID); err != nil {
+		return nil, err
+	}
+	reason := map[string]any{"message": "task cancelled after executor became unavailable"}
+	cancelled, finishEvents, err := m.store.MarkCancelled(ctx, task.ID, reason)
+	if err != nil {
+		return nil, err
+	}
+	if len(finishEvents) > 0 {
+		m.recordTaskFinished(cancelled, reason)
+	}
+	m.publish(finishEvents...)
+	m.tryResumeParentAfterChild(cancelled)
+	return cancelled, nil
+}
+
+func (m *Manager) finalizeResolvedApproval(ctx context.Context, approval *approvals.ToolApproval) (*approvals.ToolApproval, []TaskEvent, error) {
+	if m == nil || m.store == nil || approval == nil {
+		return approval, nil, nil
+	}
+
+	var events []TaskEvent
+	var finalized approvals.ToolApproval
+	err := m.store.withWriteRetry(ctx, func() error {
+		return m.store.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			loaded, err := loadApprovalTx(tx, approval.TaskID, approval.ID)
+			if err != nil {
+				return err
+			}
+
+			if loaded.ResolvedEventPublishedAt == nil {
+				event, err := appendEventTx(tx, loaded.TaskID, EventApprovalResolved, "info", map[string]any{
+					"approval_id":       loaded.ID,
+					"task_id":           loaded.TaskID,
+					"conversation_id":   loaded.ConversationID,
+					"step":              loaded.StepIndex,
+					"tool_call_id":      loaded.ToolCallID,
+					"tool_name":         loaded.ToolName,
+					"arguments_summary": loaded.ArgumentsSummary,
+					"risk_level":        loaded.RiskLevel,
+					"reason":            loaded.Reason,
+					"decision":          approvalDecisionForStatus(loaded.Status),
+					"decision_reason":   loaded.DecisionReason,
+					"decision_by":       loaded.DecisionBy,
+					"status":            loaded.Status,
+				})
+				if err != nil {
+					return err
+				}
+				now := time.Now().UTC()
+				if err := tx.Model(&approvals.ToolApproval{}).
+					Where("id = ? AND task_id = ?", loaded.ID, loaded.TaskID).
+					Update("resolved_event_published_at", now).Error; err != nil {
+					return err
+				}
+				loaded.ResolvedEventPublishedAt = &now
+				events = append(events, event)
+			}
+
+			if err := finalizeApprovalTaskStateTx(tx, loaded, &events); err != nil {
+				return err
+			}
+			if loaded.FinalizedAt == nil {
+				now := time.Now().UTC()
+				if err := tx.Model(&approvals.ToolApproval{}).
+					Where("id = ? AND task_id = ?", loaded.ID, loaded.TaskID).
+					Update("finalized_at", now).Error; err != nil {
+					return err
+				}
+				loaded.FinalizedAt = &now
+			}
+
+			finalized = *loaded
+			return nil
+		})
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return &finalized, events, nil
+}
+
+func finalizeApprovalTaskStateTx(tx *gorm.DB, approval *approvals.ToolApproval, events *[]TaskEvent) error {
+	if tx == nil || approval == nil {
+		return nil
+	}
+	task, err := loadTaskTx(tx, approval.TaskID)
+	if err != nil {
+		return err
+	}
+	if task.Status != StatusWaiting || task.SuspendReason != "waiting_for_tool_approval" {
+		return nil
+	}
+
+	now := time.Now().UTC()
+	result := tx.Model(&Task{}).
+		Where("id = ?", task.ID).
+		Where("status = ?", StatusWaiting).
+		Where("suspend_reason = ?", "waiting_for_tool_approval").
+		Updates(map[string]any{
+			"status":         StatusQueued,
+			"suspend_reason": "",
+			"updated_at":     now,
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return nil
+	}
+
+	task.Status = StatusQueued
+	task.SuspendReason = ""
+	task.UpdatedAt = now
+	event, err := appendEventTx(tx, task.ID, EventTaskResumed, "info", map[string]any{
+		"status":        task.Status,
+		"resume_reason": "tool_approval_resolved",
+	})
+	if err != nil {
+		return err
+	}
+	*events = append(*events, event)
+	return nil
+}
+
+func loadApprovalTx(tx *gorm.DB, taskID string, approvalID string) (*approvals.ToolApproval, error) {
+	var approval approvals.ToolApproval
+	err := tx.Where("id = ? AND task_id = ?", approvalID, taskID).Take(&approval).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, fmt.Errorf("%w: %s", approvals.ErrApprovalNotFound, approvalID)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &approval, nil
+}
+
+func approvalDecisionForStatus(status approvals.Status) approvals.Decision {
+	switch status {
+	case approvals.StatusApproved:
+		return approvals.DecisionApprove
+	case approvals.StatusRejected, approvals.StatusExpired:
+		return approvals.DecisionReject
+	default:
+		return ""
+	}
 }

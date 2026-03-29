@@ -1,20 +1,25 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
-import { Promotion } from '@element-plus/icons-vue'
+import { Close, Promotion } from '@element-plus/icons-vue'
 
 const props = defineProps<{
   disabled: boolean
+  busy?: boolean
+  stopDisabled?: boolean
 }>()
 
 const emit = defineEmits<{
   send: [message: string]
+  stop: []
 }>()
 
 const draft = ref('')
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
 const minComposerHeightPx = 64
 
-const canSend = computed(() => !props.disabled && draft.value.trim().length > 0)
+const canSend = computed(() => !props.disabled && !props.busy && draft.value.trim().length > 0)
+const isBusy = computed(() => Boolean(props.busy))
+const canStop = computed(() => isBusy.value && !props.stopDisabled)
 
 function syncTextareaHeight() {
   if (!textareaRef.value) {
@@ -26,6 +31,9 @@ function syncTextareaHeight() {
 }
 
 function handleKeydown(event: KeyboardEvent) {
+  if (isBusy.value) {
+    return
+  }
   if (event.key !== 'Enter' || event.shiftKey) {
     return
   }
@@ -35,6 +43,10 @@ function handleKeydown(event: KeyboardEvent) {
 }
 
 function submit() {
+  if (isBusy.value) {
+    emit('stop')
+    return
+  }
   if (!canSend.value) {
     return
   }
@@ -75,8 +87,9 @@ onMounted(() => {
         @input="handleInput"
         @keydown="handleKeydown"
       />
-      <button class="composer-submit" type="submit" :disabled="!canSend" aria-label="发送">
-        <Promotion />
+      <button class="composer-submit" type="submit" :disabled="isBusy ? !canStop : !canSend" :aria-label="isBusy ? '停止' : '发送'">
+        <Close v-if="isBusy" />
+        <Promotion v-else />
       </button>
     </div>
   </form>

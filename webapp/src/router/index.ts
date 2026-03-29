@@ -4,6 +4,7 @@ import { formatDocumentTitle } from '../lib/chat'
 import { syncSession } from '../lib/session'
 import AdminAuditView from '../views/AdminAuditView.vue'
 import AdminPromptView from '../views/AdminPromptView.vue'
+import ApprovalView from '../views/ApprovalView.vue'
 import ChatView from '../views/ChatView.vue'
 import LoginView from '../views/LoginView.vue'
 
@@ -27,6 +28,15 @@ const routes = [
     meta: {
       requiresSession: true,
       title: '聊天',
+    },
+  },
+  {
+    path: '/approvals/:taskId',
+    name: 'approvals',
+    component: ApprovalView,
+    meta: {
+      requiresSession: true,
+      title: '审批管理',
     },
   },
   {

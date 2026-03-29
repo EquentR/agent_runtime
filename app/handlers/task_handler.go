@@ -346,6 +346,10 @@ func (h *TaskHandler) handleEvents(c *gin.Context) {
 			return
 		}
 		lastSeq = event.Seq
+		if event.EventType == coretasks.EventTaskFinished {
+			flusher.Flush()
+			return
+		}
 	}
 	flusher.Flush()
 
@@ -368,6 +372,9 @@ func (h *TaskHandler) handleEvents(c *gin.Context) {
 			}
 			lastSeq = event.Seq
 			flusher.Flush()
+			if event.EventType == coretasks.EventTaskFinished {
+				return
+			}
 		case <-keepAlive.C:
 			if _, err := writer.Write([]byte(": keepalive\n\n")); err != nil {
 				return

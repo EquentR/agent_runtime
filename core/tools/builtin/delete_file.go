@@ -12,23 +12,24 @@ import (
 func newDeleteFileTool(env runtimeEnv) coretools.Tool {
 	return coretools.Tool{
 		Name:        "delete_file",
-		Description: "Delete a file after explicit confirmation",
+		Description: "Delete a file in the workspace",
 		Source:      "builtin",
-		Parameters: objectSchema([]string{"path", "confirm"}, map[string]types.SchemaProperty{
-			"path":    {Type: "string", Description: "File path relative to workspace"},
-			"confirm": {Type: "boolean", Description: "Must be true to confirm deletion"},
+		Parameters: objectSchema([]string{"path"}, map[string]types.SchemaProperty{
+			"path": {Type: "string", Description: "File path relative to workspace"},
 		}),
+		ApprovalMode: types.ToolApprovalModeAlways,
+		ApprovalEvaluator: func(arguments map[string]any) coretools.ApprovalRequirement {
+			pathArg, _ := arguments["path"].(string)
+			return coretools.ApprovalRequirement{
+				ArgumentsSummary: fmt.Sprintf("path=%s", pathArg),
+				RiskLevel:        coretools.RiskLevelHigh,
+				Reason:           "deletes a workspace file",
+			}
+		},
 		Handler: func(_ context.Context, arguments map[string]any) (string, error) {
 			pathArg, err := requiredStringArg(arguments, "path")
 			if err != nil {
 				return "", err
-			}
-			confirm, err := boolArg(arguments, "confirm", false)
-			if err != nil {
-				return "", err
-			}
-			if !confirm {
-				return "", fmt.Errorf("delete_file requires confirm=true")
 			}
 
 			filePath, relPath, err := env.resolveWorkspaceFile(pathArg, true)

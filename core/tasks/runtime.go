@@ -2,10 +2,13 @@ package tasks
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 
+	"github.com/EquentR/agent_runtime/core/approvals"
 	coretools "github.com/EquentR/agent_runtime/core/tools"
+	coretypes "github.com/EquentR/agent_runtime/core/types"
 )
 
 // Runtime 为单个任务执行过程提供事件写入与上下文桥接能力。
@@ -28,6 +31,14 @@ func (r *Runtime) TaskID() string {
 		return ""
 	}
 	return r.taskID
+}
+
+// GetTask 返回当前任务的最新快照。
+func (r *Runtime) GetTask(ctx context.Context) (*Task, error) {
+	if r == nil || r.manager == nil || r.manager.store == nil {
+		return nil, fmt.Errorf("task runtime is not configured")
+	}
+	return r.manager.store.GetTask(ctx, r.taskID)
 }
 
 // StartStep 将任务推进到新的步骤，并发布 step.started 事件。
@@ -57,6 +68,33 @@ func (r *Runtime) UpdateMetadata(ctx context.Context, metadata any) error {
 	}
 	_, err := r.manager.store.UpdateTaskMetadata(ctx, r.taskID, metadata)
 	return err
+}
+
+// CreateApproval 基于当前任务创建工具审批记录。
+func (r *Runtime) CreateApproval(ctx context.Context, input approvals.CreateApprovalInput) (*approvals.ToolApproval, error) {
+	if r == nil || r.manager == nil {
+		return nil, fmt.Errorf("task runtime is not configured")
+	}
+	if input.TaskID == "" {
+		input.TaskID = r.taskID
+	}
+	return r.manager.CreateApproval(ctx, input)
+}
+
+// GetApproval 查询当前任务下的审批记录。
+func (r *Runtime) GetApproval(ctx context.Context, approvalID string) (*approvals.ToolApproval, error) {
+	if r == nil || r.manager == nil || r.manager.approvals == nil {
+		return nil, fmt.Errorf("approval store is not configured")
+	}
+	return r.manager.approvals.GetApproval(ctx, r.taskID, approvalID)
+}
+
+// ExpireApproval 将当前任务下的审批标记为 expired，并复用 manager 的 resolved 收尾逻辑。
+func (r *Runtime) ExpireApproval(ctx context.Context, approvalID string, reason string) (*approvals.ToolApproval, error) {
+	if r == nil || r.manager == nil {
+		return nil, fmt.Errorf("task runtime is not configured")
+	}
+	return r.manager.ExpireTaskApproval(ctx, r.taskID, approvalID, reason)
 }
 
 // CreateChildTask 基于当前任务创建一个子任务，并继承根任务关联。
@@ -110,7 +148,91 @@ func (r *Runtime) Suspend(ctx context.Context, reason string) error {
 		r.manager.recordTaskWaiting(task)
 	}
 	r.manager.publish(events...)
+	if reason == "waiting_for_tool_approval" {
+		if err := r.finalizeResolvedToolApprovalAfterSuspend(ctx, task); err != nil {
+			if recovered, recoveryErr := r.recoverResolvedToolApprovalAfterSuspend(ctx, task); recoveryErr == nil && recovered {
+				return nil
+			}
+			return err
+		}
+	}
 	return nil
+}
+
+func (r *Runtime) finalizeResolvedToolApprovalAfterSuspend(ctx context.Context, task *Task) error {
+	if r == nil || r.manager == nil || r.manager.approvals == nil || task == nil {
+		return nil
+	}
+	approvalID, ok, err := taskApprovalCheckpointID(task.MetadataJSON)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil
+	}
+	approval, err := r.manager.approvals.GetApproval(ctx, task.ID, approvalID)
+	if err != nil {
+		return err
+	}
+	if approval.Status == approvals.StatusPending {
+		return nil
+	}
+	_, events, err := r.manager.finalizeResolvedApproval(ctx, approval)
+	if err != nil {
+		return err
+	}
+	r.manager.publish(events...)
+	return nil
+}
+
+func (r *Runtime) recoverResolvedToolApprovalAfterSuspend(ctx context.Context, task *Task) (bool, error) {
+	if r == nil || r.manager == nil || r.manager.approvals == nil || r.manager.store == nil || task == nil {
+		return false, nil
+	}
+	approvalID, ok, err := taskApprovalCheckpointID(task.MetadataJSON)
+	if err != nil || !ok {
+		return false, err
+	}
+	approval, err := r.manager.approvals.GetApproval(ctx, task.ID, approvalID)
+	if err != nil {
+		return false, err
+	}
+	if approval.Status == approvals.StatusPending {
+		return false, nil
+	}
+	resumed, events, err := r.manager.store.ResumeWaitingTask(ctx, task.ID, "tool_approval_finalize_recovery")
+	if err != nil {
+		return false, err
+	}
+	if resumed == nil || resumed.Status != StatusQueued {
+		return false, nil
+	}
+	r.manager.publish(events...)
+	return true, nil
+}
+
+func taskApprovalCheckpointID(metadataJSON []byte) (string, bool, error) {
+	if len(metadataJSON) == 0 {
+		return "", false, nil
+	}
+	var metadata map[string]json.RawMessage
+	if err := json.Unmarshal(metadataJSON, &metadata); err != nil {
+		return "", false, fmt.Errorf("decode task metadata: %w", err)
+	}
+	raw, ok := metadata[coretypes.TaskMetadataKeyToolApprovalCheckpoint]
+	if !ok || len(raw) == 0 || string(raw) == "null" {
+		return "", false, nil
+	}
+	var checkpoint struct {
+		ApprovalID string `json:"approval_id"`
+	}
+	if err := json.Unmarshal(raw, &checkpoint); err != nil {
+		return "", false, fmt.Errorf("decode tool approval checkpoint: %w", err)
+	}
+	if checkpoint.ApprovalID == "" {
+		return "", false, nil
+	}
+	return checkpoint.ApprovalID, true, nil
 }
 
 func (r *Runtime) isSuspended() bool {

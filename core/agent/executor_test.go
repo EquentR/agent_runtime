@@ -11,7 +11,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/EquentR/agent_runtime/core/approvals"
 	coreaudit "github.com/EquentR/agent_runtime/core/audit"
 	"github.com/EquentR/agent_runtime/core/memory"
 	coreprompt "github.com/EquentR/agent_runtime/core/prompt"
@@ -395,6 +397,822 @@ func TestAgentExecutorPromptUsesCanonicalResolvedProviderAndModelForPromptSelect
 		t.Fatalf("executor() error = %v", err)
 	}
 	assertExecutorRequestSystemPrompt(t, client, "Canonical prompt")
+}
+
+func TestAgentExecutorResumesApprovedToolCallFromApprovalCheckpoint(t *testing.T) {
+	store := newConversationStoreForTest(t)
+	approvalStore, _ := newExecutorApprovalStoreForTest(t)
+	if _, err := store.CreateConversation(context.Background(), CreateConversationInput{ID: "conv_resume_approved", ProviderID: "openai", ModelID: "gpt-5.4"}); err != nil {
+		t.Fatalf("CreateConversation() error = %v", err)
+	}
+	if err := store.AppendMessages(context.Background(), "conv_resume_approved", "task_previous", []model.Message{{Role: model.RoleUser, Content: "weather?"}}); err != nil {
+		t.Fatalf("AppendMessages() error = %v", err)
+	}
+
+	approval, err := approvalStore.CreateApproval(context.Background(), approvals.CreateApprovalInput{
+		TaskID:           "task_resume_approved",
+		ConversationID:   "conv_resume_approved",
+		StepIndex:        1,
+		ToolCallID:       "call_1",
+		ToolName:         "lookup_weather",
+		ArgumentsSummary: "Shanghai",
+		RiskLevel:        "high",
+		Reason:           "network access",
+	})
+	if err != nil {
+		t.Fatalf("CreateApproval() error = %v", err)
+	}
+	if _, _, err := approvalStore.ResolveApproval(context.Background(), "task_resume_approved", approval.ID, approvals.ResolveApprovalInput{
+		Decision:   approvals.DecisionApprove,
+		Reason:     "safe",
+		DecisionBy: "alice",
+	}); err != nil {
+		t.Fatalf("ResolveApproval() error = %v", err)
+	}
+
+	var executed int
+	registry := coretools.NewRegistry()
+	if err := registry.Register(coretools.Tool{
+		Name:         "lookup_weather",
+		ApprovalMode: coretypes.ToolApprovalModeAlways,
+		Handler: func(context.Context, map[string]interface{}) (string, error) {
+			executed++
+			return "sunny", nil
+		},
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	client := &stubClient{streams: []model.Stream{newStubStream(
+		[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "The weather is sunny."}}},
+		model.Message{Role: model.RoleAssistant, Content: "The weather is sunny."},
+		nil,
+	)}}
+	executor := newTaskExecutorForTest(t, ExecutorDependencies{
+		Resolver:          newExecutorResolverForTest(),
+		ConversationStore: store,
+		Registry:          registry,
+		ApprovalStore:     approvalStore,
+		ClientFactory:     func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return client, nil },
+	})
+	task := &coretasks.Task{
+		ID:           "task_resume_approved",
+		TaskType:     "agent.run",
+		InputJSON:    marshalExecutorTaskInput(t, map[string]any{"conversation_id": "conv_resume_approved", "provider_id": "openai", "model_id": "gpt-5.4", "message": "weather?"}),
+		MetadataJSON: marshalExecutorCheckpointMetadata(t, approval.ID, toolApprovalCheckpoint{ApprovalID: approval.ID, Step: 1, AssistantMessage: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "lookup_weather", Arguments: `{"city":"Shanghai"}`}}}, ToolCallIndex: 0, ProducedMessagesBeforeCheckpoint: []model.Message{{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "lookup_weather", Arguments: `{"city":"Shanghai"}`}}}}}),
+	}
+
+	result, err := executor(context.Background(), task, nil)
+	if err != nil {
+		t.Fatalf("executor() error = %v", err)
+	}
+	runResult := result.(RunTaskResult)
+	if runResult.FinalMessage.Content != "The weather is sunny." {
+		t.Fatalf("final content = %q, want The weather is sunny.", runResult.FinalMessage.Content)
+	}
+	if executed != 1 {
+		t.Fatalf("tool executions = %d, want 1", executed)
+	}
+	if len(client.streamRequests) != 1 {
+		t.Fatalf("stream request count = %d, want 1", len(client.streamRequests))
+	}
+	requestMessages := client.streamRequests[0].Messages
+	if len(requestMessages) != 3 {
+		t.Fatalf("request messages = %#v, want user+assistant tool call+tool", requestMessages)
+	}
+	if requestMessages[0].Role != model.RoleUser || requestMessages[1].Role != model.RoleAssistant || requestMessages[2].Role != model.RoleTool {
+		t.Fatalf("request messages = %#v, want user+assistant+tool replay", requestMessages)
+	}
+	if requestMessages[2].Content != "sunny" {
+		t.Fatalf("tool replay content = %q, want sunny", requestMessages[2].Content)
+	}
+	persisted, err := store.ListMessages(context.Background(), "conv_resume_approved")
+	if err != nil {
+		t.Fatalf("ListMessages() error = %v", err)
+	}
+	if len(persisted) != 4 {
+		t.Fatalf("persisted message count = %d, want 4", len(persisted))
+	}
+	if persisted[1].Role != model.RoleAssistant || persisted[2].Role != model.RoleTool || persisted[3].Role != model.RoleAssistant {
+		t.Fatalf("persisted messages = %#v, want resumed assistant/tool/final assistant", persisted)
+	}
+}
+
+func TestAgentExecutorResumeHonorsNonZeroToolCallIndex(t *testing.T) {
+	store := newConversationStoreForTest(t)
+	approvalStore, _ := newExecutorApprovalStoreForTest(t)
+	if _, err := store.CreateConversation(context.Background(), CreateConversationInput{ID: "conv_resume_second_tool", ProviderID: "openai", ModelID: "gpt-5.4"}); err != nil {
+		t.Fatalf("CreateConversation() error = %v", err)
+	}
+	if err := store.AppendMessages(context.Background(), "conv_resume_second_tool", "task_previous", []model.Message{{Role: model.RoleUser, Content: "do both"}}); err != nil {
+		t.Fatalf("AppendMessages() error = %v", err)
+	}
+
+	approval, err := approvalStore.CreateApproval(context.Background(), approvals.CreateApprovalInput{
+		TaskID:           "task_resume_second_tool",
+		ConversationID:   "conv_resume_second_tool",
+		StepIndex:        1,
+		ToolCallID:       "call_2",
+		ToolName:         "guarded_tool",
+		ArgumentsSummary: "dangerous",
+		RiskLevel:        "high",
+		Reason:           "dangerous operation",
+	})
+	if err != nil {
+		t.Fatalf("CreateApproval() error = %v", err)
+	}
+	if _, _, err := approvalStore.ResolveApproval(context.Background(), "task_resume_second_tool", approval.ID, approvals.ResolveApprovalInput{
+		Decision:   approvals.DecisionApprove,
+		Reason:     "safe",
+		DecisionBy: "alice",
+	}); err != nil {
+		t.Fatalf("ResolveApproval() error = %v", err)
+	}
+
+	executed := make([]string, 0, 2)
+	registry := coretools.NewRegistry()
+	if err := registry.Register(coretools.Tool{
+		Name: "safe_tool",
+		Handler: func(context.Context, map[string]interface{}) (string, error) {
+			executed = append(executed, "safe_tool")
+			return "safe result", nil
+		},
+	}); err != nil {
+		t.Fatalf("Register(safe_tool) error = %v", err)
+	}
+	if err := registry.Register(coretools.Tool{
+		Name:         "guarded_tool",
+		ApprovalMode: coretypes.ToolApprovalModeAlways,
+		Handler: func(context.Context, map[string]interface{}) (string, error) {
+			executed = append(executed, "guarded_tool")
+			return "guarded result", nil
+		},
+	}); err != nil {
+		t.Fatalf("Register(guarded_tool) error = %v", err)
+	}
+	client := &stubClient{streams: []model.Stream{newStubStream(
+		[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "done"}}},
+		model.Message{Role: model.RoleAssistant, Content: "done"},
+		nil,
+	)}}
+	executor := newTaskExecutorForTest(t, ExecutorDependencies{
+		Resolver:          newExecutorResolverForTest(),
+		ConversationStore: store,
+		Registry:          registry,
+		ApprovalStore:     approvalStore,
+		ClientFactory:     func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return client, nil },
+	})
+	task := &coretasks.Task{
+		ID:       "task_resume_second_tool",
+		TaskType: "agent.run",
+		InputJSON: marshalExecutorTaskInput(t, map[string]any{
+			"conversation_id": "conv_resume_second_tool",
+			"provider_id":     "openai",
+			"model_id":        "gpt-5.4",
+			"message":         "do both",
+		}),
+		MetadataJSON: marshalExecutorCheckpointMetadata(t, approval.ID, toolApprovalCheckpoint{
+			ApprovalID:    approval.ID,
+			Step:          1,
+			ToolCallIndex: 1,
+			AssistantMessage: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{
+				{ID: "call_1", Name: "safe_tool", Arguments: `{}`},
+				{ID: "call_2", Name: "guarded_tool", Arguments: `{}`},
+			}},
+			ProducedMessagesBeforeCheckpoint: []model.Message{
+				{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "safe_tool", Arguments: `{}`}, {ID: "call_2", Name: "guarded_tool", Arguments: `{}`}}},
+				{Role: model.RoleTool, ToolCallId: "call_1", Content: "safe result"},
+			},
+		}),
+	}
+
+	result, err := executor(context.Background(), task, nil)
+	if err != nil {
+		t.Fatalf("executor() error = %v", err)
+	}
+	if result.(RunTaskResult).FinalMessage.Content != "done" {
+		t.Fatalf("final content = %q, want done", result.(RunTaskResult).FinalMessage.Content)
+	}
+	if len(executed) != 1 || executed[0] != "guarded_tool" {
+		t.Fatalf("executed tools = %#v, want only guarded_tool", executed)
+	}
+	requestMessages := client.streamRequests[0].Messages
+	if len(requestMessages) != 4 {
+		t.Fatalf("request messages = %#v, want user+assistant+prior tool+resumed tool", requestMessages)
+	}
+	if requestMessages[2].Role != model.RoleTool || requestMessages[2].ToolCallId != "call_1" || requestMessages[2].Content != "safe result" {
+		t.Fatalf("request messages[2] = %#v, want prior tool replay for call_1", requestMessages[2])
+	}
+	if requestMessages[3].Role != model.RoleTool || requestMessages[3].ToolCallId != "call_2" || requestMessages[3].Content != "guarded result" {
+		t.Fatalf("request messages[3] = %#v, want resumed tool replay for call_2", requestMessages[3])
+	}
+}
+
+func TestAgentExecutorInjectsSyntheticToolOutputForRejectedOrExpiredApproval(t *testing.T) {
+	tests := []struct {
+		name   string
+		status approvals.Status
+		want   string
+	}{
+		{name: "rejected", status: approvals.StatusRejected, want: "rejected"},
+		{name: "expired", status: approvals.StatusExpired, want: "expired"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newConversationStoreForTest(t)
+			approvalStore, approvalDB := newExecutorApprovalStoreForTest(t)
+			if _, err := store.CreateConversation(context.Background(), CreateConversationInput{ID: "conv_resume_" + tt.name, ProviderID: "openai", ModelID: "gpt-5.4"}); err != nil {
+				t.Fatalf("CreateConversation() error = %v", err)
+			}
+			if err := store.AppendMessages(context.Background(), "conv_resume_"+tt.name, "task_previous", []model.Message{{Role: model.RoleUser, Content: "weather?"}}); err != nil {
+				t.Fatalf("AppendMessages() error = %v", err)
+			}
+
+			approval, err := approvalStore.CreateApproval(context.Background(), approvals.CreateApprovalInput{
+				TaskID:           "task_resume_" + tt.name,
+				ConversationID:   "conv_resume_" + tt.name,
+				StepIndex:        1,
+				ToolCallID:       "call_1",
+				ToolName:         "lookup_weather",
+				ArgumentsSummary: "Shanghai",
+				RiskLevel:        "high",
+				Reason:           "network access",
+			})
+			if err != nil {
+				t.Fatalf("CreateApproval() error = %v", err)
+			}
+			if tt.status == approvals.StatusRejected {
+				if _, _, err := approvalStore.ResolveApproval(context.Background(), "task_resume_"+tt.name, approval.ID, approvals.ResolveApprovalInput{
+					Decision:   approvals.DecisionReject,
+					Reason:     "not safe",
+					DecisionBy: "alice",
+				}); err != nil {
+					t.Fatalf("ResolveApproval() error = %v", err)
+				}
+			} else {
+				now := time.Now().UTC()
+				if err := approvalDB.Model(&approvals.ToolApproval{}).Where("id = ?", approval.ID).Updates(map[string]any{"status": approvals.StatusExpired, "decision_reason": "timed out", "decision_at": &now, "updated_at": now}).Error; err != nil {
+					t.Fatalf("mark expired error = %v", err)
+				}
+			}
+
+			registry := coretools.NewRegistry()
+			if err := registry.Register(coretools.Tool{
+				Name:         "lookup_weather",
+				ApprovalMode: coretypes.ToolApprovalModeAlways,
+				Handler: func(context.Context, map[string]interface{}) (string, error) {
+					t.Fatal("guarded tool should not execute after non-approved decision")
+					return "", nil
+				},
+			}); err != nil {
+				t.Fatalf("Register() error = %v", err)
+			}
+			client := &stubClient{streams: []model.Stream{newStubStream(
+				[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "Understood."}}},
+				model.Message{Role: model.RoleAssistant, Content: "Understood."},
+				nil,
+			)}}
+			executor := newTaskExecutorForTest(t, ExecutorDependencies{
+				Resolver:          newExecutorResolverForTest(),
+				ConversationStore: store,
+				Registry:          registry,
+				ApprovalStore:     approvalStore,
+				ClientFactory:     func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return client, nil },
+			})
+			task := &coretasks.Task{
+				ID:           "task_resume_" + tt.name,
+				TaskType:     "agent.run",
+				InputJSON:    marshalExecutorTaskInput(t, map[string]any{"conversation_id": "conv_resume_" + tt.name, "provider_id": "openai", "model_id": "gpt-5.4", "message": "weather?"}),
+				MetadataJSON: marshalExecutorCheckpointMetadata(t, approval.ID, toolApprovalCheckpoint{ApprovalID: approval.ID, Step: 1, AssistantMessage: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "lookup_weather", Arguments: `{"city":"Shanghai"}`}}}, ToolCallIndex: 0, ProducedMessagesBeforeCheckpoint: []model.Message{{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "lookup_weather", Arguments: `{"city":"Shanghai"}`}}}}}),
+			}
+
+			result, err := executor(context.Background(), task, nil)
+			if err != nil {
+				t.Fatalf("executor() error = %v", err)
+			}
+			if result.(RunTaskResult).FinalMessage.Content != "Understood." {
+				t.Fatalf("final content = %q, want Understood.", result.(RunTaskResult).FinalMessage.Content)
+			}
+			if len(client.streamRequests) != 1 {
+				t.Fatalf("stream request count = %d, want 1", len(client.streamRequests))
+			}
+			requestMessages := client.streamRequests[0].Messages
+			if len(requestMessages) != 3 || requestMessages[2].Role != model.RoleTool {
+				t.Fatalf("request messages = %#v, want tool replay with synthetic output", requestMessages)
+			}
+			if !strings.Contains(strings.ToLower(requestMessages[2].Content), tt.want) {
+				t.Fatalf("synthetic tool output = %q, want substring %q", requestMessages[2].Content, tt.want)
+			}
+		})
+	}
+}
+
+func TestAgentRunTaskRejectApprovalResumesAndCompletesWithoutFailing(t *testing.T) {
+	conversationStore := newConversationStoreForTest(t)
+	approvalStore, taskDB := newExecutorApprovalStoreForTest(t)
+	taskStore := coretasks.NewStore(taskDB)
+	if err := taskStore.AutoMigrate(); err != nil {
+		t.Fatalf("taskStore.AutoMigrate() error = %v", err)
+	}
+	manager := coretasks.NewManager(taskStore, coretasks.ManagerOptions{
+		RunnerID:          "runner-approval",
+		PollInterval:      5 * time.Millisecond,
+		LeaseDuration:     100 * time.Millisecond,
+		HeartbeatInterval: 20 * time.Millisecond,
+		ApprovalStore:     approvalStore,
+	})
+
+	registry := coretools.NewRegistry()
+	if err := registry.Register(coretools.Tool{
+		Name: "safe_tool",
+		Handler: func(context.Context, map[string]interface{}) (string, error) {
+			return "safe result", nil
+		},
+	}); err != nil {
+		t.Fatalf("Register(safe_tool) error = %v", err)
+	}
+	if err := registry.Register(coretools.Tool{
+		Name:         "guarded_tool",
+		ApprovalMode: coretypes.ToolApprovalModeAlways,
+		ApprovalEvaluator: func(arguments map[string]any) coretools.ApprovalRequirement {
+			return coretools.ApprovalRequirement{Required: true, ArgumentsSummary: "dangerous", RiskLevel: coretools.RiskLevelHigh, Reason: "dangerous operation"}
+		},
+		Handler: func(context.Context, map[string]interface{}) (string, error) {
+			t.Fatal("guarded tool should not execute after reject")
+			return "", nil
+		},
+	}); err != nil {
+		t.Fatalf("Register(guarded_tool) error = %v", err)
+	}
+	client := &stubClient{streams: []model.Stream{
+		newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "safe_tool", Arguments: `{}`}, {ID: "call_2", Name: "guarded_tool", Arguments: `{}`}}}}},
+			model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "safe_tool", Arguments: `{}`}, {ID: "call_2", Name: "guarded_tool", Arguments: `{}`}}},
+			nil,
+		),
+		newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "completed after reject"}}},
+			model.Message{Role: model.RoleAssistant, Content: "completed after reject"},
+			nil,
+		),
+	}}
+	executor := NewTaskExecutor(ExecutorDependencies{
+		Resolver:          newExecutorResolverForTest(),
+		ConversationStore: conversationStore,
+		Registry:          registry,
+		ApprovalStore:     approvalStore,
+		PromptResolver:    newExecutorPromptResolverForTest(t, nil),
+		WorkspaceRoot:     t.TempDir(),
+		ClientFactory:     func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return client, nil },
+	})
+	if err := manager.RegisterExecutor("agent.run", executor); err != nil {
+		t.Fatalf("RegisterExecutor() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	manager.Start(ctx)
+
+	created, err := manager.CreateTask(ctx, coretasks.CreateTaskInput{
+		TaskType:  "agent.run",
+		CreatedBy: "tester",
+		Input: RunTaskInput{
+			ConversationID: "conv_reject_resume",
+			ProviderID:     "openai",
+			ModelID:        "gpt-5.4",
+			Message:        "run guarded flow",
+			CreatedBy:      "tester",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateTask() error = %v", err)
+	}
+
+	waiting := waitForTaskStatusInExecutorTest(t, ctx, manager, created.ID, coretasks.StatusWaiting)
+	if waiting.SuspendReason != "waiting_for_tool_approval" {
+		t.Fatalf("waiting suspend reason = %q, want waiting_for_tool_approval", waiting.SuspendReason)
+	}
+	approvalsList, err := manager.ListTaskApprovals(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("ListTaskApprovals() error = %v", err)
+	}
+	if len(approvalsList) != 1 {
+		t.Fatalf("approval count = %d, want 1", len(approvalsList))
+	}
+	if _, err := manager.ResolveTaskApproval(ctx, created.ID, approvalsList[0].ID, approvals.ResolveApprovalInput{
+		Decision:   approvals.DecisionReject,
+		Reason:     "not safe",
+		DecisionBy: "alice",
+	}); err != nil {
+		t.Fatalf("ResolveTaskApproval() error = %v", err)
+	}
+
+	final := waitForTaskStatusInExecutorTest(t, ctx, manager, created.ID, coretasks.StatusSucceeded)
+	if final.ErrorJSON != nil && string(final.ErrorJSON) != "" && string(final.ErrorJSON) != "null" {
+		t.Fatalf("final ErrorJSON = %s, want empty or null", string(final.ErrorJSON))
+	}
+	resultPayload := decodeJSONRaw(t, final.ResultJSON)
+	if got := resultPayload["conversation_id"]; got != "conv_reject_resume" {
+		t.Fatalf("result conversation_id = %#v, want conv_reject_resume", got)
+	}
+	messages, err := conversationStore.ListMessages(ctx, "conv_reject_resume")
+	if err != nil {
+		t.Fatalf("ListMessages() error = %v", err)
+	}
+	if len(messages) != 5 {
+		t.Fatalf("message count = %d, want 5", len(messages))
+	}
+	if messages[2].Role != model.RoleTool || messages[2].ToolCallId != "call_1" || messages[2].Content != "safe result" {
+		t.Fatalf("first tool message = %#v, want persisted safe tool output", messages[2])
+	}
+	if messages[3].Role != model.RoleTool || messages[3].ToolCallId != "call_2" || !strings.Contains(strings.ToLower(messages[3].Content), "rejected") {
+		t.Fatalf("synthetic tool message = %#v, want rejected synthetic output for call_2", messages[3])
+	}
+	if messages[4].Role != model.RoleAssistant || messages[4].Content != "completed after reject" {
+		t.Fatalf("final assistant message = %#v, want completed after reject", messages[4])
+	}
+	events, err := manager.ListEvents(ctx, created.ID, 0, 20)
+	if err != nil {
+		t.Fatalf("ListEvents() error = %v", err)
+	}
+	var sawWaiting, sawResolved, sawResumed, sawFinished bool
+	for _, event := range events {
+		switch event.EventType {
+		case coretasks.EventTaskWaiting:
+			sawWaiting = true
+		case coretasks.EventApprovalResolved:
+			sawResolved = true
+		case coretasks.EventTaskResumed:
+			sawResumed = true
+		case coretasks.EventTaskFinished:
+			sawFinished = true
+		}
+	}
+	if !sawWaiting || !sawResolved || !sawResumed || !sawFinished {
+		t.Fatalf("events missing expected markers: waiting=%v resolved=%v resumed=%v finished=%v", sawWaiting, sawResolved, sawResumed, sawFinished)
+	}
+}
+
+func TestAgentRunTaskExpireApprovalResumesOnceAndCompletesWithoutFailing(t *testing.T) {
+	conversationStore := newConversationStoreForTest(t)
+	approvalStore, taskDB := newExecutorApprovalStoreForTest(t)
+	taskStore := coretasks.NewStore(taskDB)
+	if err := taskStore.AutoMigrate(); err != nil {
+		t.Fatalf("taskStore.AutoMigrate() error = %v", err)
+	}
+	manager := coretasks.NewManager(taskStore, coretasks.ManagerOptions{
+		RunnerID:          "runner-approval-expire",
+		PollInterval:      5 * time.Millisecond,
+		LeaseDuration:     100 * time.Millisecond,
+		HeartbeatInterval: 20 * time.Millisecond,
+		ApprovalStore:     approvalStore,
+	})
+
+	registry := coretools.NewRegistry()
+	if err := registry.Register(coretools.Tool{
+		Name: "safe_tool",
+		Handler: func(context.Context, map[string]interface{}) (string, error) {
+			return "safe result", nil
+		},
+	}); err != nil {
+		t.Fatalf("Register(safe_tool) error = %v", err)
+	}
+	if err := registry.Register(coretools.Tool{
+		Name:         "guarded_tool",
+		ApprovalMode: coretypes.ToolApprovalModeAlways,
+		ApprovalEvaluator: func(arguments map[string]any) coretools.ApprovalRequirement {
+			return coretools.ApprovalRequirement{Required: true, ArgumentsSummary: "dangerous", RiskLevel: coretools.RiskLevelHigh, Reason: "dangerous operation"}
+		},
+		Handler: func(context.Context, map[string]interface{}) (string, error) {
+			t.Fatal("guarded tool should not execute after expiry")
+			return "", nil
+		},
+	}); err != nil {
+		t.Fatalf("Register(guarded_tool) error = %v", err)
+	}
+	client := &stubClient{streams: []model.Stream{
+		newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "safe_tool", Arguments: `{}`}, {ID: "call_2", Name: "guarded_tool", Arguments: `{}`}}}}},
+			model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "safe_tool", Arguments: `{}`}, {ID: "call_2", Name: "guarded_tool", Arguments: `{}`}}},
+			nil,
+		),
+		newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "completed after expiry"}}},
+			model.Message{Role: model.RoleAssistant, Content: "completed after expiry"},
+			nil,
+		),
+	}}
+	executor := NewTaskExecutor(ExecutorDependencies{
+		Resolver:          newExecutorResolverForTest(),
+		ConversationStore: conversationStore,
+		Registry:          registry,
+		ApprovalStore:     approvalStore,
+		PromptResolver:    newExecutorPromptResolverForTest(t, nil),
+		WorkspaceRoot:     t.TempDir(),
+		ClientFactory:     func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return client, nil },
+	})
+	if err := manager.RegisterExecutor("agent.run", executor); err != nil {
+		t.Fatalf("RegisterExecutor() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	manager.Start(ctx)
+
+	created, err := manager.CreateTask(ctx, coretasks.CreateTaskInput{
+		TaskType:  "agent.run",
+		CreatedBy: "tester",
+		Input: RunTaskInput{
+			ConversationID: "conv_expire_resume",
+			ProviderID:     "openai",
+			ModelID:        "gpt-5.4",
+			Message:        "run guarded flow",
+			CreatedBy:      "tester",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateTask() error = %v", err)
+	}
+
+	waiting := waitForTaskStatusInExecutorTest(t, ctx, manager, created.ID, coretasks.StatusWaiting)
+	if waiting.SuspendReason != "waiting_for_tool_approval" {
+		t.Fatalf("waiting suspend reason = %q, want waiting_for_tool_approval", waiting.SuspendReason)
+	}
+	approvalsList, err := manager.ListTaskApprovals(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("ListTaskApprovals() error = %v", err)
+	}
+	if len(approvalsList) != 1 {
+		t.Fatalf("approval count = %d, want 1", len(approvalsList))
+	}
+	if _, err := manager.ExpireTaskApproval(ctx, created.ID, approvalsList[0].ID, "timed out"); err != nil {
+		t.Fatalf("ExpireTaskApproval() error = %v", err)
+	}
+	if _, err := manager.ExpireTaskApproval(ctx, created.ID, approvalsList[0].ID, "timed out again"); err != nil {
+		t.Fatalf("ExpireTaskApproval() second error = %v", err)
+	}
+
+	final := waitForTaskStatusInExecutorTest(t, ctx, manager, created.ID, coretasks.StatusSucceeded)
+	resultPayload := decodeJSONRaw(t, final.ResultJSON)
+	if got := resultPayload["conversation_id"]; got != "conv_expire_resume" {
+		t.Fatalf("result conversation_id = %#v, want conv_expire_resume", got)
+	}
+	messages, err := conversationStore.ListMessages(ctx, "conv_expire_resume")
+	if err != nil {
+		t.Fatalf("ListMessages() error = %v", err)
+	}
+	if len(messages) != 5 {
+		t.Fatalf("message count = %d, want 5", len(messages))
+	}
+	if messages[3].Role != model.RoleTool || messages[3].ToolCallId != "call_2" || !strings.Contains(strings.ToLower(messages[3].Content), "expired") {
+		t.Fatalf("synthetic tool message = %#v, want expired synthetic output for call_2", messages[3])
+	}
+	if messages[4].Role != model.RoleAssistant || messages[4].Content != "completed after expiry" {
+		t.Fatalf("final assistant message = %#v, want completed after expiry", messages[4])
+	}
+	events, err := manager.ListEvents(ctx, created.ID, 0, 30)
+	if err != nil {
+		t.Fatalf("ListEvents() error = %v", err)
+	}
+	approvalResolvedCount := 0
+	resumedCount := 0
+	for _, event := range events {
+		switch event.EventType {
+		case coretasks.EventApprovalResolved:
+			approvalResolvedCount++
+		case coretasks.EventTaskResumed:
+			resumedCount++
+		}
+	}
+	if approvalResolvedCount != 1 {
+		t.Fatalf("approval.resolved count = %d, want 1", approvalResolvedCount)
+	}
+	if resumedCount != 1 {
+		t.Fatalf("task.resumed count = %d, want 1", resumedCount)
+	}
+}
+
+func TestAgentRunTaskClearsApprovalCheckpointAfterResumeAndRetry(t *testing.T) {
+	conversationStore := newConversationStoreForTest(t)
+	approvalStore, taskDB := newExecutorApprovalStoreForTest(t)
+	taskStore := coretasks.NewStore(taskDB)
+	if err := taskStore.AutoMigrate(); err != nil {
+		t.Fatalf("taskStore.AutoMigrate() error = %v", err)
+	}
+	manager := coretasks.NewManager(taskStore, coretasks.ManagerOptions{
+		RunnerID:          "runner-approval-cleanup",
+		PollInterval:      5 * time.Millisecond,
+		LeaseDuration:     100 * time.Millisecond,
+		HeartbeatInterval: 20 * time.Millisecond,
+		ApprovalStore:     approvalStore,
+	})
+
+	registry := coretools.NewRegistry()
+	if err := registry.Register(coretools.Tool{
+		Name:         "guarded_tool",
+		ApprovalMode: coretypes.ToolApprovalModeAlways,
+		ApprovalEvaluator: func(arguments map[string]any) coretools.ApprovalRequirement {
+			return coretools.ApprovalRequirement{Required: true, ArgumentsSummary: "dangerous", RiskLevel: coretools.RiskLevelHigh, Reason: "dangerous operation"}
+		},
+		Handler: func(context.Context, map[string]interface{}) (string, error) {
+			return "guarded result", nil
+		},
+	}); err != nil {
+		t.Fatalf("Register(guarded_tool) error = %v", err)
+	}
+	client := &stubClient{streams: []model.Stream{
+		newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "guarded_tool", Arguments: `{}`}}}}},
+			model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "guarded_tool", Arguments: `{}`}}},
+			nil,
+		),
+		newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "done after approve"}}},
+			model.Message{Role: model.RoleAssistant, Content: "done after approve"},
+			nil,
+		),
+	}}
+	executor := NewTaskExecutor(ExecutorDependencies{
+		Resolver:          newExecutorResolverForTest(),
+		ConversationStore: conversationStore,
+		Registry:          registry,
+		ApprovalStore:     approvalStore,
+		PromptResolver:    newExecutorPromptResolverForTest(t, nil),
+		WorkspaceRoot:     t.TempDir(),
+		ClientFactory:     func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return client, nil },
+	})
+	if err := manager.RegisterExecutor("agent.run", executor); err != nil {
+		t.Fatalf("RegisterExecutor() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	manager.Start(ctx)
+
+	created, err := manager.CreateTask(ctx, coretasks.CreateTaskInput{
+		TaskType:  "agent.run",
+		CreatedBy: "tester",
+		Input: RunTaskInput{
+			ConversationID: "conv_cleanup_retry",
+			ProviderID:     "openai",
+			ModelID:        "gpt-5.4",
+			Message:        "run guarded flow",
+			CreatedBy:      "tester",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateTask() error = %v", err)
+	}
+
+	waiting := waitForTaskStatusInExecutorTest(t, ctx, manager, created.ID, coretasks.StatusWaiting)
+	if !taskMetadataHasKey(t, waiting.MetadataJSON, coretypes.TaskMetadataKeyToolApprovalCheckpoint) {
+		t.Fatalf("waiting metadata = %s, want checkpoint key", string(waiting.MetadataJSON))
+	}
+	approvalsList, err := manager.ListTaskApprovals(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("ListTaskApprovals() error = %v", err)
+	}
+	if _, err := manager.ResolveTaskApproval(ctx, created.ID, approvalsList[0].ID, approvals.ResolveApprovalInput{
+		Decision:   approvals.DecisionApprove,
+		Reason:     "safe",
+		DecisionBy: "alice",
+	}); err != nil {
+		t.Fatalf("ResolveTaskApproval() error = %v", err)
+	}
+
+	final := waitForTaskStatusInExecutorTest(t, ctx, manager, created.ID, coretasks.StatusSucceeded)
+	if taskMetadataHasKey(t, final.MetadataJSON, coretypes.TaskMetadataKeyToolApprovalCheckpoint) {
+		t.Fatalf("final metadata = %s, want checkpoint key cleared", string(final.MetadataJSON))
+	}
+	retried, err := manager.RetryTask(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("RetryTask() error = %v", err)
+	}
+	if taskMetadataHasKey(t, retried.MetadataJSON, coretypes.TaskMetadataKeyToolApprovalCheckpoint) {
+		t.Fatalf("retried metadata = %s, want checkpoint key absent", string(retried.MetadataJSON))
+	}
+}
+
+func TestAgentExecutorPreservesCheckpointWhenResumeStateBuildFails(t *testing.T) {
+	conversationStore := newConversationStoreForTest(t)
+	approvalStore, taskDB := newExecutorApprovalStoreForTest(t)
+	taskStore := coretasks.NewStore(taskDB)
+	if err := taskStore.AutoMigrate(); err != nil {
+		t.Fatalf("taskStore.AutoMigrate() error = %v", err)
+	}
+	manager := coretasks.NewManager(taskStore, coretasks.ManagerOptions{
+		RunnerID:          "runner-resume-build-fail",
+		PollInterval:      5 * time.Millisecond,
+		LeaseDuration:     100 * time.Millisecond,
+		HeartbeatInterval: 20 * time.Millisecond,
+		ApprovalStore:     approvalStore,
+	})
+	if _, err := conversationStore.CreateConversation(context.Background(), CreateConversationInput{ID: "conv_resume_build_fail", ProviderID: "openai", ModelID: "gpt-5.4"}); err != nil {
+		t.Fatalf("CreateConversation() error = %v", err)
+	}
+	if err := conversationStore.AppendMessages(context.Background(), "conv_resume_build_fail", "task_previous", []model.Message{{Role: model.RoleUser, Content: "weather?"}}); err != nil {
+		t.Fatalf("AppendMessages() error = %v", err)
+	}
+
+	checkpoint := toolApprovalCheckpoint{
+		ApprovalID:                       "approval_missing",
+		Step:                             1,
+		ToolCallIndex:                    0,
+		AssistantMessage:                 model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "lookup_weather", Arguments: `{"city":"Shanghai"}`}}},
+		ProducedMessagesBeforeCheckpoint: []model.Message{{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "lookup_weather", Arguments: `{"city":"Shanghai"}`}}}},
+	}
+	executor := newTaskExecutorForTest(t, ExecutorDependencies{
+		Resolver:          newExecutorResolverForTest(),
+		ConversationStore: conversationStore,
+		ApprovalStore:     approvalStore,
+		ClientFactory:     func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return &stubClient{}, nil },
+	})
+	if err := manager.RegisterExecutor("agent.run", executor); err != nil {
+		t.Fatalf("RegisterExecutor() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	manager.Start(ctx)
+
+	created, err := manager.CreateTask(ctx, coretasks.CreateTaskInput{
+		TaskType:  "agent.run",
+		CreatedBy: "tester",
+		Input:     RunTaskInput{ConversationID: "conv_resume_build_fail", ProviderID: "openai", ModelID: "gpt-5.4", Message: "weather?", CreatedBy: "tester"},
+		Metadata:  map[string]any{coretypes.TaskMetadataKeyToolApprovalCheckpoint: checkpoint},
+	})
+	if err != nil {
+		t.Fatalf("CreateTask() error = %v", err)
+	}
+
+	failed := waitForTaskStatusInExecutorTest(t, ctx, manager, created.ID, coretasks.StatusFailed)
+	if !taskMetadataHasKey(t, failed.MetadataJSON, coretypes.TaskMetadataKeyToolApprovalCheckpoint) {
+		t.Fatalf("failed metadata = %s, want checkpoint preserved on resume build failure", string(failed.MetadataJSON))
+	}
+	retried, err := manager.RetryTask(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("RetryTask() error = %v", err)
+	}
+	if !taskMetadataHasKey(t, retried.MetadataJSON, coretypes.TaskMetadataKeyToolApprovalCheckpoint) {
+		t.Fatalf("retried metadata = %s, want checkpoint preserved for retry path", string(retried.MetadataJSON))
+	}
+}
+
+func TestAgentExecutorResumeCountsOnlyResumedMessagesInMessagesAppended(t *testing.T) {
+	store := newConversationStoreForTest(t)
+	approvalStore, _ := newExecutorApprovalStoreForTest(t)
+	if _, err := store.CreateConversation(context.Background(), CreateConversationInput{ID: "conv_resume_count", ProviderID: "openai", ModelID: "gpt-5.4"}); err != nil {
+		t.Fatalf("CreateConversation() error = %v", err)
+	}
+	if err := store.AppendMessages(context.Background(), "conv_resume_count", "task_previous", []model.Message{{Role: model.RoleUser, Content: "weather?"}}); err != nil {
+		t.Fatalf("AppendMessages() error = %v", err)
+	}
+
+	approval, err := approvalStore.CreateApproval(context.Background(), approvals.CreateApprovalInput{
+		TaskID:           "task_resume_count",
+		ConversationID:   "conv_resume_count",
+		StepIndex:        1,
+		ToolCallID:       "call_1",
+		ToolName:         "lookup_weather",
+		ArgumentsSummary: "Shanghai",
+		RiskLevel:        "high",
+		Reason:           "network access",
+	})
+	if err != nil {
+		t.Fatalf("CreateApproval() error = %v", err)
+	}
+	if _, _, err := approvalStore.ResolveApproval(context.Background(), "task_resume_count", approval.ID, approvals.ResolveApprovalInput{Decision: approvals.DecisionApprove, Reason: "safe", DecisionBy: "alice"}); err != nil {
+		t.Fatalf("ResolveApproval() error = %v", err)
+	}
+
+	registry := coretools.NewRegistry()
+	if err := registry.Register(coretools.Tool{Name: "lookup_weather", ApprovalMode: coretypes.ToolApprovalModeAlways, Handler: func(context.Context, map[string]interface{}) (string, error) { return "sunny", nil }}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	client := &stubClient{streams: []model.Stream{newStubStream(
+		[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "The weather is sunny."}}},
+		model.Message{Role: model.RoleAssistant, Content: "The weather is sunny."},
+		nil,
+	)}}
+	executor := newTaskExecutorForTest(t, ExecutorDependencies{
+		Resolver:          newExecutorResolverForTest(),
+		ConversationStore: store,
+		Registry:          registry,
+		ApprovalStore:     approvalStore,
+		ClientFactory:     func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return client, nil },
+	})
+	result, err := executor(context.Background(), &coretasks.Task{
+		ID:           "task_resume_count",
+		TaskType:     "agent.run",
+		InputJSON:    marshalExecutorTaskInput(t, map[string]any{"conversation_id": "conv_resume_count", "provider_id": "openai", "model_id": "gpt-5.4", "message": "weather?"}),
+		MetadataJSON: marshalExecutorCheckpointMetadata(t, approval.ID, toolApprovalCheckpoint{ApprovalID: approval.ID, Step: 1, AssistantMessage: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "lookup_weather", Arguments: `{"city":"Shanghai"}`}}}, ToolCallIndex: 0, ProducedMessagesBeforeCheckpoint: []model.Message{{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "lookup_weather", Arguments: `{"city":"Shanghai"}`}}}}}),
+	}, nil)
+	if err != nil {
+		t.Fatalf("executor() error = %v", err)
+	}
+	runResult := result.(RunTaskResult)
+	if runResult.MessagesAppended != 3 {
+		t.Fatalf("MessagesAppended = %d, want 3 for resumed assistant/tool/final assistant only", runResult.MessagesAppended)
+	}
 }
 
 func TestTemporaryLegacySystemPromptBridgeUsesResolvedSessionOnly(t *testing.T) {
@@ -1244,6 +2062,84 @@ func marshalExecutorTaskInput(t *testing.T, fields map[string]any) []byte {
 		t.Fatalf("json.Marshal() error = %v", err)
 	}
 	return payload
+}
+
+func marshalExecutorMetadata(t *testing.T, metadata map[string]any) []byte {
+	t.Helper()
+
+	payload, err := json.Marshal(metadata)
+	if err != nil {
+		t.Fatalf("json.Marshal(metadata) error = %v", err)
+	}
+	return payload
+}
+
+func marshalExecutorCheckpointMetadata(t *testing.T, approvalID string, checkpoint toolApprovalCheckpoint) []byte {
+	t.Helper()
+	checkpoint.ApprovalID = approvalID
+	return marshalExecutorMetadata(t, map[string]any{toolApprovalCheckpointMetadataKey: checkpoint})
+}
+
+func newExecutorApprovalStoreForTest(t *testing.T) (*approvals.Store, *gorm.DB) {
+	t.Helper()
+
+	dsn := fmt.Sprintf("file:%s_approval?mode=memory&cache=shared", t.Name())
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	if err != nil {
+		t.Fatalf("gorm.Open() error = %v", err)
+	}
+	store := approvals.NewStore(db)
+	if err := store.AutoMigrate(); err != nil {
+		t.Fatalf("approvalStore.AutoMigrate() error = %v", err)
+	}
+	return store, db
+}
+
+func mustOpenExecutorTaskDB(t *testing.T) *gorm.DB {
+	t.Helper()
+
+	dsn := fmt.Sprintf("file:%s_task?mode=memory&cache=shared", t.Name())
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	if err != nil {
+		t.Fatalf("gorm.Open() error = %v", err)
+	}
+	return db
+}
+
+func waitForTaskStatusInExecutorTest(t *testing.T, ctx context.Context, manager *coretasks.Manager, taskID string, want coretasks.Status) *coretasks.Task {
+	t.Helper()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		task, err := manager.GetTask(ctx, taskID)
+		if err == nil && task != nil && task.Status == want {
+			return task
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	task, err := manager.GetTask(ctx, taskID)
+	if err != nil {
+		t.Fatalf("GetTask() error = %v", err)
+	}
+	t.Fatalf("task status = %q, want %q", task.Status, want)
+	return nil
+}
+
+func decodeJSONRaw(t *testing.T, raw []byte) map[string]any {
+	t.Helper()
+
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	return payload
+}
+
+func taskMetadataHasKey(t *testing.T, raw []byte, key string) bool {
+	t.Helper()
+	metadata := decodeJSONRaw(t, raw)
+	_, ok := metadata[key]
+	return ok
 }
 
 func assertExecutorRequestSystemPrompt(t *testing.T, client *stubClient, want string) {

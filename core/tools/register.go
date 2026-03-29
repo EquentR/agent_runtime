@@ -18,11 +18,13 @@ type Handler func(ctx context.Context, arguments map[string]interface{}) (string
 
 // Tool 表示一个可注册、可执行的本地工具。
 type Tool struct {
-	Name        string
-	Description string
-	Parameters  types.JSONSchema
-	Handler     Handler
-	Source      string
+	Name              string
+	Description       string
+	Parameters        types.JSONSchema
+	ApprovalMode      types.ToolApprovalMode
+	ApprovalEvaluator ApprovalEvaluator
+	Handler           Handler
+	Source            string
 }
 
 // MCPRegistrationOptions 控制 MCP 工具注册时的命名行为。
@@ -184,10 +186,32 @@ func (r *Registry) Execute(ctx context.Context, name string, arguments map[strin
 	return tool.Handler(ctx, arguments)
 }
 
+// ApprovalPolicy 返回工具对应的审批策略。
+func (r *Registry) ApprovalPolicy(name string) (ApprovalPolicy, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	tool, ok := r.tools[name]
+	if !ok {
+		return ApprovalPolicy{}, false
+	}
+
+	return ApprovalPolicy{
+		Mode:      tool.ApprovalMode,
+		Evaluator: tool.ApprovalEvaluator,
+	}, true
+}
+
 // Validate 校验工具定义是否合法。
 func (t Tool) Validate() error {
 	if t.Name == "" {
 		return fmt.Errorf("tool name cannot be empty")
+	}
+	if !IsValidApprovalMode(t.ApprovalMode) {
+		return fmt.Errorf("invalid approval mode %q", t.ApprovalMode)
+	}
+	if t.ApprovalMode == types.ToolApprovalModeConditional && t.ApprovalEvaluator == nil {
+		return fmt.Errorf("conditional approval requires evaluator")
 	}
 	if t.Handler == nil {
 		return fmt.Errorf("tool handler cannot be nil")
@@ -198,9 +222,10 @@ func (t Tool) Validate() error {
 // Definition 提取工具的 LLM 描述信息。
 func (t Tool) Definition() types.Tool {
 	return types.Tool{
-		Name:        t.Name,
-		Description: t.Description,
-		Parameters:  normalizeSchema(t.Parameters),
+		Name:         t.Name,
+		Description:  t.Description,
+		Parameters:   normalizeSchema(t.Parameters),
+		ApprovalMode: t.ApprovalMode,
 	}
 }
 

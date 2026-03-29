@@ -15,6 +15,7 @@ import (
 	"github.com/EquentR/agent_runtime/app/config"
 	"github.com/EquentR/agent_runtime/app/router"
 	coreagent "github.com/EquentR/agent_runtime/core/agent"
+	"github.com/EquentR/agent_runtime/core/approvals"
 	coreaudit "github.com/EquentR/agent_runtime/core/audit"
 	model "github.com/EquentR/agent_runtime/core/providers/types"
 	coretasks "github.com/EquentR/agent_runtime/core/tasks"
@@ -39,12 +40,21 @@ func TestPromptBuildRouterDependenciesExposePromptRuntime(t *testing.T) {
 		t.Fatalf("initPromptRuntime() error = %v", err)
 	}
 
-	deps := buildRouterDependencies(nil, nil, nil, nil, promptRuntime.Store, promptRuntime.Resolver, nil)
+	deps := buildRouterDependencies(nil, nil, nil, nil, nil, promptRuntime.Store, promptRuntime.Resolver, nil)
 	if deps.PromptStore != promptRuntime.Store {
 		t.Fatalf("PromptStore = %#v, want %#v", deps.PromptStore, promptRuntime.Store)
 	}
 	if deps.PromptResolver != promptRuntime.Resolver {
 		t.Fatalf("PromptResolver = %#v, want %#v", deps.PromptResolver, promptRuntime.Resolver)
+	}
+}
+
+func TestBuildRouterDependenciesExposeApprovalStore(t *testing.T) {
+	db := newServeTestDB(t)
+	approvalStore := approvals.NewStore(db)
+	deps := buildRouterDependencies(nil, approvalStore, nil, nil, nil, nil, nil, nil)
+	if deps.ApprovalStore != approvalStore {
+		t.Fatalf("ApprovalStore = %#v, want %#v", deps.ApprovalStore, approvalStore)
 	}
 }
 
@@ -185,7 +195,8 @@ func TestNewTaskManagerUsesConfiguredWorkerCountAndRunnerID(t *testing.T) {
 		t.Fatalf("task store migrate error = %v", err)
 	}
 
-	manager := newTaskManager(store, config.TaskManagerConfig{
+	approvalStore := approvals.NewStore(db)
+	manager := newTaskManager(store, approvalStore, config.TaskManagerConfig{
 		WorkerCount: 2,
 		RunnerID:    "configured-runner",
 	}, nil)
@@ -243,6 +254,47 @@ func TestNewTaskManagerUsesConfiguredWorkerCountAndRunnerID(t *testing.T) {
 	waitForServeTestTaskStatus(t, ctx, manager, second.ID, coretasks.StatusSucceeded)
 }
 
+func TestNewTaskManagerPreservesInjectedApprovalStoreForRuntimeUse(t *testing.T) {
+	db := newServeTestDB(t)
+	store := coretasks.NewStore(db)
+	if err := store.AutoMigrate(); err != nil {
+		t.Fatalf("task store migrate error = %v", err)
+	}
+	approvalStore := approvals.NewStore(db)
+	if err := approvalStore.AutoMigrate(); err != nil {
+		t.Fatalf("approval store migrate error = %v", err)
+	}
+
+	manager := newTaskManager(store, approvalStore, config.TaskManagerConfig{RunnerID: "configured-runner"}, nil)
+	task, err := manager.CreateTask(context.Background(), coretasks.CreateTaskInput{TaskType: "agent.run", CreatedBy: "tester"})
+	if err != nil {
+		t.Fatalf("CreateTask() error = %v", err)
+	}
+	approval, err := manager.CreateApproval(context.Background(), approvals.CreateApprovalInput{
+		TaskID:           task.ID,
+		ConversationID:   "conv-1",
+		StepIndex:        1,
+		ToolCallID:       "call-1",
+		ToolName:         "bash",
+		ArgumentsSummary: "rm -rf /tmp/demo",
+		RiskLevel:        "high",
+		Reason:           "dangerous filesystem mutation",
+	})
+	if err != nil {
+		t.Fatalf("CreateApproval() error = %v", err)
+	}
+	if approval == nil || approval.ID == "" {
+		t.Fatalf("approval = %#v, want persisted approval", approval)
+	}
+	listed, err := manager.ListTaskApprovals(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("ListTaskApprovals() error = %v", err)
+	}
+	if len(listed) != 1 || listed[0].ID != approval.ID {
+		t.Fatalf("listed approvals = %#v, want %q", listed, approval.ID)
+	}
+}
+
 func TestPromptBuildRouterDependenciesPreservesAuditRoutes(t *testing.T) {
 	db := newServeTestDB(t)
 	auditStore := coreaudit.NewStore(db)
@@ -269,6 +321,42 @@ func TestPromptBuildRouterDependenciesPreservesAuditRoutes(t *testing.T) {
 	}
 	if envelope.Code != http.StatusUnauthorized {
 		t.Fatalf("envelope.Code = %d, want %d", envelope.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestRouterInitRegistersApprovalRoutes(t *testing.T) {
+	engine := rest.Init()
+	router.Init(engine, "/api/v1", nil, router.Dependencies{})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/task_1/approvals", nil)
+	engine.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 so the route is registered", recorder.Code)
+	}
+	var envelope serveRouterEnvelope
+	if err := json.Unmarshal(recorder.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("Unmarshal() envelope error = %v, body = %s", err, recorder.Body.String())
+	}
+	if envelope.OK {
+		t.Fatal("envelope.OK = true, want unauthorized failure for anonymous request")
+	}
+	if envelope.Code != http.StatusUnauthorized {
+		t.Fatalf("envelope.Code = %d, want %d", envelope.Code, http.StatusUnauthorized)
+	}
+
+	recorder = httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/tasks/task_1/approvals/approval_1/decision", nil)
+	engine.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("decision status = %d, want 200 so the route is registered", recorder.Code)
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("Unmarshal() decision envelope error = %v, body = %s", err, recorder.Body.String())
+	}
+	if envelope.Code != http.StatusUnauthorized {
+		t.Fatalf("decision envelope.Code = %d, want %d", envelope.Code, http.StatusUnauthorized)
 	}
 }
 
@@ -313,7 +401,7 @@ func TestBuildAgentRunExecutorDependenciesThreadPromptRuntimeAndWorkspaceRoot(t 
 		return &serveStubClient{answer: "hello"}, nil
 	}
 
-	deps := buildAgentRunExecutorDependencies(resolver, conversationStore, nil, promptRuntime.Resolver, workspaceRoot, clientFactory, recorder)
+	deps := buildAgentRunExecutorDependencies(resolver, conversationStore, nil, nil, promptRuntime.Resolver, workspaceRoot, clientFactory, recorder)
 	if deps.Resolver != resolver {
 		t.Fatalf("deps.Resolver = %#v, want %#v", deps.Resolver, resolver)
 	}
@@ -374,7 +462,7 @@ func TestRegisterAgentRunExecutorPromptWiringKeepsAuditRecorder(t *testing.T) {
 		HeartbeatInterval: 20 * time.Millisecond,
 		AuditRecorder:     newTaskAuditRecorder(recorder),
 	})
-	if err := registerAgentRunExecutor(manager, &coreagent.ModelResolver{Providers: []coretypes.LLMProvider{{
+	if err := registerAgentRunExecutor(manager, nil, &coreagent.ModelResolver{Providers: []coretypes.LLMProvider{{
 		BaseProvider: coretypes.BaseProvider{Name: "openai"},
 		Models:       []coretypes.LLMModel{{BaseModel: coretypes.BaseModel{ID: "gpt-5.4", Name: "GPT 5.4"}, Type: coretypes.LLMTypeOpenAIResponses}},
 	}}}, conversationStore, nil, promptRuntime.Resolver, workspaceRoot, func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) {

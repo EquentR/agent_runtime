@@ -8,6 +8,7 @@ import (
 
 	"github.com/EquentR/agent_runtime/app/models"
 	"github.com/EquentR/agent_runtime/core/agent"
+	"github.com/EquentR/agent_runtime/core/approvals"
 	"github.com/EquentR/agent_runtime/core/memory"
 	"github.com/EquentR/agent_runtime/core/prompt"
 	coretasks "github.com/EquentR/agent_runtime/core/tasks"
@@ -217,6 +218,42 @@ func TestBootstrapMigratesTaskConcurrencyKeyColumn(t *testing.T) {
 	}
 }
 
+func TestTaskMigrationCreatesToolApprovalsTable(t *testing.T) {
+	log.Init(&log.Config{Level: "error"})
+
+	db.Init(&db.Database{
+		Name:     "tool_approval_migration_test",
+		DbDir:    t.TempDir(),
+		InMemory: true,
+		LogLevel: "silent",
+	})
+
+	Bootstrap("0.1.0")
+
+	if !db.DB().Migrator().HasTable(&approvals.ToolApproval{}) {
+		t.Fatal("tool_approvals table was not created")
+	}
+	assertTableHasColumns(t, "tool_approvals",
+		"id",
+		"task_id",
+		"conversation_id",
+		"step_index",
+		"tool_call_id",
+		"tool_name",
+		"arguments_summary",
+		"risk_level",
+		"reason",
+		"status",
+		"decision_by",
+		"decision_reason",
+		"decision_at",
+		"expires_at",
+		"created_at",
+		"updated_at",
+	)
+	assertTableHasUniqueIndexWithColumns(t, "tool_approvals", "task_id", "tool_call_id")
+}
+
 func assertTableHasColumns(t *testing.T, table string, columns ...string) {
 	t.Helper()
 
@@ -238,7 +275,8 @@ type pragmaColumnInfo struct {
 }
 
 type pragmaIndexEntry struct {
-	Name string `gorm:"column:name"`
+	Name   string `gorm:"column:name"`
+	Unique int    `gorm:"column:unique"`
 }
 
 type pragmaIndexColumnInfo struct {
@@ -302,6 +340,22 @@ func assertTableHasIndexWithColumns(t *testing.T, table string, wantColumns ...s
 	}
 
 	t.Fatalf("%s index with columns %v was not created", table, wantColumns)
+}
+
+func assertTableHasUniqueIndexWithColumns(t *testing.T, table string, wantColumns ...string) {
+	t.Helper()
+
+	for _, index := range tableIndexes(t, table) {
+		if index.Unique != 1 {
+			continue
+		}
+		gotColumns := tableIndexColumns(t, index.Name)
+		if sameStrings(gotColumns, wantColumns) {
+			return
+		}
+	}
+
+	t.Fatalf("%s unique index with columns %v was not created", table, wantColumns)
 }
 
 func tableIndexes(t *testing.T, table string) []pragmaIndexEntry {

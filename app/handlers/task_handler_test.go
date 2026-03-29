@@ -68,6 +68,37 @@ func TestTaskHandlerCancelQueuedTask(t *testing.T) {
 	}
 }
 
+func TestTaskHandlerEventsClosesStreamAfterHistoricalTaskFinished(t *testing.T) {
+	_, server := newTaskHandlerTestServer(t, nil, false)
+
+	created := createTaskViaHTTP(t, server.URL, map[string]any{
+		"task_type": "agent.run",
+	})
+	_ = postTaskAction(t, server.URL, "/api/v1/tasks/"+created.ID+"/cancel")
+
+	request, err := http.NewRequest(http.MethodGet, server.URL+"/api/v1/tasks/"+created.ID+"/events?after_seq=0", nil)
+	if err != nil {
+		t.Fatalf("NewRequest() error = %v", err)
+	}
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("Do() error = %v", err)
+	}
+	defer response.Body.Close()
+
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("ReadAll() error = %v", err)
+	}
+	content := string(body)
+	if !strings.Contains(content, "event: task.finished") {
+		t.Fatalf("events body = %q, want task.finished event", content)
+	}
+	if strings.Contains(content, ": keepalive") {
+		t.Fatalf("events body = %q, want stream closed before keepalive", content)
+	}
+}
+
 // TestTaskHandlerRetryCreatesNewQueuedTask 验证重试接口会返回新的任务。
 func TestTaskHandlerRetryCreatesNewQueuedTask(t *testing.T) {
 	_, server := newTaskHandlerTestServer(t, nil, false)

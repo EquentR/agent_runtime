@@ -18,6 +18,22 @@ describe('MessageComposer', () => {
     expect(wrapper.find('.composer-submit svg').exists()).toBe(true)
   })
 
+  it('switches the submit button into a stop button while busy and emits stop', async () => {
+    const wrapper = mount(MessageComposer, {
+      props: {
+        disabled: false,
+        busy: true,
+      },
+    })
+
+    expect(wrapper.find('.composer-submit').attributes('aria-label')).toBe('停止')
+
+    await wrapper.find('form').trigger('submit.prevent')
+
+    expect(wrapper.emitted('stop')).toEqual([[]])
+    expect(wrapper.emitted('send')).toBeUndefined()
+  })
+
   it('submits on Enter and preserves newline on Shift+Enter', async () => {
     const wrapper = mount(MessageComposer, {
       props: {

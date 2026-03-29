@@ -536,4 +536,151 @@ describe('MessageList', () => {
     expect(summary.text()).toContain('工具调用')
     expect(summary.text()).toContain('read_file')
   })
+
+  it('renders an inline approval card with allow and reject actions', async () => {
+    const wrapper = mount(MessageList, {
+      props: {
+        loading: false,
+        entries: [
+          {
+            id: 'approval-entry-1',
+            kind: 'approval',
+            title: '等待审批',
+            approval: {
+              id: 'approval_1',
+              task_id: 'task_1',
+              conversation_id: 'conv_1',
+              step_index: 4,
+              tool_call_id: 'call_1',
+              tool_name: 'bash',
+              arguments_summary: 'rm -rf /tmp/demo',
+              risk_level: 'high',
+              reason: 'dangerous filesystem mutation',
+              status: 'pending',
+            },
+          } as any,
+        ],
+      },
+    })
+
+    expect(wrapper.find('.approval-card').exists()).toBe(true)
+    expect(wrapper.text()).toContain('bash')
+    expect(wrapper.text()).toContain('high')
+    expect(wrapper.text()).toContain('dangerous filesystem mutation')
+    expect(wrapper.text()).toContain('rm -rf /tmp/demo')
+    expect(wrapper.find('[data-approval-action="approve"]').exists()).toBe(true)
+    expect(wrapper.find('[data-approval-action="reject"]').exists()).toBe(true)
+
+    await wrapper.find('.approval-reason-input').setValue('checked')
+    await wrapper.find('[data-approval-action="approve"]').trigger('click')
+
+    expect(wrapper.emitted('approval-decision')).toEqual([
+      [{ taskId: 'task_1', approvalId: 'approval_1', decision: 'approve', reason: 'checked' }],
+    ])
+  })
+
+  it('emits a reject decision from the inline approval card with the optional note', async () => {
+    const wrapper = mount(MessageList, {
+      props: {
+        loading: false,
+        entries: [
+          {
+            id: 'approval-entry-2',
+            kind: 'approval',
+            title: '等待审批',
+            approval: {
+              id: 'approval_2',
+              task_id: 'task_2',
+              conversation_id: 'conv_2',
+              step_index: 5,
+              tool_call_id: 'call_2',
+              tool_name: 'delete_file',
+              arguments_summary: '{"path":"danger.txt"}',
+              risk_level: 'high',
+              reason: 'dangerous file mutation',
+              status: 'pending',
+            },
+          } as any,
+        ],
+      },
+    })
+
+    await wrapper.find('.approval-reason-input').setValue('reject this')
+    await wrapper.find('[data-approval-action="reject"]').trigger('click')
+
+    expect(wrapper.emitted('approval-decision')).toEqual([
+      [{ taskId: 'task_2', approvalId: 'approval_2', decision: 'reject', reason: 'reject this' }],
+    ])
+  })
+
+  it('prevents duplicate or conflicting approval clicks while a decision is in flight', async () => {
+    const wrapper = mount(MessageList, {
+      props: {
+        loading: false,
+        entries: [
+          {
+            id: 'approval-entry-4',
+            kind: 'approval',
+            title: '等待审批',
+            approval: {
+              id: 'approval_4',
+              task_id: 'task_4',
+              conversation_id: 'conv_4',
+              step_index: 6,
+              tool_call_id: 'call_4',
+              tool_name: 'bash',
+              arguments_summary: 'kill 1234',
+              risk_level: 'high',
+              reason: 'process termination',
+              status: 'pending',
+            },
+          } as any,
+        ],
+        approvalDecisionStateById: {
+          approval_4: { pending: true, decision: 'approve' },
+        },
+      },
+    })
+
+    expect(wrapper.get('.approval-reason-input').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-approval-action="approve"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-approval-action="reject"]').attributes('disabled')).toBeDefined()
+
+    await wrapper.get('[data-approval-action="approve"]').trigger('click')
+    await wrapper.get('[data-approval-action="reject"]').trigger('click')
+
+    expect(wrapper.emitted('approval-decision')).toBeUndefined()
+  })
+
+  it('renders waiting approval entries without the error shell', () => {
+    const wrapper = mount(MessageList, {
+      props: {
+        loading: false,
+        entries: [
+          {
+            id: 'approval-entry-3',
+            kind: 'approval',
+            title: '等待审批',
+            approval: {
+              id: 'approval_3',
+              task_id: 'task_3',
+              conversation_id: 'conv_3',
+              step_index: 6,
+              tool_call_id: 'call_3',
+              tool_name: 'bash',
+              arguments_summary: 'kill 1234',
+              risk_level: 'high',
+              reason: 'process termination',
+              status: 'pending',
+            },
+          } as any,
+        ],
+      },
+    })
+
+    expect(wrapper.find('.approval-card').exists()).toBe(true)
+    expect(wrapper.find('.trace-error-detail').exists()).toBe(false)
+    expect(wrapper.find('.trace-block.error').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('运行失败')
+  })
 })

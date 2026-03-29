@@ -1,4 +1,5 @@
 import type {
+  ApprovalDecision,
   ApiEnvelope,
   AuditEvent,
   AuditReplayBundle,
@@ -17,6 +18,8 @@ import type {
   RunTaskResult,
   TaskStreamEvent,
   TaskSnapshot,
+  ToolApproval,
+  ToolApprovalDecisionInput,
   TranscriptTokenUsage,
   UpdatePromptDocumentInput,
   UserRole,
@@ -74,6 +77,61 @@ export function buildRunTaskRequest(input: {
 
 function normalizeStringValue(value: unknown) {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+function normalizeIntegerValue(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? value
+    : typeof value === 'string' && value.trim() && Number.isFinite(Number(value))
+      ? Number(value)
+      : undefined
+}
+
+function normalizeApprovalDecision(value: unknown): ApprovalDecision | undefined {
+  return value === 'approve' || value === 'reject' ? value : undefined
+}
+
+export function normalizeToolApproval(
+  approval: Partial<ToolApproval> & {
+    ID?: string
+    approval_id?: string
+    approvalId?: string
+    TaskID?: string
+    ConversationID?: string
+    Step?: number | string
+    StepIndex?: number | string
+    ToolCallID?: string
+    ToolName?: string
+    ArgumentsSummary?: string
+    RiskLevel?: string
+    Reason?: string
+    Status?: string
+    Decision?: string
+    DecisionBy?: string
+    DecisionReason?: string
+    DecisionAt?: string
+    CreatedAt?: string
+    UpdatedAt?: string
+  },
+): ToolApproval {
+  return {
+    id: String(approval.id ?? approval.approval_id ?? approval.approvalId ?? approval.ID ?? ''),
+    task_id: String(approval.task_id ?? approval.TaskID ?? ''),
+    conversation_id: String(approval.conversation_id ?? approval.ConversationID ?? ''),
+    step_index: normalizeIntegerValue(approval.step_index ?? approval.StepIndex ?? approval.Step),
+    tool_call_id: String(approval.tool_call_id ?? approval.ToolCallID ?? ''),
+    tool_name: String(approval.tool_name ?? approval.ToolName ?? ''),
+    arguments_summary: String(approval.arguments_summary ?? approval.ArgumentsSummary ?? ''),
+    risk_level: String(approval.risk_level ?? approval.RiskLevel ?? ''),
+    reason: normalizeStringValue(approval.reason ?? approval.Reason),
+    status: String(approval.status ?? approval.Status ?? ''),
+    decision: normalizeApprovalDecision(approval.decision ?? approval.Decision),
+    decision_by: normalizeStringValue(approval.decision_by ?? approval.DecisionBy),
+    decision_reason: normalizeStringValue(approval.decision_reason ?? approval.DecisionReason),
+    decision_at: normalizeStringValue(approval.decision_at ?? approval.DecisionAt),
+    created_at: normalizeStringValue(approval.created_at ?? approval.CreatedAt),
+    updated_at: normalizeStringValue(approval.updated_at ?? approval.UpdatedAt),
+  }
 }
 
 export function normalizeConversationMessage(
@@ -364,6 +422,26 @@ export async function fetchTaskDetails(taskId: string) {
   return normalizeTaskDetails(task)
 }
 
+export async function fetchTaskApprovals(taskId: string) {
+  const approvals = await request<Array<Partial<ToolApproval>>>(`/tasks/${taskId}/approvals`)
+  return approvals.map((approval) => normalizeToolApproval(approval))
+}
+
+export async function decideTaskApproval(taskId: string, approvalId: string, input: ToolApprovalDecisionInput) {
+  const approval = await request<Partial<ToolApproval>>(`/tasks/${taskId}/approvals/${approvalId}/decision`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+  return normalizeToolApproval(approval)
+}
+
+export async function cancelTask(taskId: string) {
+  const task = await request<TaskDetails>(`/tasks/${taskId}/cancel`, {
+    method: 'POST',
+  })
+  return normalizeTaskDetails(task)
+}
+
 export async function findRunningTaskByConversation(conversationId: string) {
   const task = await request<TaskDetails | null>(`/tasks/running?conversation_id=${encodeURIComponent(conversationId)}`)
   return task ? normalizeTaskDetails(task) : null
@@ -485,6 +563,8 @@ export async function streamRunTask(
     stream.addEventListener('log.message', handleEvent)
     stream.addEventListener('tool.started', handleEvent)
     stream.addEventListener('tool.finished', handleEvent)
+    stream.addEventListener('approval.requested', handleEvent)
+    stream.addEventListener('approval.resolved', handleEvent)
     stream.addEventListener('task.finished', handleEvent)
   
     stream.onerror = () => {

@@ -3,12 +3,18 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import MarkdownIt from 'markdown-it'
 import { CircleCheckFilled, CopyDocument, Operation, WarningFilled } from '@element-plus/icons-vue'
 
+import ApprovalRecordCard from './ApprovalRecordCard.vue'
 import { formatMessageContent } from '../lib/chat'
 import type { TranscriptEntry, TranscriptEntryDetail } from '../types/api'
 
 const props = defineProps<{
   loading: boolean
   entries: TranscriptEntry[]
+  approvalDecisionStateById?: Record<string, { pending: boolean; decision: 'approve' | 'reject' }>
+}>()
+
+const emit = defineEmits<{
+  'approval-decision': [payload: { taskId: string; approvalId: string; decision: 'approve' | 'reject'; reason: string }]
 }>()
 
 const normalizedEntries = computed(() => props.entries)
@@ -281,6 +287,12 @@ function showCopyToast(message: string, variant: 'success' | 'error') {
             },
           ]"
         >
+          <ApprovalRecordCard
+            v-if="entry.kind === 'approval' && entry.approval"
+            :approval="entry.approval"
+            :pending-decision="props.approvalDecisionStateById?.[entry.approval.id]?.pending ? props.approvalDecisionStateById[entry.approval.id]?.decision : ''"
+            @approval-decision="emit('approval-decision', $event)"
+          />
           <details v-if="entry.kind === 'error'" class="trace-detail trace-error-detail trace-flat-shell">
             <summary class="trace-detail-summary">
               <span class="trace-summary-leading">

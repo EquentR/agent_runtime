@@ -3,9 +3,11 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
+	"github.com/EquentR/agent_runtime/core/approvals"
 	coreaudit "github.com/EquentR/agent_runtime/core/audit"
 	"github.com/EquentR/agent_runtime/core/memory"
 	coreprompt "github.com/EquentR/agent_runtime/core/prompt"
@@ -77,6 +79,7 @@ type ExecutorDependencies struct {
 	Resolver          *ModelResolver
 	ConversationStore *ConversationStore
 	Registry          *tools.Registry
+	ApprovalStore     *approvals.Store
 	PromptResolver    *coreprompt.Resolver
 	WorkspaceRoot     string
 	ClientFactory     ClientFactory
@@ -84,6 +87,8 @@ type ExecutorDependencies struct {
 	NewEventSink      EventSinkFactory
 	AuditRecorder     coreaudit.Recorder
 }
+
+const toolApprovalCheckpointMetadataKey = coretypes.TaskMetadataKeyToolApprovalCheckpoint
 
 func (r *ModelResolver) Resolve(providerID, modelID string) (*ResolvedModel, error) {
 	if r == nil || len(r.Providers) == 0 {
@@ -263,14 +268,42 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 		if err != nil {
 			return nil, err
 		}
-		userMessage := model.Message{Role: model.RoleUser, Content: input.Message, ProviderID: input.ProviderID, ModelID: input.ModelID}
-		if err := deps.ConversationStore.AppendMessages(ctx, conversation.ID, task.ID, []model.Message{userMessage}); err != nil {
+		checkpoint, err := taskApprovalCheckpointFromMetadata(task.MetadataJSON)
+		if err != nil {
 			return nil, err
 		}
-		messages := append(cloneMessages(history), userMessage)
-		auditor.recordUserMessageAppended(ctx, userMessage, messages)
-		result, err := runner.Run(ctx, RunInput{Messages: messages})
+		messages := cloneMessages(history)
+		runInput := RunInput{Messages: messages}
+		if checkpoint == nil {
+			userMessage := model.Message{Role: model.RoleUser, Content: input.Message, ProviderID: input.ProviderID, ModelID: input.ModelID}
+			if err := deps.ConversationStore.AppendMessages(ctx, conversation.ID, task.ID, []model.Message{userMessage}); err != nil {
+				return nil, err
+			}
+			messages = append(messages, userMessage)
+			runInput.Messages = messages
+			auditor.recordUserMessageAppended(ctx, userMessage, messages)
+		} else {
+			resume, err := buildToolApprovalResume(ctx, deps.ApprovalStore, task, checkpoint)
+			if err != nil {
+				return nil, err
+			}
+			cleanedMetadata, cleanupErr := clearToolApprovalCheckpointMetadata(task.MetadataJSON)
+			if cleanupErr != nil {
+				return nil, cleanupErr
+			}
+			if runtime != nil {
+				if err := runtime.UpdateMetadata(ctx, cleanedMetadata); err != nil {
+					return nil, err
+				}
+			}
+			task.MetadataJSON = marshalTaskMetadataForExecutor(cleanedMetadata, task.MetadataJSON)
+			runInput.ToolApprovalResume = resume
+		}
+		result, err := runner.Run(ctx, runInput)
 		if err != nil {
+			if errors.Is(err, ErrToolApprovalPending) {
+				return nil, coretasks.ErrTaskSuspended
+			}
 			snapshotErr = err
 			partialMessages = cloneMessages(result.Messages)
 			if len(result.Messages) > 0 {
@@ -299,9 +332,94 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 			FinalMessage:     result.FinalMessage,
 			Usage:            result.Usage,
 			Cost:             result.Cost,
-			MessagesAppended: 1 + len(result.Messages),
+			MessagesAppended: len(result.Messages) + boolToInt(checkpoint == nil),
 		}, nil
 	}
+}
+
+func taskApprovalCheckpointFromMetadata(metadataJSON []byte) (*toolApprovalCheckpoint, error) {
+	if len(metadataJSON) == 0 {
+		return nil, nil
+	}
+	var metadata map[string]json.RawMessage
+	if err := json.Unmarshal(metadataJSON, &metadata); err != nil {
+		return nil, fmt.Errorf("decode task metadata: %w", err)
+	}
+	raw, ok := metadata[toolApprovalCheckpointMetadataKey]
+	if !ok || len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	var checkpoint toolApprovalCheckpoint
+	if err := json.Unmarshal(raw, &checkpoint); err != nil {
+		return nil, fmt.Errorf("decode tool approval checkpoint: %w", err)
+	}
+	return &checkpoint, nil
+}
+
+func buildToolApprovalResume(ctx context.Context, approvalStore *approvals.Store, task *coretasks.Task, checkpoint *toolApprovalCheckpoint) (*toolApprovalResume, error) {
+	if checkpoint == nil {
+		return nil, nil
+	}
+	if approvalStore == nil {
+		return nil, fmt.Errorf("approval store is required to resume checkpointed tool approval")
+	}
+	approval, err := approvalStore.GetApproval(ctx, task.ID, checkpoint.ApprovalID)
+	if err != nil {
+		return nil, err
+	}
+	resume := &toolApprovalResume{Checkpoint: *checkpoint}
+	switch approval.Status {
+	case approvals.StatusApproved:
+		return resume, nil
+	case approvals.StatusRejected, approvals.StatusExpired:
+		resume.SyntheticOutput = syntheticToolOutputForApproval(approval)
+		return resume, nil
+	case approvals.StatusPending:
+		return nil, fmt.Errorf("approval %q is still pending", approval.ID)
+	default:
+		return nil, fmt.Errorf("approval %q is not resumable with status %q", approval.ID, approval.Status)
+	}
+}
+
+func syntheticToolOutputForApproval(approval *approvals.ToolApproval) string {
+	if approval == nil {
+		return "Tool execution was skipped because approval was not granted."
+	}
+	status := strings.TrimSpace(string(approval.Status))
+	if status == "" {
+		status = "not granted"
+	}
+	message := fmt.Sprintf("Tool execution was skipped because approval was %s.", status)
+	if reason := strings.TrimSpace(approval.DecisionReason); reason != "" {
+		message += " Reason: " + reason
+	}
+	return message
+}
+
+func clearToolApprovalCheckpointMetadata(metadataJSON []byte) (map[string]any, error) {
+	metadata := map[string]any{}
+	if len(metadataJSON) > 0 {
+		if err := json.Unmarshal(metadataJSON, &metadata); err != nil {
+			return nil, fmt.Errorf("decode task metadata: %w", err)
+		}
+	}
+	delete(metadata, toolApprovalCheckpointMetadataKey)
+	return metadata, nil
+}
+
+func marshalTaskMetadataForExecutor(metadata map[string]any, fallback []byte) []byte {
+	encoded, err := json.Marshal(metadata)
+	if err != nil {
+		return append([]byte(nil), fallback...)
+	}
+	return encoded
+}
+
+func boolToInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 func buildMemoryManager(factory MemoryFactory, llmModel *coretypes.LLMModel) (*memory.Manager, error) {

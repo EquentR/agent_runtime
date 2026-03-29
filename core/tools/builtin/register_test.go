@@ -263,16 +263,26 @@ func TestDeleteFileRequiresConfirmation(t *testing.T) {
 	mustWriteFile(t, filepath.Join(workspace, "trash.txt"), "bye")
 
 	registry := newBuiltinRegistry(t, Options{WorkspaceRoot: workspace})
-	_, err := registry.Execute(context.Background(), "delete_file", map[string]any{"path": "trash.txt"})
-	if err == nil {
-		t.Fatal("Execute(delete_file) error = nil, want confirmation error")
+	tool := toolDefinitionByName(t, registry, "delete_file")
+	if _, ok := tool.Parameters.Properties["confirm"]; ok {
+		t.Fatal("delete_file confirm parameter present, want absent")
+	}
+	if tool.ApprovalMode != coretypes.ToolApprovalModeAlways {
+		t.Fatalf("delete_file ApprovalMode = %q, want %q", tool.ApprovalMode, coretypes.ToolApprovalModeAlways)
+	}
+	policy, ok := registry.ApprovalPolicy("delete_file")
+	if !ok {
+		t.Fatal("ApprovalPolicy(delete_file) ok = false, want true")
+	}
+	requirement := policy.Evaluate(map[string]any{"path": "trash.txt"})
+	if !requirement.Required {
+		t.Fatal("delete_file approval Required = false, want true")
 	}
 
 	if _, err := registry.Execute(context.Background(), "delete_file", map[string]any{
-		"path":    "trash.txt",
-		"confirm": true,
+		"path": "trash.txt",
 	}); err != nil {
-		t.Fatalf("Execute(delete_file confirm) error = %v", err)
+		t.Fatalf("Execute(delete_file) error = %v", err)
 	}
 
 	if _, err := os.Stat(filepath.Join(workspace, "trash.txt")); !errors.Is(err, os.ErrNotExist) {
@@ -335,6 +345,116 @@ func TestFileToolsRejectSymlink(t *testing.T) {
 func TestExecCommand(t *testing.T) {
 	workspace := t.TempDir()
 	registry := newBuiltinRegistry(t, Options{WorkspaceRoot: workspace, CommandTimeout: 5 * time.Second})
+	policy, ok := registry.ApprovalPolicy("exec_command")
+	if !ok {
+		t.Fatal("ApprovalPolicy(exec_command) ok = false, want true")
+	}
+
+	safeRequirement := policy.Evaluate(map[string]any{
+		"command": "go",
+		"args":    []any{"env", "GOOS"},
+	})
+	if safeRequirement.Required {
+		t.Fatalf("safe exec approval = %#v, want no approval", safeRequirement)
+	}
+
+	deleteRequirement := policy.Evaluate(map[string]any{
+		"command": "rm",
+		"args":    []any{"-rf", "tmp"},
+	})
+	if !deleteRequirement.Required {
+		t.Fatal("rm approval Required = false, want true")
+	}
+	if deleteRequirement.RiskLevel == "" {
+		t.Fatal("rm approval RiskLevel = empty, want non-empty")
+	}
+	if !strings.Contains(strings.ToLower(deleteRequirement.Reason), "delete") {
+		t.Fatalf("rm approval Reason = %q, want delete-focused summary", deleteRequirement.Reason)
+	}
+
+	mutationRequirement := policy.Evaluate(map[string]any{
+		"command": "apt-get",
+		"args":    []any{"install", "ripgrep"},
+	})
+	if !mutationRequirement.Required {
+		t.Fatal("apt-get install approval Required = false, want true")
+	}
+	if !strings.Contains(strings.ToLower(mutationRequirement.Reason), "system") {
+		t.Fatalf("apt-get install Reason = %q, want system-focused summary", mutationRequirement.Reason)
+	}
+
+	wrapperCases := []struct {
+		name   string
+		args   map[string]any
+		wantIn string
+	}{
+		{
+			name:   "sh wrapper delete",
+			args:   map[string]any{"command": "sh", "args": []any{"-c", "rm -rf tmp"}},
+			wantIn: "delete",
+		},
+		{
+			name:   "cmd wrapper delete",
+			args:   map[string]any{"command": "cmd", "args": []any{"/C", "del temp.txt"}},
+			wantIn: "delete",
+		},
+		{
+			name:   "powershell wrapper kill",
+			args:   map[string]any{"command": "powershell", "args": []any{"-Command", "Stop-Process -Id 42"}},
+			wantIn: "terminate",
+		},
+		{
+			name:   "sudo prefix delete",
+			args:   map[string]any{"command": "sudo", "args": []any{"rm", "-rf", "tmp"}},
+			wantIn: "delete",
+		},
+		{
+			name:   "env prefix delete",
+			args:   map[string]any{"command": "env", "args": []any{"FOO=1", "BAR=2", "rm", "-rf", "tmp"}},
+			wantIn: "delete",
+		},
+		{
+			name:   "nohup prefix kill",
+			args:   map[string]any{"command": "nohup", "args": []any{"kill", "123"}},
+			wantIn: "terminate",
+		},
+		{
+			name:   "powershell start-process wrapper kill",
+			args:   map[string]any{"command": "powershell", "args": []any{"-Command", "Start-Process taskkill -ArgumentList '/PID 123 /F' -Wait"}},
+			wantIn: "terminate",
+		},
+	}
+	for _, tc := range wrapperCases {
+		t.Run(tc.name, func(t *testing.T) {
+			requirement := policy.Evaluate(tc.args)
+			if !requirement.Required {
+				t.Fatalf("policy.Evaluate(%#v) Required = false, want true", tc.args)
+			}
+			if !strings.Contains(strings.ToLower(requirement.Reason), tc.wantIn) {
+				t.Fatalf("policy.Evaluate(%#v) Reason = %q, want substring %q", tc.args, requirement.Reason, tc.wantIn)
+			}
+		})
+	}
+
+	killCases := []struct {
+		name string
+		args map[string]any
+	}{
+		{name: "kill", args: map[string]any{"command": "kill", "args": []any{"123"}}},
+		{name: "pkill", args: map[string]any{"command": "pkill", "args": []any{"agent"}}},
+		{name: "taskkill", args: map[string]any{"command": "taskkill", "args": []any{"/PID", "123", "/F"}}},
+	}
+	for _, tc := range killCases {
+		t.Run(tc.name, func(t *testing.T) {
+			requirement := policy.Evaluate(tc.args)
+			if !requirement.Required {
+				t.Fatalf("policy.Evaluate(%#v) Required = false, want true", tc.args)
+			}
+			if !strings.Contains(strings.ToLower(requirement.Reason), "terminate") {
+				t.Fatalf("policy.Evaluate(%#v) Reason = %q, want terminate-focused summary", tc.args, requirement.Reason)
+			}
+		})
+	}
 
 	raw, err := registry.Execute(context.Background(), "exec_command", map[string]any{
 		"command": "go",
@@ -412,9 +532,23 @@ func TestListProcessesReturnsCurrentProcess(t *testing.T) {
 	}
 }
 
-func TestKillProcessRequiresConfirmationAndTerminatesProcess(t *testing.T) {
+func TestKillProcessRequiresApprovalAndTerminatesProcess(t *testing.T) {
 	workspace := t.TempDir()
 	registry := newBuiltinRegistry(t, Options{WorkspaceRoot: workspace})
+	tool := toolDefinitionByName(t, registry, "kill_process")
+	if _, ok := tool.Parameters.Properties["confirm"]; ok {
+		t.Fatal("kill_process confirm parameter present, want absent")
+	}
+	if tool.ApprovalMode != coretypes.ToolApprovalModeAlways {
+		t.Fatalf("kill_process ApprovalMode = %q, want %q", tool.ApprovalMode, coretypes.ToolApprovalModeAlways)
+	}
+	policy, ok := registry.ApprovalPolicy("kill_process")
+	if !ok {
+		t.Fatal("ApprovalPolicy(kill_process) ok = false, want true")
+	}
+	if requirement := policy.Evaluate(map[string]any{"pid": 123}); !requirement.Required {
+		t.Fatal("kill_process approval Required = false, want true")
+	}
 
 	cmd := exec.Command(os.Args[0], "-test.run=TestHelperProcess", "--", "sleep")
 	cmd.Env = append(os.Environ(), "GO_WANT_HELPER_PROCESS=1")
@@ -426,16 +560,10 @@ func TestKillProcessRequiresConfirmationAndTerminatesProcess(t *testing.T) {
 		_ = cmd.Wait()
 	})
 
-	_, err := registry.Execute(context.Background(), "kill_process", map[string]any{"pid": cmd.Process.Pid})
-	if err == nil {
-		t.Fatal("Execute(kill_process) error = nil, want confirmation error")
-	}
-
 	if _, err := registry.Execute(context.Background(), "kill_process", map[string]any{
-		"pid":     cmd.Process.Pid,
-		"confirm": true,
+		"pid": cmd.Process.Pid,
 	}); err != nil {
-		t.Fatalf("Execute(kill_process confirm) error = %v", err)
+		t.Fatalf("Execute(kill_process) error = %v", err)
 	}
 
 	waitDone := make(chan error, 1)
@@ -451,6 +579,17 @@ func TestKillProcessRequiresConfirmationAndTerminatesProcess(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("helper process did not exit after kill")
 	}
+}
+
+func toolDefinitionByName(t *testing.T, registry *coretools.Registry, name string) coretypes.Tool {
+	t.Helper()
+	for _, definition := range registry.List() {
+		if definition.Name == name {
+			return definition
+		}
+	}
+	t.Fatalf("tool %q not found", name)
+	return coretypes.Tool{}
 }
 
 func TestGetSystemInfo(t *testing.T) {

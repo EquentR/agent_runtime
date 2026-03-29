@@ -207,6 +207,7 @@ export interface TaskSnapshot {
   task_type: string
   status: 'queued' | 'running' | 'waiting' | 'cancel_requested' | 'cancelled' | 'succeeded' | 'failed'
   input?: TaskInput
+  suspend_reason?: string
   created_by: string
   created_at: string
   updated_at: string
@@ -246,9 +247,37 @@ export interface TaskStreamEvent {
   payload?: Record<string, unknown>
 }
 
+export type ApprovalDecision = 'approve' | 'reject'
+
+export type ToolApprovalStatus = 'pending' | 'approved' | 'rejected' | 'expired' | 'cancelled' | string
+
+export interface ToolApproval {
+  id: string
+  task_id: string
+  conversation_id: string
+  step_index?: number
+  tool_call_id: string
+  tool_name: string
+  arguments_summary: string
+  risk_level: string
+  reason?: string
+  status: ToolApprovalStatus
+  decision?: ApprovalDecision
+  decision_by?: string
+  decision_reason?: string
+  decision_at?: string
+  created_at?: string
+  updated_at?: string
+}
+
+export interface ToolApprovalDecisionInput {
+  decision: ApprovalDecision
+  reason: string
+}
+
 export interface TranscriptEntry {
   id: string
-  kind: 'user' | 'reasoning' | 'tool' | 'reply' | 'error'
+  kind: 'user' | 'reasoning' | 'tool' | 'reply' | 'error' | 'approval'
   title: string
   content?: string
   provider_id?: string
@@ -257,6 +286,7 @@ export interface TranscriptEntry {
   status?: 'running' | 'done' | 'error'
   group_key?: string
   token_usage?: TranscriptTokenUsage
+  approval?: ToolApproval
 }
 
 export interface TranscriptTokenUsage {

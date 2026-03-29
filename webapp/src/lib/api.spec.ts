@@ -2,8 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   buildRunTaskRequest,
+  cancelTask,
   extractStreamText,
   formatTaskError,
+  normalizeToolApproval,
   normalizeConversationMessage,
   normalizeRunTaskResult,
   streamRunTask,
@@ -25,6 +27,157 @@ describe('auth normalization helpers', () => {
       username: 'admin',
       role: 'admin',
     })
+  })
+})
+
+describe('approval API helpers', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    vi.stubGlobal('fetch', vi.fn())
+  })
+
+  it('normalizes approval payloads from REST and SSE shapes', () => {
+    expect(
+      normalizeToolApproval({
+        ID: 'approval_1',
+        TaskID: 'task_1',
+        ConversationID: 'conv_1',
+        StepIndex: 3,
+        ToolCallID: 'call_1',
+        ToolName: 'bash',
+        ArgumentsSummary: 'rm -rf /tmp/demo',
+        RiskLevel: 'high',
+        Reason: 'dangerous filesystem mutation',
+        Status: 'pending',
+      } as any),
+    ).toMatchObject({
+      id: 'approval_1',
+      task_id: 'task_1',
+      conversation_id: 'conv_1',
+      step_index: 3,
+      tool_call_id: 'call_1',
+      tool_name: 'bash',
+      arguments_summary: 'rm -rf /tmp/demo',
+      risk_level: 'high',
+      reason: 'dangerous filesystem mutation',
+      status: 'pending',
+    })
+  })
+
+  it('lists approvals and submits approval decisions with shared helpers', async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          code: 200,
+          message: 'OK',
+          data: [
+            {
+              id: 'approval_1',
+              task_id: 'task_1',
+              conversation_id: 'conv_1',
+              step_index: 3,
+              tool_call_id: 'call_1',
+              tool_name: 'bash',
+              arguments_summary: 'rm -rf /tmp/demo',
+              risk_level: 'high',
+              reason: 'dangerous filesystem mutation',
+              status: 'pending',
+              created_at: '2026-03-29T09:00:00Z',
+              updated_at: '2026-03-29T09:00:00Z',
+            },
+          ],
+          time: '',
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          code: 200,
+          message: 'OK',
+          data: {
+            id: 'approval_1',
+            task_id: 'task_1',
+            conversation_id: 'conv_1',
+            step_index: 3,
+            tool_call_id: 'call_1',
+            tool_name: 'bash',
+            arguments_summary: 'rm -rf /tmp/demo',
+            risk_level: 'high',
+            status: 'approved',
+            decision_by: 'demo-user',
+            decision_reason: 'looks safe now',
+            decision_at: '2026-03-29T09:01:00Z',
+            created_at: '2026-03-29T09:00:00Z',
+            updated_at: '2026-03-29T09:01:00Z',
+          },
+          time: '',
+        }),
+      } as Response)
+
+    const api = (await import('./api')) as Record<string, unknown>
+
+    expect(typeof api.fetchTaskApprovals).toBe('function')
+    expect(typeof api.decideTaskApproval).toBe('function')
+
+    if (typeof api.fetchTaskApprovals !== 'function' || typeof api.decideTaskApproval !== 'function') {
+      return
+    }
+
+    const approvals = await api.fetchTaskApprovals('task_1')
+    const resolved = await api.decideTaskApproval('task_1', 'approval_1', {
+      decision: 'approve',
+      reason: 'looks safe now',
+    })
+
+    expect(fetch).toHaveBeenNthCalledWith(1, '/api/v1/tasks/task_1/approvals', expect.objectContaining({ credentials: 'include' }))
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      '/api/v1/tasks/task_1/approvals/approval_1/decision',
+      expect.objectContaining({
+        credentials: 'include',
+        method: 'POST',
+        body: JSON.stringify({ decision: 'approve', reason: 'looks safe now' }),
+      }),
+    )
+    expect(approvals).toEqual([
+      expect.objectContaining({ id: 'approval_1', task_id: 'task_1', reason: 'dangerous filesystem mutation', status: 'pending' }),
+    ])
+    expect(resolved).toMatchObject({ id: 'approval_1', status: 'approved', decision_reason: 'looks safe now' })
+  })
+
+  it('submits task cancellation through the shared helper', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        code: 200,
+        message: 'OK',
+        data: {
+          id: 'task_1',
+          task_type: 'agent.run',
+          status: 'cancel_requested',
+          input: { conversation_id: 'conv_1' },
+          created_by: 'demo-user',
+          created_at: '2026-03-29T09:00:00Z',
+          updated_at: '2026-03-29T09:01:00Z',
+        },
+        time: '',
+      }),
+    } as Response)
+
+    const task = await cancelTask('task_1')
+
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/v1/tasks/task_1/cancel',
+      expect.objectContaining({
+        credentials: 'include',
+        method: 'POST',
+      }),
+    )
+    expect(task).toMatchObject({ id: 'task_1', status: 'cancel_requested' })
   })
 })
 
@@ -771,5 +924,86 @@ describe('streamRunTask', () => {
     })
 
     await expect(promise).resolves.toMatchObject({ conversation_id: 'conv_new' })
+  })
+
+  it('forwards approval stream events to the shared event handler', async () => {
+    class MockEventSource {
+      static instances: MockEventSource[] = []
+
+      url: string
+      withCredentials: boolean
+      onerror: (() => void) | null = null
+      private readonly listeners = new Map<string, Array<(event: MessageEvent<string>) => void>>()
+
+      constructor(url: string, options?: { withCredentials?: boolean }) {
+        this.url = url
+        this.withCredentials = options?.withCredentials ?? false
+        MockEventSource.instances.push(this)
+      }
+
+      addEventListener(type: string, handler: (event: MessageEvent<string>) => void) {
+        this.listeners.set(type, [...(this.listeners.get(type) ?? []), handler])
+      }
+
+      close() {
+        void 0
+      }
+
+      emit(type: string, data: unknown) {
+        for (const handler of this.listeners.get(type) ?? []) {
+          handler({ data: JSON.stringify(data) } as MessageEvent<string>)
+        }
+      }
+    }
+
+    const onEvent = vi.fn()
+
+    vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource)
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        code: 200,
+        message: 'OK',
+        data: {
+          id: 'task_1',
+          task_type: 'agent.run',
+          status: 'succeeded',
+          input: { conversation_id: 'conv_new' },
+          result: {
+            conversation_id: 'conv_new',
+            provider_id: 'openai',
+            model_id: 'gpt-5.4',
+            messages_appended: 1,
+            final_message: { Role: 'assistant', Content: 'done' },
+          },
+        },
+      }),
+    } as Response))
+
+    const promise = streamRunTask('task_1', () => void 0, onEvent)
+
+    MockEventSource.instances[0]?.emit('approval.requested', {
+      task_id: 'task_1',
+      seq: 1,
+      type: 'approval.requested',
+      payload: { approval_id: 'approval_1', tool_name: 'bash', status: 'pending' },
+    })
+    MockEventSource.instances[0]?.emit('approval.resolved', {
+      task_id: 'task_1',
+      seq: 2,
+      type: 'approval.resolved',
+      payload: { approval_id: 'approval_1', status: 'approved' },
+    })
+    MockEventSource.instances[0]?.emit('task.finished', {
+      task_id: 'task_1',
+      seq: 3,
+      type: 'task.finished',
+      payload: { status: 'succeeded' },
+    })
+
+    await expect(promise).resolves.toMatchObject({ conversation_id: 'conv_new' })
+    expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({ type: 'approval.requested' }))
+    expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({ type: 'approval.resolved' }))
   })
 })

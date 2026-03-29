@@ -7,11 +7,14 @@ import ConversationSidebar from '../components/ConversationSidebar.vue'
 import MessageComposer from '../components/MessageComposer.vue'
 import MessageList from '../components/MessageList.vue'
 import {
+  cancelTask,
   createRunTask,
+  decideTaskApproval,
   deleteConversation,
   fetchConversationMessages,
   fetchConversations,
   fetchModelCatalog,
+  fetchTaskApprovals,
   fetchTaskDetails,
   findRunningTaskByConversation,
   streamRunTask,
@@ -20,7 +23,12 @@ import {
 import { formatConversationTitle, formatDocumentTitle } from '../lib/chat'
 import { clearChatState, loadChatState, saveChatState } from '../lib/chat-state'
 import { getSessionName, getSessionRole, logout } from '../lib/session'
-import { attachReplyMetaToLatestReply, buildTranscriptEntries, updateTranscriptFromStreamEvent } from '../lib/transcript'
+import {
+  attachReplyMetaToLatestReply,
+  buildApprovalStreamEvent,
+  buildTranscriptEntries,
+  updateTranscriptFromStreamEvent,
+} from '../lib/transcript'
 import type {
   Conversation,
   ModelCatalog,
@@ -47,6 +55,7 @@ const conversations = ref<Conversation[]>([])
 const entries = ref<TranscriptEntry[]>([])
 const draftEntriesByConversation = ref<Record<string, TranscriptEntry[]>>({})
 const pendingConversationById = ref<Record<string, Conversation>>({})
+const approvalDecisionStateById = ref<Record<string, { pending: boolean; decision: 'approve' | 'reject' }>>({})
 const errorMessage = ref('')
 const modelCatalog = ref<ModelCatalog | null>(null)
 const catalogLoading = ref(false)
@@ -90,7 +99,8 @@ const selectedModel = computed<ModelCatalogEntry | null>(
 )
 const selectedModelLabel = computed(() => selectedModel.value?.name || selectedModelId.value || '选择模型')
 const modelMenuDisabled = computed(() => sending.value || catalogLoading.value || availableProviders.value.length === 0)
-const composerDisabled = computed(() => sending.value || catalogLoading.value || !selectedProviderId.value || !selectedModelId.value)
+const composerDisabled = computed(() => catalogLoading.value || !selectedProviderId.value || !selectedModelId.value)
+const stoppingTask = ref(false)
 
 function activeConversationTitle() {
   const current = conversations.value.find((conversation) => conversation.id === activeConversationId.value)
@@ -277,6 +287,34 @@ function isTaskActive(task: TaskDetails | null | undefined) {
   return task?.status === 'queued' || task?.status === 'running' || task?.status === 'waiting' || task?.status === 'cancel_requested'
 }
 
+async function hydratePendingApprovals(task: TaskDetails | null | undefined, conversationId = '') {
+  if (!task || task.status !== 'waiting' || task.suspend_reason !== 'waiting_for_tool_approval') {
+    return
+  }
+
+  const taskConversationId = resolveTaskConversationId(task) || conversationId || activeConversationId.value
+  if (!taskConversationId) {
+    return
+  }
+
+	let approvals
+	try {
+		approvals = await fetchTaskApprovals(task.id)
+	} catch {
+		return
+	}
+	const pendingApprovals = approvals.filter((approval) => approval.status === 'pending')
+  if (pendingApprovals.length === 0) {
+    return
+  }
+
+  let nextEntries = draftEntriesByConversation.value[taskConversationId] ?? (taskConversationId === activeConversationId.value ? entries.value : [])
+  for (const approval of pendingApprovals) {
+    nextEntries = updateTranscriptFromStreamEvent(nextEntries, buildApprovalStreamEvent(approval, { type: 'approval.requested' }))
+  }
+  applyEntriesForConversation(taskConversationId, nextEntries)
+}
+
 function stopActiveStream() {
   activeStreamAbortController?.abort()
   activeStreamAbortController = null
@@ -344,6 +382,82 @@ function applyDefaultSelection() {
 function chooseModel(providerId: string, modelId: string) {
   applySelection(providerId, modelId)
   closeModelMenu()
+}
+
+async function handleApprovalDecision(input: {
+  taskId: string
+  approvalId: string
+  decision: 'approve' | 'reject'
+  reason: string
+}) {
+  const taskId = input.taskId || activeTaskId.value
+  if (!taskId || !input.approvalId) {
+    return
+  }
+
+   if (approvalDecisionStateById.value[input.approvalId]?.pending) {
+    return
+  }
+
+  try {
+    errorMessage.value = ''
+    approvalDecisionStateById.value = {
+      ...approvalDecisionStateById.value,
+      [input.approvalId]: { pending: true, decision: input.decision },
+    }
+    const approval = await decideTaskApproval(taskId, input.approvalId, {
+      decision: input.decision,
+      reason: input.reason,
+    })
+    const currentEntries = activeConversationId.value
+      ? draftEntriesByConversation.value[activeConversationId.value] ?? entries.value
+      : entries.value
+    const nextEntries = updateTranscriptFromStreamEvent(
+      currentEntries,
+      buildApprovalStreamEvent(approval, { type: 'approval.resolved', decision: input.decision }),
+    )
+    applyEntriesForConversation(activeConversationId.value, nextEntries)
+    void attachTaskStream(taskId, approval.conversation_id || activeConversationId.value)
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '审批提交失败'
+  } finally {
+    const nextState = { ...approvalDecisionStateById.value }
+    delete nextState[input.approvalId]
+    approvalDecisionStateById.value = nextState
+  }
+}
+
+async function handleStopTask() {
+  const taskId = activeTaskId.value
+  if (!taskId || stoppingTask.value) {
+    return
+  }
+
+  try {
+    stoppingTask.value = true
+    errorMessage.value = ''
+    let task = await cancelTask(taskId)
+    if (task.status === 'cancel_requested') {
+      task = await cancelTask(taskId)
+    }
+    if (!isTaskActive(task)) {
+      stopActiveStream()
+      const conversationId = resolveTaskConversationId(task) || activeConversationId.value
+      const currentEntries = conversationId
+        ? draftEntriesByConversation.value[conversationId] ?? (conversationId === activeConversationId.value ? entries.value : [])
+        : entries.value
+      const nextEntries = updateTranscriptFromStreamEvent(currentEntries, {
+        type: 'task.finished',
+        payload: { status: task.status, error: task.error },
+      })
+      applyEntriesForConversation(conversationId, nextEntries)
+      clearActiveTask()
+    }
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '停止任务失败'
+  } finally {
+    stoppingTask.value = false
+  }
 }
 
 function syncSelectionFromConversation(conversationId: string) {
@@ -443,6 +557,10 @@ async function attachTaskStream(taskId: string, conversationId = '') {
     try {
       const task = await fetchTaskDetails(taskId)
       if (!isTaskActive(task)) {
+        if (task.status === 'cancelled') {
+          clearActiveTask()
+          return
+        }
         errorMessage.value = taskError
         const currentEntries = streamConversationId ? draftEntriesByConversation.value[streamConversationId] ?? [] : entries.value
         const nextEntries = updateTranscriptFromStreamEvent(currentEntries, {
@@ -487,6 +605,7 @@ async function resumeTask(task: TaskDetails | null | undefined, conversationId =
     return
   }
 
+  await hydratePendingApprovals(task, taskConversationId || conversationId)
   await attachTaskStream(task.id, taskConversationId || conversationId)
 }
 
@@ -702,10 +821,21 @@ onBeforeUnmount(() => {
       <p v-if="errorMessage" class="error-banner">{{ errorMessage }}</p>
 
       <div class="chat-main">
-        <MessageList :loading="messagesLoading || sending" :entries="entries" />
+        <MessageList
+          :loading="messagesLoading || sending"
+          :entries="entries"
+          :approval-decision-state-by-id="approvalDecisionStateById"
+          @approval-decision="handleApprovalDecision"
+        />
       </div>
       <div class="chat-composer-dock">
-        <MessageComposer :disabled="composerDisabled" @send="handleSend" />
+        <MessageComposer
+          :disabled="composerDisabled"
+          :busy="sending"
+          :stop-disabled="stoppingTask"
+          @send="handleSend"
+          @stop="handleStopTask"
+        />
       </div>
     </section>
   </main>

@@ -1,10 +1,19 @@
 package types
 
 type Tool struct {
-	Name        string     `json:"name"`
-	Description string     `json:"description"`
-	Parameters  JSONSchema `json:"parameters"`
+	Name         string           `json:"name"`
+	Description  string           `json:"description"`
+	Parameters   JSONSchema       `json:"parameters"`
+	ApprovalMode ToolApprovalMode `json:"approval_mode,omitempty"`
 }
+
+type ToolApprovalMode string
+
+const (
+	ToolApprovalModeNever       ToolApprovalMode = "never"
+	ToolApprovalModeAlways      ToolApprovalMode = "always"
+	ToolApprovalModeConditional ToolApprovalMode = "conditional"
+)
 
 type JSONSchema struct {
 	Type       string                    `json:"type"`

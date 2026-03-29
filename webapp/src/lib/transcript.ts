@@ -1,13 +1,15 @@
 import type {
+  ApprovalDecision,
   ConversationMessage,
   TaskStreamEvent,
+  ToolApproval,
   TranscriptEntry,
   TranscriptEntryDetail,
   TranscriptEntryDetailBlock,
   TranscriptTokenUsage,
 } from '../types/api'
 
-import { normalizeTranscriptTokenUsage } from './api'
+import { normalizeToolApproval, normalizeTranscriptTokenUsage } from './api'
 
 function createEntryId(prefix: string) {
   return `${prefix}-${Math.random().toString(36).slice(2, 10)}`
@@ -142,6 +144,48 @@ function makeReasoningEntry(content: string, loading = true): TranscriptEntry {
         blocks: [{ label: 'Trace', value: content, loading }],
       },
     ],
+  }
+}
+
+function makeApprovalEntry(approval: ToolApproval): TranscriptEntry {
+  return {
+    id: createEntryId('approval'),
+    kind: 'approval',
+    title: approval.status === 'pending' ? '等待审批' : '审批已处理',
+    approval,
+    status: approval.status === 'pending' ? 'running' : approval.status === 'approved' ? 'done' : 'error',
+  }
+}
+
+export function buildApprovalStreamEvent(
+  approval: ToolApproval,
+  options?: {
+    type?: 'approval.requested' | 'approval.resolved'
+    decision?: ApprovalDecision
+  },
+): Partial<TaskStreamEvent> {
+  const type = options?.type ?? (approval.status === 'pending' ? 'approval.requested' : 'approval.resolved')
+
+  return {
+    type,
+    payload: {
+      approval_id: approval.id,
+      task_id: approval.task_id,
+      conversation_id: approval.conversation_id,
+      step: approval.step_index,
+      tool_call_id: approval.tool_call_id,
+      tool_name: approval.tool_name,
+      arguments_summary: approval.arguments_summary,
+      risk_level: approval.risk_level,
+      reason: approval.reason,
+      status: approval.status,
+      decision: approval.decision ?? options?.decision,
+      decision_reason: approval.decision_reason,
+      decision_by: approval.decision_by,
+      decision_at: approval.decision_at,
+      created_at: approval.created_at,
+      updated_at: approval.updated_at,
+    },
   }
 }
 
@@ -603,6 +647,55 @@ function latestToolFailureMessage(entries: TranscriptEntry[]) {
   return ''
 }
 
+function findApprovalEntryIndex(entries: TranscriptEntry[], approvalId: string) {
+  return entries.findIndex((entry) => entry.kind === 'approval' && entry.approval?.id === approvalId)
+}
+
+function isResolvedApprovalStatus(status: string | undefined) {
+  return status === 'approved' || status === 'rejected' || status === 'expired' || status === 'cancelled'
+}
+
+function upsertApprovalEntry(entries: TranscriptEntry[], approval: ToolApproval) {
+  const next = [...entries]
+  const approvalIndex = findApprovalEntryIndex(next, approval.id)
+  const current = approvalIndex >= 0 ? next[approvalIndex]?.approval : undefined
+  const mergedStatus =
+    isResolvedApprovalStatus(current?.status) && !isResolvedApprovalStatus(approval.status)
+      ? current?.status || ''
+      : approval.status || current?.status || ''
+  const mergedApproval: ToolApproval = {
+    id: approval.id || current?.id || '',
+    task_id: approval.task_id || current?.task_id || '',
+    conversation_id: approval.conversation_id || current?.conversation_id || '',
+    step_index: approval.step_index ?? current?.step_index,
+    tool_call_id: approval.tool_call_id || current?.tool_call_id || '',
+    tool_name: approval.tool_name || current?.tool_name || '',
+    arguments_summary: approval.arguments_summary || current?.arguments_summary || '',
+    risk_level: approval.risk_level || current?.risk_level || '',
+    reason: approval.reason ?? current?.reason,
+    status: mergedStatus,
+    decision: approval.decision ?? current?.decision,
+    decision_by: approval.decision_by ?? current?.decision_by,
+    decision_reason: approval.decision_reason ?? current?.decision_reason,
+    decision_at: approval.decision_at ?? current?.decision_at,
+    created_at: approval.created_at ?? current?.created_at,
+    updated_at: approval.updated_at ?? current?.updated_at,
+  }
+
+  if (approvalIndex >= 0) {
+    next[approvalIndex] = {
+      ...next[approvalIndex],
+      title: mergedApproval.status === 'pending' ? '等待审批' : '审批已处理',
+      approval: mergedApproval,
+      status: mergedApproval.status === 'pending' ? 'running' : mergedApproval.status === 'approved' ? 'done' : 'error',
+    }
+    return next
+  }
+
+  next.push(makeApprovalEntry(mergedApproval))
+  return next
+}
+
 export function attachTokenUsageToLatestReply(entries: TranscriptEntry[], usage: TranscriptTokenUsage | undefined) {
   return attachReplyMetaToLatestReply(entries, { token_usage: usage })
 }
@@ -739,6 +832,14 @@ export function updateTranscriptFromStreamEvent(entries: TranscriptEntry[], even
     })
   }
 
+  if (event.type === 'approval.requested') {
+    return upsertApprovalEntry(entries, normalizeToolApproval(payload))
+  }
+
+  if (event.type === 'approval.resolved') {
+    return upsertApprovalEntry(entries, normalizeToolApproval(payload))
+  }
+
   if (event.type === 'task.failed') {
     const settledEntries = stopAllLoading(entries, 'error')
     const message = String(payload.error ?? 'Unknown error')
@@ -753,12 +854,12 @@ export function updateTranscriptFromStreamEvent(entries: TranscriptEntry[], even
 
   if (event.type === 'task.finished') {
     const status = String(payload.status ?? '')
-    const terminalToolStatus = status === 'failed' || status === 'cancelled' ? 'error' : 'done'
+    const terminalToolStatus = status === 'failed' ? 'error' : 'done'
     const settledEntries = attachTokenUsageToLatestReply(
       stopAllLoading(entries, terminalToolStatus),
       normalizeTranscriptTokenUsage(payload.usage ?? payload.token_usage ?? payload.Usage ?? payload.TokenUsage),
     )
-    if (status === 'failed' || status === 'cancelled') {
+    if (status === 'failed') {
       const nestedError = payload.error && typeof payload.error === 'object' ? String((payload.error as Record<string, unknown>).message ?? '') : ''
       return [
         ...settledEntries,

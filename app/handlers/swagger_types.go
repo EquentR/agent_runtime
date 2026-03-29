@@ -293,6 +293,49 @@ type TaskSwaggerDoc struct {
 	UpdatedAt        string `json:"updated_at"`
 }
 
+// ApprovalSwaggerDoc 描述工具审批记录的文档结构。
+type ApprovalSwaggerDoc struct {
+	ID               string `json:"id"`
+	TaskID           string `json:"task_id"`
+	ConversationID   string `json:"conversation_id"`
+	StepIndex        int    `json:"step_index"`
+	ToolCallID       string `json:"tool_call_id"`
+	ToolName         string `json:"tool_name"`
+	ArgumentsSummary string `json:"arguments_summary"`
+	RiskLevel        string `json:"risk_level"`
+	Reason           string `json:"reason"`
+	Status           string `json:"status" enums:"pending,approved,rejected,expired,cancelled"`
+	DecisionBy       string `json:"decision_by"`
+	DecisionReason   string `json:"decision_reason"`
+	DecisionAt       string `json:"decision_at"`
+	CreatedAt        string `json:"created_at"`
+	UpdatedAt        string `json:"updated_at"`
+}
+
+// ApprovalListSwaggerResponse 描述审批列表接口的成功响应结构。
+type ApprovalListSwaggerResponse struct {
+	Code    int                  `json:"code"`
+	Message string               `json:"message"`
+	Data    []ApprovalSwaggerDoc `json:"data"`
+	OK      bool                 `json:"ok"`
+	Time    string               `json:"time"`
+}
+
+// ApprovalSwaggerResponse 描述审批详情接口的成功响应结构。
+type ApprovalSwaggerResponse struct {
+	Code    int                `json:"code"`
+	Message string             `json:"message"`
+	Data    ApprovalSwaggerDoc `json:"data"`
+	OK      bool               `json:"ok"`
+	Time    string             `json:"time"`
+}
+
+// ApprovalDecisionSwaggerRequest 描述审批决策请求结构。
+type ApprovalDecisionSwaggerRequest struct {
+	Decision string `json:"decision"`
+	Reason   string `json:"reason"`
+}
+
 // AuditRunSwaggerResponse 描述审计运行详情接口的成功响应结构。
 type AuditRunSwaggerResponse struct {
 	Code    int                `json:"code"`
