@@ -159,6 +159,10 @@ function formatEventType(eventType?: string) {
       return '消息已持久化'
     case 'tool.called':
       return '工具调用'
+    case 'approval.requested':
+      return '审批请求'
+    case 'approval.resolved':
+      return '审批已处理'
     case 'run.finished':
       return '运行完成'
     default:
@@ -177,6 +181,9 @@ function statusTone(entry: AuditReplayEvent) {
   if (entry.level === 'error' || entry.event_type.includes('fail') || entry.event_type.includes('error')) {
     return 'error'
   }
+  if (entry.event_type.startsWith('approval.')) {
+    return 'request'
+  }
   if (entry.phase === 'tool') {
     return 'tool'
   }
@@ -189,6 +196,12 @@ function statusTone(entry: AuditReplayEvent) {
 function iconForEntry(entry: AuditReplayEvent) {
   if (entry.level === 'error' || entry.event_type.includes('fail') || entry.event_type.includes('error')) {
     return WarningFilled
+  }
+  if (entry.event_type === 'approval.requested') {
+    return WarningFilled
+  }
+  if (entry.event_type === 'approval.resolved') {
+    return CircleCheck
   }
   if (entry.phase === 'tool') {
     return Operation

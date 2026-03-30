@@ -36,6 +36,7 @@ function makeRouter() {
   return createRouter({
     history: createMemoryHistory(),
     routes: [
+      { path: '/approvals', component: ApprovalView },
       { path: '/approvals/:taskId', component: ApprovalView },
       { path: '/chat', component: { template: '<div>chat</div>' } },
     ],
@@ -71,6 +72,28 @@ function buildPendingApproval(overrides: Record<string, unknown> = {}) {
 describe('ApprovalView', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+  })
+
+  it('shows an empty prompt when entering approval management without a selected task', async () => {
+    api.fetchTaskDetails.mockResolvedValue(undefined)
+    api.fetchTaskApprovals.mockResolvedValue([])
+
+    const router = makeRouter()
+    await router.push('/approvals')
+    await router.isReady()
+
+    const wrapper = mount(ApprovalView, {
+      global: {
+        plugins: [router],
+      },
+    })
+
+    await flushPromises()
+
+    expect(api.fetchTaskDetails).not.toHaveBeenCalled()
+    expect(api.fetchTaskApprovals).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('选择一个任务')
+    expect(wrapper.text()).toContain('请从聊天中的审批入口进入，或指定任务后查看审批记录。')
   })
 
   it('lists task approvals for the selected task and applies approval SSE updates', async () => {
@@ -126,7 +149,7 @@ describe('ApprovalView', () => {
     })
     await flushPromises()
 
-    expect(wrapper.text()).toContain('Approved')
+    expect(wrapper.text()).toContain('已同意')
     expect(wrapper.text()).toContain('checked in queue')
 
     stream.reject(new Error('Task event stream aborted'))
@@ -176,7 +199,7 @@ describe('ApprovalView', () => {
       reason: 'looks safe',
     })
     expect(router.currentRoute.value.fullPath).toBe('/approvals/task_waiting')
-    expect(wrapper.text()).toContain('Approved')
+    expect(wrapper.text()).toContain('已同意')
     expect(wrapper.text()).toContain('looks safe')
 
     stream.reject(new Error('Task event stream aborted'))
@@ -225,7 +248,7 @@ describe('ApprovalView', () => {
       decision: 'reject',
       reason: 'too risky',
     })
-    expect(wrapper.text()).toContain('Rejected')
+    expect(wrapper.text()).toContain('已拒绝')
     expect(wrapper.text()).toContain('too risky')
 
     stream.reject(new Error('Task event stream aborted'))

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { Operation } from '@element-plus/icons-vue'
+import { WarningFilled } from '@element-plus/icons-vue'
 
 import { formatMessageContent } from '../lib/chat'
 import type { ToolApproval } from '../types/api'
@@ -8,6 +8,7 @@ import type { ToolApproval } from '../types/api'
 const props = defineProps<{
   approval: ToolApproval
   pendingDecision?: 'approve' | 'reject' | ''
+  variant?: 'chat' | 'default'
 }>()
 
 const emit = defineEmits<{
@@ -18,6 +19,7 @@ const decisionReason = ref('')
 
 const approvalTitle = computed(() => (props.approval.status === 'pending' ? '等待审批' : '审批已处理'))
 const submissionLocked = computed(() => Boolean(props.pendingDecision))
+const cardVariant = computed(() => props.variant ?? 'default')
 
 watch(
   () => props.approval.id,
@@ -28,11 +30,11 @@ watch(
 )
 
 function approvalStatusText(status: string) {
-  if (status === 'pending') return 'Pending'
-  if (status === 'approved') return 'Approved'
-  if (status === 'rejected') return 'Rejected'
-  if (status === 'cancelled') return 'Cancelled'
-  if (status === 'expired') return 'Expired'
+  if (status === 'pending') return '待处理'
+  if (status === 'approved') return '已同意'
+  if (status === 'rejected') return '已拒绝'
+  if (status === 'cancelled') return '已取消'
+  if (status === 'expired') return '已过期'
   return status
 }
 
@@ -51,10 +53,10 @@ function submitDecision(decision: 'approve' | 'reject') {
 </script>
 
 <template>
-  <div class="approval-card trace-flat-shell">
+  <div class="approval-card trace-flat-shell" :class="{ 'chat-approval-card': cardVariant === 'chat' }">
     <div class="trace-detail-summary">
       <span class="trace-summary-leading">
-        <span class="trace-kind-badge tool operation-badge" aria-hidden="true"><Operation /></span>
+        <span class="trace-kind-badge approval operation-badge" aria-hidden="true"><WarningFilled /></span>
         <span class="trace-detail-label">{{ approvalTitle }}</span>
         <span class="trace-tool-name">{{ approval.tool_name }}</span>
       </span>
@@ -62,36 +64,52 @@ function submitDecision(decision: 'approve' | 'reject') {
     </div>
     <div class="trace-detail-blocks">
       <div class="trace-detail-block">
-        <div class="trace-detail-block-header"><span>Risk</span></div>
-        <pre class="trace-detail-content">{{ approval.risk_level || 'unknown' }}</pre>
+        <div class="trace-detail-block-header"><span>风险等级</span></div>
+        <pre class="trace-detail-content">{{ approval.risk_level || '未标注' }}</pre>
       </div>
       <div v-if="approval.reason" class="trace-detail-block">
-        <div class="trace-detail-block-header"><span>Reason</span></div>
+        <div class="trace-detail-block-header"><span>审批原因</span></div>
         <pre class="trace-detail-content">{{ formatMessageContent(approval.reason) }}</pre>
       </div>
       <div class="trace-detail-block">
-        <div class="trace-detail-block-header"><span>Arguments</span></div>
+        <div class="trace-detail-block-header"><span>调用参数</span></div>
         <pre class="trace-detail-content">{{ formatMessageContent(approval.arguments_summary) }}</pre>
       </div>
       <div v-if="approval.status === 'pending'" class="trace-detail-block">
-        <div class="trace-detail-block-header"><span>Decision note</span></div>
+        <div class="trace-detail-block-header"><span>审批说明</span></div>
         <input
           class="approval-reason-input"
           type="text"
           :value="decisionReason"
           :disabled="submissionLocked"
-          placeholder="Optional reason"
+          placeholder="可选，补充审批说明"
           @input="decisionReason = ($event.target as HTMLInputElement).value"
         />
       </div>
       <div v-else-if="approval.decision_reason || approval.decision_by" class="trace-detail-block">
-        <div class="trace-detail-block-header"><span>Resolution</span></div>
+        <div class="trace-detail-block-header"><span>处理结果</span></div>
         <pre class="trace-detail-content">{{ formatMessageContent([approval.decision_reason, approval.decision_by].filter(Boolean).join(' · ')) }}</pre>
       </div>
     </div>
-    <div v-if="approval.status === 'pending'" class="trace-reply-footer">
-      <button data-approval-action="approve" class="ghost-button" type="button" :disabled="submissionLocked" @click="submitDecision('approve')">Allow</button>
-      <button data-approval-action="reject" class="ghost-button" type="button" :disabled="submissionLocked" @click="submitDecision('reject')">Reject</button>
+    <div v-if="approval.status === 'pending'" class="trace-reply-footer approval-card-actions">
+      <button
+        data-approval-action="approve"
+        class="ghost-button approval-action-button approval-action-approve"
+        type="button"
+        :disabled="submissionLocked"
+        @click="submitDecision('approve')"
+      >
+        同意执行
+      </button>
+      <button
+        data-approval-action="reject"
+        class="ghost-button approval-action-button approval-action-reject"
+        type="button"
+        :disabled="submissionLocked"
+        @click="submitDecision('reject')"
+      >
+        拒绝执行
+      </button>
     </div>
   </div>
 </template>

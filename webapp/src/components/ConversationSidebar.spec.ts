@@ -152,4 +152,30 @@ describe('ConversationSidebar', () => {
 
     expect(wrapper.emitted('logout')).toHaveLength(1)
   })
+
+  it('does not show approval management in the user menu', async () => {
+    const wrapper = mount(ConversationSidebar, {
+      global: {
+        stubs: {
+          RouterLink: {
+            props: ['to'],
+            template: '<a :href="to"><slot /></a>',
+          },
+        },
+      },
+      props: {
+        activeConversationId: '',
+        loading: false,
+        username: 'demo-user',
+        conversations: [],
+        isAdmin: true,
+      },
+    })
+
+    await wrapper.find('.sidebar-user-menu-trigger').trigger('click')
+    await nextTick()
+
+    const adminLinks = Array.from(document.body.querySelectorAll('.sidebar-admin-link'))
+    expect(adminLinks.map((link) => link.textContent ?? '')).not.toContain('审批管理')
+  })
 })

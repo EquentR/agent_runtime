@@ -103,6 +103,8 @@ async function loadApprovalView(taskId: string) {
   if (!taskId) {
     task.value = null
     approvalEntries.value = []
+    errorMessage.value = ''
+    loading.value = false
     return
   }
 
@@ -238,13 +240,17 @@ onBeforeUnmount(() => {
         <RouterLink class="ghost-button icon-button admin-audit-back-link" to="/chat" title="返回聊天" aria-label="返回聊天">
           <ArrowLeft />
         </RouterLink>
-        <div class="topbar-title-block">
-          <h1 class="topbar-conversation-title">{{ selectedTaskId || '选择一个任务' }}</h1>
-        </div>
+      <div class="topbar-title-block">
+        <h1 class="topbar-conversation-title">{{ selectedTaskId || '审批管理' }}</h1>
+      </div>
         <div class="status-pill" :class="task ? 'idle' : 'loading'">{{ taskStatusLabel }}</div>
       </header>
 
       <p v-if="errorMessage" class="error-banner">{{ errorMessage }}</p>
+      <div v-else-if="!selectedTaskId" class="messages-empty approval-empty-state">
+        <p>选择一个任务</p>
+        <p>请从聊天中的审批入口进入，或指定任务后查看审批记录。</p>
+      </div>
       <p v-else-if="loading" class="messages-empty">正在加载审批...</p>
       <div v-else-if="approvals.length === 0" class="messages-empty">当前任务暂无审批记录。</div>
       <div v-else class="approval-card-list">

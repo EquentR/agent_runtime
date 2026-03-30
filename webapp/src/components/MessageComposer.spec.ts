@@ -1,11 +1,26 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+
 import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
 
 import MessageComposer from './MessageComposer.vue'
 
+const chatStyles = readFileSync(resolve(process.cwd(), 'src/style.css'), 'utf8')
+
+const routerLinkStub = {
+  props: ['to'],
+  template: '<a class="composer-approval-entry" :href="to"><slot /></a>',
+}
+
 describe('MessageComposer', () => {
   it('renders an icon send button inside the composer', () => {
     const wrapper = mount(MessageComposer, {
+      global: {
+        stubs: {
+          RouterLink: routerLinkStub,
+        },
+      },
       props: {
         disabled: false,
       },
@@ -18,8 +33,33 @@ describe('MessageComposer', () => {
     expect(wrapper.find('.composer-submit svg').exists()).toBe(true)
   })
 
+  it('does not render a separate approval entry button next to the send action', () => {
+    const wrapper = mount(MessageComposer, {
+      props: {
+        disabled: false,
+      },
+    })
+
+    expect(wrapper.find('.composer-approval-entry').exists()).toBe(false)
+  })
+
+  it('keeps the send button pinned to the bottom-right corner of the textarea', () => {
+    expect(chatStyles).toMatch(/\.composer-submit\s*\{[\s\S]*?position:\s*absolute;/)
+    expect(chatStyles).toMatch(/\.composer-submit\s*\{[\s\S]*?right:\s*0\.72rem;/)
+    expect(chatStyles).toMatch(/\.composer-submit\s*\{[\s\S]*?bottom:\s*0\.72rem;/)
+  })
+
+  it('hides the textarea vertical scrollbar while auto-resizing', () => {
+    expect(chatStyles).toMatch(/\.composer-input\s*\{[\s\S]*?overflow-y:\s*hidden;/)
+  })
+
   it('switches the submit button into a stop button while busy and emits stop', async () => {
     const wrapper = mount(MessageComposer, {
+      global: {
+        stubs: {
+          RouterLink: routerLinkStub,
+        },
+      },
       props: {
         disabled: false,
         busy: true,
@@ -36,6 +76,11 @@ describe('MessageComposer', () => {
 
   it('submits on Enter and preserves newline on Shift+Enter', async () => {
     const wrapper = mount(MessageComposer, {
+      global: {
+        stubs: {
+          RouterLink: routerLinkStub,
+        },
+      },
       props: {
         disabled: false,
       },
@@ -54,8 +99,13 @@ describe('MessageComposer', () => {
     expect((textarea.element as HTMLTextAreaElement).value).toBe('line one')
   })
 
-  it('starts at two rows and grows with content', async () => {
+  it('adds half a line of default height before growing with content', async () => {
     const wrapper = mount(MessageComposer, {
+      global: {
+        stubs: {
+          RouterLink: routerLinkStub,
+        },
+      },
       props: {
         disabled: false,
       },
@@ -74,7 +124,7 @@ describe('MessageComposer', () => {
     await textarea.trigger('input')
 
     expect(textarea.attributes('rows')).toBe('2')
-    expect(element.style.height).toBe('64px')
+    expect(element.style.height).toBe('72px')
 
     await textarea.setValue('first line\nsecond line\nthird line')
     await textarea.trigger('input')

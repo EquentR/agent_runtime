@@ -291,6 +291,7 @@ function showCopyToast(message: string, variant: 'success' | 'error') {
             v-if="entry.kind === 'approval' && entry.approval"
             :approval="entry.approval"
             :pending-decision="props.approvalDecisionStateById?.[entry.approval.id]?.pending ? props.approvalDecisionStateById[entry.approval.id]?.decision : ''"
+            variant="chat"
             @approval-decision="emit('approval-decision', $event)"
           />
           <details v-if="entry.kind === 'error'" class="trace-detail trace-error-detail trace-flat-shell">
@@ -419,6 +420,10 @@ function showCopyToast(message: string, variant: 'success' | 'error') {
             </div>
           </details>
         </article>
+        <div v-if="props.loading" class="messages-generating-indicator" aria-live="polite">
+          <span class="messages-generating-spinner" aria-hidden="true"></span>
+          <span>正在生成</span>
+        </div>
       </div>
     </div>
 

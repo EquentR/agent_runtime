@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 import { flushPromises, mount } from '@vue/test-utils'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createRouter, createMemoryHistory } from 'vue-router'
 
 const chatStyles = readFileSync(resolve(process.cwd(), 'src/style.css'), 'utf8')
@@ -106,6 +106,12 @@ describe('ChatView', () => {
           models: [{ id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', type: 'google' }],
         },
       ],
+    })
+  })
+
+  afterEach(() => {
+    document.body.querySelectorAll('.sidebar-user-menu-panel, .sidebar-confirm-overlay').forEach((node) => {
+      node.parentNode?.removeChild(node)
     })
   })
 
@@ -317,7 +323,7 @@ describe('ChatView', () => {
     expect(wrapper.find('.topbar .status-pill').text()).toContain('就绪')
   })
 
-  it('shows an admin audit entry point for admin users only', async () => {
+  it('shows admin links only inside the user menu', async () => {
     localStorage.setItem('agent-runtime.user', JSON.stringify({ username: 'demo-user', role: 'admin' }))
     api.fetchConversations.mockResolvedValue([])
 
@@ -340,9 +346,81 @@ describe('ChatView', () => {
 
     const link = document.body.querySelector('.sidebar-admin-link') as HTMLAnchorElement | null
     expect(link).not.toBeNull()
-    expect(link?.textContent).toContain('审计')
-    expect(link?.getAttribute('href')).toBe('/admin/audit')
+    expect(Array.from(document.body.querySelectorAll('.sidebar-admin-link')).map((node) => node.textContent ?? '')).toEqual(
+      expect.arrayContaining(['审计', '提示词管理']),
+    )
     expect(wrapper.find('.topbar-audit-link').exists()).toBe(false)
+  })
+
+  it('does not show a separate approval entry beside the composer even when waiting for approval', async () => {
+    localStorage.setItem(
+      'agent-runtime.user',
+      JSON.stringify({ username: 'demo-user', role: 'admin' }),
+    )
+    localStorage.setItem(
+      'agent-runtime.chat-state',
+      JSON.stringify({
+        activeConversationId: 'conv_waiting',
+        activeTaskId: 'task_waiting',
+        activeTaskEventSeq: 0,
+        entries: [],
+        draftEntriesByConversation: {},
+      }),
+    )
+    api.fetchConversations.mockResolvedValue([
+      {
+        id: 'conv_waiting',
+        title: 'Waiting chat',
+        last_message: 'hello',
+        message_count: 1,
+        provider_id: 'openai',
+        model_id: 'gpt-5.4',
+        created_by: 'demo-user',
+        created_at: '',
+        updated_at: '',
+      },
+    ])
+    api.fetchConversationMessages.mockResolvedValue([{ role: 'user', content: 'hello' }])
+    api.fetchTaskDetails.mockResolvedValue({
+      id: 'task_waiting',
+      status: 'waiting',
+      input: { conversation_id: 'conv_waiting' },
+      suspend_reason: 'waiting_for_tool_approval',
+    })
+    api.fetchTaskApprovals.mockResolvedValue([])
+    api.streamRunTask.mockRejectedValue(new Error('Task event stream disconnected'))
+
+    const router = makeRouter()
+    await router.push('/chat')
+    await router.isReady()
+
+    const wrapper = mount(ChatView, {
+      global: {
+        plugins: [router],
+      },
+    })
+
+    await flushPromises()
+
+    expect(wrapper.find('.composer-approval-entry').exists()).toBe(false)
+  })
+
+  it('does not show a separate approval entry beside the composer without an active approval task', async () => {
+    api.fetchConversations.mockResolvedValue([])
+
+    const router = makeRouter()
+    await router.push('/chat')
+    await router.isReady()
+
+    const wrapper = mount(ChatView, {
+      global: {
+        plugins: [router],
+      },
+    })
+
+    await flushPromises()
+
+    expect(wrapper.find('.composer-approval-entry').exists()).toBe(false)
   })
 
   it('opens on a new conversation instead of auto-selecting an existing one after refresh', async () => {
@@ -1672,5 +1750,6 @@ describe('ChatView', () => {
     expect(status.exists()).toBe(true)
     expect(status.text()).toContain('同步中')
     expect(status.classes()).toContain('loading')
+    expect(wrapper.find('.messages-generating-indicator').exists()).toBe(true)
   })
 })

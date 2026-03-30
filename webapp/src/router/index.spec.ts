@@ -44,9 +44,9 @@ describe('app router session guard', () => {
 
     expect(document.title).toBe('提示词管理 - Agent Runtime')
 
-    await router.push('/approvals/task_1')
+    await router.push('/admin/audit')
 
-    expect(document.title).toBe('审批管理 - Agent Runtime')
+    expect(document.title).toBe('审计会话 - Agent Runtime')
   })
 
   it('forces backend session validation before entering protected pages', async () => {
@@ -77,14 +77,14 @@ describe('app router session guard', () => {
     expect(router.currentRoute.value.path).toBe('/login')
   })
 
-  it('redirects unauthenticated users away from the approval route', async () => {
+  it('redirects unauthenticated users away from the admin audit route', async () => {
     session.hasActiveSession.mockReturnValue(false)
     session.syncSession.mockResolvedValue(null)
 
     const { createAppRouter } = await import('./index')
     const router = createAppRouter(true)
 
-    await router.push('/approvals/task_1')
+    await router.push('/admin/audit')
     await router.isReady()
 
     expect(session.syncSession).toHaveBeenCalledWith(true)
@@ -119,20 +119,18 @@ describe('app router session guard', () => {
     expect(router.currentRoute.value.path).toBe('/chat')
   })
 
-  it('allows signed-in users to enter the approval route', async () => {
+  it('does not register a standalone approval route', async () => {
     session.hasActiveSession.mockReturnValue(true)
     session.syncSession.mockResolvedValue({ username: 'alice', role: 'user' })
 
     const { createAppRouter } = await import('./index')
     const router = createAppRouter(true)
 
-    await router.push('/approvals/task_1')
+    await router.push('/approvals')
     await router.isReady()
 
-    expect(session.syncSession).toHaveBeenCalledWith(true)
-    expect(router.currentRoute.value.path).toBe('/approvals/task_1')
-    expect(router.currentRoute.value.meta.requiresSession).toBe(true)
-    expect(router.currentRoute.value.meta.requiresAdmin).toBeUndefined()
+    expect(session.syncSession).toHaveBeenCalledWith()
+    expect(router.currentRoute.value.matched).toHaveLength(0)
   })
 
   it('allows admin users to enter the admin prompts route', async () => {

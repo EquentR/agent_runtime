@@ -65,6 +65,22 @@ describe('MessageList', () => {
     expect(wrapper.find('.messages-empty').text()).toContain('请尽情使唤 ~')
   })
 
+  it('shows a generating indicator at the bottom while syncing', () => {
+    const wrapper = mount(MessageList, {
+      props: {
+        loading: true,
+        entries: [
+          { id: 'reply-1', kind: 'reply', title: '', content: 'first chunk' },
+        ],
+      },
+    })
+
+    const indicator = wrapper.find('.messages-generating-indicator')
+    expect(indicator.exists()).toBe(true)
+    expect(indicator.text()).toContain('正在生成')
+    expect(indicator.find('.messages-generating-spinner').exists()).toBe(true)
+  })
+
   it('scrolls the message area to the real bottom when entries change', async () => {
     const wrapper = mount(MessageList, {
       props: {
@@ -537,7 +553,7 @@ describe('MessageList', () => {
     expect(summary.text()).toContain('read_file')
   })
 
-  it('renders an inline approval card with allow and reject actions', async () => {
+  it('renders a warning-styled inline approval card with Chinese approval actions', async () => {
     const wrapper = mount(MessageList, {
       props: {
         loading: false,
@@ -564,12 +580,25 @@ describe('MessageList', () => {
     })
 
     expect(wrapper.find('.approval-card').exists()).toBe(true)
+    expect(wrapper.find('.approval-card').classes()).toContain('chat-approval-card')
+    expect(wrapper.find('.approval-card .trace-kind-badge').classes()).toContain('approval')
     expect(wrapper.text()).toContain('bash')
     expect(wrapper.text()).toContain('high')
     expect(wrapper.text()).toContain('dangerous filesystem mutation')
     expect(wrapper.text()).toContain('rm -rf /tmp/demo')
+    expect(wrapper.text()).toContain('等待审批')
+    expect(wrapper.text()).toContain('待处理')
+    expect(wrapper.text()).toContain('风险等级')
+    expect(wrapper.text()).toContain('审批原因')
+    expect(wrapper.text()).toContain('调用参数')
+    expect(wrapper.text()).toContain('审批说明')
     expect(wrapper.find('[data-approval-action="approve"]').exists()).toBe(true)
     expect(wrapper.find('[data-approval-action="reject"]').exists()).toBe(true)
+    expect(wrapper.find('[data-approval-action="approve"]').text()).toBe('同意执行')
+    expect(wrapper.find('[data-approval-action="reject"]').text()).toBe('拒绝执行')
+    expect(wrapper.find('[data-approval-action="approve"]').classes()).toContain('approval-action-approve')
+    expect(wrapper.find('[data-approval-action="reject"]').classes()).toContain('approval-action-reject')
+    expect(wrapper.find('.approval-reason-input').attributes('placeholder')).toBe('可选，补充审批说明')
 
     await wrapper.find('.approval-reason-input').setValue('checked')
     await wrapper.find('[data-approval-action="approve"]').trigger('click')

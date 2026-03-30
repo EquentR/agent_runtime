@@ -15,7 +15,7 @@ const emit = defineEmits<{
 
 const draft = ref('')
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
-const minComposerHeightPx = 64
+const minComposerHeightPx = 72
 
 const canSend = computed(() => !props.disabled && !props.busy && draft.value.trim().length > 0)
 const isBusy = computed(() => Boolean(props.busy))
