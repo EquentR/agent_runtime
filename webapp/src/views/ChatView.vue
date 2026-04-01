@@ -67,6 +67,7 @@ const selectedProviderId = ref('')
 const selectedModelId = ref('')
 const modelMenuOpen = ref(false)
 const modelMenuRef = ref<HTMLElement | null>(null)
+const showThinkingAndTools = ref(true)
 let activeStreamAbortController: AbortController | null = null
 let activeStreamingTaskId = ''
 const isAdmin = computed(() => getSessionRole() === 'admin')
@@ -872,7 +873,22 @@ onBeforeUnmount(() => {
             {{ activeConversationTitle() }}
           </strong>
         </div>
-        <span :class="topbarStatusClass">{{ topbarStatusLabel }}</span>
+        <div class="topbar-right">
+          <button
+            class="thinking-toggle"
+            :class="{ active: showThinkingAndTools }"
+            :title="showThinkingAndTools ? '隐藏思考与工具调用' : '显示思考与工具调用'"
+            :aria-label="showThinkingAndTools ? '隐藏思考与工具调用' : '显示思考与工具调用'"
+            :aria-pressed="showThinkingAndTools"
+            @click="showThinkingAndTools = !showThinkingAndTools"
+          >
+            <span class="thinking-toggle-track">
+              <span class="thinking-toggle-thumb"></span>
+            </span>
+            <span class="thinking-toggle-label">思考过程</span>
+          </button>
+          <span :class="topbarStatusClass">{{ topbarStatusLabel }}</span>
+        </div>
       </header>
 
       <p v-if="errorMessage" class="error-banner">{{ errorMessage }}</p>
@@ -881,6 +897,7 @@ onBeforeUnmount(() => {
         <MessageList
           :loading="messagesLoading || sending"
           :entries="entries"
+          :show-thinking-and-tools="showThinkingAndTools"
           :approval-decision-state-by-id="approvalDecisionStateById"
           :question-response-state-by-id="questionResponseStateById"
           @approval-decision="handleApprovalDecision"

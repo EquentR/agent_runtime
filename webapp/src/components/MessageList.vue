@@ -10,6 +10,7 @@ import type { QuestionInteractionSubmitInput, TranscriptEntry, TranscriptEntryDe
 const props = defineProps<{
   loading: boolean
   entries: TranscriptEntry[]
+  showThinkingAndTools?: boolean
   approvalDecisionStateById?: Record<string, { pending: boolean; decision: 'approve' | 'reject' }>
   questionResponseStateById?: Record<string, { pending: boolean }>
 }>()
@@ -100,6 +101,44 @@ function questionCustomText(entry: TranscriptEntry) {
 
 function questionIsPending(entry: TranscriptEntry) {
   return entry.kind === 'question' && entry.question_interaction?.status === 'pending'
+}
+
+// Track question interaction IDs that were ever seen as pending in this session.
+// These should stay expanded even after being answered (streaming scenario).
+// When entries are fully replaced (switching conversations), the set is reset.
+const everPendingQuestionIds = ref(new Set<string>())
+
+watch(
+  () => props.entries,
+  (nextEntries, previousEntries) => {
+    // If entries array is replaced with a shorter or empty list, it means we
+    // switched conversations — reset the set so history loads collapsed.
+    if (!previousEntries || nextEntries.length < previousEntries.length) {
+      everPendingQuestionIds.value = new Set()
+    }
+    for (const entry of nextEntries) {
+      if (entry.kind === 'question' && entry.question_interaction?.status === 'pending') {
+        const id = entry.question_interaction.id
+        if (id) {
+          everPendingQuestionIds.value.add(id)
+        }
+      }
+    }
+  },
+  { deep: true, immediate: true },
+)
+
+function questionIsOpen(entry: TranscriptEntry) {
+  if (entry.kind !== 'question' || !entry.question_interaction) {
+    return undefined
+  }
+  if (questionIsPending(entry)) {
+    return true
+  }
+  // Keep expanded if it was pending during this session (stream just answered it).
+  // History entries that loaded already answered will NOT be in the set → collapsed.
+  const id = entry.question_interaction.id
+  return id && everPendingQuestionIds.value.has(id) ? true : undefined
 }
 
 function questionSubmissionLocked(entry: TranscriptEntry) {
@@ -237,11 +276,19 @@ const normalizedEntries = computed(() => {
     }
   }
 
-  if (questionToolCallIds.size === 0) {
-    return props.entries
+  const hideThinkingAndTools = props.showThinkingAndTools === false
+
+  let filtered = props.entries
+
+  if (hideThinkingAndTools) {
+    filtered = filtered.filter((entry) => entry.kind !== 'reasoning' && entry.kind !== 'tool')
   }
 
-  return props.entries.filter((entry) => {
+  if (questionToolCallIds.size === 0) {
+    return filtered
+  }
+
+  return filtered.filter((entry) => {
     if (entry.kind !== 'tool') {
       return true
     }
@@ -530,7 +577,7 @@ function showCopyToast(message: string, variant: 'success' | 'error') {
             variant="chat"
             @approval-decision="emit('approval-decision', $event)"
           />
-          <details v-else-if="entry.kind === 'question' && entry.question_interaction" :open="questionIsPending(entry) || undefined" class="question-interaction-card chat-question-card trace-flat-shell">
+          <details v-else-if="entry.kind === 'question' && entry.question_interaction" :open="questionIsOpen(entry)" class="question-interaction-card chat-question-card trace-flat-shell">
             <summary class="trace-detail-summary">
               <span class="trace-summary-leading">
                 <span class="trace-kind-badge approval operation-badge" aria-hidden="true"><WarningFilled /></span>
