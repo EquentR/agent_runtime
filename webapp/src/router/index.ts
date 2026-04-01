@@ -1,4 +1,4 @@
-import { createMemoryHistory, createRouter, createWebHistory } from 'vue-router'
+import {createMemoryHistory, createRouter, createWebHashHistory} from 'vue-router'
 
 import { formatDocumentTitle } from '../lib/chat'
 import { syncSession } from '../lib/session'
@@ -53,7 +53,7 @@ const routes = [
 
 export function createAppRouter(memory = false) {
   const router = createRouter({
-    history: memory ? createMemoryHistory() : createWebHistory(),
+    history: memory ? createMemoryHistory() : createWebHashHistory(),
     routes,
   })
 

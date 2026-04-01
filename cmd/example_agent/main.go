@@ -3,7 +3,12 @@ package main
 import (
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
+	"os/exec"
+	"runtime"
+	"strings"
+	"time"
 
 	"github.com/EquentR/agent_runtime/app/commands"
 	"github.com/EquentR/agent_runtime/app/config"
@@ -38,7 +43,90 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+	go openConfiguredBrowserWhenReady(cfg, waitForServerReady, openBrowser)
 	commands.Serve(cfg, Version, GitCommit)
+}
+
+func openConfiguredBrowserWhenReady(cfg *config.Config, waiter func(string) bool, opener func(string) error) {
+	url := buildBrowserLaunchURL(cfg)
+	if url == "" {
+		return
+	}
+	if waiter != nil && !waiter(url) {
+		return
+	}
+	openConfiguredBrowserBestEffort(cfg, opener)
+}
+
+func openConfiguredBrowserBestEffort(cfg *config.Config, opener func(string) error) {
+	if opener == nil {
+		return
+	}
+	url := buildBrowserLaunchURL(cfg)
+	if url == "" {
+		return
+	}
+	_ = opener(url)
+}
+
+func buildBrowserLaunchURL(cfg *config.Config) string {
+	if cfg == nil || cfg.Server.Port <= 0 {
+		return ""
+	}
+	host := normalizeBrowserHost(cfg.Server.Host)
+	path := "/"
+	if len(cfg.Server.StaticPaths) > 0 {
+		path = normalizeBrowserPath(cfg.Server.StaticPaths[0].Path)
+	}
+	return fmt.Sprintf("http://%s:%d%s", host, cfg.Server.Port, path)
+}
+
+func normalizeBrowserHost(host string) string {
+	host = strings.TrimSpace(host)
+	switch host {
+	case "", "0.0.0.0", "::":
+		return "localhost"
+	default:
+		return host
+	}
+}
+
+func normalizeBrowserPath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "/"
+	}
+	if !strings.HasPrefix(path, "/") {
+		return "/" + path
+	}
+	return path
+}
+
+func waitForServerReady(url string) bool {
+	client := &http.Client{Timeout: 300 * time.Millisecond}
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err := client.Get(url)
+		if err == nil {
+			_ = resp.Body.Close()
+			return true
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return false
+}
+
+func openBrowser(url string) error {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+	case "darwin":
+		cmd = exec.Command("open", url)
+	default:
+		cmd = exec.Command("xdg-open", url)
+	}
+	return cmd.Start()
 }
 
 // loadConfig 从配置文件读取并解析应用配置。

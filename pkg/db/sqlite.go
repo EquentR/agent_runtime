@@ -47,10 +47,10 @@ func InitSqlite(cfg *Database) (*gorm.DB, error) {
 		}
 
 		cfg.DbDir = filepath.Join(wd, cfg.DbDir)
-		err = os.MkdirAll(cfg.DbDir, os.ModePerm)
-		if err != nil {
-			return nil, err
-		}
+	}
+	err = os.MkdirAll(cfg.DbDir, os.ModePerm)
+	if err != nil {
+		return nil, err
 	}
 	dbFile = filepath.Join(cfg.DbDir, cfg.Name+".db")
 	// 2、创建数据源

@@ -18,6 +18,11 @@ func RegisterAPI(apiGroup *gin.RouterGroup, registers []Register) {
 }
 
 func InitRouter(e *gin.Engine, registers []Register, baseUrl string, staticPaths []rest.Static) {
+	e.NoRoute(func(c *gin.Context) {
+		c.JSON(404, gin.H{
+			"msg": "Not Found",
+		})
+	})
 	// 注册 phase1 路由
 	rg := e.Group(baseUrl)
 	RegisterAPI(rg, registers)
