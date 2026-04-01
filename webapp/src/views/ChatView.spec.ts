@@ -13,9 +13,10 @@ const api = vi.hoisted(() => ({
   createRunTask: vi.fn(),
   decideTaskApproval: vi.fn(),
   deleteConversation: vi.fn(),
-  fetchModelCatalog: vi.fn(),
+	fetchModelCatalog: vi.fn(),
   fetchConversationMessages: vi.fn(),
   fetchConversations: vi.fn(),
+	fetchTaskInteractions: vi.fn(),
   fetchTaskApprovals: vi.fn(),
   findRunningTaskByConversation: vi.fn(),
   fetchTaskDetails: vi.fn(),
@@ -37,7 +38,23 @@ const api = vi.hoisted(() => ({
     created_at: approval.created_at,
     updated_at: approval.updated_at,
   })),
+  normalizeInteractionRecord: vi.fn((interaction: any) => ({
+    id: interaction.id ?? '',
+    task_id: interaction.task_id ?? '',
+    conversation_id: interaction.conversation_id ?? '',
+    step_index: interaction.step_index,
+    tool_call_id: interaction.tool_call_id ?? '',
+    kind: interaction.kind ?? '',
+    status: interaction.status ?? '',
+    request_json: interaction.request_json,
+    response_json: interaction.response_json,
+    responded_by: interaction.responded_by,
+    responded_at: interaction.responded_at,
+    created_at: interaction.created_at,
+    updated_at: interaction.updated_at,
+  })),
   normalizeTranscriptTokenUsage: vi.fn((usage: any) => usage),
+	respondTaskInteraction: vi.fn(),
   streamRunTask: vi.fn(),
 }))
 
@@ -84,9 +101,11 @@ describe('ChatView', () => {
     api.createRunTask.mockReset()
     api.decideTaskApproval.mockReset()
     api.deleteConversation.mockReset()
+    api.fetchTaskInteractions.mockReset()
     api.findRunningTaskByConversation.mockReset()
     api.fetchTaskDetails.mockReset()
     api.fetchTaskApprovals.mockReset()
+    api.respondTaskInteraction.mockReset()
     api.streamRunTask.mockReset()
     api.fetchModelCatalog.mockResolvedValue({
       default_provider_id: 'openai',
@@ -1144,6 +1163,271 @@ describe('ChatView', () => {
     runningStream.resolve({ conversation_id: 'conv_reject' })
     await flushPromises()
   })
+
+	it('submits a question interaction response from the chat transcript card', async () => {
+		const runningStream = createDeferred<{ conversation_id: string }>()
+
+		api.fetchConversations.mockResolvedValue([])
+		api.createRunTask.mockResolvedValue({ id: 'task_question', input: { conversation_id: 'conv_question' } })
+		api.streamRunTask.mockImplementation(async (_taskId: string, _onTextDelta: () => void, onEvent: (event: any) => void) => {
+			onEvent({
+				type: 'interaction.requested',
+				seq: 1,
+				payload: {
+					id: 'interaction_question_1',
+					task_id: 'task_question',
+					conversation_id: 'conv_question',
+					step_index: 3,
+					tool_call_id: 'call_ask',
+					kind: 'question',
+					status: 'pending',
+					request_json: {
+						question: 'Which environment?',
+						options: ['staging', 'production'],
+						allow_custom: true,
+						placeholder: 'Other environment',
+					},
+				},
+			})
+			return runningStream.promise
+		})
+		api.respondTaskInteraction.mockResolvedValue({
+			id: 'interaction_question_1',
+			task_id: 'task_question',
+			conversation_id: 'conv_question',
+			step_index: 3,
+			tool_call_id: 'call_ask',
+			kind: 'question',
+			status: 'responded',
+			request_json: {
+				question: 'Which environment?',
+				options: ['staging', 'production'],
+				allow_custom: true,
+			},
+			response_json: {
+				selected_option_id: 'staging',
+				custom_text: 'Blue env',
+			},
+			responded_by: 'demo-user',
+		})
+
+		const router = makeRouter()
+		await router.push('/chat')
+		await router.isReady()
+
+		const wrapper = mount(ChatView, {
+			global: {
+				plugins: [router],
+			},
+		})
+
+		await flushPromises()
+		await wrapper.find('textarea').setValue('hello')
+		await wrapper.find('form').trigger('submit.prevent')
+		await flushPromises()
+
+		wrapper.findComponent(MessageList).vm.$emit('interaction-respond', {
+			taskId: 'task_question',
+			interactionId: 'interaction_question_1',
+			selectedOptionId: 'staging',
+			customText: 'Blue env',
+		})
+		await flushPromises()
+
+		expect(api.respondTaskInteraction).toHaveBeenCalledWith('task_question', 'interaction_question_1', {
+			selected_option_id: 'staging',
+			custom_text: 'Blue env',
+		})
+	})
+
+	it('submits multiple selected options for question interactions', async () => {
+		const runningStream = createDeferred<{ conversation_id: string }>()
+
+		api.fetchConversations.mockResolvedValue([])
+		api.createRunTask.mockResolvedValue({ id: 'task_question_multi', input: { conversation_id: 'conv_question_multi' } })
+		api.streamRunTask.mockImplementation(async (_taskId: string, _onTextDelta: () => void, onEvent: (event: any) => void) => {
+			onEvent({
+				type: 'interaction.requested',
+				seq: 1,
+				payload: {
+					id: 'interaction_question_multi',
+					task_id: 'task_question_multi',
+					conversation_id: 'conv_question_multi',
+					kind: 'question',
+					status: 'pending',
+					request_json: {
+						question: 'Choose environments',
+						options: ['staging', 'preview'],
+						multiple: true,
+						allow_custom: false,
+					},
+				},
+			})
+			return runningStream.promise
+		})
+		api.respondTaskInteraction.mockResolvedValue({
+			id: 'interaction_question_multi',
+			task_id: 'task_question_multi',
+			conversation_id: 'conv_question_multi',
+			kind: 'question',
+			status: 'responded',
+			request_json: { question: 'Choose environments', options: ['staging', 'preview'], multiple: true, allow_custom: false },
+			response_json: { selected_option_ids: ['staging', 'preview'] },
+		})
+
+		const router = makeRouter()
+		await router.push('/chat')
+		await router.isReady()
+		const wrapper = mount(ChatView, { global: { plugins: [router] } })
+		await flushPromises()
+		await wrapper.find('textarea').setValue('hello')
+		await wrapper.find('form').trigger('submit.prevent')
+		await flushPromises()
+
+		wrapper.findComponent(MessageList).vm.$emit('interaction-respond', {
+			taskId: 'task_question_multi',
+			interactionId: 'interaction_question_multi',
+			selectedOptionIds: ['staging', 'preview'],
+		})
+		await flushPromises()
+
+		expect(api.respondTaskInteraction).toHaveBeenCalledWith('task_question_multi', 'interaction_question_multi', {
+			selected_option_ids: ['staging', 'preview'],
+			custom_text: undefined,
+		})
+	})
+
+	it('prevents duplicate question submissions while the first response is still pending', async () => {
+		const runningStream = createDeferred<{ conversation_id: string }>()
+		const responding = createDeferred<any>()
+
+		api.fetchConversations.mockResolvedValue([])
+		api.createRunTask.mockResolvedValue({ id: 'task_question_lock', input: { conversation_id: 'conv_question_lock' } })
+		api.streamRunTask.mockImplementation(async (_taskId: string, _onTextDelta: () => void, onEvent: (event: any) => void) => {
+			onEvent({
+				type: 'interaction.requested',
+				seq: 1,
+				payload: {
+					id: 'interaction_question_lock',
+					task_id: 'task_question_lock',
+					conversation_id: 'conv_question_lock',
+					kind: 'question',
+					status: 'pending',
+					request_json: {
+						question: 'Choose one',
+						options: ['staging', 'production'],
+						allow_custom: false,
+					},
+				},
+			})
+			return runningStream.promise
+		})
+		api.respondTaskInteraction.mockReturnValue(responding.promise)
+
+		const router = makeRouter()
+		await router.push('/chat')
+		await router.isReady()
+		const wrapper = mount(ChatView, { global: { plugins: [router] } })
+		await flushPromises()
+		await wrapper.find('textarea').setValue('hello')
+		await wrapper.find('form').trigger('submit.prevent')
+		await flushPromises()
+
+		wrapper.findComponent(MessageList).vm.$emit('interaction-respond', {
+			taskId: 'task_question_lock',
+			interactionId: 'interaction_question_lock',
+			selectedOptionId: 'staging',
+		})
+		await flushPromises()
+
+		wrapper.findComponent(MessageList).vm.$emit('interaction-respond', {
+			taskId: 'task_question_lock',
+			interactionId: 'interaction_question_lock',
+			selectedOptionId: 'production',
+		})
+		await flushPromises()
+
+		expect(api.respondTaskInteraction).toHaveBeenCalledTimes(1)
+		expect(wrapper.findComponent(MessageList).props('questionResponseStateById')).toEqual({
+			interaction_question_lock: { pending: true },
+		})
+
+		responding.resolve({
+			id: 'interaction_question_lock',
+			task_id: 'task_question_lock',
+			conversation_id: 'conv_question_lock',
+			kind: 'question',
+			status: 'responded',
+			request_json: { question: 'Choose one', options: ['staging', 'production'], allow_custom: false },
+			response_json: { selected_option_id: 'staging' },
+		})
+		runningStream.resolve({ conversation_id: 'conv_question_lock' })
+		await flushPromises()
+	})
+
+	it('hydrates waiting_for_interaction cards when reopening a waiting task', async () => {
+		localStorage.setItem(
+			'agent-runtime.chat-state',
+			JSON.stringify({
+				activeConversationId: 'conv_waiting_interaction',
+				activeTaskId: 'task_waiting_interaction',
+				activeTaskEventSeq: 0,
+				entries: [],
+				draftEntriesByConversation: {},
+			}),
+		)
+		api.fetchConversations.mockResolvedValue([
+			{
+				id: 'conv_waiting_interaction',
+				title: 'Waiting interaction chat',
+				last_message: 'hello',
+				message_count: 1,
+				provider_id: 'openai',
+				model_id: 'gpt-5.4',
+				created_by: 'demo-user',
+				created_at: '',
+				updated_at: '',
+			},
+		])
+		api.fetchConversationMessages.mockResolvedValue([{ role: 'user', content: 'hello' }])
+		api.fetchTaskDetails.mockResolvedValue({
+			id: 'task_waiting_interaction',
+			status: 'waiting',
+			input: { conversation_id: 'conv_waiting_interaction' },
+			suspend_reason: 'waiting_for_interaction',
+		})
+		api.fetchTaskInteractions.mockResolvedValue([
+			{
+				id: 'interaction_waiting_1',
+				task_id: 'task_waiting_interaction',
+				conversation_id: 'conv_waiting_interaction',
+				kind: 'question',
+				status: 'pending',
+				request_json: {
+					question: 'Which environment?',
+					options: ['staging', 'production'],
+					allow_custom: true,
+				},
+			},
+		])
+		api.streamRunTask.mockRejectedValue(new Error('Task event stream disconnected'))
+
+		const router = makeRouter()
+		await router.push('/chat')
+		await router.isReady()
+		const wrapper = mount(ChatView, { global: { plugins: [router] } })
+		await flushPromises()
+
+		const hydratedEntries = wrapper.findComponent(MessageList).props('entries') as Array<any>
+
+		expect(api.fetchTaskInteractions).toHaveBeenCalledWith('task_waiting_interaction')
+		expect(
+			hydratedEntries.some(
+				(entry) => entry.kind === 'question' && entry.question_interaction?.id === 'interaction_waiting_1',
+			),
+		).toBe(true)
+		expect(wrapper.text()).not.toContain('运行失败')
+	})
 
   it('does not render waiting_for_tool_approval as a failure state after stream interruption', async () => {
     api.fetchConversations.mockResolvedValue([])

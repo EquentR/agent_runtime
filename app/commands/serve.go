@@ -15,6 +15,7 @@ import (
 	coreagent "github.com/EquentR/agent_runtime/core/agent"
 	"github.com/EquentR/agent_runtime/core/approvals"
 	coreaudit "github.com/EquentR/agent_runtime/core/audit"
+	"github.com/EquentR/agent_runtime/core/interactions"
 	coreprompt "github.com/EquentR/agent_runtime/core/prompt"
 	googleclient "github.com/EquentR/agent_runtime/core/providers/client/google"
 	openaicompletions "github.com/EquentR/agent_runtime/core/providers/client/openai_completions"
@@ -50,11 +51,12 @@ func Serve(c *config.Config, version, commit string) {
 	// 初始化任务持久层与后台管理器，为后续 agent executor 预留接入点。
 	taskStore := coretasks.NewStore(db.DB())
 	approvalStore := approvals.NewStore(db.DB())
+	interactionStore := interactions.NewStore(db.DB())
 	auditRuntime, err := initAuditRuntime(db.DB())
 	if err != nil {
 		log.Panicf("Failed to init audit runtime: %v", err)
 	}
-	taskManager := newTaskManager(taskStore, approvalStore, c.Tasks, auditRuntime.TaskRecorder)
+	taskManager := newTaskManager(taskStore, approvalStore, interactionStore, c.Tasks, auditRuntime.TaskRecorder)
 	conversationStore := coreagent.NewConversationStore(db.DB())
 	if err := conversationStore.AutoMigrate(); err != nil {
 		log.Panicf("Failed to migrate conversation store: %v", err)
@@ -76,13 +78,13 @@ func Serve(c *config.Config, version, commit string) {
 		log.Panicf("Failed to register builtin tools: %v", err)
 	}
 	resolver := &coreagent.ModelResolver{Providers: c.LLM}
-	if err := registerAgentRunExecutor(taskManager, approvalStore, resolver, conversationStore, toolRegistry, promptRuntime.Resolver, workspaceRoot, buildLLMClientFactory(), auditRuntime.RunRecorder); err != nil {
+	if err := registerAgentRunExecutor(taskManager, approvalStore, interactionStore, resolver, conversationStore, toolRegistry, promptRuntime.Resolver, workspaceRoot, buildLLMClientFactory(), auditRuntime.RunRecorder); err != nil {
 		log.Panicf("Failed to register agent.run executor: %v", err)
 	}
 	taskManager.Start(globalCtx)
 
 	// 将任务管理器作为依赖注入路由层。
-	router.Init(engine, c.Server.ApiBasePath, c.Server.StaticPaths, buildRouterDependencies(taskManager, approvalStore, conversationStore, auditRuntime.Store, resolver, promptRuntime.Store, promptRuntime.Resolver, authLogic))
+	router.Init(engine, c.Server.ApiBasePath, c.Server.StaticPaths, buildRouterDependencies(taskManager, approvalStore, conversationStore, auditRuntime.Store, resolver, promptRuntime.Store, promptRuntime.Resolver, authLogic, interactionStore))
 
 	addr := fmt.Sprintf("%s:%d", c.Server.Host, c.Server.Port)
 	ln, err := net.Listen("tcp", addr)
@@ -123,17 +125,22 @@ func buildLLMClientFactory() coreagent.ClientFactory {
 	}
 }
 
-func registerAgentRunExecutor(taskManager *coretasks.Manager, approvalStore *approvals.Store, resolver *coreagent.ModelResolver, conversationStore *coreagent.ConversationStore, toolRegistry *coretools.Registry, promptResolver *coreprompt.Resolver, workspaceRoot string, clientFactory coreagent.ClientFactory, auditRecorder coreaudit.Recorder) error {
+func registerAgentRunExecutor(taskManager *coretasks.Manager, approvalStore *approvals.Store, interactionStore *interactions.Store, resolver *coreagent.ModelResolver, conversationStore *coreagent.ConversationStore, toolRegistry *coretools.Registry, promptResolver *coreprompt.Resolver, workspaceRoot string, clientFactory coreagent.ClientFactory, auditRecorder coreaudit.Recorder) error {
 	if taskManager == nil {
 		return fmt.Errorf("task manager is required")
 	}
-	return taskManager.RegisterExecutor("agent.run", coreagent.NewTaskExecutor(buildAgentRunExecutorDependencies(resolver, conversationStore, toolRegistry, approvalStore, promptResolver, workspaceRoot, clientFactory, auditRecorder)))
+	return taskManager.RegisterExecutor("agent.run", coreagent.NewTaskExecutor(buildAgentRunExecutorDependencies(resolver, conversationStore, toolRegistry, approvalStore, interactionStore, promptResolver, workspaceRoot, clientFactory, auditRecorder)))
 }
 
-func buildRouterDependencies(taskManager *coretasks.Manager, approvalStore *approvals.Store, conversationStore *coreagent.ConversationStore, auditStore *coreaudit.Store, resolver *coreagent.ModelResolver, promptStore *coreprompt.Store, promptResolver *coreprompt.Resolver, authLogic *logics.AuthLogic) router.Dependencies {
+func buildRouterDependencies(taskManager *coretasks.Manager, approvalStore *approvals.Store, conversationStore *coreagent.ConversationStore, auditStore *coreaudit.Store, resolver *coreagent.ModelResolver, promptStore *coreprompt.Store, promptResolver *coreprompt.Resolver, authLogic *logics.AuthLogic, interactionStores ...*interactions.Store) router.Dependencies {
+	var interactionStore *interactions.Store
+	if len(interactionStores) > 0 {
+		interactionStore = interactionStores[0]
+	}
 	return router.Dependencies{
 		TaskManager:       taskManager,
 		ApprovalStore:     approvalStore,
+		InteractionStore:  interactionStore,
 		ConversationStore: conversationStore,
 		AuditStore:        auditStore,
 		ModelResolver:     resolver,
@@ -179,12 +186,13 @@ func resolveEffectiveWorkspaceRoot(configuredRoot string) (string, error) {
 	return filepath.Clean(workspaceRoot), nil
 }
 
-func buildAgentRunExecutorDependencies(resolver *coreagent.ModelResolver, conversationStore *coreagent.ConversationStore, toolRegistry *coretools.Registry, approvalStore *approvals.Store, promptResolver *coreprompt.Resolver, workspaceRoot string, clientFactory coreagent.ClientFactory, auditRecorder coreaudit.Recorder) coreagent.ExecutorDependencies {
+func buildAgentRunExecutorDependencies(resolver *coreagent.ModelResolver, conversationStore *coreagent.ConversationStore, toolRegistry *coretools.Registry, approvalStore *approvals.Store, interactionStore *interactions.Store, promptResolver *coreprompt.Resolver, workspaceRoot string, clientFactory coreagent.ClientFactory, auditRecorder coreaudit.Recorder) coreagent.ExecutorDependencies {
 	return coreagent.ExecutorDependencies{
 		Resolver:          resolver,
 		ConversationStore: conversationStore,
 		Registry:          toolRegistry,
 		ApprovalStore:     approvalStore,
+		InteractionStore:  interactionStore,
 		PromptResolver:    promptResolver,
 		WorkspaceRoot:     workspaceRoot,
 		ClientFactory:     clientFactory,
@@ -211,9 +219,10 @@ func initAuditRuntime(database *gorm.DB) (*auditRuntime, error) {
 	}, nil
 }
 
-func newTaskManager(store *coretasks.Store, approvalStore *approvals.Store, cfg config.TaskManagerConfig, auditRecorder coretasks.AuditRecorder) *coretasks.Manager {
+func newTaskManager(store *coretasks.Store, approvalStore *approvals.Store, interactionStore *interactions.Store, cfg config.TaskManagerConfig, auditRecorder coretasks.AuditRecorder) *coretasks.Manager {
 	options := cfg.ManagerOptions(auditRecorder)
 	options.ApprovalStore = approvalStore
+	options.InteractionStore = interactionStore
 	return coretasks.NewManager(store, options)
 }
 

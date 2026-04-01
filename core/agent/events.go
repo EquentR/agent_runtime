@@ -23,6 +23,20 @@ type runnerToolOutputArtifact struct {
 	Error      string `json:"error,omitempty"`
 }
 
+type runnerInteractionRequestArtifact struct {
+	InteractionID string         `json:"interaction_id,omitempty"`
+	Kind          string         `json:"kind"`
+	ToolCallID    string         `json:"tool_call_id,omitempty"`
+	ToolName      string         `json:"tool_name"`
+	Request       map[string]any `json:"request,omitempty"`
+}
+
+type runnerInteractionResponseArtifact struct {
+	InteractionID string         `json:"interaction_id,omitempty"`
+	Kind          string         `json:"kind"`
+	Response      map[string]any `json:"response,omitempty"`
+}
+
 type StepEvent struct {
 	Step     int
 	Title    string
@@ -185,6 +199,41 @@ func (r *Runner) emitToolFinish(ctx context.Context, step int, call coretypes.To
 	r.appendAuditEvent(ctx, step, coreaudit.PhaseTool, "tool.finished", payload, artifactID)
 }
 
+func (r *Runner) emitInteractionRequested(ctx context.Context, step int, interactionID string, kind string, call coretypes.ToolCall, request map[string]any) {
+	artifactID := r.attachAuditArtifact(ctx, coreaudit.ArtifactKindInteractionRequest, runnerInteractionRequestArtifact{
+		InteractionID: interactionID,
+		Kind:          kind,
+		ToolCallID:    call.ID,
+		ToolName:      call.Name,
+		Request:       cloneAnyMap(request),
+	})
+	r.appendAuditEvent(ctx, step, coreaudit.PhaseInteraction, "interaction.requested", map[string]any{
+		"interaction_id": interactionID,
+		"kind":           kind,
+		"tool_call_id":   call.ID,
+		"tool_name":      call.Name,
+	}, artifactID)
+}
+
+func (r *Runner) emitInteractionResponded(ctx context.Context, step int, interactionID string, kind string, response map[string]any) {
+	artifactID := r.attachAuditArtifact(ctx, coreaudit.ArtifactKindInteractionResponse, runnerInteractionResponseArtifact{
+		InteractionID: interactionID,
+		Kind:          kind,
+		Response:      cloneAnyMap(response),
+	})
+	r.appendAuditEvent(ctx, step, coreaudit.PhaseInteraction, "interaction.responded", map[string]any{
+		"interaction_id": interactionID,
+		"kind":           kind,
+	}, artifactID)
+}
+
+func (r *Runner) emitInteractionResumed(ctx context.Context, step int, interactionID string, kind string) {
+	r.appendAuditEvent(ctx, step, coreaudit.PhaseInteraction, "interaction.resumed", map[string]any{
+		"interaction_id": interactionID,
+		"kind":           kind,
+	}, "")
+}
+
 func (r *Runner) emitLog(ctx context.Context, level string, message string, fields map[string]any) {
 	if r == nil || r.options.EventSink == nil {
 		return
@@ -277,4 +326,15 @@ func mergeAuditPayload(base map[string]any, extra any) map[string]any {
 		payload["value"] = typed
 	}
 	return payload
+}
+
+func cloneAnyMap(input map[string]any) map[string]any {
+	if len(input) == 0 {
+		return nil
+	}
+	cloned := make(map[string]any, len(input))
+	for key, value := range input {
+		cloned[key] = value
+	}
+	return cloned
 }

@@ -553,7 +553,7 @@ describe('MessageList', () => {
     expect(summary.text()).toContain('read_file')
   })
 
-  it('renders a warning-styled inline approval card with Chinese approval actions', async () => {
+  it('renders an approval card expanded by default and allows collapsing it', async () => {
     const wrapper = mount(MessageList, {
       props: {
         loading: false,
@@ -579,9 +579,11 @@ describe('MessageList', () => {
       },
     })
 
-    expect(wrapper.find('.approval-card').exists()).toBe(true)
-    expect(wrapper.find('.approval-card').classes()).toContain('chat-approval-card')
-    expect(wrapper.find('.approval-card .trace-kind-badge').classes()).toContain('approval')
+    const approvalCard = wrapper.get('.approval-card')
+    expect(approvalCard.element.tagName).toBe('DETAILS')
+    expect(approvalCard.classes()).toContain('chat-approval-card')
+    expect(approvalCard.attributes('open')).toBeDefined()
+    expect(approvalCard.find('.trace-kind-badge').classes()).toContain('approval')
     expect(wrapper.text()).toContain('bash')
     expect(wrapper.text()).toContain('high')
     expect(wrapper.text()).toContain('dangerous filesystem mutation')
@@ -599,6 +601,10 @@ describe('MessageList', () => {
     expect(wrapper.find('[data-approval-action="approve"]').classes()).toContain('approval-action-approve')
     expect(wrapper.find('[data-approval-action="reject"]').classes()).toContain('approval-action-reject')
     expect(wrapper.find('.approval-reason-input').attributes('placeholder')).toBe('可选，补充审批说明')
+
+    approvalCard.element.removeAttribute('open')
+    await nextTick()
+    expect(approvalCard.attributes('open')).toBeUndefined()
 
     await wrapper.find('.approval-reason-input').setValue('checked')
     await wrapper.find('[data-approval-action="approve"]').trigger('click')
@@ -711,5 +717,378 @@ describe('MessageList', () => {
     expect(wrapper.find('.trace-error-detail').exists()).toBe(false)
     expect(wrapper.find('.trace-block.error').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('运行失败')
+    expect(wrapper.findAll('.trace-block.approval > .approval-card')).toHaveLength(1)
+    expect(wrapper.findAll('.trace-block.approval > *')).toHaveLength(1)
   })
+
+	it('renders a question card expanded by default with custom answer as a peer option', async () => {
+		const wrapper = mount(MessageList, {
+			props: {
+				loading: false,
+				entries: [
+					{
+						id: 'question-entry-1',
+						kind: 'question',
+						title: '等待回答',
+						question_interaction: {
+							id: 'interaction_question_1',
+							task_id: 'task_1',
+							conversation_id: 'conv_1',
+							step_index: 3,
+							tool_call_id: 'call_ask',
+							kind: 'question',
+							status: 'pending',
+							request_json: {
+								question: 'Which environment?',
+								options: ['staging', 'production'],
+								allow_custom: true,
+								placeholder: 'Other environment',
+							},
+						},
+					} as any,
+				],
+			},
+		})
+
+		const questionCard = wrapper.get('.question-interaction-card')
+		expect(questionCard.element.tagName).toBe('DETAILS')
+		expect(questionCard.classes()).toContain('chat-question-card')
+		expect(questionCard.attributes('open')).toBeDefined()
+		expect(wrapper.find('.trace-error-detail').exists()).toBe(false)
+		expect(wrapper.text()).toContain('Which environment?')
+		expect(wrapper.findAll('[data-question-option]').length).toBe(3)
+		expect(wrapper.find('.question-options-list').exists()).toBe(true)
+		expect(wrapper.find('.question-options-list').element.tagName).toBe('UL')
+		expect(wrapper.findAll('.question-option-item')).toHaveLength(3)
+		expect(wrapper.find('.question-option-button').classes()).toContain('question-option-wireframe')
+		expect(wrapper.find('.question-option-button').classes()).not.toContain('ghost-button')
+		expect(wrapper.find('.question-option-button .question-option-indicator').classes()).toContain('single-choice')
+		expect(wrapper.get('[data-question-option="__custom__"]').text()).toContain('自定义回答')
+		expect(wrapper.find('.question-custom-input').exists()).toBe(false)
+		expect(wrapper.findAll('.trace-block.question > .question-interaction-card')).toHaveLength(1)
+		expect(wrapper.findAll('.trace-block.question > *')).toHaveLength(1)
+
+		questionCard.element.removeAttribute('open')
+		await nextTick()
+		expect(questionCard.attributes('open')).toBeUndefined()
+
+		questionCard.element.setAttribute('open', '')
+		await nextTick()
+		await wrapper.find('[data-question-option="__custom__"]').trigger('click')
+		expect(wrapper.find('[data-question-option="__custom__"]').classes()).toContain('selected')
+		expect(wrapper.find('[data-question-option="__custom__"]').classes()).not.toContain('active')
+		expect(wrapper.find('.question-custom-input').classes()).toContain('question-card-input')
+		expect(wrapper.find('.question-custom-input').attributes('placeholder')).toBe('Other environment')
+		expect(wrapper.find('.question-custom-input').classes()).toContain('question-option-custom-input')
+		await wrapper.find('.question-custom-input').setValue('Blue env')
+		await wrapper.find('[data-question-submit]').trigger('click')
+
+		expect(wrapper.emitted('interaction-respond')).toEqual([
+			[{ taskId: 'task_1', interactionId: 'interaction_question_1', selectedOptionId: undefined, customText: 'Blue env' }],
+		])
+	})
+
+	it('does not render a custom answer option when allow_custom is false', async () => {
+		const wrapper = mount(MessageList, {
+			props: {
+				loading: false,
+				entries: [
+					{
+						id: 'question-entry-2',
+						kind: 'question',
+						title: '等待回答',
+						question_interaction: {
+							id: 'interaction_question_2',
+							task_id: 'task_2',
+							conversation_id: 'conv_2',
+							kind: 'question',
+							status: 'pending',
+							request_json: {
+								question: 'Choose one',
+								options: ['staging', 'production'],
+								allow_custom: false,
+							},
+						},
+					} as any,
+				],
+			},
+		})
+
+		expect(wrapper.find('[data-question-option="__custom__"]').exists()).toBe(false)
+		expect(wrapper.find('.question-custom-input').exists()).toBe(false)
+		await wrapper.get('[data-question-submit]').trigger('click')
+		expect(wrapper.emitted('interaction-respond')).toBeUndefined()
+	})
+
+	it('keeps the custom answer input hidden until that option is selected', async () => {
+		const wrapper = mount(MessageList, {
+			props: {
+				loading: false,
+				entries: [
+					{
+						id: 'question-entry-4',
+						kind: 'question',
+						title: '等待回答',
+						question_interaction: {
+							id: 'interaction_question_4',
+							task_id: 'task_4',
+							conversation_id: 'conv_4',
+							kind: 'question',
+							status: 'pending',
+							request_json: {
+								question: 'Choose or type',
+								options: ['A', 'B'],
+								allow_custom: true,
+								placeholder: 'Type one',
+							},
+						},
+					} as any,
+				],
+			},
+		})
+
+		expect(wrapper.find('.question-custom-input').exists()).toBe(false)
+
+		await wrapper.get('[data-question-option="A"]').trigger('click')
+		expect(wrapper.find('.question-custom-input').exists()).toBe(false)
+
+		await wrapper.get('[data-question-option="__custom__"]').trigger('click')
+		expect(wrapper.find('.question-custom-input').exists()).toBe(true)
+	})
+
+	it('supports multiple selection question responses', async () => {
+		const wrapper = mount(MessageList, {
+			props: {
+				loading: false,
+				entries: [
+					{
+						id: 'question-entry-3',
+						kind: 'question',
+						title: '等待回答',
+						question_interaction: {
+							id: 'interaction_question_3',
+							task_id: 'task_3',
+							conversation_id: 'conv_3',
+							kind: 'question',
+							status: 'pending',
+							request_json: {
+								question: 'Choose environments',
+								options: ['staging', 'production', 'preview'],
+								multiple: true,
+								allow_custom: false,
+							},
+						},
+					} as any,
+				],
+			},
+		})
+
+		expect(wrapper.findAll('.question-option-indicator.square-choice')).toHaveLength(3)
+		expect(wrapper.find('.question-option-button .question-option-indicator').classes()).not.toContain('single-choice')
+
+		await wrapper.get('[data-question-option="staging"]').trigger('click')
+		await wrapper.get('[data-question-option="preview"]').trigger('click')
+		expect(wrapper.get('[data-question-option="staging"]').classes()).toContain('selected')
+		expect(wrapper.get('[data-question-option="preview"]').classes()).toContain('selected')
+		expect(wrapper.get('[data-question-option="staging"]').classes()).not.toContain('active')
+		await wrapper.get('[data-question-submit]').trigger('click')
+
+		expect(wrapper.emitted('interaction-respond')).toEqual([
+			[{ taskId: 'task_3', interactionId: 'interaction_question_3', selectedOptionIds: ['staging', 'preview'], customText: undefined }],
+		])
+	})
+
+	it('switches multi-select questions to custom-only when custom answer is chosen', async () => {
+		const wrapper = mount(MessageList, {
+			props: {
+				loading: false,
+				entries: [
+					{
+						id: 'question-entry-5',
+						kind: 'question',
+						title: '等待回答',
+						question_interaction: {
+							id: 'interaction_question_5',
+							task_id: 'task_5',
+							conversation_id: 'conv_5',
+							kind: 'question',
+							status: 'pending',
+							request_json: {
+								question: 'Choose environments',
+								options: ['staging', 'production', 'preview'],
+								multiple: true,
+								allow_custom: true,
+								placeholder: 'Type one',
+							},
+						},
+					} as any,
+				],
+			},
+		})
+
+		await wrapper.get('[data-question-option="staging"]').trigger('click')
+		await wrapper.get('[data-question-option="preview"]').trigger('click')
+		expect(wrapper.get('[data-question-option="staging"]').classes()).toContain('selected')
+		expect(wrapper.get('[data-question-option="preview"]').classes()).toContain('selected')
+
+		await wrapper.get('[data-question-option="__custom__"]').trigger('click')
+
+		expect(wrapper.get('[data-question-option="__custom__"]').classes()).toContain('selected')
+		expect(wrapper.get('[data-question-option="staging"]').classes()).not.toContain('selected')
+		expect(wrapper.get('[data-question-option="preview"]').classes()).not.toContain('selected')
+		expect(wrapper.find('.question-custom-input').exists()).toBe(true)
+	})
+
+	it('clears the custom answer selection when a normal option is chosen afterward', async () => {
+		const wrapper = mount(MessageList, {
+			props: {
+				loading: false,
+				entries: [
+					{
+						id: 'question-entry-6',
+						kind: 'question',
+						title: '等待回答',
+						question_interaction: {
+							id: 'interaction_question_6',
+							task_id: 'task_6',
+							conversation_id: 'conv_6',
+							kind: 'question',
+							status: 'pending',
+							request_json: {
+								question: 'Choose environments',
+								options: ['staging', 'production', 'preview'],
+								multiple: true,
+								allow_custom: true,
+								placeholder: 'Type one',
+							},
+						},
+					} as any,
+				],
+			},
+		})
+
+		await wrapper.get('[data-question-option="__custom__"]').trigger('click')
+		expect(wrapper.get('[data-question-option="__custom__"]').classes()).toContain('selected')
+		expect(wrapper.find('.question-custom-input').exists()).toBe(true)
+
+		await wrapper.get('[data-question-option="production"]').trigger('click')
+
+		expect(wrapper.get('[data-question-option="production"]').classes()).toContain('selected')
+		expect(wrapper.get('[data-question-option="__custom__"]').classes()).not.toContain('selected')
+		expect(wrapper.find('.question-custom-input').exists()).toBe(false)
+	})
+
+	it('disables question submit while a question response is in flight', async () => {
+		const wrapper = mount(MessageList, {
+			props: {
+				loading: false,
+				approvalDecisionStateById: {},
+				entries: [
+					{
+						id: 'question-entry-7',
+						kind: 'question',
+						title: '等待回答',
+						question_interaction: {
+							id: 'interaction_question_7',
+							task_id: 'task_7',
+							conversation_id: 'conv_7',
+							kind: 'question',
+							status: 'pending',
+							request_json: {
+								question: 'Choose one',
+								options: ['staging', 'production'],
+								allow_custom: false,
+							},
+						},
+					} as any,
+				],
+				questionResponseStateById: {
+					interaction_question_7: { pending: true },
+				},
+			},
+		})
+
+		expect(wrapper.get('[data-question-option="staging"]').attributes('disabled')).toBeDefined()
+		expect(wrapper.get('[data-question-submit]').attributes('disabled')).toBeDefined()
+		await wrapper.get('[data-question-submit]').trigger('click')
+		expect(wrapper.emitted('interaction-respond')).toBeUndefined()
+	})
+
+	it('renders the final answer content for a responded question card', () => {
+		const wrapper = mount(MessageList, {
+			props: {
+				loading: false,
+				entries: [
+					{
+						id: 'question-entry-8',
+						kind: 'question',
+						title: '已回答问题',
+						question_interaction: {
+							id: 'interaction_question_8',
+							task_id: 'task_8',
+							conversation_id: 'conv_8',
+							kind: 'question',
+							status: 'responded',
+							request_json: {
+								question: 'Which environment?',
+								options: ['staging', 'production'],
+								allow_custom: true,
+							},
+							response_json: {
+								selected_option_id: 'production',
+								custom_text: 'Blue env',
+							},
+							responded_by: 'demo-user',
+						},
+					} as any,
+				],
+			},
+		})
+
+		expect(wrapper.text()).toContain('已提交')
+		expect(wrapper.text()).toContain('最终回答')
+		expect(wrapper.text()).toContain('production')
+		expect(wrapper.text()).toContain('Blue env')
+		expect(wrapper.find('[data-question-submit]').exists()).toBe(false)
+	})
+
+	it('renders a direct text input when allow_custom is true but no options are provided', async () => {
+		const wrapper = mount(MessageList, {
+			props: {
+				loading: false,
+				entries: [
+					{
+						id: 'question-entry-custom-only',
+						kind: 'question',
+						title: '等待回答',
+						question_interaction: {
+							id: 'interaction_custom_only',
+							task_id: 'task_co',
+							conversation_id: 'conv_co',
+							kind: 'question',
+							status: 'pending',
+							request_json: {
+								question: 'Type your answer',
+								options: [],
+								allow_custom: true,
+								placeholder: 'Enter something',
+							},
+						},
+					} as any,
+				],
+			},
+		})
+
+		expect(wrapper.text()).toContain('Type your answer')
+		expect(wrapper.find('.question-options-list').exists()).toBe(false)
+		expect(wrapper.find('[data-question-custom-only]').exists()).toBe(true)
+		expect(wrapper.find('[data-question-custom-only]').attributes('placeholder')).toBe('Enter something')
+
+		await wrapper.find('[data-question-custom-only]').setValue('my free-form text')
+		await wrapper.find('[data-question-submit]').trigger('click')
+
+		expect(wrapper.emitted('interaction-respond')).toEqual([
+			[{ taskId: 'task_co', interactionId: 'interaction_custom_only', selectedOptionId: undefined, customText: 'my free-form text' }],
+		])
+	})
 })

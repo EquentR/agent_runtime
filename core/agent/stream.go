@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,12 +11,15 @@ import (
 
 	"github.com/EquentR/agent_runtime/core/approvals"
 	coreaudit "github.com/EquentR/agent_runtime/core/audit"
+	"github.com/EquentR/agent_runtime/core/interactions"
 	coreprompt "github.com/EquentR/agent_runtime/core/prompt"
 	model "github.com/EquentR/agent_runtime/core/providers/types"
 	coretypes "github.com/EquentR/agent_runtime/core/types"
 )
 
-var ErrToolApprovalPending = errors.New("tool approval pending")
+var ErrInteractionPending = errors.New("interaction pending")
+
+var ErrToolApprovalPending = ErrInteractionPending
 
 type StreamEventKind string
 
@@ -126,8 +130,8 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 		}
 
 		for step := 1; step <= r.options.MaxSteps; step++ {
-			if step == 1 && input.ToolApprovalResume != nil {
-				resume := cloneToolApprovalResume(input.ToolApprovalResume)
+			if step == 1 && input.InteractionResume != nil {
+				resume := cloneInteractionResume(input.InteractionResume)
 				checkpointMessages := cloneMessages(resume.Checkpoint.ProducedMessagesBeforeCheckpoint)
 				baseConversation = append(baseConversation, checkpointMessages...)
 				produced = append(produced, checkpointMessages...)
@@ -145,8 +149,8 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 				}
 				if suspended {
 					snapshotResult(resume.Checkpoint.Step)
-					result.StopReason = "waiting_for_tool_approval"
-					runErr = ErrToolApprovalPending
+					result.StopReason = "waiting_for_interaction"
+					runErr = ErrInteractionPending
 					return
 				}
 				afterToolTurn = len(resume.Checkpoint.AssistantMessage.ToolCalls) > 0
@@ -310,8 +314,8 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 			}
 			if suspended {
 				snapshotResult(step)
-				result.StopReason = "waiting_for_tool_approval"
-				runErr = ErrToolApprovalPending
+				result.StopReason = "waiting_for_interaction"
+				runErr = ErrInteractionPending
 				return
 			}
 			afterToolTurn = len(assistant.ToolCalls) > 0
@@ -350,7 +354,7 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 	}, nil
 }
 
-func (r *Runner) executeAssistantToolCalls(ctx context.Context, step int, title string, assistant model.Message, startIndex int, resume *toolApprovalResume, baseConversation *[]model.Message, produced *[]model.Message, memoryInsertedCount *int, toolCalls *int) (bool, error) {
+func (r *Runner) executeAssistantToolCalls(ctx context.Context, step int, title string, assistant model.Message, startIndex int, resume *interactionResume, baseConversation *[]model.Message, produced *[]model.Message, memoryInsertedCount *int, toolCalls *int) (bool, error) {
 	if startIndex < 0 || startIndex > len(assistant.ToolCalls) {
 		return false, fmt.Errorf("resume tool call index %d out of range", startIndex)
 	}
@@ -371,8 +375,25 @@ func (r *Runner) executeAssistantToolCalls(ctx context.Context, step int, title 
 		resumeCurrentCall := resume != nil && callIndex == startIndex
 		if resumeCurrentCall {
 			syntheticOutput = strings.TrimSpace(resume.SyntheticOutput)
+			r.emitInteractionResumed(ctx, step, resume.Checkpoint.InteractionID, inferInteractionKindFromToolCall(call.Name))
+			if syntheticOutput != "" {
+				var response map[string]any
+				if err := json.Unmarshal([]byte(syntheticOutput), &response); err == nil {
+					r.emitInteractionResponded(ctx, step, resume.Checkpoint.InteractionID, inferInteractionKindFromToolCall(call.Name), response)
+				}
+			}
 		} else {
-			required, suspendErr := r.maybeSuspendForToolApproval(ctx, step, callIndex, assistant, call, arguments, *produced)
+			if call.Name == "ask_user" {
+				required, suspendErr := r.maybeSuspendForQuestion(ctx, step, callIndex, assistant, call, arguments, *produced)
+				if suspendErr != nil {
+					return false, suspendErr
+				}
+				if required {
+					return true, nil
+				}
+				continue
+			}
+			required, suspendErr := r.maybeSuspendForInteraction(ctx, step, callIndex, assistant, call, arguments, *produced)
 			if suspendErr != nil {
 				return false, suspendErr
 			}
@@ -411,7 +432,7 @@ func (r *Runner) executeAssistantToolCalls(ctx context.Context, step int, title 
 	return false, nil
 }
 
-func (r *Runner) maybeSuspendForToolApproval(ctx context.Context, step int, toolCallIndex int, assistant model.Message, call coretypes.ToolCall, arguments map[string]interface{}, produced []model.Message) (bool, error) {
+func (r *Runner) maybeSuspendForInteraction(ctx context.Context, step int, toolCallIndex int, assistant model.Message, call coretypes.ToolCall, arguments map[string]interface{}, produced []model.Message) (bool, error) {
 	if r == nil || r.registry == nil {
 		return false, nil
 	}
@@ -440,12 +461,17 @@ func (r *Runner) maybeSuspendForToolApproval(ctx context.Context, step int, tool
 	if err != nil {
 		return false, err
 	}
+	r.emitInteractionRequested(ctx, step, approval.ID, string(interactions.KindApproval), call, map[string]any{
+		"arguments_summary": requirement.ArgumentsSummary,
+		"risk_level":        requirement.RiskLevel,
+		"reason":            requirement.Reason,
+	})
 	task, err := runtime.GetTask(ctx)
 	if err != nil {
 		return false, err
 	}
-	metadata, err := metadataWithToolApprovalCheckpoint(task.MetadataJSON, toolApprovalCheckpoint{
-		ApprovalID:                       approval.ID,
+	metadata, err := metadataWithInteractionCheckpoint(task.MetadataJSON, interactionCheckpoint{
+		InteractionID:                    approval.ID,
 		Step:                             step,
 		AssistantMessage:                 cloneMessage(assistant),
 		ToolCallIndex:                    toolCallIndex,
@@ -457,10 +483,84 @@ func (r *Runner) maybeSuspendForToolApproval(ctx context.Context, step int, tool
 	if err := runtime.UpdateMetadata(ctx, metadata); err != nil {
 		return false, err
 	}
-	if err := runtime.Suspend(ctx, "waiting_for_tool_approval"); err != nil {
+	if err := runtime.Suspend(ctx, "waiting_for_interaction"); err != nil {
 		return false, err
 	}
 	return true, nil
+}
+
+func (r *Runner) maybeSuspendForQuestion(ctx context.Context, step int, toolCallIndex int, assistant model.Message, call coretypes.ToolCall, arguments map[string]interface{}, produced []model.Message) (bool, error) {
+	runtime := r.taskRuntime()
+	if runtime == nil {
+		return false, fmt.Errorf("tool %q requires task runtime to request human input", call.Name)
+	}
+	question := strings.TrimSpace(fmt.Sprint(arguments["question"]))
+	if question == "" {
+		return false, fmt.Errorf("ask_user requires question")
+	}
+	options := make([]string, 0)
+	if rawOptions, ok := arguments["options"].([]any); ok {
+		for _, option := range rawOptions {
+			label := strings.TrimSpace(fmt.Sprint(option))
+			if label != "" {
+				options = append(options, label)
+			}
+		}
+	}
+	request := map[string]any{
+		"question":     question,
+		"options":      options,
+		"allow_custom": arguments["allow_custom"],
+		"placeholder":  arguments["placeholder"],
+		"multiple":     arguments["multiple"],
+	}
+	interaction, err := runtime.CreateInteraction(ctx, interactions.CreateInteractionInput{
+		ID:             questionInteractionID(runtime.TaskID(), call.ID),
+		TaskID:         runtime.TaskID(),
+		ConversationID: firstNonEmpty(r.options.Metadata["conversation_id"]),
+		StepIndex:      step,
+		ToolCallID:     call.ID,
+		Kind:           interactions.KindQuestion,
+		Request:        request,
+	})
+	if err != nil {
+		return false, err
+	}
+	interactionID := interaction.ID
+	r.emitInteractionRequested(ctx, step, interactionID, string(interactions.KindQuestion), call, request)
+	task, err := runtime.GetTask(ctx)
+	if err != nil {
+		return false, err
+	}
+	metadata, err := metadataWithInteractionCheckpoint(task.MetadataJSON, interactionCheckpoint{
+		InteractionID:                    interactionID,
+		Step:                             step,
+		AssistantMessage:                 cloneMessage(assistant),
+		ToolCallIndex:                    toolCallIndex,
+		ProducedMessagesBeforeCheckpoint: cloneMessages(produced),
+	})
+	if err != nil {
+		return false, err
+	}
+	if err := runtime.UpdateMetadata(ctx, metadata); err != nil {
+		return false, err
+	}
+	if err := runtime.Suspend(ctx, "waiting_for_interaction"); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func inferInteractionKindFromToolCall(toolName string) string {
+	if toolName == "ask_user" {
+		return string(interactions.KindQuestion)
+	}
+	return string(interactions.KindApproval)
+}
+
+func questionInteractionID(taskID string, toolCallID string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(taskID) + "\n" + strings.TrimSpace(toolCallID)))
+	return fmt.Sprintf("interaction_question_%x", sum[:16])
 }
 
 func (r *Runner) taskRuntime() taskRuntime {
@@ -493,7 +593,7 @@ func decodeToolArguments(call coretypes.ToolCall) (map[string]interface{}, error
 	return arguments, nil
 }
 
-func metadataWithToolApprovalCheckpoint(metadataJSON []byte, checkpoint toolApprovalCheckpoint) (map[string]any, error) {
+func metadataWithInteractionCheckpoint(metadataJSON []byte, checkpoint interactionCheckpoint) (map[string]any, error) {
 	metadata := map[string]any{}
 	if len(metadataJSON) > 0 {
 		if err := json.Unmarshal(metadataJSON, &metadata); err != nil {
@@ -503,11 +603,11 @@ func metadataWithToolApprovalCheckpoint(metadataJSON []byte, checkpoint toolAppr
 	if metadata == nil {
 		metadata = map[string]any{}
 	}
-	metadata[toolApprovalCheckpointMetadataKey] = checkpoint
+	metadata[interactionCheckpointMetadataKey] = checkpoint
 	return metadata, nil
 }
 
-func cloneToolApprovalResume(resume *toolApprovalResume) *toolApprovalResume {
+func cloneInteractionResume(resume *interactionResume) *interactionResume {
 	if resume == nil {
 		return nil
 	}

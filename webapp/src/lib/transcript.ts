@@ -1,6 +1,7 @@
 import type {
   ApprovalDecision,
   ConversationMessage,
+  InteractionRecord,
   TaskStreamEvent,
   ToolApproval,
   TranscriptEntry,
@@ -9,7 +10,7 @@ import type {
   TranscriptTokenUsage,
 } from '../types/api'
 
-import { normalizeToolApproval, normalizeTranscriptTokenUsage } from './api'
+import { normalizeInteractionRecord, normalizeToolApproval, normalizeTranscriptTokenUsage } from './api'
 
 function createEntryId(prefix: string) {
   return `${prefix}-${Math.random().toString(36).slice(2, 10)}`
@@ -155,6 +156,34 @@ function makeApprovalEntry(approval: ToolApproval): TranscriptEntry {
     approval,
     status: approval.status === 'pending' ? 'running' : approval.status === 'approved' ? 'done' : 'error',
   }
+}
+
+function makeQuestionInteractionEntry(interaction: InteractionRecord): TranscriptEntry {
+  return {
+    id: createEntryId('interaction-question'),
+    kind: 'question',
+    title: interaction.status === 'pending' ? '等待回答' : '已回答问题',
+    question_interaction: interaction,
+  }
+}
+
+function findQuestionInteractionEntryIndex(entries: TranscriptEntry[], interactionId: string) {
+  return entries.findIndex((entry) => entry.kind === 'question' && entry.question_interaction?.id === interactionId)
+}
+
+function upsertQuestionInteractionEntry(entries: TranscriptEntry[], interaction: InteractionRecord) {
+  const next = [...entries]
+  const index = findQuestionInteractionEntryIndex(next, interaction.id)
+  const entry = makeQuestionInteractionEntry(interaction)
+  if (index >= 0) {
+    next[index] = {
+      ...next[index],
+      ...entry,
+    }
+    return next
+  }
+  next.push(entry)
+  return next
 }
 
 export function buildApprovalStreamEvent(
@@ -376,12 +405,15 @@ function findReusableLiveToolGroupKey(entries: TranscriptEntry[]) {
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const entry = entries[index]
     if (entry.kind === 'tool' && entry.group_key) {
-      return entry.group_key
+      if (entry.status === 'running') {
+        return entry.group_key
+      }
+      return ''
     }
     if (entry.kind === 'reasoning') {
       continue
     }
-    if (entry.kind === 'user' || entry.kind === 'reply' || entry.kind === 'error') {
+    if (entry.kind === 'user' || entry.kind === 'reply' || entry.kind === 'error' || entry.kind === 'approval' || entry.kind === 'question') {
       break
     }
   }
@@ -397,7 +429,7 @@ function makeLiveToolGroupKey(entries: TranscriptEntry[]) {
 }
 
 function resolveStreamGroupKey(entries: TranscriptEntry[], payload: Record<string, unknown>) {
-  const step = payload.Step
+  const step = payload.Step ?? payload.step ?? payload.step_index ?? payload.StepIndex
   if (typeof step === 'string' || typeof step === 'number') {
     return `step-${String(step)}`
   }
@@ -736,13 +768,76 @@ export function buildTranscriptEntries(messages: ConversationMessage[]): Transcr
   const toolNames = new Map<string, string>()
   let assistantToolGroupIndex = 0
 
+  // Pre-scan: collect ask_user tool call arguments so we can synthesise
+  // question entries instead of plain tool entries for history.
+  const askUserArgsByCallId = new Map<string, Record<string, unknown>>()
+
   for (const message of messages) {
-    if (message.role === 'assistant' && (message.tool_calls ?? []).length > 0) {
-      assistantToolGroupIndex += 1
+    if (message.role === 'assistant') {
+      for (const tc of message.tool_calls ?? []) {
+        if (tc.name === 'ask_user') {
+          let args: Record<string, unknown> = {}
+          try {
+            args = JSON.parse(tc.arguments ?? '{}') as Record<string, unknown>
+          } catch {
+            // ignore malformed json
+          }
+          askUserArgsByCallId.set(tc.id, args)
+        }
+      }
+    }
+  }
+
+  for (const message of messages) {
+    if (message.role === 'assistant') {
+      const nonAskUserToolCalls = (message.tool_calls ?? []).filter((tc) => !askUserArgsByCallId.has(tc.id))
+      if (nonAskUserToolCalls.length > 0) {
+        assistantToolGroupIndex += 1
+      }
     }
 
-    entries = applyConversationMessage(entries, message, {
-      groupKey: message.role === 'assistant' && (message.tool_calls ?? []).length > 0 ? `persisted-step-${assistantToolGroupIndex}` : undefined,
+    // For tool result messages that correspond to ask_user calls, synthesise a
+    // responded question entry and skip the normal tool-result attachment.
+    if (message.role === 'tool' && message.tool_call_id && askUserArgsByCallId.has(message.tool_call_id)) {
+      const callId = message.tool_call_id
+      const args = askUserArgsByCallId.get(callId) ?? {}
+      const responseText = message.content ?? ''
+      let responseJson: Record<string, unknown> = { custom_text: responseText }
+      try {
+        const parsed: unknown = JSON.parse(responseText)
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          responseJson = parsed as Record<string, unknown>
+        }
+      } catch {
+        // not valid JSON – keep the plain text as custom_text
+      }
+      const interaction: InteractionRecord = {
+        id: `history-question-${callId}`,
+        task_id: '',
+        conversation_id: '',
+        tool_call_id: callId,
+        kind: 'question',
+        status: 'responded',
+        request_json: args,
+        response_json: responseJson,
+      }
+      entries = upsertQuestionInteractionEntry(entries, interaction)
+      continue
+    }
+
+    // Strip ask_user tool calls from assistant messages so they don't produce
+    // a tool entry – the corresponding question entry is added above instead.
+    const effectiveMessage: ConversationMessage =
+      message.role === 'assistant' && (message.tool_calls ?? []).some((tc) => askUserArgsByCallId.has(tc.id))
+        ? {
+            ...message,
+            tool_calls: (message.tool_calls ?? []).filter((tc) => !askUserArgsByCallId.has(tc.id)),
+          }
+        : message
+
+    const hasToolCalls = (effectiveMessage.tool_calls ?? []).length > 0
+    entries = applyConversationMessage(entries, effectiveMessage, {
+      groupKey: effectiveMessage.role === 'assistant' && hasToolCalls ? `persisted-step-${assistantToolGroupIndex}` : undefined,
       toolNames,
     })
   }
@@ -838,6 +933,32 @@ export function updateTranscriptFromStreamEvent(entries: TranscriptEntry[], even
 
   if (event.type === 'approval.resolved') {
     return upsertApprovalEntry(entries, normalizeToolApproval(payload))
+  }
+
+  if (event.type === 'interaction.requested' || event.type === 'interaction.responded') {
+    const interaction = normalizeInteractionRecord(payload as Record<string, unknown>)
+    if (interaction.kind === 'approval') {
+      return upsertApprovalEntry(entries, normalizeToolApproval({
+        id: interaction.id,
+        task_id: interaction.task_id,
+        conversation_id: interaction.conversation_id,
+        step_index: interaction.step_index,
+        tool_call_id: interaction.tool_call_id,
+        tool_name: String(interaction.request_json?.tool_name ?? ''),
+        arguments_summary: String(interaction.request_json?.arguments_summary ?? ''),
+        risk_level: String(interaction.request_json?.risk_level ?? ''),
+        reason: typeof interaction.request_json?.reason === 'string' ? interaction.request_json.reason : undefined,
+        status: interaction.status,
+        decision_reason: typeof interaction.response_json?.reason === 'string' ? interaction.response_json.reason : undefined,
+        decision_by: interaction.responded_by,
+        decision_at: interaction.responded_at,
+        created_at: interaction.created_at,
+        updated_at: interaction.updated_at,
+      }))
+    }
+    if (interaction.kind === 'question') {
+      return upsertQuestionInteractionEntry(entries, interaction)
+    }
   }
 
   if (event.type === 'task.failed') {

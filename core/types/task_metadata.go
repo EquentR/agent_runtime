@@ -1,3 +1,6 @@
 package types
 
-const TaskMetadataKeyToolApprovalCheckpoint = "tool_approval_checkpoint"
+const (
+	TaskMetadataKeyInteractionCheckpoint  = "interaction_checkpoint"
+	TaskMetadataKeyToolApprovalCheckpoint = "tool_approval_checkpoint"
+)

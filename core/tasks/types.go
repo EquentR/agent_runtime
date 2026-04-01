@@ -68,6 +68,10 @@ const (
 	EventApprovalRequested = "approval.requested"
 	// EventApprovalResolved 表示人工审批已经完成。
 	EventApprovalResolved = "approval.resolved"
+	// EventInteractionRequested 表示任务请求人工问题交互。
+	EventInteractionRequested = "interaction.requested"
+	// EventInteractionResponded 表示人工问题交互已经完成响应。
+	EventInteractionResponded = "interaction.responded"
 	// EventLogMessage 表示任务运行过程中的日志事件。
 	EventLogMessage = "log.message"
 	// EventChildTaskSpawned 预留给未来父子任务模型。

@@ -10,6 +10,7 @@ import {
   cancelTask,
   createRunTask,
   decideTaskApproval,
+  fetchTaskInteractions,
   deleteConversation,
   fetchConversationMessages,
   fetchConversations,
@@ -17,6 +18,7 @@ import {
   fetchTaskApprovals,
   fetchTaskDetails,
   findRunningTaskByConversation,
+	respondTaskInteraction,
   streamRunTask,
   TASK_STREAM_ABORTED_MESSAGE,
 } from '../lib/api'
@@ -34,6 +36,7 @@ import type {
   ModelCatalog,
   ModelCatalogEntry,
   ModelCatalogProvider,
+	QuestionInteractionSubmitInput,
   TaskDetails,
   TranscriptEntry,
   TranscriptTokenUsage,
@@ -56,6 +59,7 @@ const entries = ref<TranscriptEntry[]>([])
 const draftEntriesByConversation = ref<Record<string, TranscriptEntry[]>>({})
 const pendingConversationById = ref<Record<string, Conversation>>({})
 const approvalDecisionStateById = ref<Record<string, { pending: boolean; decision: 'approve' | 'reject' }>>({})
+const questionResponseStateById = ref<Record<string, { pending: boolean }>>({})
 const errorMessage = ref('')
 const modelCatalog = ref<ModelCatalog | null>(null)
 const catalogLoading = ref(false)
@@ -288,7 +292,7 @@ function isTaskActive(task: TaskDetails | null | undefined) {
 }
 
 async function hydratePendingApprovals(task: TaskDetails | null | undefined, conversationId = '') {
-  if (!task || task.status !== 'waiting' || task.suspend_reason !== 'waiting_for_tool_approval') {
+  if (!task || task.status !== 'waiting' || (task.suspend_reason !== 'waiting_for_tool_approval' && task.suspend_reason !== 'waiting_for_interaction')) {
     return
   }
 
@@ -297,6 +301,22 @@ async function hydratePendingApprovals(task: TaskDetails | null | undefined, con
     return
   }
 
+	let nextEntries = draftEntriesByConversation.value[taskConversationId] ?? (taskConversationId === activeConversationId.value ? entries.value : [])
+	if (task.suspend_reason === 'waiting_for_interaction') {
+		try {
+			const interactions = await fetchTaskInteractions(task.id)
+			for (const interaction of interactions.filter((item) => item.status === 'pending')) {
+				nextEntries = updateTranscriptFromStreamEvent(nextEntries, {
+					type: 'interaction.requested',
+					payload: interaction as unknown as Record<string, unknown>,
+				})
+			}
+			applyEntriesForConversation(taskConversationId, nextEntries)
+			return
+		} catch {
+			return
+		}
+	}
 	let approvals
 	try {
 		approvals = await fetchTaskApprovals(task.id)
@@ -305,14 +325,12 @@ async function hydratePendingApprovals(task: TaskDetails | null | undefined, con
 	}
 	const pendingApprovals = approvals.filter((approval) => approval.status === 'pending')
   if (pendingApprovals.length === 0) {
-    return
-  }
-
-  let nextEntries = draftEntriesByConversation.value[taskConversationId] ?? (taskConversationId === activeConversationId.value ? entries.value : [])
-  for (const approval of pendingApprovals) {
-    nextEntries = updateTranscriptFromStreamEvent(nextEntries, buildApprovalStreamEvent(approval, { type: 'approval.requested' }))
-  }
-  applyEntriesForConversation(taskConversationId, nextEntries)
+		return
+	}
+	for (const approval of pendingApprovals) {
+		nextEntries = updateTranscriptFromStreamEvent(nextEntries, buildApprovalStreamEvent(approval, { type: 'approval.requested' }))
+	}
+	applyEntriesForConversation(taskConversationId, nextEntries)
 }
 
 function stopActiveStream() {
@@ -424,6 +442,45 @@ async function handleApprovalDecision(input: {
     const nextState = { ...approvalDecisionStateById.value }
     delete nextState[input.approvalId]
     approvalDecisionStateById.value = nextState
+  }
+}
+
+async function handleInteractionRespond(input: QuestionInteractionSubmitInput) {
+  const taskId = input.taskId || activeTaskId.value
+  if (!taskId || !input.interactionId) {
+    return
+  }
+
+  if (questionResponseStateById.value[input.interactionId]?.pending) {
+    return
+  }
+
+  try {
+    errorMessage.value = ''
+    questionResponseStateById.value = {
+      ...questionResponseStateById.value,
+      [input.interactionId]: { pending: true },
+    }
+    const interaction = await respondTaskInteraction(taskId, input.interactionId, {
+      selected_option_id: input.selectedOptionId,
+      selected_option_ids: input.selectedOptionIds,
+      custom_text: input.customText,
+    })
+    const currentEntries = activeConversationId.value
+      ? draftEntriesByConversation.value[activeConversationId.value] ?? entries.value
+      : entries.value
+    const nextEntries = updateTranscriptFromStreamEvent(currentEntries, {
+      type: 'interaction.responded',
+      payload: interaction as unknown as Record<string, unknown>,
+    })
+    applyEntriesForConversation(activeConversationId.value, nextEntries)
+    void attachTaskStream(taskId, interaction.conversation_id || activeConversationId.value)
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '提交回答失败'
+  } finally {
+    const nextState = { ...questionResponseStateById.value }
+    delete nextState[input.interactionId]
+    questionResponseStateById.value = nextState
   }
 }
 
@@ -825,7 +882,9 @@ onBeforeUnmount(() => {
           :loading="messagesLoading || sending"
           :entries="entries"
           :approval-decision-state-by-id="approvalDecisionStateById"
+          :question-response-state-by-id="questionResponseStateById"
           @approval-decision="handleApprovalDecision"
+          @interaction-respond="handleInteractionRespond"
         />
       </div>
       <div class="chat-composer-dock">

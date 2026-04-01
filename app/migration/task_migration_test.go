@@ -2,13 +2,16 @@ package migration
 
 import (
 	"database/sql"
+	"encoding/json"
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/EquentR/agent_runtime/app/models"
 	"github.com/EquentR/agent_runtime/core/agent"
 	"github.com/EquentR/agent_runtime/core/approvals"
+	"github.com/EquentR/agent_runtime/core/interactions"
 	"github.com/EquentR/agent_runtime/core/memory"
 	"github.com/EquentR/agent_runtime/core/prompt"
 	coretasks "github.com/EquentR/agent_runtime/core/tasks"
@@ -252,6 +255,164 @@ func TestTaskMigrationCreatesToolApprovalsTable(t *testing.T) {
 		"updated_at",
 	)
 	assertTableHasUniqueIndexWithColumns(t, "tool_approvals", "task_id", "tool_call_id")
+}
+
+func TestTaskMigrationCreatesInteractionsTableAndBackfillsApprovals(t *testing.T) {
+	log.Init(&log.Config{Level: "error"})
+
+	db.Init(&db.Database{
+		Name:     "interaction_migration_test",
+		DbDir:    t.TempDir(),
+		InMemory: true,
+		LogLevel: "silent",
+	})
+
+	rawDB := db.DB()
+	if err := rawDB.Migrator().DropTable(&interactions.Interaction{}, &approvals.ToolApproval{}, &migrate.DataVersion{}); err != nil {
+		t.Fatalf("reset interaction migration tables error = %v", err)
+	}
+	if err := rawDB.AutoMigrate(&migrate.DataVersion{}, &approvals.ToolApproval{}); err != nil {
+		t.Fatalf("AutoMigrate(legacy approvals) error = %v", err)
+	}
+
+	expiresAt := time.Date(2026, time.March, 31, 10, 0, 0, 0, time.UTC)
+	decisionAt := time.Date(2026, time.March, 31, 10, 5, 0, 0, time.UTC)
+	approval := approvals.ToolApproval{
+		ID:               "approval_legacy_1",
+		TaskID:           "task_1",
+		ConversationID:   "conv_1",
+		StepIndex:        2,
+		ToolCallID:       "call_1",
+		ToolName:         "bash",
+		ArgumentsSummary: "rm -rf /tmp/demo",
+		RiskLevel:        "high",
+		Reason:           "dangerous filesystem mutation",
+		Status:           approvals.StatusApproved,
+		DecisionBy:       "alice",
+		DecisionReason:   "safe enough",
+		DecisionAt:       &decisionAt,
+		ExpiresAt:        &expiresAt,
+	}
+	if err := rawDB.Create(&approval).Error; err != nil {
+		t.Fatalf("seed legacy approval error = %v", err)
+	}
+	if err := rawDB.Create(&migrate.DataVersion{ID: 1, Version: "0.1.0"}).Error; err != nil {
+		t.Fatalf("seed data version error = %v", err)
+	}
+
+	Bootstrap("0.1.1")
+
+	assertTableHasColumns(t, "interactions",
+		"id",
+		"task_id",
+		"conversation_id",
+		"step_index",
+		"tool_call_id",
+		"kind",
+		"status",
+		"request_json",
+		"response_json",
+		"responded_by",
+		"responded_at",
+		"created_at",
+		"updated_at",
+	)
+
+	var interaction interactions.Interaction
+	if err := rawDB.First(&interaction, "id = ?", approval.ID).Error; err != nil {
+		t.Fatalf("load backfilled interaction error = %v", err)
+	}
+	if interaction.Kind != interactions.KindApproval {
+		t.Fatalf("interaction.Kind = %q, want %q", interaction.Kind, interactions.KindApproval)
+	}
+	if interaction.Status != interactions.StatusApproved {
+		t.Fatalf("interaction.Status = %q, want %q", interaction.Status, interactions.StatusApproved)
+	}
+	if interaction.RespondedBy != "alice" {
+		t.Fatalf("interaction.RespondedBy = %q, want %q", interaction.RespondedBy, "alice")
+	}
+	if interaction.RespondedAt == nil || !interaction.RespondedAt.Equal(decisionAt) {
+		t.Fatalf("interaction.RespondedAt = %v, want %v", interaction.RespondedAt, decisionAt)
+	}
+
+	var request map[string]any
+	if err := json.Unmarshal(interaction.RequestJSON, &request); err != nil {
+		t.Fatalf("json.Unmarshal(interaction.RequestJSON) error = %v", err)
+	}
+	if request["tool_name"] != approval.ToolName {
+		t.Fatalf("request.tool_name = %v, want %q", request["tool_name"], approval.ToolName)
+	}
+	if request["arguments_summary"] != approval.ArgumentsSummary {
+		t.Fatalf("request.arguments_summary = %v, want %q", request["arguments_summary"], approval.ArgumentsSummary)
+	}
+
+	var response map[string]any
+	if err := json.Unmarshal(interaction.ResponseJSON, &response); err != nil {
+		t.Fatalf("json.Unmarshal(interaction.ResponseJSON) error = %v", err)
+	}
+	if response["decision"] != string(approvals.DecisionApprove) {
+		t.Fatalf("response.decision = %v, want %q", response["decision"], approvals.DecisionApprove)
+	}
+
+	Bootstrap("0.1.1")
+	var count int64
+	if err := rawDB.Model(&interactions.Interaction{}).Count(&count).Error; err != nil {
+		t.Fatalf("count backfilled interactions error = %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("interaction count after rerun = %d, want 1", count)
+	}
+}
+
+func TestTaskMigrationBackfillsPendingApprovalWithoutResponsePayload(t *testing.T) {
+	log.Init(&log.Config{Level: "error"})
+
+	db.Init(&db.Database{
+		Name:     "interaction_pending_migration_test",
+		DbDir:    t.TempDir(),
+		InMemory: true,
+		LogLevel: "silent",
+	})
+
+	rawDB := db.DB()
+	if err := rawDB.Migrator().DropTable(&interactions.Interaction{}, &approvals.ToolApproval{}, &migrate.DataVersion{}); err != nil {
+		t.Fatalf("reset interaction migration tables error = %v", err)
+	}
+	if err := rawDB.AutoMigrate(&migrate.DataVersion{}, &approvals.ToolApproval{}); err != nil {
+		t.Fatalf("AutoMigrate(legacy approvals) error = %v", err)
+	}
+	approval := approvals.ToolApproval{
+		ID:               "approval_pending_1",
+		TaskID:           "task_1",
+		ConversationID:   "conv_1",
+		StepIndex:        1,
+		ToolCallID:       "call_1",
+		ToolName:         "bash",
+		ArgumentsSummary: "ls -la",
+		Status:           approvals.StatusPending,
+	}
+	if err := rawDB.Create(&approval).Error; err != nil {
+		t.Fatalf("seed pending approval error = %v", err)
+	}
+	if err := rawDB.Create(&migrate.DataVersion{ID: 1, Version: "0.1.0"}).Error; err != nil {
+		t.Fatalf("seed data version error = %v", err)
+	}
+
+	Bootstrap("0.1.1")
+
+	var interaction interactions.Interaction
+	if err := rawDB.First(&interaction, "id = ?", approval.ID).Error; err != nil {
+		t.Fatalf("load backfilled interaction error = %v", err)
+	}
+	if interaction.Status != interactions.StatusPending {
+		t.Fatalf("interaction.Status = %q, want %q", interaction.Status, interactions.StatusPending)
+	}
+	if len(interaction.ResponseJSON) != 0 {
+		t.Fatalf("interaction.ResponseJSON = %s, want empty", string(interaction.ResponseJSON))
+	}
+	if interaction.RespondedBy != "" {
+		t.Fatalf("interaction.RespondedBy = %q, want empty", interaction.RespondedBy)
+	}
 }
 
 func assertTableHasColumns(t *testing.T, table string, columns ...string) {

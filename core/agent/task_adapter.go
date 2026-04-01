@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/EquentR/agent_runtime/core/approvals"
+	"github.com/EquentR/agent_runtime/core/interactions"
 	coretasks "github.com/EquentR/agent_runtime/core/tasks"
 )
 
@@ -17,6 +18,7 @@ type taskRuntime interface {
 	UpdateMetadata(ctx context.Context, metadata any) error
 	Suspend(ctx context.Context, reason string) error
 	CreateApproval(ctx context.Context, input approvals.CreateApprovalInput) (*approvals.ToolApproval, error)
+	CreateInteraction(ctx context.Context, input interactions.CreateInteractionInput) (*interactions.Interaction, error)
 	GetApproval(ctx context.Context, approvalID string) (*approvals.ToolApproval, error)
 	ExpireApproval(ctx context.Context, approvalID string, reason string) (*approvals.ToolApproval, error)
 	ToolContext(ctx context.Context, stepID string) context.Context

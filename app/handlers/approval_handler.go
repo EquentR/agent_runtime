@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 
 	coreagent "github.com/EquentR/agent_runtime/core/agent"
 	"github.com/EquentR/agent_runtime/core/approvals"
+	"github.com/EquentR/agent_runtime/core/interactions"
 	coretasks "github.com/EquentR/agent_runtime/core/tasks"
 	resp "github.com/EquentR/agent_runtime/pkg/rest"
 	"github.com/gin-gonic/gin"
@@ -16,6 +18,7 @@ import (
 type ApprovalHandler struct {
 	manager       *coretasks.Manager
 	approvals     *approvals.Store
+	interactions  *interactions.Store
 	conversations *coreagent.ConversationStore
 	middlewares   []gin.HandlerFunc
 	authRequired  bool
@@ -30,10 +33,19 @@ func NewApprovalHandler(manager *coretasks.Manager, approvalStore *approvals.Sto
 	return &ApprovalHandler{
 		manager:       manager,
 		approvals:     approvalStore,
+		interactions:  nil,
 		conversations: conversations,
 		middlewares:   middlewares,
 		authRequired:  len(middlewares) > 0,
 	}
+}
+
+func (h *ApprovalHandler) WithInteractionStore(store *interactions.Store) *ApprovalHandler {
+	if h == nil {
+		return nil
+	}
+	h.interactions = store
+	return h
 }
 
 func (h *ApprovalHandler) Register(rg *gin.RouterGroup) {
@@ -62,9 +74,62 @@ func (h *ApprovalHandler) handleListTaskApprovals() (method, relativePath string
 		if err != nil {
 			return nil, opts, err
 		}
+		if h.interactions != nil {
+			listed, err := h.interactions.ListTaskInteractions(c.Request.Context(), task.ID)
+			if err != nil {
+				return nil, nil, err
+			}
+			return mapApprovalInteractions(listed), nil, nil
+		}
 		listed, err := h.approvals.ListTaskApprovals(c.Request.Context(), task.ID)
 		return listed, nil, err
 	}, nil
+}
+
+func mapApprovalInteractions(listed []interactions.Interaction) []approvals.ToolApproval {
+	approvalsList := make([]approvals.ToolApproval, 0, len(listed))
+	for _, interaction := range listed {
+		if interaction.Kind != interactions.KindApproval {
+			continue
+		}
+		approval := approvals.ToolApproval{
+			ID:             interaction.ID,
+			TaskID:         interaction.TaskID,
+			ConversationID: interaction.ConversationID,
+			StepIndex:      interaction.StepIndex,
+			ToolCallID:     interaction.ToolCallID,
+			Status:         approvals.Status(interaction.Status),
+			DecisionBy:     interaction.RespondedBy,
+			DecisionAt:     interaction.RespondedAt,
+			CreatedAt:      interaction.CreatedAt,
+			UpdatedAt:      interaction.UpdatedAt,
+		}
+		var request map[string]any
+		_ = json.Unmarshal(interaction.RequestJSON, &request)
+		approval.ToolName = stringValue(request["tool_name"])
+		approval.ArgumentsSummary = stringValue(request["arguments_summary"])
+		approval.RiskLevel = stringValue(request["risk_level"])
+		approval.Reason = stringValue(request["reason"])
+		var response map[string]any
+		_ = json.Unmarshal(interaction.ResponseJSON, &response)
+		approval.DecisionReason = stringValue(response["reason"])
+		switch stringValue(response["decision"]) {
+		case string(approvals.DecisionApprove):
+			approval.Status = approvals.StatusApproved
+		case string(approvals.DecisionReject):
+			if approval.Status == approvals.StatusExpired {
+				approval.Status = approvals.StatusExpired
+			} else {
+				approval.Status = approvals.StatusRejected
+			}
+		}
+		approvalsList = append(approvalsList, approval)
+	}
+	return approvalsList
+}
+
+func stringValue(value any) string {
+	return strings.TrimSpace(fmt.Sprint(value))
 }
 
 // @Summary 审批工具调用

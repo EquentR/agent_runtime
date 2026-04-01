@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/EquentR/agent_runtime/core/approvals"
+	"github.com/EquentR/agent_runtime/core/interactions"
 	coretools "github.com/EquentR/agent_runtime/core/tools"
 	coretypes "github.com/EquentR/agent_runtime/core/types"
 )
@@ -78,7 +79,25 @@ func (r *Runtime) CreateApproval(ctx context.Context, input approvals.CreateAppr
 	if input.TaskID == "" {
 		input.TaskID = r.taskID
 	}
-	return r.manager.CreateApproval(ctx, input)
+	approval, err := r.manager.CreateApproval(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := r.manager.ensureApprovalInteraction(ctx, approval); err != nil {
+		return nil, err
+	}
+	return approval, nil
+}
+
+// CreateInteraction 基于当前任务创建可恢复的人工交互记录。
+func (r *Runtime) CreateInteraction(ctx context.Context, input interactions.CreateInteractionInput) (*interactions.Interaction, error) {
+	if r == nil || r.manager == nil {
+		return nil, fmt.Errorf("task runtime is not configured")
+	}
+	if input.TaskID == "" {
+		input.TaskID = r.taskID
+	}
+	return r.manager.CreateInteraction(ctx, input)
 }
 
 // GetApproval 查询当前任务下的审批记录。
@@ -148,7 +167,7 @@ func (r *Runtime) Suspend(ctx context.Context, reason string) error {
 		r.manager.recordTaskWaiting(task)
 	}
 	r.manager.publish(events...)
-	if reason == "waiting_for_tool_approval" {
+	if isInteractionWaitReason(reason) {
 		if err := r.finalizeResolvedToolApprovalAfterSuspend(ctx, task); err != nil {
 			if recovered, recoveryErr := r.recoverResolvedToolApprovalAfterSuspend(ctx, task); recoveryErr == nil && recovered {
 				return nil
@@ -170,9 +189,12 @@ func (r *Runtime) finalizeResolvedToolApprovalAfterSuspend(ctx context.Context, 
 	if !ok {
 		return nil
 	}
-	approval, err := r.manager.approvals.GetApproval(ctx, task.ID, approvalID)
+	approval, err := r.manager.loadResolvedApprovalForInteraction(ctx, task.ID, approvalID)
 	if err != nil {
 		return err
+	}
+	if approval == nil {
+		return nil
 	}
 	if approval.Status == approvals.StatusPending {
 		return nil
@@ -193,14 +215,17 @@ func (r *Runtime) recoverResolvedToolApprovalAfterSuspend(ctx context.Context, t
 	if err != nil || !ok {
 		return false, err
 	}
-	approval, err := r.manager.approvals.GetApproval(ctx, task.ID, approvalID)
+	approval, err := r.manager.loadResolvedApprovalForInteraction(ctx, task.ID, approvalID)
 	if err != nil {
 		return false, err
+	}
+	if approval == nil {
+		return false, nil
 	}
 	if approval.Status == approvals.StatusPending {
 		return false, nil
 	}
-	resumed, events, err := r.manager.store.ResumeWaitingTask(ctx, task.ID, "tool_approval_finalize_recovery")
+	resumed, events, err := r.manager.store.ResumeWaitingTask(ctx, task.ID, "interaction_finalize_recovery")
 	if err != nil {
 		return false, err
 	}
@@ -219,6 +244,26 @@ func taskApprovalCheckpointID(metadataJSON []byte) (string, bool, error) {
 	if err := json.Unmarshal(metadataJSON, &metadata); err != nil {
 		return "", false, fmt.Errorf("decode task metadata: %w", err)
 	}
+	if raw, ok := metadata[coretypes.TaskMetadataKeyInteractionCheckpoint]; ok && len(raw) > 0 && string(raw) != "null" {
+		var checkpoint struct {
+			InteractionID string `json:"interaction_id"`
+		}
+		if err := json.Unmarshal(raw, &checkpoint); err != nil {
+			return "", false, fmt.Errorf("decode interaction checkpoint: %w", err)
+		}
+		if checkpoint.InteractionID != "" {
+			return checkpoint.InteractionID, true, nil
+		}
+		var legacyApprovalCheckpoint struct {
+			ApprovalID string `json:"approval_id"`
+		}
+		if err := json.Unmarshal(raw, &legacyApprovalCheckpoint); err != nil {
+			return "", false, fmt.Errorf("decode interaction checkpoint: %w", err)
+		}
+		if legacyApprovalCheckpoint.ApprovalID != "" {
+			return legacyApprovalCheckpoint.ApprovalID, true, nil
+		}
+	}
 	raw, ok := metadata[coretypes.TaskMetadataKeyToolApprovalCheckpoint]
 	if !ok || len(raw) == 0 || string(raw) == "null" {
 		return "", false, nil
@@ -233,6 +278,14 @@ func taskApprovalCheckpointID(metadataJSON []byte) (string, bool, error) {
 		return "", false, nil
 	}
 	return checkpoint.ApprovalID, true, nil
+}
+
+func isInteractionWaitReason(reason string) bool {
+	return reason == "waiting_for_interaction" || reason == "waiting_for_tool_approval"
+}
+
+func interactionKindIsApproval(interaction *interactions.Interaction) bool {
+	return interaction != nil && interaction.Kind == interactions.KindApproval
 }
 
 func (r *Runtime) isSuspended() bool {

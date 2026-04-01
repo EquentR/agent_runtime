@@ -11,6 +11,7 @@ import (
 
 	"github.com/EquentR/agent_runtime/core/approvals"
 	coreaudit "github.com/EquentR/agent_runtime/core/audit"
+	"github.com/EquentR/agent_runtime/core/interactions"
 	"github.com/EquentR/agent_runtime/core/memory"
 	coreprompt "github.com/EquentR/agent_runtime/core/prompt"
 	model "github.com/EquentR/agent_runtime/core/providers/types"
@@ -863,20 +864,20 @@ func TestRunnerSuspendsGuardedToolCallForApprovalBeforeToolStart(t *testing.T) {
 	}
 
 	result, err := runner.Run(context.Background(), RunInput{Messages: []model.Message{{Role: model.RoleUser, Content: "delete it"}}, Tools: registry.List()})
-	if !errors.Is(err, ErrToolApprovalPending) {
-		t.Fatalf("Run() error = %v, want ErrToolApprovalPending", err)
+	if !errors.Is(err, ErrInteractionPending) {
+		t.Fatalf("Run() error = %v, want ErrInteractionPending", err)
 	}
 	if executed {
 		t.Fatal("guarded tool executed before approval")
 	}
-	if runtime.suspendReason != "waiting_for_tool_approval" {
-		t.Fatalf("suspend reason = %q, want waiting_for_tool_approval", runtime.suspendReason)
+	if runtime.suspendReason != "waiting_for_interaction" {
+		t.Fatalf("suspend reason = %q, want waiting_for_interaction", runtime.suspendReason)
 	}
 	if len(runtime.approvals) != 1 {
 		t.Fatalf("approval count = %d, want 1", len(runtime.approvals))
 	}
-	if result.StopReason != "waiting_for_tool_approval" {
-		t.Fatalf("StopReason = %q, want waiting_for_tool_approval", result.StopReason)
+	if result.StopReason != "waiting_for_interaction" {
+		t.Fatalf("StopReason = %q, want waiting_for_interaction", result.StopReason)
 	}
 	if len(result.Messages) != 1 || result.Messages[0].Role != model.RoleAssistant {
 		t.Fatalf("result.Messages = %#v, want assistant checkpoint message only", result.Messages)
@@ -893,20 +894,20 @@ func TestRunnerSuspendsGuardedToolCallForApprovalBeforeToolStart(t *testing.T) {
 	if approvalRequested != 1 {
 		t.Fatalf("approval.requested count = %d, want 1; emits = %#v", approvalRequested, runtime.emits)
 	}
-	checkpointValue, ok := runtime.metadata[toolApprovalCheckpointMetadataKey]
+	checkpointValue, ok := runtime.metadata[coretypes.TaskMetadataKeyInteractionCheckpoint]
 	if !ok {
-		t.Fatalf("runtime metadata = %#v, want %q checkpoint key", runtime.metadata, toolApprovalCheckpointMetadataKey)
+		t.Fatalf("runtime metadata = %#v, want %q checkpoint key", runtime.metadata, coretypes.TaskMetadataKeyInteractionCheckpoint)
 	}
 	checkpointJSON, err := json.Marshal(checkpointValue)
 	if err != nil {
 		t.Fatalf("json.Marshal(checkpoint) error = %v", err)
 	}
-	var checkpoint toolApprovalCheckpoint
+	var checkpoint interactionCheckpoint
 	if err := json.Unmarshal(checkpointJSON, &checkpoint); err != nil {
 		t.Fatalf("json.Unmarshal(checkpoint) error = %v", err)
 	}
-	if checkpoint.ApprovalID != runtime.approvals[0].ID {
-		t.Fatalf("checkpoint approval id = %q, want %q", checkpoint.ApprovalID, runtime.approvals[0].ID)
+	if checkpoint.InteractionID != runtime.approvals[0].ID {
+		t.Fatalf("checkpoint interaction id = %q, want %q", checkpoint.InteractionID, runtime.approvals[0].ID)
 	}
 	if checkpoint.Step != 1 {
 		t.Fatalf("checkpoint step = %d, want 1", checkpoint.Step)
@@ -959,20 +960,226 @@ func TestRunnerSuspendsGuardedToolCallWhenTaskMetadataIsJSONNull(t *testing.T) {
 	if err == nil {
 		t.Fatal("Run() error = nil, want task suspended")
 	}
-	if !errors.Is(err, ErrToolApprovalPending) {
-		t.Fatalf("Run() error = %v, want ErrToolApprovalPending", err)
+	if !errors.Is(err, ErrInteractionPending) {
+		t.Fatalf("Run() error = %v, want ErrInteractionPending", err)
 	}
-	if runtime.suspendReason != "waiting_for_tool_approval" {
-		t.Fatalf("suspend reason = %q, want waiting_for_tool_approval", runtime.suspendReason)
+	if runtime.suspendReason != "waiting_for_interaction" {
+		t.Fatalf("suspend reason = %q, want waiting_for_interaction", runtime.suspendReason)
 	}
-	if result.StopReason != "waiting_for_tool_approval" {
-		t.Fatalf("StopReason = %q, want waiting_for_tool_approval", result.StopReason)
+	if result.StopReason != "waiting_for_interaction" {
+		t.Fatalf("StopReason = %q, want waiting_for_interaction", result.StopReason)
 	}
-	if _, ok := runtime.metadata[toolApprovalCheckpointMetadataKey]; !ok {
+	if _, ok := runtime.metadata[coretypes.TaskMetadataKeyInteractionCheckpoint]; !ok {
 		t.Fatalf("runtime metadata = %#v, want checkpoint key", runtime.metadata)
 	}
 	if len(runtime.approvals) != 1 {
 		t.Fatalf("approval count = %d, want 1", len(runtime.approvals))
+	}
+}
+
+func TestRunnerAuditRecordsInteractionRequestedBeforeApprovalSuspend(t *testing.T) {
+	registry := coretools.NewRegistry()
+	if err := registry.Register(coretools.Tool{
+		Name:         "delete_file",
+		ApprovalMode: coretypes.ToolApprovalModeAlways,
+		ApprovalEvaluator: func(arguments map[string]any) coretools.ApprovalRequirement {
+			return coretools.ApprovalRequirement{Required: true, ArgumentsSummary: "danger.txt", RiskLevel: coretools.RiskLevelHigh, Reason: "dangerous delete"}
+		},
+		Handler: func(context.Context, map[string]interface{}) (string, error) {
+			t.Fatal("guarded tool should not execute before approval")
+			return "", nil
+		},
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	client := &stubClient{streams: []model.Stream{newStubStream(
+		[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "delete_file", Arguments: `{"path":"danger.txt"}`}}}}},
+		model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "delete_file", Arguments: `{"path":"danger.txt"}`}}},
+		nil,
+	)}}
+	runtime := &recordingTaskRuntime{taskID: "task-approval-audit", metadata: map[string]any{"existing": "value"}}
+	recorder := newRecordingRunnerAuditRecorder()
+	runner, err := NewRunner(client, registry, Options{
+		Model:         "test-model",
+		TaskID:        "task-approval-audit",
+		Metadata:      map[string]string{"conversation_id": "conv-approval"},
+		EventSink:     &taskRuntimeSink{runtime: runtime},
+		AuditRecorder: recorder,
+		AuditRunID:    "run_interaction_approval",
+	})
+	if err != nil {
+		t.Fatalf("NewRunner() error = %v", err)
+	}
+	if _, err := runner.Run(context.Background(), RunInput{Messages: []model.Message{{Role: model.RoleUser, Content: "delete it"}}, Tools: registry.List()}); !errors.Is(err, ErrInteractionPending) {
+		t.Fatalf("Run() error = %v, want ErrInteractionPending", err)
+	}
+	event := recorder.requireEventForStep(t, "run_interaction_approval", "interaction.requested", 1)
+	if event.Phase != coreaudit.PhaseInteraction {
+		t.Fatalf("event phase = %q, want %q", event.Phase, coreaudit.PhaseInteraction)
+	}
+	artifact := recorder.requireArtifactByKind(t, "run_interaction_approval", coreaudit.ArtifactKindInteractionRequest)
+	var payload map[string]any
+	if err := json.Unmarshal(artifact.BodyJSON, &payload); err != nil {
+		t.Fatalf("json.Unmarshal(artifact) error = %v", err)
+	}
+	if payload["kind"] != string(interactions.KindApproval) {
+		t.Fatalf("artifact kind = %#v, want %q", payload["kind"], interactions.KindApproval)
+	}
+	if payload["tool_name"] != "delete_file" {
+		t.Fatalf("artifact tool_name = %#v, want delete_file", payload["tool_name"])
+	}
+}
+
+func TestRunnerSuspendsAskUserAsQuestionInteractionAndAuditsRequest(t *testing.T) {
+	registry := coretools.NewRegistry()
+	if err := registry.Register(coretools.Tool{
+		Name:        "ask_user",
+		Description: "Request structured human clarification and pause the current task",
+		Parameters: coretypes.JSONSchema{
+			Type: "object",
+			Properties: map[string]coretypes.SchemaProperty{
+				"question":     {Type: "string"},
+				"options":      {Type: "array", Items: &coretypes.SchemaProperty{Type: "string"}},
+				"allow_custom": {Type: "boolean"},
+			},
+			Required: []string{"question"},
+		},
+		Handler: func(context.Context, map[string]interface{}) (string, error) {
+			return "", fmt.Errorf("ask_user is handled by the agent runtime")
+		},
+	}); err != nil {
+		t.Fatalf("Register(ask_user) error = %v", err)
+	}
+	client := &stubClient{streams: []model.Stream{newStubStream(
+		[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_ask", Name: "ask_user", Arguments: `{"question":"Which environment?","options":["Staging","Production"],"allow_custom":true}`}}}}},
+		model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_ask", Name: "ask_user", Arguments: `{"question":"Which environment?","options":["Staging","Production"],"allow_custom":true}`}}},
+		nil,
+	)}}
+	runtime := &recordingTaskRuntime{taskID: "task-question-audit", metadata: map[string]any{}}
+	recorder := newRecordingRunnerAuditRecorder()
+	runner, err := NewRunner(client, registry, Options{
+		Model:         "test-model",
+		TaskID:        "task-question-audit",
+		Metadata:      map[string]string{"conversation_id": "conv-question"},
+		EventSink:     &taskRuntimeSink{runtime: runtime},
+		AuditRecorder: recorder,
+		AuditRunID:    "run_interaction_question",
+	})
+	if err != nil {
+		t.Fatalf("NewRunner() error = %v", err)
+	}
+	result, err := runner.Run(context.Background(), RunInput{Messages: []model.Message{{Role: model.RoleUser, Content: "deploy it"}}, Tools: registry.List()})
+	if !errors.Is(err, ErrInteractionPending) {
+		t.Fatalf("Run() error = %v, want ErrInteractionPending", err)
+	}
+	if result.StopReason != "waiting_for_interaction" {
+		t.Fatalf("result.StopReason = %q, want waiting_for_interaction", result.StopReason)
+	}
+	if runtime.suspendReason != "waiting_for_interaction" {
+		t.Fatalf("runtime.suspendReason = %q, want waiting_for_interaction", runtime.suspendReason)
+	}
+	event := recorder.requireEventForStep(t, "run_interaction_question", "interaction.requested", 1)
+	if event.Phase != coreaudit.PhaseInteraction {
+		t.Fatalf("event phase = %q, want %q", event.Phase, coreaudit.PhaseInteraction)
+	}
+	artifact := recorder.requireArtifactByKind(t, "run_interaction_question", coreaudit.ArtifactKindInteractionRequest)
+	var payload map[string]any
+	if err := json.Unmarshal(artifact.BodyJSON, &payload); err != nil {
+		t.Fatalf("json.Unmarshal(artifact) error = %v", err)
+	}
+	if payload["kind"] != string(interactions.KindQuestion) {
+		t.Fatalf("artifact kind = %#v, want %q", payload["kind"], interactions.KindQuestion)
+	}
+	if payload["tool_name"] != "ask_user" {
+		t.Fatalf("artifact tool_name = %#v, want ask_user", payload["tool_name"])
+	}
+}
+
+func TestRunnerAskUserUsesDistinctInteractionIDsAcrossTasksForSameToolCallID(t *testing.T) {
+	registry := coretools.NewRegistry()
+	if err := registry.Register(coretools.Tool{
+		Name:        "ask_user",
+		Description: "Request structured human clarification and pause the current task",
+		Parameters: coretypes.JSONSchema{
+			Type: "object",
+			Properties: map[string]coretypes.SchemaProperty{
+				"question":     {Type: "string"},
+				"options":      {Type: "array", Items: &coretypes.SchemaProperty{Type: "string"}},
+				"allow_custom": {Type: "boolean"},
+			},
+			Required: []string{"question"},
+		},
+		Handler: func(context.Context, map[string]interface{}) (string, error) {
+			return "", fmt.Errorf("ask_user is handled by the agent runtime")
+		},
+	}); err != nil {
+		t.Fatalf("Register(ask_user) error = %v", err)
+	}
+
+	db := mustOpenExecutorTaskDB(t)
+	interactionStore := newExecutorInteractionStoreForTest(t, db)
+	newRunner := func(taskID string, conversationID string) *Runner {
+		t.Helper()
+		client := &stubClient{streams: []model.Stream{newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "functions.ask_user:0", Name: "ask_user", Arguments: `{"question":"Which environment?","options":["staging","production"],"allow_custom":true}`}}}}},
+			model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "functions.ask_user:0", Name: "ask_user", Arguments: `{"question":"Which environment?","options":["staging","production"],"allow_custom":true}`}}},
+			nil,
+		)}}
+		runtime := &interactionStoreTaskRuntime{
+			recordingTaskRuntime: &recordingTaskRuntime{taskID: taskID, metadata: map[string]any{}},
+			store:                interactionStore,
+		}
+		runner, err := NewRunner(client, registry, Options{
+			Model:     "test-model",
+			TaskID:    taskID,
+			Metadata:  map[string]string{"conversation_id": conversationID},
+			EventSink: &taskRuntimeSink{runtime: runtime},
+		})
+		if err != nil {
+			t.Fatalf("NewRunner() error = %v", err)
+		}
+		return runner
+	}
+
+	ctx := context.Background()
+	firstResult, err := newRunner("task_question_1", "conv_question_1").Run(ctx, RunInput{
+		Messages: []model.Message{{Role: model.RoleUser, Content: "deploy it"}},
+		Tools:    registry.List(),
+	})
+	if !errors.Is(err, ErrInteractionPending) {
+		t.Fatalf("first Run() error = %v, want ErrInteractionPending", err)
+	}
+	if firstResult.StopReason != "waiting_for_interaction" {
+		t.Fatalf("first StopReason = %q, want waiting_for_interaction", firstResult.StopReason)
+	}
+
+	secondResult, err := newRunner("task_question_2", "conv_question_2").Run(ctx, RunInput{
+		Messages: []model.Message{{Role: model.RoleUser, Content: "deploy it"}},
+		Tools:    registry.List(),
+	})
+	if !errors.Is(err, ErrInteractionPending) {
+		t.Fatalf("second Run() error = %v, want ErrInteractionPending", err)
+	}
+	if secondResult.StopReason != "waiting_for_interaction" {
+		t.Fatalf("second StopReason = %q, want waiting_for_interaction", secondResult.StopReason)
+	}
+
+	firstInteractions, err := interactionStore.ListTaskInteractions(ctx, "task_question_1")
+	if err != nil {
+		t.Fatalf("ListTaskInteractions(task_question_1) error = %v", err)
+	}
+	secondInteractions, err := interactionStore.ListTaskInteractions(ctx, "task_question_2")
+	if err != nil {
+		t.Fatalf("ListTaskInteractions(task_question_2) error = %v", err)
+	}
+	if len(firstInteractions) != 1 || len(secondInteractions) != 1 {
+		t.Fatalf("interaction counts = (%d, %d), want exactly one per task", len(firstInteractions), len(secondInteractions))
+	}
+	if firstInteractions[0].ToolCallID != "functions.ask_user:0" || secondInteractions[0].ToolCallID != "functions.ask_user:0" {
+		t.Fatalf("tool call ids = (%q, %q), want functions.ask_user:0 for both", firstInteractions[0].ToolCallID, secondInteractions[0].ToolCallID)
+	}
+	if firstInteractions[0].ID == secondInteractions[0].ID {
+		t.Fatalf("interaction ids = (%q, %q), want distinct ids across tasks", firstInteractions[0].ID, secondInteractions[0].ID)
 	}
 }
 
@@ -1116,6 +1323,21 @@ type stubClient struct {
 	streamRequests []model.ChatRequest
 }
 
+type interactionStoreTaskRuntime struct {
+	*recordingTaskRuntime
+	store *interactions.Store
+}
+
+func (r *interactionStoreTaskRuntime) CreateInteraction(ctx context.Context, input interactions.CreateInteractionInput) (*interactions.Interaction, error) {
+	interaction, err := r.store.CreateInteraction(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	r.recordingTaskRuntime.interactions = append(r.recordingTaskRuntime.interactions, interaction)
+	r.recordingTaskRuntime.emits = append(r.recordingTaskRuntime.emits, recordedEmit{eventType: coretasks.EventInteractionRequested, level: "info", payload: interaction})
+	return interaction, nil
+}
+
 func (s *stubClient) Chat(_ context.Context, req model.ChatRequest) (model.ChatResponse, error) {
 	s.requests = append(s.requests, req)
 	if s.err != nil {
@@ -1190,6 +1412,7 @@ type recordingTaskRuntime struct {
 	metadata      map[string]any
 	suspendReason string
 	approvals     []*approvals.ToolApproval
+	interactions  []*interactions.Interaction
 }
 
 type toolArgumentsAuditArtifact struct {
@@ -1438,6 +1661,21 @@ func (r *recordingTaskRuntime) CreateApproval(_ context.Context, input approvals
 	r.approvals = append(r.approvals, approval)
 	r.emits = append(r.emits, recordedEmit{eventType: coretasks.EventApprovalRequested, level: "info", payload: approval})
 	return approval, nil
+}
+
+func (r *recordingTaskRuntime) CreateInteraction(_ context.Context, input interactions.CreateInteractionInput) (*interactions.Interaction, error) {
+	interaction := &interactions.Interaction{
+		ID:             input.ID,
+		TaskID:         input.TaskID,
+		ConversationID: input.ConversationID,
+		StepIndex:      input.StepIndex,
+		ToolCallID:     input.ToolCallID,
+		Kind:           input.Kind,
+		Status:         interactions.StatusPending,
+	}
+	r.interactions = append(r.interactions, interaction)
+	r.emits = append(r.emits, recordedEmit{eventType: coretasks.EventInteractionRequested, level: "info", payload: interaction})
+	return interaction, nil
 }
 
 func (r *recordingTaskRuntime) GetApproval(_ context.Context, approvalID string) (*approvals.ToolApproval, error) {

@@ -10,9 +10,23 @@ import (
 	"time"
 
 	"github.com/EquentR/agent_runtime/core/approvals"
+	"github.com/EquentR/agent_runtime/core/interactions"
 	coretypes "github.com/EquentR/agent_runtime/core/types"
 	"gorm.io/gorm"
 )
+
+func newApprovalAndInteractionStoresForTest(t *testing.T, store *Store) (*approvals.Store, *interactions.Store) {
+	t.Helper()
+	approvalStore := approvals.NewStore(store.db)
+	if err := approvalStore.AutoMigrate(); err != nil {
+		t.Fatalf("approvalStore.AutoMigrate() error = %v", err)
+	}
+	interactionStore := interactions.NewStore(store.db)
+	if err := interactionStore.AutoMigrate(); err != nil {
+		t.Fatalf("interactionStore.AutoMigrate() error = %v", err)
+	}
+	return approvalStore, interactionStore
+}
 
 func TestApprovalEventConstants(t *testing.T) {
 	if EventApprovalRequested != "approval.requested" {
@@ -25,11 +39,8 @@ func TestApprovalEventConstants(t *testing.T) {
 
 func TestManagerResolveTaskApprovalResumesWaitingTaskExactlyOnce(t *testing.T) {
 	store := newTestStore(t)
-	approvalStore := approvals.NewStore(store.db)
-	if err := approvalStore.AutoMigrate(); err != nil {
-		t.Fatalf("approvalStore.AutoMigrate() error = %v", err)
-	}
-	manager := NewManager(store, ManagerOptions{ApprovalStore: approvalStore})
+	approvalStore, interactionStore := newApprovalAndInteractionStoresForTest(t, store)
+	manager := NewManager(store, ManagerOptions{ApprovalStore: approvalStore, InteractionStore: interactionStore})
 
 	task, err := manager.CreateTask(context.Background(), CreateTaskInput{TaskType: "agent.run", CreatedBy: "alice"})
 	if err != nil {
@@ -112,11 +123,8 @@ func TestManagerResolveTaskApprovalResumesWaitingTaskExactlyOnce(t *testing.T) {
 
 func TestManagerResolveTaskApprovalRetriesAfterResolvedEventWriteFailure(t *testing.T) {
 	store := newTestStore(t)
-	approvalStore := approvals.NewStore(store.db)
-	if err := approvalStore.AutoMigrate(); err != nil {
-		t.Fatalf("approvalStore.AutoMigrate() error = %v", err)
-	}
-	manager := NewManager(store, ManagerOptions{ApprovalStore: approvalStore})
+	approvalStore, interactionStore := newApprovalAndInteractionStoresForTest(t, store)
+	manager := NewManager(store, ManagerOptions{ApprovalStore: approvalStore, InteractionStore: interactionStore})
 
 	task, err := manager.CreateTask(context.Background(), CreateTaskInput{TaskType: "agent.run", CreatedBy: "alice"})
 	if err != nil {
@@ -214,16 +222,14 @@ func TestManagerResolveTaskApprovalRetriesAfterResolvedEventWriteFailure(t *test
 
 func TestManagerReconcilesWaitingToolApprovalAfterPostSuspendFinalizeFailure(t *testing.T) {
 	store := newTestStore(t)
-	approvalStore := approvals.NewStore(store.db)
-	if err := approvalStore.AutoMigrate(); err != nil {
-		t.Fatalf("approvalStore.AutoMigrate() error = %v", err)
-	}
+	approvalStore, interactionStore := newApprovalAndInteractionStoresForTest(t, store)
 	manager := NewManager(store, ManagerOptions{
 		RunnerID:          "runner-1",
 		PollInterval:      5 * time.Millisecond,
 		LeaseDuration:     100 * time.Millisecond,
 		HeartbeatInterval: 20 * time.Millisecond,
 		ApprovalStore:     approvalStore,
+		InteractionStore:  interactionStore,
 	})
 
 	var mu sync.Mutex
@@ -248,13 +254,13 @@ func TestManagerReconcilesWaitingToolApprovalAfterPostSuspendFinalizeFailure(t *
 			if err != nil {
 				return nil, err
 			}
-			if err := runtime.UpdateMetadata(withTransientWriteErrorContext(ctx, "post-suspend-approval-finalize"), map[string]any{coretypes.TaskMetadataKeyToolApprovalCheckpoint: map[string]any{"approval_id": approval.ID}}); err != nil {
+			if err := runtime.UpdateMetadata(withTransientWriteErrorContext(ctx, "post-suspend-approval-finalize"), map[string]any{coretypes.TaskMetadataKeyInteractionCheckpoint: map[string]any{"interaction_id": approval.ID}}); err != nil {
 				return nil, err
 			}
 			if _, _, err := approvalStore.ResolveApproval(ctx, task.ID, approval.ID, approvals.ResolveApprovalInput{Decision: approvals.DecisionApprove, Reason: "safe", DecisionBy: "alice"}); err != nil {
 				return nil, err
 			}
-			if err := runtime.Suspend(withTransientWriteErrorContext(ctx, "post-suspend-approval-finalize"), "waiting_for_tool_approval"); err != nil {
+			if err := runtime.Suspend(withTransientWriteErrorContext(ctx, "post-suspend-approval-finalize"), "waiting_for_interaction"); err != nil {
 				return nil, err
 			}
 			return nil, ErrTaskSuspended
@@ -347,18 +353,333 @@ func TestManagerResolveTaskApprovalDoesNotResumeNonToolWaitingTask(t *testing.T)
 	}
 }
 
-func TestManagerAvoidsResolveBeforeSuspendRaceForToolApprovalWaitingTask(t *testing.T) {
+func TestManagerResolveTaskApprovalDoesNotResumeQuestionInteractionWaitingTask(t *testing.T) {
 	store := newTestStore(t)
 	approvalStore := approvals.NewStore(store.db)
 	if err := approvalStore.AutoMigrate(); err != nil {
 		t.Fatalf("approvalStore.AutoMigrate() error = %v", err)
 	}
+	interactionStore := interactions.NewStore(store.db)
+	if err := interactionStore.AutoMigrate(); err != nil {
+		t.Fatalf("interactionStore.AutoMigrate() error = %v", err)
+	}
+	manager := NewManager(store, ManagerOptions{ApprovalStore: approvalStore, InteractionStore: interactionStore})
+
+	task, err := manager.CreateTask(context.Background(), CreateTaskInput{TaskType: "agent.run", CreatedBy: "alice"})
+	if err != nil {
+		t.Fatalf("CreateTask() error = %v", err)
+	}
+	claimed, _, err := store.ClaimNextTask(context.Background(), "runner-1", time.Minute)
+	if err != nil {
+		t.Fatalf("ClaimNextTask() error = %v", err)
+	}
+	if claimed == nil || claimed.ID != task.ID {
+		t.Fatalf("claimed task = %#v, want %q", claimed, task.ID)
+	}
+	if _, _, err := store.MarkWaiting(context.Background(), task.ID, "waiting_for_interaction"); err != nil {
+		t.Fatalf("MarkWaiting() error = %v", err)
+	}
+	if _, err := store.UpdateTaskMetadata(context.Background(), task.ID, map[string]any{
+		coretypes.TaskMetadataKeyInteractionCheckpoint: map[string]any{"interaction_id": "question_1"},
+	}); err != nil {
+		t.Fatalf("UpdateTaskMetadata() error = %v", err)
+	}
+	if _, err := interactionStore.CreateInteraction(context.Background(), interactions.CreateInteractionInput{
+		ID:     "question_1",
+		TaskID: task.ID,
+		Kind:   interactions.KindQuestion,
+		Request: map[string]any{
+			"prompt": "Which environment?",
+		},
+	}); err != nil {
+		t.Fatalf("CreateInteraction(question) error = %v", err)
+	}
+	approval, err := manager.CreateApproval(context.Background(), approvals.CreateApprovalInput{
+		TaskID:           task.ID,
+		ConversationID:   "conv-1",
+		StepIndex:        1,
+		ToolCallID:       "call-1",
+		ToolName:         "bash",
+		ArgumentsSummary: "rm -rf /tmp/demo",
+		RiskLevel:        "high",
+		Reason:           "dangerous filesystem mutation",
+	})
+	if err != nil {
+		t.Fatalf("CreateApproval() error = %v", err)
+	}
+	if _, err := manager.ResolveTaskApproval(context.Background(), task.ID, approval.ID, approvals.ResolveApprovalInput{
+		Decision:   approvals.DecisionApprove,
+		Reason:     "safe",
+		DecisionBy: "alice",
+	}); err != nil {
+		t.Fatalf("ResolveTaskApproval() error = %v", err)
+	}
+	approvalInteraction, err := interactionStore.GetInteraction(context.Background(), task.ID, approval.ID)
+	if err != nil {
+		t.Fatalf("GetInteraction(approval) error = %v", err)
+	}
+	if approvalInteraction.Kind != interactions.KindApproval {
+		t.Fatalf("approval interaction kind = %q, want %q", approvalInteraction.Kind, interactions.KindApproval)
+	}
+	waiting, err := manager.GetTask(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("GetTask() error = %v", err)
+	}
+	if waiting.Status != StatusWaiting {
+		t.Fatalf("waiting status = %q, want %q", waiting.Status, StatusWaiting)
+	}
+	if waiting.SuspendReason != "waiting_for_interaction" {
+		t.Fatalf("waiting suspend_reason = %q, want waiting_for_interaction", waiting.SuspendReason)
+	}
+}
+
+func TestManagerResolveTaskApprovalSynchronizesApprovalInteractionState(t *testing.T) {
+	store := newTestStore(t)
+	approvalStore := approvals.NewStore(store.db)
+	if err := approvalStore.AutoMigrate(); err != nil {
+		t.Fatalf("approvalStore.AutoMigrate() error = %v", err)
+	}
+	interactionStore := interactions.NewStore(store.db)
+	if err := interactionStore.AutoMigrate(); err != nil {
+		t.Fatalf("interactionStore.AutoMigrate() error = %v", err)
+	}
+	manager := NewManager(store, ManagerOptions{ApprovalStore: approvalStore, InteractionStore: interactionStore})
+
+	task, err := manager.CreateTask(context.Background(), CreateTaskInput{TaskType: "agent.run", CreatedBy: "alice"})
+	if err != nil {
+		t.Fatalf("CreateTask() error = %v", err)
+	}
+	claimed, _, err := store.ClaimNextTask(context.Background(), "runner-1", time.Minute)
+	if err != nil {
+		t.Fatalf("ClaimNextTask() error = %v", err)
+	}
+	if claimed == nil || claimed.ID != task.ID {
+		t.Fatalf("claimed task = %#v, want %q", claimed, task.ID)
+	}
+	if _, _, err := store.MarkWaiting(context.Background(), task.ID, "waiting_for_interaction"); err != nil {
+		t.Fatalf("MarkWaiting() error = %v", err)
+	}
+	approval, err := manager.CreateApproval(context.Background(), approvals.CreateApprovalInput{
+		TaskID:           task.ID,
+		ConversationID:   "conv-1",
+		StepIndex:        1,
+		ToolCallID:       "call-1",
+		ToolName:         "bash",
+		ArgumentsSummary: "rm -rf /tmp/demo",
+		RiskLevel:        "high",
+		Reason:           "dangerous filesystem mutation",
+	})
+	if err != nil {
+		t.Fatalf("CreateApproval() error = %v", err)
+	}
+	if _, err := store.UpdateTaskMetadata(context.Background(), task.ID, map[string]any{
+		coretypes.TaskMetadataKeyInteractionCheckpoint: map[string]any{"interaction_id": approval.ID},
+	}); err != nil {
+		t.Fatalf("UpdateTaskMetadata() error = %v", err)
+	}
+	if _, err := manager.ResolveTaskApproval(context.Background(), task.ID, approval.ID, approvals.ResolveApprovalInput{
+		Decision:   approvals.DecisionApprove,
+		Reason:     "safe",
+		DecisionBy: "alice",
+	}); err != nil {
+		t.Fatalf("ResolveTaskApproval() error = %v", err)
+	}
+	interaction, err := interactionStore.GetInteraction(context.Background(), task.ID, approval.ID)
+	if err != nil {
+		t.Fatalf("GetInteraction() error = %v", err)
+	}
+	if interaction.Status != interactions.StatusApproved {
+		t.Fatalf("interaction.Status = %q, want %q", interaction.Status, interactions.StatusApproved)
+	}
+	if interaction.RespondedBy != "alice" {
+		t.Fatalf("interaction.RespondedBy = %q, want %q", interaction.RespondedBy, "alice")
+	}
+	var response map[string]any
+	if err := json.Unmarshal(interaction.ResponseJSON, &response); err != nil {
+		t.Fatalf("json.Unmarshal(interaction.ResponseJSON) error = %v", err)
+	}
+	if response["decision"] != string(approvals.DecisionApprove) {
+		t.Fatalf("response.decision = %#v, want %q", response["decision"], approvals.DecisionApprove)
+	}
+}
+
+func TestManagerRespondQuestionInteractionPublishesRespondedEventAndResumesTask(t *testing.T) {
+	store := newTestStore(t)
+	interactionStore := interactions.NewStore(store.db)
+	if err := interactionStore.AutoMigrate(); err != nil {
+		t.Fatalf("interactionStore.AutoMigrate() error = %v", err)
+	}
+	manager := NewManager(store, ManagerOptions{RunnerID: "question-manager-test", InteractionStore: interactionStore})
+
+	task, err := manager.CreateTask(context.Background(), CreateTaskInput{TaskType: "agent.run", CreatedBy: "alice"})
+	if err != nil {
+		t.Fatalf("CreateTask() error = %v", err)
+	}
+	claimed, _, err := store.ClaimNextTask(context.Background(), "runner-1", time.Minute)
+	if err != nil {
+		t.Fatalf("ClaimNextTask() error = %v", err)
+	}
+	if claimed == nil || claimed.ID != task.ID {
+		t.Fatalf("claimed task = %#v, want %q", claimed, task.ID)
+	}
+	runtime := newRuntime(manager, task.ID)
+	if err := runtime.Suspend(context.Background(), "waiting_for_interaction"); err != nil {
+		t.Fatalf("runtime.Suspend() error = %v", err)
+	}
+	waiting, err := manager.GetTask(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("GetTask() after Suspend error = %v", err)
+	}
+	if waiting.Status != StatusWaiting || waiting.SuspendReason != "waiting_for_interaction" {
+		t.Fatalf("waiting after Suspend = %#v, want waiting_for_interaction", waiting)
+	}
+	if _, err := store.UpdateTaskMetadata(context.Background(), task.ID, map[string]any{
+		coretypes.TaskMetadataKeyInteractionCheckpoint: map[string]any{"interaction_id": "question_1"},
+	}); err != nil {
+		t.Fatalf("UpdateTaskMetadata() error = %v", err)
+	}
+	waiting, err = manager.GetTask(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("GetTask() error = %v", err)
+	}
+	if got, ok, err := taskApprovalCheckpointID(waiting.MetadataJSON); err != nil || !ok || got != "question_1" {
+		t.Fatalf("checkpoint = (%q, %v, %v), want question_1,true,nil", got, ok, err)
+	}
+	if _, err := interactionStore.CreateInteraction(context.Background(), interactions.CreateInteractionInput{
+		ID:             "question_1",
+		TaskID:         task.ID,
+		ConversationID: "conv-question",
+		StepIndex:      2,
+		ToolCallID:     "call_ask",
+		Kind:           interactions.KindQuestion,
+		Request: map[string]any{
+			"question":     "Which environment?",
+			"options":      []string{"staging", "production"},
+			"allow_custom": true,
+		},
+	}); err != nil {
+		t.Fatalf("CreateInteraction() error = %v", err)
+	}
+
+	resumed, interaction, events, err := manager.RespondQuestionInteraction(context.Background(), task.ID, "question_1", interactions.ResponseInput{
+		Status:      interactions.StatusResponded,
+		Response:    map[string]any{"selected_option_id": "staging", "custom_text": ""},
+		RespondedBy: "alice",
+		RespondedAt: func() *time.Time {
+			now := time.Now().UTC()
+			return &now
+		}(),
+	})
+	if err != nil {
+		t.Fatalf("RespondQuestionInteraction() error = %v", err)
+	}
+	if resumed == nil || resumed.Status != StatusQueued {
+		t.Fatalf("resumed = %#v, want queued task", resumed)
+	}
+	if interaction == nil || interaction.Status != interactions.StatusResponded {
+		t.Fatalf("interaction = %#v, want responded interaction", interaction)
+	}
+	if len(events) == 0 {
+		t.Fatal("events = empty, want interaction responded and task resumed events")
+	}
+	respondedEvent := mustFindTaskEvent(t, events, EventInteractionResponded)
+	respondedPayload := decodeJSONRaw(t, respondedEvent.PayloadJSON)
+	for _, key := range []string{"interaction_id", "task_id", "conversation_id", "step", "tool_call_id", "kind", "status", "request_json", "response_json", "responded_by", "responded_at", "created_at", "updated_at"} {
+		if _, ok := respondedPayload[key]; !ok {
+			t.Fatalf("interaction.responded payload = %#v, want key %q", respondedPayload, key)
+		}
+	}
+	resumedEvent := mustFindTaskEvent(t, events, EventTaskResumed)
+	resumedPayload := decodeJSONRaw(t, resumedEvent.PayloadJSON)
+	if resumedPayload["resume_reason"] != "interaction_resolved" {
+		t.Fatalf("resume_reason = %#v, want interaction_resolved", resumedPayload["resume_reason"])
+	}
+}
+
+func TestManagerRespondQuestionInteractionRejectsApprovalInteraction(t *testing.T) {
+	store := newTestStore(t)
+	interactionStore := interactions.NewStore(store.db)
+	if err := interactionStore.AutoMigrate(); err != nil {
+		t.Fatalf("interactionStore.AutoMigrate() error = %v", err)
+	}
+	manager := NewManager(store, ManagerOptions{RunnerID: "question-manager-test", InteractionStore: interactionStore})
+
+	task, err := manager.CreateTask(context.Background(), CreateTaskInput{TaskType: "agent.run", CreatedBy: "alice"})
+	if err != nil {
+		t.Fatalf("CreateTask() error = %v", err)
+	}
+	if _, err := interactionStore.CreateInteraction(context.Background(), interactions.CreateInteractionInput{
+		ID:     "approval_1",
+		TaskID: task.ID,
+		Kind:   interactions.KindApproval,
+		Request: map[string]any{
+			"tool_name": "bash",
+		},
+	}); err != nil {
+		t.Fatalf("CreateInteraction() error = %v", err)
+	}
+	resumed, interaction, events, err := manager.RespondQuestionInteraction(context.Background(), task.ID, "approval_1", interactions.ResponseInput{
+		Status:      interactions.StatusResponded,
+		Response:    map[string]any{"custom_text": "unsafe"},
+		RespondedBy: "alice",
+		RespondedAt: func() *time.Time { now := time.Now().UTC(); return &now }(),
+	})
+	if err == nil {
+		t.Fatalf("RespondQuestionInteraction() error = nil, want non-nil; resumed=%#v interaction=%#v events=%#v", resumed, interaction, events)
+	}
+	stored, loadErr := interactionStore.GetInteraction(context.Background(), task.ID, "approval_1")
+	if loadErr != nil {
+		t.Fatalf("GetInteraction() error = %v", loadErr)
+	}
+	if stored.Status != interactions.StatusPending {
+		t.Fatalf("stored.Status = %q, want pending", stored.Status)
+	}
+}
+
+func TestManagerRespondQuestionInteractionRejectsEmptyResponse(t *testing.T) {
+	store := newTestStore(t)
+	interactionStore := interactions.NewStore(store.db)
+	if err := interactionStore.AutoMigrate(); err != nil {
+		t.Fatalf("interactionStore.AutoMigrate() error = %v", err)
+	}
+	manager := NewManager(store, ManagerOptions{RunnerID: "question-manager-test", InteractionStore: interactionStore})
+
+	task, err := manager.CreateTask(context.Background(), CreateTaskInput{TaskType: "agent.run", CreatedBy: "alice"})
+	if err != nil {
+		t.Fatalf("CreateTask() error = %v", err)
+	}
+	if _, err := interactionStore.CreateInteraction(context.Background(), interactions.CreateInteractionInput{
+		ID:     "question_2",
+		TaskID: task.ID,
+		Kind:   interactions.KindQuestion,
+		Request: map[string]any{
+			"question":     "Which environment?",
+			"allow_custom": true,
+		},
+	}); err != nil {
+		t.Fatalf("CreateInteraction() error = %v", err)
+	}
+	_, _, _, err = manager.RespondQuestionInteraction(context.Background(), task.ID, "question_2", interactions.ResponseInput{
+		Status:      interactions.StatusResponded,
+		Response:    map[string]any{},
+		RespondedBy: "alice",
+		RespondedAt: func() *time.Time { now := time.Now().UTC(); return &now }(),
+	})
+	if err == nil {
+		t.Fatal("RespondQuestionInteraction() error = nil, want non-nil for empty response")
+	}
+}
+
+func TestManagerAvoidsResolveBeforeSuspendRaceForToolApprovalWaitingTask(t *testing.T) {
+	store := newTestStore(t)
+	approvalStore, interactionStore := newApprovalAndInteractionStoresForTest(t, store)
 	manager := NewManager(store, ManagerOptions{
 		RunnerID:          "runner-1",
 		PollInterval:      5 * time.Millisecond,
 		LeaseDuration:     100 * time.Millisecond,
 		HeartbeatInterval: 20 * time.Millisecond,
 		ApprovalStore:     approvalStore,
+		InteractionStore:  interactionStore,
 	})
 
 	var mu sync.Mutex
@@ -382,13 +703,13 @@ func TestManagerAvoidsResolveBeforeSuspendRaceForToolApprovalWaitingTask(t *test
 			if err != nil {
 				return nil, err
 			}
-			if err := runtime.UpdateMetadata(ctx, map[string]any{coretypes.TaskMetadataKeyToolApprovalCheckpoint: map[string]any{"approval_id": approval.ID}}); err != nil {
+			if err := runtime.UpdateMetadata(ctx, map[string]any{coretypes.TaskMetadataKeyInteractionCheckpoint: map[string]any{"interaction_id": approval.ID}}); err != nil {
 				return nil, err
 			}
 			if _, err := manager.ResolveTaskApproval(ctx, task.ID, approval.ID, approvals.ResolveApprovalInput{Decision: approvals.DecisionApprove, Reason: "safe", DecisionBy: "alice"}); err != nil {
 				return nil, err
 			}
-			if err := runtime.Suspend(ctx, "waiting_for_tool_approval"); err != nil {
+			if err := runtime.Suspend(ctx, "waiting_for_interaction"); err != nil {
 				return nil, err
 			}
 			return nil, ErrTaskSuspended

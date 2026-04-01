@@ -9,6 +9,7 @@ import (
 
 	"github.com/EquentR/agent_runtime/core/approvals"
 	coreaudit "github.com/EquentR/agent_runtime/core/audit"
+	"github.com/EquentR/agent_runtime/core/interactions"
 	"github.com/EquentR/agent_runtime/core/memory"
 	coreprompt "github.com/EquentR/agent_runtime/core/prompt"
 	model "github.com/EquentR/agent_runtime/core/providers/types"
@@ -80,6 +81,7 @@ type ExecutorDependencies struct {
 	ConversationStore *ConversationStore
 	Registry          *tools.Registry
 	ApprovalStore     *approvals.Store
+	InteractionStore  *interactions.Store
 	PromptResolver    *coreprompt.Resolver
 	WorkspaceRoot     string
 	ClientFactory     ClientFactory
@@ -88,7 +90,10 @@ type ExecutorDependencies struct {
 	AuditRecorder     coreaudit.Recorder
 }
 
-const toolApprovalCheckpointMetadataKey = coretypes.TaskMetadataKeyToolApprovalCheckpoint
+const (
+	interactionCheckpointMetadataKey        = coretypes.TaskMetadataKeyInteractionCheckpoint
+	legacyToolApprovalCheckpointMetadataKey = coretypes.TaskMetadataKeyToolApprovalCheckpoint
+)
 
 func (r *ModelResolver) Resolve(providerID, modelID string) (*ResolvedModel, error) {
 	if r == nil || len(r.Providers) == 0 {
@@ -268,7 +273,7 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 		if err != nil {
 			return nil, err
 		}
-		checkpoint, err := taskApprovalCheckpointFromMetadata(task.MetadataJSON)
+		checkpoint, err := taskInteractionCheckpointFromMetadata(task.MetadataJSON)
 		if err != nil {
 			return nil, err
 		}
@@ -283,11 +288,12 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 			runInput.Messages = messages
 			auditor.recordUserMessageAppended(ctx, userMessage, messages)
 		} else {
-			resume, err := buildToolApprovalResume(ctx, deps.ApprovalStore, task, checkpoint)
+			resume, err := buildInteractionResume(ctx, deps.InteractionStore, deps.ApprovalStore, task, checkpoint)
 			if err != nil {
 				return nil, err
 			}
-			cleanedMetadata, cleanupErr := clearToolApprovalCheckpointMetadata(task.MetadataJSON)
+			recordInteractionResumeAudit(ctx, deps.AuditRecorder, runID, checkpoint, resume)
+			cleanedMetadata, cleanupErr := clearInteractionCheckpointMetadata(task.MetadataJSON)
 			if cleanupErr != nil {
 				return nil, cleanupErr
 			}
@@ -297,11 +303,11 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 				}
 			}
 			task.MetadataJSON = marshalTaskMetadataForExecutor(cleanedMetadata, task.MetadataJSON)
-			runInput.ToolApprovalResume = resume
+			runInput.InteractionResume = resume
 		}
 		result, err := runner.Run(ctx, runInput)
 		if err != nil {
-			if errors.Is(err, ErrToolApprovalPending) {
+			if errors.Is(err, ErrInteractionPending) {
 				return nil, coretasks.ErrTaskSuspended
 			}
 			snapshotErr = err
@@ -337,7 +343,7 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 	}
 }
 
-func taskApprovalCheckpointFromMetadata(metadataJSON []byte) (*toolApprovalCheckpoint, error) {
+func taskInteractionCheckpointFromMetadata(metadataJSON []byte) (*interactionCheckpoint, error) {
 	if len(metadataJSON) == 0 {
 		return nil, nil
 	}
@@ -345,7 +351,14 @@ func taskApprovalCheckpointFromMetadata(metadataJSON []byte) (*toolApprovalCheck
 	if err := json.Unmarshal(metadataJSON, &metadata); err != nil {
 		return nil, fmt.Errorf("decode task metadata: %w", err)
 	}
-	raw, ok := metadata[toolApprovalCheckpointMetadataKey]
+	if raw, ok := metadata[interactionCheckpointMetadataKey]; ok && len(raw) > 0 && string(raw) != "null" {
+		var checkpoint interactionCheckpoint
+		if err := json.Unmarshal(raw, &checkpoint); err != nil {
+			return nil, fmt.Errorf("decode interaction checkpoint: %w", err)
+		}
+		return &checkpoint, nil
+	}
+	raw, ok := metadata[legacyToolApprovalCheckpointMetadataKey]
 	if !ok || len(raw) == 0 || string(raw) == "null" {
 		return nil, nil
 	}
@@ -353,21 +366,54 @@ func taskApprovalCheckpointFromMetadata(metadataJSON []byte) (*toolApprovalCheck
 	if err := json.Unmarshal(raw, &checkpoint); err != nil {
 		return nil, fmt.Errorf("decode tool approval checkpoint: %w", err)
 	}
-	return &checkpoint, nil
+	return &interactionCheckpoint{
+		InteractionID:                    checkpoint.ApprovalID,
+		Step:                             checkpoint.Step,
+		AssistantMessage:                 checkpoint.AssistantMessage,
+		ToolCallIndex:                    checkpoint.ToolCallIndex,
+		ProducedMessagesBeforeCheckpoint: checkpoint.ProducedMessagesBeforeCheckpoint,
+	}, nil
 }
 
-func buildToolApprovalResume(ctx context.Context, approvalStore *approvals.Store, task *coretasks.Task, checkpoint *toolApprovalCheckpoint) (*toolApprovalResume, error) {
+func buildInteractionResume(ctx context.Context, interactionStore *interactions.Store, approvalStore *approvals.Store, task *coretasks.Task, checkpoint *interactionCheckpoint) (*interactionResume, error) {
 	if checkpoint == nil {
 		return nil, nil
 	}
+	if task == nil {
+		return nil, fmt.Errorf("task is required to resume interaction checkpoint")
+	}
+	resume := &interactionResume{Checkpoint: *checkpoint}
+	if interactionStore != nil {
+		interaction, err := interactionStore.GetInteraction(ctx, task.ID, checkpoint.InteractionID)
+		if err == nil {
+			switch interaction.Kind {
+			case interactions.KindApproval:
+				return buildApprovalInteractionResume(ctx, approvalStore, task, resume)
+			case interactions.KindQuestion:
+				if len(interaction.ResponseJSON) == 0 {
+					return nil, fmt.Errorf("interaction %q is still pending", interaction.ID)
+				}
+				resume.SyntheticOutput = string(interaction.ResponseJSON)
+				return resume, nil
+			default:
+				return nil, fmt.Errorf("interaction %q kind %q is not resumable", interaction.ID, interaction.Kind)
+			}
+		}
+		if !errors.Is(err, interactions.ErrInteractionNotFound) {
+			return nil, err
+		}
+	}
+	return buildApprovalInteractionResume(ctx, approvalStore, task, resume)
+}
+
+func buildApprovalInteractionResume(ctx context.Context, approvalStore *approvals.Store, task *coretasks.Task, resume *interactionResume) (*interactionResume, error) {
 	if approvalStore == nil {
 		return nil, fmt.Errorf("approval store is required to resume checkpointed tool approval")
 	}
-	approval, err := approvalStore.GetApproval(ctx, task.ID, checkpoint.ApprovalID)
+	approval, err := approvalStore.GetApproval(ctx, task.ID, resume.Checkpoint.InteractionID)
 	if err != nil {
 		return nil, err
 	}
-	resume := &toolApprovalResume{Checkpoint: *checkpoint}
 	switch approval.Status {
 	case approvals.StatusApproved:
 		return resume, nil
@@ -396,14 +442,44 @@ func syntheticToolOutputForApproval(approval *approvals.ToolApproval) string {
 	return message
 }
 
-func clearToolApprovalCheckpointMetadata(metadataJSON []byte) (map[string]any, error) {
+func recordInteractionResumeAudit(ctx context.Context, recorder coreaudit.Recorder, runID string, checkpoint *interactionCheckpoint, resume *interactionResume) {
+	if recorder == nil || strings.TrimSpace(runID) == "" || checkpoint == nil || resume == nil {
+		return
+	}
+	kind := string(interactions.KindApproval)
+	if len(resume.SyntheticOutput) > 0 {
+		if _, err := recorder.AppendEvent(ctx, runID, coreaudit.AppendEventInput{
+			Phase:     coreaudit.PhaseInteraction,
+			EventType: "interaction.responded",
+			StepIndex: checkpoint.Step,
+			Payload: map[string]any{
+				"interaction_id": checkpoint.InteractionID,
+				"kind":           kind,
+			},
+		}); err != nil {
+			return
+		}
+	}
+	_, _ = recorder.AppendEvent(ctx, runID, coreaudit.AppendEventInput{
+		Phase:     coreaudit.PhaseInteraction,
+		EventType: "interaction.resumed",
+		StepIndex: checkpoint.Step,
+		Payload: map[string]any{
+			"interaction_id": checkpoint.InteractionID,
+			"kind":           kind,
+		},
+	})
+}
+
+func clearInteractionCheckpointMetadata(metadataJSON []byte) (map[string]any, error) {
 	metadata := map[string]any{}
 	if len(metadataJSON) > 0 {
 		if err := json.Unmarshal(metadataJSON, &metadata); err != nil {
 			return nil, fmt.Errorf("decode task metadata: %w", err)
 		}
 	}
-	delete(metadata, toolApprovalCheckpointMetadataKey)
+	delete(metadata, interactionCheckpointMetadataKey)
+	delete(metadata, legacyToolApprovalCheckpointMetadataKey)
 	return metadata, nil
 }
 

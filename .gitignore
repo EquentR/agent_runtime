@@ -1,6 +1,6 @@
 /.idea/
-/docs/plans/
 /data/
 /logs/
 node_modules/
 dist/
+workspace/

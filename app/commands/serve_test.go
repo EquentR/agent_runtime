@@ -17,6 +17,7 @@ import (
 	coreagent "github.com/EquentR/agent_runtime/core/agent"
 	"github.com/EquentR/agent_runtime/core/approvals"
 	coreaudit "github.com/EquentR/agent_runtime/core/audit"
+	"github.com/EquentR/agent_runtime/core/interactions"
 	model "github.com/EquentR/agent_runtime/core/providers/types"
 	coretasks "github.com/EquentR/agent_runtime/core/tasks"
 	coretools "github.com/EquentR/agent_runtime/core/tools"
@@ -196,7 +197,8 @@ func TestNewTaskManagerUsesConfiguredWorkerCountAndRunnerID(t *testing.T) {
 	}
 
 	approvalStore := approvals.NewStore(db)
-	manager := newTaskManager(store, approvalStore, config.TaskManagerConfig{
+	interactionStore := interactions.NewStore(db)
+	manager := newTaskManager(store, approvalStore, interactionStore, config.TaskManagerConfig{
 		WorkerCount: 2,
 		RunnerID:    "configured-runner",
 	}, nil)
@@ -264,8 +266,12 @@ func TestNewTaskManagerPreservesInjectedApprovalStoreForRuntimeUse(t *testing.T)
 	if err := approvalStore.AutoMigrate(); err != nil {
 		t.Fatalf("approval store migrate error = %v", err)
 	}
+	interactionStore := interactions.NewStore(db)
+	if err := interactionStore.AutoMigrate(); err != nil {
+		t.Fatalf("interaction store migrate error = %v", err)
+	}
 
-	manager := newTaskManager(store, approvalStore, config.TaskManagerConfig{RunnerID: "configured-runner"}, nil)
+	manager := newTaskManager(store, approvalStore, interactionStore, config.TaskManagerConfig{RunnerID: "configured-runner"}, nil)
 	task, err := manager.CreateTask(context.Background(), coretasks.CreateTaskInput{TaskType: "agent.run", CreatedBy: "tester"})
 	if err != nil {
 		t.Fatalf("CreateTask() error = %v", err)
@@ -401,7 +407,7 @@ func TestBuildAgentRunExecutorDependenciesThreadPromptRuntimeAndWorkspaceRoot(t 
 		return &serveStubClient{answer: "hello"}, nil
 	}
 
-	deps := buildAgentRunExecutorDependencies(resolver, conversationStore, nil, nil, promptRuntime.Resolver, workspaceRoot, clientFactory, recorder)
+	deps := buildAgentRunExecutorDependencies(resolver, conversationStore, nil, nil, nil, promptRuntime.Resolver, workspaceRoot, clientFactory, recorder)
 	if deps.Resolver != resolver {
 		t.Fatalf("deps.Resolver = %#v, want %#v", deps.Resolver, resolver)
 	}
@@ -462,7 +468,7 @@ func TestRegisterAgentRunExecutorPromptWiringKeepsAuditRecorder(t *testing.T) {
 		HeartbeatInterval: 20 * time.Millisecond,
 		AuditRecorder:     newTaskAuditRecorder(recorder),
 	})
-	if err := registerAgentRunExecutor(manager, nil, &coreagent.ModelResolver{Providers: []coretypes.LLMProvider{{
+	if err := registerAgentRunExecutor(manager, nil, nil, &coreagent.ModelResolver{Providers: []coretypes.LLMProvider{{
 		BaseProvider: coretypes.BaseProvider{Name: "openai"},
 		Models:       []coretypes.LLMModel{{BaseModel: coretypes.BaseModel{ID: "gpt-5.4", Name: "GPT 5.4"}, Type: coretypes.LLMTypeOpenAIResponses}},
 	}}}, conversationStore, nil, promptRuntime.Resolver, workspaceRoot, func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) {

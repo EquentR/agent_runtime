@@ -15,6 +15,7 @@ import (
 
 	"github.com/EquentR/agent_runtime/core/approvals"
 	coreaudit "github.com/EquentR/agent_runtime/core/audit"
+	"github.com/EquentR/agent_runtime/core/interactions"
 	"github.com/EquentR/agent_runtime/core/memory"
 	coreprompt "github.com/EquentR/agent_runtime/core/prompt"
 	model "github.com/EquentR/agent_runtime/core/providers/types"
@@ -497,6 +498,90 @@ func TestAgentExecutorResumesApprovedToolCallFromApprovalCheckpoint(t *testing.T
 	}
 }
 
+func TestAgentExecutorResumesApprovedToolCallFromInteractionCheckpoint(t *testing.T) {
+	store := newConversationStoreForTest(t)
+	approvalStore, _ := newExecutorApprovalStoreForTest(t)
+	if _, err := store.CreateConversation(context.Background(), CreateConversationInput{ID: "conv_resume_interaction", ProviderID: "openai", ModelID: "gpt-5.4"}); err != nil {
+		t.Fatalf("CreateConversation() error = %v", err)
+	}
+	if err := store.AppendMessages(context.Background(), "conv_resume_interaction", "task_previous", []model.Message{{Role: model.RoleUser, Content: "weather?"}}); err != nil {
+		t.Fatalf("AppendMessages() error = %v", err)
+	}
+
+	approval, err := approvalStore.CreateApproval(context.Background(), approvals.CreateApprovalInput{
+		TaskID:           "task_resume_interaction",
+		ConversationID:   "conv_resume_interaction",
+		StepIndex:        1,
+		ToolCallID:       "call_1",
+		ToolName:         "lookup_weather",
+		ArgumentsSummary: "Shanghai",
+		RiskLevel:        "high",
+		Reason:           "network access",
+	})
+	if err != nil {
+		t.Fatalf("CreateApproval() error = %v", err)
+	}
+	if _, _, err := approvalStore.ResolveApproval(context.Background(), "task_resume_interaction", approval.ID, approvals.ResolveApprovalInput{
+		Decision:   approvals.DecisionApprove,
+		Reason:     "safe",
+		DecisionBy: "alice",
+	}); err != nil {
+		t.Fatalf("ResolveApproval() error = %v", err)
+	}
+
+	var executed int
+	registry := coretools.NewRegistry()
+	if err := registry.Register(coretools.Tool{
+		Name:         "lookup_weather",
+		ApprovalMode: coretypes.ToolApprovalModeAlways,
+		Handler: func(context.Context, map[string]interface{}) (string, error) {
+			executed++
+			return "sunny", nil
+		},
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	client := &stubClient{streams: []model.Stream{newStubStream(
+		[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "The weather is sunny."}}},
+		model.Message{Role: model.RoleAssistant, Content: "The weather is sunny."},
+		nil,
+	)}}
+	executor := newTaskExecutorForTest(t, ExecutorDependencies{
+		Resolver:          newExecutorResolverForTest(),
+		ConversationStore: store,
+		Registry:          registry,
+		ApprovalStore:     approvalStore,
+		ClientFactory:     func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return client, nil },
+	})
+	task := &coretasks.Task{
+		ID:        "task_resume_interaction",
+		TaskType:  "agent.run",
+		InputJSON: marshalExecutorTaskInput(t, map[string]any{"conversation_id": "conv_resume_interaction", "provider_id": "openai", "model_id": "gpt-5.4", "message": "weather?"}),
+		MetadataJSON: marshalExecutorMetadata(t, map[string]any{coretypes.TaskMetadataKeyInteractionCheckpoint: interactionCheckpoint{
+			InteractionID:                    approval.ID,
+			Step:                             1,
+			AssistantMessage:                 model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "lookup_weather", Arguments: `{"city":"Shanghai"}`}}},
+			ToolCallIndex:                    0,
+			ProducedMessagesBeforeCheckpoint: []model.Message{{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "lookup_weather", Arguments: `{"city":"Shanghai"}`}}}},
+		}}),
+	}
+
+	result, err := executor(context.Background(), task, nil)
+	if err != nil {
+		t.Fatalf("executor() error = %v", err)
+	}
+	runResult := result.(RunTaskResult)
+	if runResult.FinalMessage.Content != "The weather is sunny." {
+		t.Fatalf("final content = %q, want The weather is sunny.", runResult.FinalMessage.Content)
+	}
+	if executed != 1 {
+		t.Fatalf("tool executions = %d, want 1", executed)
+	}
+	if len(client.streamRequests) != 1 {
+		t.Fatalf("stream request count = %d, want 1", len(client.streamRequests))
+	}
+}
+
 func TestAgentExecutorResumeHonorsNonZeroToolCallIndex(t *testing.T) {
 	store := newConversationStoreForTest(t)
 	approvalStore, _ := newExecutorApprovalStoreForTest(t)
@@ -709,6 +794,7 @@ func TestAgentExecutorInjectsSyntheticToolOutputForRejectedOrExpiredApproval(t *
 func TestAgentRunTaskRejectApprovalResumesAndCompletesWithoutFailing(t *testing.T) {
 	conversationStore := newConversationStoreForTest(t)
 	approvalStore, taskDB := newExecutorApprovalStoreForTest(t)
+	interactionStore := newExecutorInteractionStoreForTest(t, taskDB)
 	taskStore := coretasks.NewStore(taskDB)
 	if err := taskStore.AutoMigrate(); err != nil {
 		t.Fatalf("taskStore.AutoMigrate() error = %v", err)
@@ -719,6 +805,7 @@ func TestAgentRunTaskRejectApprovalResumesAndCompletesWithoutFailing(t *testing.
 		LeaseDuration:     100 * time.Millisecond,
 		HeartbeatInterval: 20 * time.Millisecond,
 		ApprovalStore:     approvalStore,
+		InteractionStore:  interactionStore,
 	})
 
 	registry := coretools.NewRegistry()
@@ -760,6 +847,7 @@ func TestAgentRunTaskRejectApprovalResumesAndCompletesWithoutFailing(t *testing.
 		ConversationStore: conversationStore,
 		Registry:          registry,
 		ApprovalStore:     approvalStore,
+		InteractionStore:  interactionStore,
 		PromptResolver:    newExecutorPromptResolverForTest(t, nil),
 		WorkspaceRoot:     t.TempDir(),
 		ClientFactory:     func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return client, nil },
@@ -788,8 +876,8 @@ func TestAgentRunTaskRejectApprovalResumesAndCompletesWithoutFailing(t *testing.
 	}
 
 	waiting := waitForTaskStatusInExecutorTest(t, ctx, manager, created.ID, coretasks.StatusWaiting)
-	if waiting.SuspendReason != "waiting_for_tool_approval" {
-		t.Fatalf("waiting suspend reason = %q, want waiting_for_tool_approval", waiting.SuspendReason)
+	if waiting.SuspendReason != "waiting_for_interaction" {
+		t.Fatalf("waiting suspend reason = %q, want waiting_for_interaction", waiting.SuspendReason)
 	}
 	approvalsList, err := manager.ListTaskApprovals(ctx, created.ID)
 	if err != nil {
@@ -855,6 +943,7 @@ func TestAgentRunTaskRejectApprovalResumesAndCompletesWithoutFailing(t *testing.
 func TestAgentRunTaskExpireApprovalResumesOnceAndCompletesWithoutFailing(t *testing.T) {
 	conversationStore := newConversationStoreForTest(t)
 	approvalStore, taskDB := newExecutorApprovalStoreForTest(t)
+	interactionStore := newExecutorInteractionStoreForTest(t, taskDB)
 	taskStore := coretasks.NewStore(taskDB)
 	if err := taskStore.AutoMigrate(); err != nil {
 		t.Fatalf("taskStore.AutoMigrate() error = %v", err)
@@ -865,6 +954,7 @@ func TestAgentRunTaskExpireApprovalResumesOnceAndCompletesWithoutFailing(t *test
 		LeaseDuration:     100 * time.Millisecond,
 		HeartbeatInterval: 20 * time.Millisecond,
 		ApprovalStore:     approvalStore,
+		InteractionStore:  interactionStore,
 	})
 
 	registry := coretools.NewRegistry()
@@ -906,6 +996,7 @@ func TestAgentRunTaskExpireApprovalResumesOnceAndCompletesWithoutFailing(t *test
 		ConversationStore: conversationStore,
 		Registry:          registry,
 		ApprovalStore:     approvalStore,
+		InteractionStore:  interactionStore,
 		PromptResolver:    newExecutorPromptResolverForTest(t, nil),
 		WorkspaceRoot:     t.TempDir(),
 		ClientFactory:     func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return client, nil },
@@ -934,8 +1025,8 @@ func TestAgentRunTaskExpireApprovalResumesOnceAndCompletesWithoutFailing(t *test
 	}
 
 	waiting := waitForTaskStatusInExecutorTest(t, ctx, manager, created.ID, coretasks.StatusWaiting)
-	if waiting.SuspendReason != "waiting_for_tool_approval" {
-		t.Fatalf("waiting suspend reason = %q, want waiting_for_tool_approval", waiting.SuspendReason)
+	if waiting.SuspendReason != "waiting_for_interaction" {
+		t.Fatalf("waiting suspend reason = %q, want waiting_for_interaction", waiting.SuspendReason)
 	}
 	approvalsList, err := manager.ListTaskApprovals(ctx, created.ID)
 	if err != nil {
@@ -994,6 +1085,7 @@ func TestAgentRunTaskExpireApprovalResumesOnceAndCompletesWithoutFailing(t *test
 func TestAgentRunTaskClearsApprovalCheckpointAfterResumeAndRetry(t *testing.T) {
 	conversationStore := newConversationStoreForTest(t)
 	approvalStore, taskDB := newExecutorApprovalStoreForTest(t)
+	interactionStore := newExecutorInteractionStoreForTest(t, taskDB)
 	taskStore := coretasks.NewStore(taskDB)
 	if err := taskStore.AutoMigrate(); err != nil {
 		t.Fatalf("taskStore.AutoMigrate() error = %v", err)
@@ -1004,6 +1096,7 @@ func TestAgentRunTaskClearsApprovalCheckpointAfterResumeAndRetry(t *testing.T) {
 		LeaseDuration:     100 * time.Millisecond,
 		HeartbeatInterval: 20 * time.Millisecond,
 		ApprovalStore:     approvalStore,
+		InteractionStore:  interactionStore,
 	})
 
 	registry := coretools.NewRegistry()
@@ -1036,6 +1129,7 @@ func TestAgentRunTaskClearsApprovalCheckpointAfterResumeAndRetry(t *testing.T) {
 		ConversationStore: conversationStore,
 		Registry:          registry,
 		ApprovalStore:     approvalStore,
+		InteractionStore:  interactionStore,
 		PromptResolver:    newExecutorPromptResolverForTest(t, nil),
 		WorkspaceRoot:     t.TempDir(),
 		ClientFactory:     func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return client, nil },
@@ -1064,7 +1158,7 @@ func TestAgentRunTaskClearsApprovalCheckpointAfterResumeAndRetry(t *testing.T) {
 	}
 
 	waiting := waitForTaskStatusInExecutorTest(t, ctx, manager, created.ID, coretasks.StatusWaiting)
-	if !taskMetadataHasKey(t, waiting.MetadataJSON, coretypes.TaskMetadataKeyToolApprovalCheckpoint) {
+	if !taskMetadataHasKey(t, waiting.MetadataJSON, coretypes.TaskMetadataKeyInteractionCheckpoint) {
 		t.Fatalf("waiting metadata = %s, want checkpoint key", string(waiting.MetadataJSON))
 	}
 	approvalsList, err := manager.ListTaskApprovals(ctx, created.ID)
@@ -1080,21 +1174,142 @@ func TestAgentRunTaskClearsApprovalCheckpointAfterResumeAndRetry(t *testing.T) {
 	}
 
 	final := waitForTaskStatusInExecutorTest(t, ctx, manager, created.ID, coretasks.StatusSucceeded)
-	if taskMetadataHasKey(t, final.MetadataJSON, coretypes.TaskMetadataKeyToolApprovalCheckpoint) {
+	if taskMetadataHasKey(t, final.MetadataJSON, coretypes.TaskMetadataKeyInteractionCheckpoint) {
 		t.Fatalf("final metadata = %s, want checkpoint key cleared", string(final.MetadataJSON))
 	}
 	retried, err := manager.RetryTask(ctx, created.ID)
 	if err != nil {
 		t.Fatalf("RetryTask() error = %v", err)
 	}
-	if taskMetadataHasKey(t, retried.MetadataJSON, coretypes.TaskMetadataKeyToolApprovalCheckpoint) {
+	if taskMetadataHasKey(t, retried.MetadataJSON, coretypes.TaskMetadataKeyInteractionCheckpoint) {
 		t.Fatalf("retried metadata = %s, want checkpoint key absent", string(retried.MetadataJSON))
+	}
+}
+
+func TestAgentRunTaskAskUserPersistsQuestionInteractionAndPublishesEvents(t *testing.T) {
+	conversationStore := newConversationStoreForTest(t)
+	_, taskDB := newExecutorApprovalStoreForTest(t)
+	interactionStore := newExecutorInteractionStoreForTest(t, taskDB)
+	taskStore := coretasks.NewStore(taskDB)
+	if err := taskStore.AutoMigrate(); err != nil {
+		t.Fatalf("taskStore.AutoMigrate() error = %v", err)
+	}
+	manager := coretasks.NewManager(taskStore, coretasks.ManagerOptions{
+		RunnerID:          "runner-question-events",
+		PollInterval:      5 * time.Millisecond,
+		LeaseDuration:     100 * time.Millisecond,
+		HeartbeatInterval: 20 * time.Millisecond,
+		InteractionStore:  interactionStore,
+	})
+
+	registry := coretools.NewRegistry()
+	if err := registry.Register(coretools.Tool{
+		Name:        "ask_user",
+		Description: "Request structured human clarification and pause the current task",
+		Parameters: coretypes.JSONSchema{
+			Type: "object",
+			Properties: map[string]coretypes.SchemaProperty{
+				"question":     {Type: "string"},
+				"options":      {Type: "array", Items: &coretypes.SchemaProperty{Type: "string"}},
+				"allow_custom": {Type: "boolean"},
+				"placeholder":  {Type: "string"},
+			},
+			Required: []string{"question"},
+		},
+		Handler: func(context.Context, map[string]interface{}) (string, error) {
+			return "", fmt.Errorf("ask_user is handled by the agent runtime")
+		},
+	}); err != nil {
+		t.Fatalf("Register(ask_user) error = %v", err)
+	}
+	client := &stubClient{streams: []model.Stream{newStubStream(
+		[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_ask", Name: "ask_user", Arguments: `{"question":"Which environment?","options":["staging","production"],"allow_custom":true,"placeholder":"Other environment"}`}}}}},
+		model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_ask", Name: "ask_user", Arguments: `{"question":"Which environment?","options":["staging","production"],"allow_custom":true,"placeholder":"Other environment"}`}}},
+		nil,
+	)}}
+	executor := NewTaskExecutor(ExecutorDependencies{
+		Resolver:          newExecutorResolverForTest(),
+		ConversationStore: conversationStore,
+		Registry:          registry,
+		InteractionStore:  interactionStore,
+		PromptResolver:    newExecutorPromptResolverForTest(t, nil),
+		WorkspaceRoot:     t.TempDir(),
+		ClientFactory:     func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return client, nil },
+	})
+	if err := manager.RegisterExecutor("agent.run", executor); err != nil {
+		t.Fatalf("RegisterExecutor() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	manager.Start(ctx)
+
+	created, err := manager.CreateTask(ctx, coretasks.CreateTaskInput{
+		TaskType:  "agent.run",
+		CreatedBy: "tester",
+		Input: RunTaskInput{
+			ConversationID: "conv_question_events",
+			ProviderID:     "openai",
+			ModelID:        "gpt-5.4",
+			Message:        "Need clarification",
+			CreatedBy:      "tester",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateTask() error = %v", err)
+	}
+
+	waiting := waitForTaskStatusInExecutorTest(t, ctx, manager, created.ID, coretasks.StatusWaiting)
+	if waiting.SuspendReason != "waiting_for_interaction" {
+		t.Fatalf("waiting suspend reason = %q, want waiting_for_interaction", waiting.SuspendReason)
+	}
+	interactionsList, err := interactionStore.ListTaskInteractions(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("ListTaskInteractions() error = %v", err)
+	}
+	if len(interactionsList) != 1 {
+		t.Fatalf("interaction count = %d, want 1", len(interactionsList))
+	}
+	interaction := &interactionsList[0]
+	if interaction.Kind != interactions.KindQuestion {
+		t.Fatalf("interaction.Kind = %q, want %q", interaction.Kind, interactions.KindQuestion)
+	}
+	if interaction.ToolCallID != "call_ask" {
+		t.Fatalf("interaction.ToolCallID = %q, want call_ask", interaction.ToolCallID)
+	}
+	request := decodeJSONRaw(t, interaction.RequestJSON)
+	if request["question"] != "Which environment?" {
+		t.Fatalf("request.question = %#v, want Which environment?", request["question"])
+	}
+	if request["allow_custom"] != true {
+		t.Fatalf("request.allow_custom = %#v, want true", request["allow_custom"])
+	}
+	events, err := manager.ListEvents(ctx, created.ID, 0, 20)
+	if err != nil {
+		t.Fatalf("ListEvents() error = %v", err)
+	}
+	var requested *coretasks.TaskEvent
+	for i := range events {
+		if events[i].EventType == coretasks.EventInteractionRequested {
+			requested = &events[i]
+			break
+		}
+	}
+	if requested == nil {
+		t.Fatalf("events = %#v, want interaction.requested event", events)
+	}
+	payload := decodeJSONRaw(t, requested.PayloadJSON)
+	for _, key := range []string{"interaction_id", "task_id", "conversation_id", "step", "tool_call_id", "kind", "status", "request_json", "created_at", "updated_at"} {
+		if _, ok := payload[key]; !ok {
+			t.Fatalf("interaction.requested payload = %#v, want key %q", payload, key)
+		}
 	}
 }
 
 func TestAgentExecutorPreservesCheckpointWhenResumeStateBuildFails(t *testing.T) {
 	conversationStore := newConversationStoreForTest(t)
 	approvalStore, taskDB := newExecutorApprovalStoreForTest(t)
+	interactionStore := newExecutorInteractionStoreForTest(t, taskDB)
 	taskStore := coretasks.NewStore(taskDB)
 	if err := taskStore.AutoMigrate(); err != nil {
 		t.Fatalf("taskStore.AutoMigrate() error = %v", err)
@@ -1105,6 +1320,7 @@ func TestAgentExecutorPreservesCheckpointWhenResumeStateBuildFails(t *testing.T)
 		LeaseDuration:     100 * time.Millisecond,
 		HeartbeatInterval: 20 * time.Millisecond,
 		ApprovalStore:     approvalStore,
+		InteractionStore:  interactionStore,
 	})
 	if _, err := conversationStore.CreateConversation(context.Background(), CreateConversationInput{ID: "conv_resume_build_fail", ProviderID: "openai", ModelID: "gpt-5.4"}); err != nil {
 		t.Fatalf("CreateConversation() error = %v", err)
@@ -1124,6 +1340,7 @@ func TestAgentExecutorPreservesCheckpointWhenResumeStateBuildFails(t *testing.T)
 		Resolver:          newExecutorResolverForTest(),
 		ConversationStore: conversationStore,
 		ApprovalStore:     approvalStore,
+		InteractionStore:  interactionStore,
 		ClientFactory:     func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return &stubClient{}, nil },
 	})
 	if err := manager.RegisterExecutor("agent.run", executor); err != nil {
@@ -2077,7 +2294,7 @@ func marshalExecutorMetadata(t *testing.T, metadata map[string]any) []byte {
 func marshalExecutorCheckpointMetadata(t *testing.T, approvalID string, checkpoint toolApprovalCheckpoint) []byte {
 	t.Helper()
 	checkpoint.ApprovalID = approvalID
-	return marshalExecutorMetadata(t, map[string]any{toolApprovalCheckpointMetadataKey: checkpoint})
+	return marshalExecutorMetadata(t, map[string]any{coretypes.TaskMetadataKeyToolApprovalCheckpoint: checkpoint})
 }
 
 func newExecutorApprovalStoreForTest(t *testing.T) (*approvals.Store, *gorm.DB) {
@@ -2093,6 +2310,15 @@ func newExecutorApprovalStoreForTest(t *testing.T) (*approvals.Store, *gorm.DB) 
 		t.Fatalf("approvalStore.AutoMigrate() error = %v", err)
 	}
 	return store, db
+}
+
+func newExecutorInteractionStoreForTest(t *testing.T, db *gorm.DB) *interactions.Store {
+	t.Helper()
+	store := interactions.NewStore(db)
+	if err := store.AutoMigrate(); err != nil {
+		t.Fatalf("interactionStore.AutoMigrate() error = %v", err)
+	}
+	return store
 }
 
 func mustOpenExecutorTaskDB(t *testing.T) *gorm.DB {

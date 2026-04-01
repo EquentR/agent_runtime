@@ -17,6 +17,7 @@ var versionMigrations = []migrate.Migration{
 	to008,
 	to009,
 	to010,
+	to011,
 }
 
 // Bootstrap 在应用启动时执行数据库迁移。

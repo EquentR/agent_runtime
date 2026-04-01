@@ -5,19 +5,255 @@ import { CircleCheckFilled, CopyDocument, Operation, WarningFilled } from '@elem
 
 import ApprovalRecordCard from './ApprovalRecordCard.vue'
 import { formatMessageContent } from '../lib/chat'
-import type { TranscriptEntry, TranscriptEntryDetail } from '../types/api'
+import type { QuestionInteractionSubmitInput, TranscriptEntry, TranscriptEntryDetail } from '../types/api'
 
 const props = defineProps<{
   loading: boolean
   entries: TranscriptEntry[]
   approvalDecisionStateById?: Record<string, { pending: boolean; decision: 'approve' | 'reject' }>
+  questionResponseStateById?: Record<string, { pending: boolean }>
 }>()
 
 const emit = defineEmits<{
   'approval-decision': [payload: { taskId: string; approvalId: string; decision: 'approve' | 'reject'; reason: string }]
+  'interaction-respond': [payload: QuestionInteractionSubmitInput]
 }>()
 
-const normalizedEntries = computed(() => props.entries)
+const questionSelectionById = ref<Record<string, string>>({})
+const questionSelectionsById = ref<Record<string, string[]>>({})
+const questionCustomTextById = ref<Record<string, string>>({})
+
+const customQuestionOptionValue = '__custom__'
+
+function questionOptions(entry: TranscriptEntry) {
+  if (entry.kind !== 'question') {
+    return []
+  }
+  const raw = entry.question_interaction?.request_json?.options
+  return Array.isArray(raw) ? raw.map((item) => String(item)).filter(Boolean) : []
+}
+
+function questionPrompt(entry: TranscriptEntry) {
+  if (entry.kind !== 'question') {
+    return ''
+  }
+  return String(entry.question_interaction?.request_json?.question ?? '')
+}
+
+function questionPlaceholder(entry: TranscriptEntry) {
+  if (entry.kind !== 'question') {
+    return ''
+  }
+  return String(entry.question_interaction?.request_json?.placeholder ?? '补充你的回答')
+}
+
+function questionAllowsCustom(entry: TranscriptEntry) {
+  if (entry.kind !== 'question') {
+    return false
+  }
+  return entry.question_interaction?.request_json?.allow_custom === true
+}
+
+function questionMultiple(entry: TranscriptEntry) {
+  if (entry.kind !== 'question') {
+    return false
+  }
+  return entry.question_interaction?.request_json?.multiple === true
+}
+
+function questionSelection(entry: TranscriptEntry) {
+  if (entry.kind !== 'question') {
+    return ''
+  }
+  return questionSelectionById.value[entry.question_interaction?.id ?? ''] ?? ''
+}
+
+function questionCustomSelected(entry: TranscriptEntry) {
+  if (entry.kind !== 'question' || !questionAllowsCustom(entry)) {
+    return false
+  }
+
+  if (questionOptions(entry).length === 0) {
+    return true
+  }
+
+  if (questionMultiple(entry)) {
+    return questionSelections(entry).includes(customQuestionOptionValue)
+  }
+
+  return questionSelection(entry) === customQuestionOptionValue
+}
+
+function questionSelections(entry: TranscriptEntry) {
+  if (entry.kind !== 'question') {
+    return []
+  }
+  return questionSelectionsById.value[entry.question_interaction?.id ?? ''] ?? []
+}
+
+function questionCustomText(entry: TranscriptEntry) {
+  if (entry.kind !== 'question') {
+    return ''
+  }
+  return questionCustomTextById.value[entry.question_interaction?.id ?? ''] ?? ''
+}
+
+function questionIsPending(entry: TranscriptEntry) {
+  return entry.kind === 'question' && entry.question_interaction?.status === 'pending'
+}
+
+function questionSubmissionLocked(entry: TranscriptEntry) {
+  if (entry.kind !== 'question') {
+    return false
+  }
+
+  const interactionId = entry.question_interaction?.id ?? ''
+  return Boolean(interactionId && props.questionResponseStateById?.[interactionId]?.pending)
+}
+
+function questionFinalAnswer(entry: TranscriptEntry) {
+  if (entry.kind !== 'question') {
+    return ''
+  }
+
+  const response = entry.question_interaction?.response_json
+  if (!response || typeof response !== 'object') {
+    return ''
+  }
+
+  const parts: string[] = []
+  const selectedOptionId = typeof response.selected_option_id === 'string' ? response.selected_option_id.trim() : ''
+  const selectedOptionIds = Array.isArray(response.selected_option_ids)
+    ? response.selected_option_ids.map((value) => String(value).trim()).filter(Boolean)
+    : []
+  const customText = typeof response.custom_text === 'string' ? response.custom_text.trim() : ''
+
+  if (selectedOptionId) {
+    parts.push(selectedOptionId)
+  }
+  if (selectedOptionIds.length > 0) {
+    parts.push(selectedOptionIds.join('、'))
+  }
+  if (customText) {
+    parts.push(customText)
+  }
+
+  return parts.join('\n')
+}
+
+function chooseQuestionOption(entry: TranscriptEntry, option: string) {
+  const interactionId = entry.question_interaction?.id ?? ''
+  if (!interactionId || !questionIsPending(entry) || questionSubmissionLocked(entry)) {
+    return
+  }
+
+  if (questionMultiple(entry)) {
+    const current = questionSelections(entry)
+    let next: string[]
+
+    if (option === customQuestionOptionValue) {
+      next = current.includes(customQuestionOptionValue) ? [] : [customQuestionOptionValue]
+    } else {
+      const clearedCustom = current.filter((item) => item !== customQuestionOptionValue)
+      next = clearedCustom.includes(option) ? clearedCustom.filter((item) => item !== option) : [...clearedCustom, option]
+    }
+
+    questionSelectionsById.value = {
+      ...questionSelectionsById.value,
+      [interactionId]: next,
+    }
+    return
+  }
+
+  questionSelectionById.value = {
+    ...questionSelectionById.value,
+    [interactionId]: option,
+  }
+}
+
+function updateQuestionCustomText(entry: TranscriptEntry, value: string) {
+  const interactionId = entry.question_interaction?.id ?? ''
+  if (!interactionId || !questionIsPending(entry) || !questionAllowsCustom(entry) || questionSubmissionLocked(entry)) {
+    return
+  }
+  questionCustomTextById.value = {
+    ...questionCustomTextById.value,
+    [interactionId]: value,
+  }
+}
+
+function canSubmitQuestionInteraction(entry: TranscriptEntry) {
+  if (!questionIsPending(entry)) {
+    return false
+  }
+  if (questionSubmissionLocked(entry)) {
+    return false
+  }
+
+  const currentSelections = questionMultiple(entry)
+    ? questionSelections(entry).filter((option) => option !== customQuestionOptionValue)
+    : questionSelection(entry) && questionSelection(entry) !== customQuestionOptionValue
+      ? [questionSelection(entry)]
+      : []
+  const hasSelections = currentSelections.length > 0
+  const hasCustomText = questionCustomSelected(entry) && questionCustomText(entry).trim() !== ''
+  return hasSelections || hasCustomText
+}
+
+function submitQuestionInteraction(entry: TranscriptEntry) {
+  const interaction = entry.question_interaction
+  if (!interaction || interaction.status !== 'pending' || !canSubmitQuestionInteraction(entry)) {
+    return
+  }
+
+  const selectedOptions = questionMultiple(entry)
+    ? questionSelections(entry).filter((option) => option !== customQuestionOptionValue)
+    : []
+  const selectedOption = questionMultiple(entry)
+    ? undefined
+    : questionSelection(entry) && questionSelection(entry) !== customQuestionOptionValue
+      ? questionSelection(entry)
+      : undefined
+
+  emit('interaction-respond', {
+    taskId: interaction.task_id,
+    interactionId: interaction.id,
+    selectedOptionId: selectedOption,
+    selectedOptionIds: questionMultiple(entry) ? selectedOptions : undefined,
+    customText: questionCustomSelected(entry) ? questionCustomText(entry).trim() || undefined : undefined,
+  })
+}
+
+const normalizedEntries = computed(() => {
+  // Collect tool_call_ids from all question interaction entries so we can
+  // suppress the corresponding tool-call cards (ask_user tool entries).
+  const questionToolCallIds = new Set<string>()
+  for (const entry of props.entries) {
+    if (entry.kind === 'question') {
+      const tcid = entry.question_interaction?.tool_call_id
+      if (tcid) {
+        questionToolCallIds.add(tcid)
+      }
+    }
+  }
+
+  if (questionToolCallIds.size === 0) {
+    return props.entries
+  }
+
+  return props.entries.filter((entry) => {
+    if (entry.kind !== 'tool') {
+      return true
+    }
+    // Keep this tool entry only if it has at least one detail that is NOT
+    // matched by a question interaction's tool_call_id.
+    const details = entry.details ?? []
+    if (details.length === 0) {
+      return true
+    }
+    return details.some((detail) => !questionToolCallIds.has(detail.key ?? ''))
+  })
+})
 const messagesBody = ref<HTMLDivElement | null>(null)
 const copyToastVisible = ref(false)
 const copyToastMessage = ref('')
@@ -294,6 +530,82 @@ function showCopyToast(message: string, variant: 'success' | 'error') {
             variant="chat"
             @approval-decision="emit('approval-decision', $event)"
           />
+          <details v-else-if="entry.kind === 'question' && entry.question_interaction" :open="questionIsPending(entry) || undefined" class="question-interaction-card chat-question-card trace-flat-shell">
+            <summary class="trace-detail-summary">
+              <span class="trace-summary-leading">
+                <span class="trace-kind-badge approval operation-badge" aria-hidden="true"><WarningFilled /></span>
+                <span class="trace-detail-label">{{ entry.title }}</span>
+              </span>
+              <span class="trace-status subtle">{{ questionIsPending(entry) ? '待处理' : '已提交' }}</span>
+            </summary>
+            <div class="trace-detail-blocks">
+              <div class="trace-detail-block">
+                <div class="trace-detail-block-header"><span>问题</span></div>
+                <pre class="trace-detail-content">{{ formatMessageContent(questionPrompt(entry)) }}</pre>
+              </div>
+              <div v-if="questionOptions(entry).length > 0" class="trace-detail-block">
+                <div class="trace-detail-block-header"><span>选项</span></div>
+                <ul class="question-options-list">
+                  <li v-for="option in questionOptions(entry)" :key="option" class="question-option-item">
+                    <button
+                      class="question-option-button question-option-wireframe"
+                      :class="{ selected: questionMultiple(entry) ? questionSelections(entry).includes(option) : questionSelection(entry) === option }"
+                      type="button"
+                      :disabled="!questionIsPending(entry) || questionSubmissionLocked(entry)"
+                      :data-question-option="option"
+                      @click="chooseQuestionOption(entry, option)"
+                    >
+                      <span class="question-option-indicator" :class="questionMultiple(entry) ? 'square-choice' : 'single-choice'" aria-hidden="true"></span>
+                      <span class="question-option-label">{{ option }}</span>
+                    </button>
+                  </li>
+                  <li v-if="questionAllowsCustom(entry)" class="question-option-item">
+                    <button
+                      class="question-option-button question-option-wireframe"
+                      :class="{ selected: questionCustomSelected(entry) }"
+                      type="button"
+                      :disabled="!questionIsPending(entry) || questionSubmissionLocked(entry)"
+                      :data-question-option="customQuestionOptionValue"
+                      @click="chooseQuestionOption(entry, customQuestionOptionValue)"
+                    >
+                      <span class="question-option-indicator" :class="questionMultiple(entry) ? 'square-choice' : 'single-choice'" aria-hidden="true"></span>
+                      <span class="question-option-label">自定义回答</span>
+                    </button>
+                    <input
+                      v-if="questionCustomSelected(entry)"
+                      class="question-custom-input question-card-input question-option-custom-input"
+                      type="text"
+                      :disabled="!questionIsPending(entry) || questionSubmissionLocked(entry)"
+                      :placeholder="questionPlaceholder(entry)"
+                      :value="questionCustomText(entry)"
+                      @input="updateQuestionCustomText(entry, ($event.target as HTMLInputElement).value)"
+                    />
+                  </li>
+                </ul>
+              </div>
+              <div v-else-if="questionAllowsCustom(entry)" class="trace-detail-block">
+                <div class="trace-detail-block-header"><span>回答</span></div>
+                <input
+                  class="question-custom-input question-card-input"
+                  data-question-custom-only
+                  type="text"
+                  :disabled="!questionIsPending(entry) || questionSubmissionLocked(entry)"
+                  :placeholder="questionPlaceholder(entry)"
+                  :value="questionCustomText(entry)"
+                  @input="updateQuestionCustomText(entry, ($event.target as HTMLInputElement).value)"
+                />
+              </div>
+              <div v-if="!questionIsPending(entry) && questionFinalAnswer(entry)" class="trace-detail-block">
+                <div class="trace-detail-block-header"><span>最终回答</span></div>
+                <pre class="trace-detail-content">{{ formatMessageContent(questionFinalAnswer(entry)) }}</pre>
+              </div>
+            </div>
+            <div v-if="questionIsPending(entry)" class="trace-reply-footer question-card-actions">
+              <button data-question-submit class="approval-action-button question-submit-button" type="button" :disabled="!canSubmitQuestionInteraction(entry)" @click="submitQuestionInteraction(entry)">
+                提交回答
+              </button>
+            </div>
+          </details>
           <details v-if="entry.kind === 'error'" class="trace-detail trace-error-detail trace-flat-shell">
             <summary class="trace-detail-summary">
               <span class="trace-summary-leading">

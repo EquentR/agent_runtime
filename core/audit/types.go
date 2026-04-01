@@ -18,6 +18,7 @@ const (
 	PhaseRequest      Phase = "request"
 	PhaseModel        Phase = "model"
 	PhaseTool         Phase = "tool"
+	PhaseInteraction  Phase = "interaction"
 	PhaseReplay       Phase = "replay"
 )
 
@@ -36,11 +37,13 @@ const (
 type ArtifactKind string
 
 const (
-	ArtifactKindRequestMessages ArtifactKind = "request_messages"
-	ArtifactKindErrorSnapshot   ArtifactKind = "error_snapshot"
-	ArtifactKindResolvedPrompt  ArtifactKind = "resolved_prompt"
-	ArtifactKindModelRequest    ArtifactKind = "model_request"
-	ArtifactKindModelResponse   ArtifactKind = "model_response"
-	ArtifactKindToolArguments   ArtifactKind = "tool_arguments"
-	ArtifactKindToolOutput      ArtifactKind = "tool_output"
+	ArtifactKindRequestMessages     ArtifactKind = "request_messages"
+	ArtifactKindErrorSnapshot       ArtifactKind = "error_snapshot"
+	ArtifactKindResolvedPrompt      ArtifactKind = "resolved_prompt"
+	ArtifactKindModelRequest        ArtifactKind = "model_request"
+	ArtifactKindModelResponse       ArtifactKind = "model_response"
+	ArtifactKindToolArguments       ArtifactKind = "tool_arguments"
+	ArtifactKindToolOutput          ArtifactKind = "tool_output"
+	ArtifactKindInteractionRequest  ArtifactKind = "interaction_request"
+	ArtifactKindInteractionResponse ArtifactKind = "interaction_response"
 )

@@ -53,15 +53,15 @@ function submitDecision(decision: 'approve' | 'reject') {
 </script>
 
 <template>
-  <div class="approval-card trace-flat-shell" :class="{ 'chat-approval-card': cardVariant === 'chat' }">
-    <div class="trace-detail-summary">
+  <details open class="approval-card trace-flat-shell" :class="{ 'chat-approval-card': cardVariant === 'chat' }">
+    <summary class="trace-detail-summary">
       <span class="trace-summary-leading">
         <span class="trace-kind-badge approval operation-badge" aria-hidden="true"><WarningFilled /></span>
         <span class="trace-detail-label">{{ approvalTitle }}</span>
         <span class="trace-tool-name">{{ approval.tool_name }}</span>
       </span>
       <span class="trace-status subtle">{{ approvalStatusText(approval.status) }}</span>
-    </div>
+    </summary>
     <div class="trace-detail-blocks">
       <div class="trace-detail-block">
         <div class="trace-detail-block-header"><span>风险等级</span></div>
@@ -86,9 +86,9 @@ function submitDecision(decision: 'approve' | 'reject') {
           @input="decisionReason = ($event.target as HTMLInputElement).value"
         />
       </div>
-      <div v-else-if="approval.decision_reason || approval.decision_by" class="trace-detail-block">
+      <div v-else class="trace-detail-block">
         <div class="trace-detail-block-header"><span>处理结果</span></div>
-        <pre class="trace-detail-content">{{ formatMessageContent([approval.decision_reason, approval.decision_by].filter(Boolean).join(' · ')) }}</pre>
+        <pre class="trace-detail-content">{{ formatMessageContent([approvalStatusText(approval.status), approval.decision_reason, approval.decision_by ? `操作人: ${approval.decision_by}` : ''].filter(Boolean).join(' · ')) }}</pre>
       </div>
     </div>
     <div v-if="approval.status === 'pending'" class="trace-reply-footer approval-card-actions">
@@ -111,5 +111,5 @@ function submitDecision(decision: 'approve' | 'reject') {
         拒绝执行
       </button>
     </div>
-  </div>
+  </details>
 </template>

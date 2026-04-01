@@ -39,9 +39,22 @@ type Options struct {
 }
 
 type RunInput struct {
-	Messages           []model.Message
-	Tools              []coretypes.Tool
-	ToolApprovalResume *toolApprovalResume
+	Messages          []model.Message
+	Tools             []coretypes.Tool
+	InteractionResume *interactionResume
+}
+
+type interactionCheckpoint struct {
+	InteractionID                    string          `json:"interaction_id"`
+	Step                             int             `json:"step"`
+	AssistantMessage                 model.Message   `json:"assistant_message"`
+	ToolCallIndex                    int             `json:"tool_call_index"`
+	ProducedMessagesBeforeCheckpoint []model.Message `json:"produced_messages_before_checkpoint"`
+}
+
+type interactionResume struct {
+	Checkpoint      interactionCheckpoint `json:"checkpoint"`
+	SyntheticOutput string                `json:"synthetic_output,omitempty"`
 }
 
 type toolApprovalCheckpoint struct {
@@ -50,11 +63,6 @@ type toolApprovalCheckpoint struct {
 	AssistantMessage                 model.Message   `json:"assistant_message"`
 	ToolCallIndex                    int             `json:"tool_call_index"`
 	ProducedMessagesBeforeCheckpoint []model.Message `json:"produced_messages_before_checkpoint"`
-}
-
-type toolApprovalResume struct {
-	Checkpoint      toolApprovalCheckpoint `json:"checkpoint"`
-	SyntheticOutput string                 `json:"synthetic_output,omitempty"`
 }
 
 type RunResult struct {

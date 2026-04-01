@@ -2,12 +2,15 @@ package tasks
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/EquentR/agent_runtime/core/approvals"
+	"github.com/EquentR/agent_runtime/core/interactions"
 	"gorm.io/gorm"
 )
 
@@ -23,6 +26,7 @@ type ManagerOptions struct {
 	HeartbeatInterval time.Duration
 	AuditRecorder     AuditRecorder
 	ApprovalStore     *approvals.Store
+	InteractionStore  *interactions.Store
 }
 
 type AuditRun struct {
@@ -64,10 +68,11 @@ var ErrTaskSuspended = errors.New("task suspended")
 
 // Manager 负责任务的创建、领取、串行执行、取消与事件发布。
 type Manager struct {
-	store     *Store
-	hub       *EventHub
-	audit     AuditRecorder
-	approvals *approvals.Store
+	store        *Store
+	hub          *EventHub
+	audit        AuditRecorder
+	approvals    *approvals.Store
+	interactions *interactions.Store
 
 	runnerID          string
 	workerCount       int
@@ -112,6 +117,7 @@ func NewManager(store *Store, options ManagerOptions) *Manager {
 		hub:               NewEventHub(),
 		audit:             options.AuditRecorder,
 		approvals:         options.ApprovalStore,
+		interactions:      options.InteractionStore,
 		runnerID:          runnerID,
 		workerCount:       workerCount,
 		pollInterval:      pollInterval,
@@ -202,10 +208,158 @@ func (m *Manager) CreateApproval(ctx context.Context, input approvals.CreateAppr
 	if err != nil {
 		return nil, err
 	}
+	if _, err := m.ensureApprovalInteraction(ctx, approval); err != nil {
+		return nil, err
+	}
 	if len(events) > 0 {
 		m.publish(events...)
 	}
+	if _, err := m.ensureApprovalInteraction(ctx, approval); err != nil {
+		return nil, err
+	}
 	return approval, nil
+}
+
+// CreateInteraction 创建可恢复的人工交互记录并发布 interaction.requested 事件。
+func (m *Manager) CreateInteraction(ctx context.Context, input interactions.CreateInteractionInput) (*interactions.Interaction, error) {
+	if m == nil || m.interactions == nil || m.store == nil {
+		return nil, fmt.Errorf("interaction store is not configured")
+	}
+	interaction, events, err := m.createInteraction(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	if len(events) > 0 {
+		m.publish(events...)
+	}
+	return interaction, nil
+}
+
+// FinalizeQuestionInteraction 在 question interaction 响应后发布 interaction.responded 并恢复任务。
+func (m *Manager) FinalizeQuestionInteraction(ctx context.Context, taskID string, interactionID string) (*Task, error) {
+	task, events, err := m.finalizeQuestionInteraction(ctx, taskID, interactionID)
+	if err != nil {
+		return nil, err
+	}
+	if len(events) > 0 {
+		m.publish(events...)
+	}
+	return task, nil
+}
+
+// RespondQuestionInteraction 以原子路径完成 question interaction 响应落库、事件发布与任务恢复。
+func (m *Manager) RespondQuestionInteraction(ctx context.Context, taskID string, interactionID string, input interactions.ResponseInput) (*Task, *interactions.Interaction, []TaskEvent, error) {
+	if m == nil || m.interactions == nil || m.store == nil {
+		return nil, nil, nil, fmt.Errorf("interaction store is not configured")
+	}
+	if input.Status != interactions.StatusResponded {
+		return nil, nil, nil, fmt.Errorf("question interaction status must be responded")
+	}
+	if responsePayloadIsEmpty(input.Response) {
+		return nil, nil, nil, fmt.Errorf("question interaction response cannot be empty")
+	}
+	var (
+		resumed     *Task
+		interaction *interactions.Interaction
+		events      []TaskEvent
+	)
+	err := m.store.withWriteRetry(ctx, func() error {
+		return m.store.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			existing := lookupInteractionTx(tx, taskID, interactionID)
+			if existing == nil {
+				return fmt.Errorf("%w: %s", interactions.ErrInteractionNotFound, interactionID)
+			}
+			if existing.Kind != interactions.KindQuestion {
+				return fmt.Errorf("interaction kind must be question")
+			}
+			store := interactions.NewStore(tx)
+			responded, changed, err := store.RespondInteraction(ctx, taskID, interactionID, input)
+			if err != nil {
+				return err
+			}
+			if responded == nil {
+				return nil
+			}
+			interaction = responded
+			if !changed {
+				return nil
+			}
+			if responded.Kind != interactions.KindQuestion || responded.Status != interactions.StatusResponded {
+				return nil
+			}
+			task, err := loadTaskTx(tx, taskID)
+			if err != nil {
+				return err
+			}
+			payload, err := buildInteractionEventPayload(responded)
+			if err != nil {
+				return err
+			}
+			respondedEvent, err := appendEventTx(tx, task.ID, EventInteractionResponded, "info", payload)
+			if err != nil {
+				return err
+			}
+			events = append(events, respondedEvent)
+			if task.Status != StatusWaiting || task.SuspendReason != "waiting_for_interaction" {
+				return nil
+			}
+			checkpointID, ok, err := taskApprovalCheckpointID(task.MetadataJSON)
+			if err != nil {
+				return err
+			}
+			if ok && checkpointID != responded.ID {
+				return nil
+			}
+			resumedEvent, err := resumeQuestionTaskTx(tx, task)
+			if err != nil {
+				return err
+			}
+			if resumedEvent != nil {
+				events = append(events, *resumedEvent)
+				copy := *task
+				resumed = &copy
+			}
+			return nil
+		})
+	})
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if len(events) > 0 {
+		m.publish(events...)
+	}
+	return resumed, interaction, events, nil
+}
+
+func responsePayloadIsEmpty(value any) bool {
+	payload, ok := value.(map[string]any)
+	if !ok || len(payload) == 0 {
+		return true
+	}
+	for key, field := range payload {
+		switch key {
+		case "selected_option_id", "custom_text":
+			if strings.TrimSpace(fmt.Sprint(field)) != "" {
+				return false
+			}
+		case "selected_option_ids":
+			switch typed := field.(type) {
+			case []string:
+				for _, item := range typed {
+					if strings.TrimSpace(item) != "" {
+						return false
+					}
+				}
+			case []any:
+				for _, item := range typed {
+					if strings.TrimSpace(fmt.Sprint(item)) != "" {
+						return false
+					}
+				}
+			}
+		}
+	}
+	return true
 }
 
 // ResolveTaskApproval 解析审批并在 waiting 任务上安全恢复一次。
@@ -345,14 +499,14 @@ func (m *Manager) runWorker(ctx context.Context, workerIndex int) {
 }
 
 func (m *Manager) reconcileResolvedWaitingToolApprovalTasks(ctx context.Context) bool {
-	if m == nil || m.store == nil || m.store.db == nil || m.approvals == nil {
+	if m == nil || m.store == nil || m.store.db == nil {
 		return false
 	}
 
 	var waitingTasks []Task
 	if err := m.store.db.WithContext(ctx).
 		Where("status = ?", StatusWaiting).
-		Where("suspend_reason = ?", "waiting_for_tool_approval").
+		Where("suspend_reason IN ?", []string{"waiting_for_interaction", "waiting_for_tool_approval"}).
 		Order("updated_at asc").
 		Limit(max(1, m.workerCount)).
 		Find(&waitingTasks).Error; err != nil {
@@ -362,15 +516,15 @@ func (m *Manager) reconcileResolvedWaitingToolApprovalTasks(ctx context.Context)
 	recoveredAny := false
 	for i := range waitingTasks {
 		task := waitingTasks[i]
-		approvalID, ok, err := taskApprovalCheckpointID(task.MetadataJSON)
+		interactionID, ok, err := taskApprovalCheckpointID(task.MetadataJSON)
 		if err != nil || !ok {
 			continue
 		}
-		approval, err := m.approvals.GetApproval(ctx, task.ID, approvalID)
-		if err != nil || approval.Status == approvals.StatusPending {
+		resolvedApproval, err := m.loadResolvedApprovalForInteraction(ctx, task.ID, interactionID)
+		if err != nil || resolvedApproval == nil || resolvedApproval.Status == approvals.StatusPending {
 			continue
 		}
-		finalized, events, err := m.finalizeResolvedApproval(ctx, approval)
+		finalized, events, err := m.finalizeResolvedApproval(ctx, resolvedApproval)
 		if err != nil {
 			continue
 		}
@@ -793,6 +947,118 @@ func (m *Manager) forceFinalizeCancelledTask(ctx context.Context, task *Task) (*
 	return cancelled, nil
 }
 
+func (m *Manager) createInteraction(ctx context.Context, input interactions.CreateInteractionInput) (*interactions.Interaction, []TaskEvent, error) {
+	if m == nil || m.interactions == nil || m.store == nil {
+		return nil, nil, fmt.Errorf("interaction store is not configured")
+	}
+	var (
+		created interactions.Interaction
+		events  []TaskEvent
+	)
+	err := m.store.withWriteRetry(ctx, func() error {
+		return m.store.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			if existing := lookupInteractionTx(tx, input.TaskID, input.ID); existing != nil {
+				created = *existing
+				return nil
+			}
+			interaction, err := interactions.NewStore(tx).CreateInteraction(ctx, input)
+			if err != nil {
+				return err
+			}
+			payload, err := buildInteractionEventPayload(interaction)
+			if err != nil {
+				return err
+			}
+			event, err := appendEventTx(tx, interaction.TaskID, EventInteractionRequested, "info", payload)
+			if err != nil {
+				return err
+			}
+			created = *interaction
+			events = append(events, event)
+			return nil
+		})
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return &created, events, nil
+}
+
+func (m *Manager) finalizeQuestionInteraction(ctx context.Context, taskID string, interactionID string) (*Task, []TaskEvent, error) {
+	if m == nil || m.interactions == nil || m.store == nil {
+		return nil, nil, fmt.Errorf("interaction store is not configured")
+	}
+	interaction, err := m.interactions.GetInteraction(ctx, taskID, interactionID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if interaction.Kind != interactions.KindQuestion || interaction.Status != interactions.StatusResponded {
+		return nil, nil, nil
+	}
+	task, err := m.store.GetTask(ctx, taskID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if task.Status != StatusWaiting || task.SuspendReason != "waiting_for_interaction" {
+		return nil, nil, nil
+	}
+	checkpointID, ok, err := taskApprovalCheckpointID(task.MetadataJSON)
+	if err != nil {
+		return nil, nil, err
+	}
+	if ok && checkpointID != interaction.ID {
+		return nil, nil, nil
+	}
+	payload, err := buildInteractionEventPayload(interaction)
+	if err != nil {
+		return nil, nil, err
+	}
+	respondedEvent, err := m.store.AppendEvent(ctx, task.ID, EventInteractionResponded, "info", payload)
+	if err != nil {
+		return nil, nil, err
+	}
+	queued, resumeEvents, err := m.store.ResumeWaitingTask(ctx, task.ID, "interaction_resolved")
+	if err != nil {
+		return nil, nil, err
+	}
+	events := []TaskEvent{respondedEvent}
+	events = append(events, resumeEvents...)
+	return queued, events, nil
+}
+
+func resumeQuestionTaskTx(tx *gorm.DB, task *Task) (*TaskEvent, error) {
+	if tx == nil || task == nil {
+		return nil, nil
+	}
+	now := time.Now().UTC()
+	result := tx.Model(&Task{}).
+		Where("id = ?", task.ID).
+		Where("status = ?", StatusWaiting).
+		Where("suspend_reason = ?", "waiting_for_interaction").
+		Updates(map[string]any{
+			"status":         StatusQueued,
+			"suspend_reason": "",
+			"updated_at":     now,
+		})
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return nil, nil
+	}
+	task.Status = StatusQueued
+	task.SuspendReason = ""
+	task.UpdatedAt = now
+	event, err := appendEventTx(tx, task.ID, EventTaskResumed, "info", map[string]any{
+		"status":        task.Status,
+		"resume_reason": "interaction_resolved",
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &event, nil
+}
+
 func (m *Manager) finalizeResolvedApproval(ctx context.Context, approval *approvals.ToolApproval) (*approvals.ToolApproval, []TaskEvent, error) {
 	if m == nil || m.store == nil || approval == nil {
 		return approval, nil, nil
@@ -836,6 +1102,10 @@ func (m *Manager) finalizeResolvedApproval(ctx context.Context, approval *approv
 				events = append(events, event)
 			}
 
+			if err := m.syncApprovalInteractionTx(tx, loaded); err != nil {
+				return err
+			}
+
 			if err := finalizeApprovalTaskStateTx(tx, loaded, &events); err != nil {
 				return err
 			}
@@ -867,15 +1137,28 @@ func finalizeApprovalTaskStateTx(tx *gorm.DB, approval *approvals.ToolApproval, 
 	if err != nil {
 		return err
 	}
-	if task.Status != StatusWaiting || task.SuspendReason != "waiting_for_tool_approval" {
+	if task.Status != StatusWaiting || !isInteractionWaitReason(task.SuspendReason) {
 		return nil
+	}
+	if task.SuspendReason == "waiting_for_interaction" {
+		checkpointID, ok, err := taskApprovalCheckpointID(task.MetadataJSON)
+		if err != nil {
+			return err
+		}
+		if !ok || checkpointID != approval.ID {
+			return nil
+		}
+		interaction := lookupInteractionTx(tx, task.ID, checkpointID)
+		if interaction == nil || interaction.Kind != interactions.KindApproval {
+			return nil
+		}
 	}
 
 	now := time.Now().UTC()
 	result := tx.Model(&Task{}).
 		Where("id = ?", task.ID).
 		Where("status = ?", StatusWaiting).
-		Where("suspend_reason = ?", "waiting_for_tool_approval").
+		Where("suspend_reason IN ?", []string{"waiting_for_interaction", "waiting_for_tool_approval"}).
 		Updates(map[string]any{
 			"status":         StatusQueued,
 			"suspend_reason": "",
@@ -893,7 +1176,7 @@ func finalizeApprovalTaskStateTx(tx *gorm.DB, approval *approvals.ToolApproval, 
 	task.UpdatedAt = now
 	event, err := appendEventTx(tx, task.ID, EventTaskResumed, "info", map[string]any{
 		"status":        task.Status,
-		"resume_reason": "tool_approval_resolved",
+		"resume_reason": "interaction_resolved",
 	})
 	if err != nil {
 		return err
@@ -923,4 +1206,170 @@ func approvalDecisionForStatus(status approvals.Status) approvals.Decision {
 	default:
 		return ""
 	}
+}
+
+func (m *Manager) ensureApprovalInteraction(ctx context.Context, approval *approvals.ToolApproval) (*interactions.Interaction, error) {
+	if m == nil || m.interactions == nil || approval == nil {
+		return nil, nil
+	}
+	existing, err := m.interactions.GetInteraction(ctx, approval.TaskID, approval.ID)
+	if err == nil {
+		return existing, nil
+	}
+	if !errors.Is(err, interactions.ErrInteractionNotFound) {
+		return nil, err
+	}
+	request := map[string]any{
+		"tool_name":         approval.ToolName,
+		"arguments_summary": approval.ArgumentsSummary,
+		"risk_level":        approval.RiskLevel,
+		"reason":            approval.Reason,
+	}
+	status := interactions.Status(approval.Status)
+	if status == "" {
+		status = interactions.StatusPending
+	}
+	var (
+		response    any
+		respondedBy string
+		respondedAt *time.Time
+	)
+	if decision := approvalDecisionForStatus(approval.Status); decision != "" || approval.DecisionReason != "" {
+		response = map[string]any{
+			"decision": decision,
+			"reason":   approval.DecisionReason,
+		}
+		respondedBy = approval.DecisionBy
+		respondedAt = approval.DecisionAt
+	}
+	_, err = m.interactions.CreateInteraction(ctx, interactions.CreateInteractionInput{
+		ID:             approval.ID,
+		TaskID:         approval.TaskID,
+		ConversationID: approval.ConversationID,
+		StepIndex:      approval.StepIndex,
+		ToolCallID:     approval.ToolCallID,
+		Kind:           interactions.KindApproval,
+		Status:         status,
+		Request:        request,
+		Response:       response,
+		RespondedBy:    respondedBy,
+		RespondedAt:    respondedAt,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return m.interactions.GetInteraction(ctx, approval.TaskID, approval.ID)
+}
+
+func (m *Manager) syncApprovalInteractionTx(tx *gorm.DB, approval *approvals.ToolApproval) error {
+	if m == nil || m.interactions == nil || tx == nil || approval == nil {
+		return nil
+	}
+	updates := map[string]any{
+		"status":       interactions.Status(approval.Status),
+		"responded_by": approval.DecisionBy,
+		"responded_at": approval.DecisionAt,
+		"updated_at":   time.Now().UTC(),
+	}
+	if decision := approvalDecisionForStatus(approval.Status); decision != "" || approval.DecisionReason != "" {
+		payload, err := marshalApprovalInteractionResponse(decision, approval.DecisionReason)
+		if err != nil {
+			return err
+		}
+		updates["response_json"] = payload
+	} else {
+		updates["response_json"] = nil
+	}
+	result := tx.Model(&interactions.Interaction{}).
+		Where("id = ? AND task_id = ?", approval.ID, approval.TaskID).
+		Updates(updates)
+	if result.Error != nil {
+		return result.Error
+	}
+	return nil
+}
+
+func marshalApprovalInteractionResponse(decision approvals.Decision, reason string) ([]byte, error) {
+	return json.Marshal(map[string]any{
+		"decision": decision,
+		"reason":   reason,
+	})
+}
+
+func buildInteractionEventPayload(interaction *interactions.Interaction) (map[string]any, error) {
+	if interaction == nil {
+		return nil, fmt.Errorf("interaction is required")
+	}
+	request, err := decodeInteractionJSON(interaction.RequestJSON)
+	if err != nil {
+		return nil, fmt.Errorf("decode interaction request: %w", err)
+	}
+	response, err := decodeInteractionJSON(interaction.ResponseJSON)
+	if err != nil {
+		return nil, fmt.Errorf("decode interaction response: %w", err)
+	}
+	payload := map[string]any{
+		"id":              interaction.ID,
+		"interaction_id":  interaction.ID,
+		"task_id":         interaction.TaskID,
+		"conversation_id": interaction.ConversationID,
+		"step":            interaction.StepIndex,
+		"tool_call_id":    interaction.ToolCallID,
+		"kind":            interaction.Kind,
+		"status":          interaction.Status,
+		"request_json":    request,
+		"created_at":      interaction.CreatedAt,
+		"updated_at":      interaction.UpdatedAt,
+	}
+	if response != nil {
+		payload["response_json"] = response
+	}
+	if interaction.RespondedBy != "" {
+		payload["responded_by"] = interaction.RespondedBy
+	}
+	if interaction.RespondedAt != nil {
+		payload["responded_at"] = interaction.RespondedAt
+	}
+	return payload, nil
+}
+
+func decodeInteractionJSON(raw []byte) (any, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var payload any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil, err
+	}
+	return payload, nil
+}
+
+func lookupInteractionTx(tx *gorm.DB, taskID string, interactionID string) *interactions.Interaction {
+	if tx == nil || taskID == "" || interactionID == "" {
+		return nil
+	}
+	var interaction interactions.Interaction
+	if err := tx.Where("id = ? AND task_id = ?", interactionID, taskID).Take(&interaction).Error; err != nil {
+		return nil
+	}
+	return &interaction
+}
+
+func (m *Manager) loadResolvedApprovalForInteraction(ctx context.Context, taskID string, interactionID string) (*approvals.ToolApproval, error) {
+	if m == nil || m.approvals == nil {
+		return nil, fmt.Errorf("approval store is not configured")
+	}
+	if m.interactions != nil {
+		interaction, err := m.interactions.GetInteraction(ctx, taskID, interactionID)
+		if err == nil {
+			if interaction.Kind != interactions.KindApproval {
+				return nil, nil
+			}
+			return m.approvals.GetApproval(ctx, taskID, interaction.ID)
+		}
+		if err != nil && !errors.Is(err, interactions.ErrInteractionNotFound) {
+			return nil, err
+		}
+	}
+	return m.approvals.GetApproval(ctx, taskID, interactionID)
 }

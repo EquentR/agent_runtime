@@ -249,6 +249,34 @@ export interface TaskStreamEvent {
 
 export type ApprovalDecision = 'approve' | 'reject'
 
+export type InteractionKind = 'approval' | 'question' | string
+
+export type InteractionStatus = 'pending' | 'approved' | 'rejected' | 'responded' | 'expired' | 'cancelled' | string
+
+export interface InteractionRecord {
+  id: string
+  task_id: string
+  conversation_id: string
+  step_index?: number
+  tool_call_id?: string
+  kind: InteractionKind
+  status: InteractionStatus
+  request_json?: Record<string, unknown>
+  response_json?: Record<string, unknown>
+  responded_by?: string
+  responded_at?: string
+  created_at?: string
+  updated_at?: string
+}
+
+export interface QuestionInteractionSubmitInput {
+  taskId: string
+  interactionId: string
+  selectedOptionId?: string
+  selectedOptionIds?: string[]
+  customText?: string
+}
+
 export type ToolApprovalStatus = 'pending' | 'approved' | 'rejected' | 'expired' | 'cancelled' | string
 
 export interface ToolApproval {
@@ -277,7 +305,7 @@ export interface ToolApprovalDecisionInput {
 
 export interface TranscriptEntry {
   id: string
-  kind: 'user' | 'reasoning' | 'tool' | 'reply' | 'error' | 'approval'
+  kind: 'user' | 'reasoning' | 'tool' | 'reply' | 'error' | 'approval' | 'question'
   title: string
   content?: string
   provider_id?: string
@@ -287,6 +315,7 @@ export interface TranscriptEntry {
   group_key?: string
   token_usage?: TranscriptTokenUsage
   approval?: ToolApproval
+  question_interaction?: InteractionRecord
 }
 
 export interface TranscriptTokenUsage {

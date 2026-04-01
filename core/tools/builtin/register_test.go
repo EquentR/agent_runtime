@@ -35,6 +35,7 @@ func TestRegisterRegistersPlannedTools(t *testing.T) {
 	}
 
 	want := []string{
+		"ask_user",
 		"check_command",
 		"copy_file",
 		"delete_file",
@@ -54,6 +55,20 @@ func TestRegisterRegistersPlannedTools(t *testing.T) {
 
 	if !slices.Equal(got, want) {
 		t.Fatalf("tool names = %#v, want %#v", got, want)
+	}
+}
+
+func TestRegisterRegistersAskUserTool(t *testing.T) {
+	registry := newBuiltinRegistry(t, Options{WorkspaceRoot: t.TempDir()})
+	tool := toolDefinitionByName(t, registry, "ask_user")
+	if tool.Parameters.Properties["options"].Items == nil {
+		t.Fatal("ask_user.options items = nil, want string item schema")
+	}
+	if tool.Parameters.Properties["options"].Items.Type != "string" {
+		t.Fatalf("ask_user.options item type = %q, want string", tool.Parameters.Properties["options"].Items.Type)
+	}
+	if _, ok := tool.Parameters.Properties["question"]; !ok {
+		t.Fatal("ask_user.question property missing")
 	}
 }
 

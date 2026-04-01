@@ -201,6 +201,65 @@ describe('buildTranscriptEntries', () => {
       expect.objectContaining({ kind: 'error', title: '运行失败', content: 'Upstream 502 while contacting provider' }),
     ])
   })
+
+  it('parses structured JSON response from persisted ask_user tool result into response_json fields', () => {
+    const entries = buildTranscriptEntries([
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          {
+            id: 'call_ask_1',
+            name: 'ask_user',
+            arguments: JSON.stringify({
+              question: 'Which environment?',
+              options: ['staging', 'production'],
+              allow_custom: true,
+            }),
+          },
+        ],
+      },
+      {
+        role: 'tool',
+        content: JSON.stringify({ selected_option_id: 'staging', custom_text: '' }),
+        tool_call_id: 'call_ask_1',
+      },
+    ] as any)
+
+    const questionEntries = entries.filter((e) => e.kind === 'question')
+    expect(questionEntries).toHaveLength(1)
+    const q = questionEntries[0]
+    expect(q.question_interaction?.status).toBe('responded')
+    expect(q.question_interaction?.response_json).toEqual({ selected_option_id: 'staging', custom_text: '' })
+    expect(q.question_interaction?.request_json).toMatchObject({ question: 'Which environment?' })
+    // No tool entry should remain for ask_user
+    expect(entries.filter((e) => e.kind === 'tool')).toHaveLength(0)
+  })
+
+  it('falls back to custom_text wrapper when persisted ask_user tool result is plain text', () => {
+    const entries = buildTranscriptEntries([
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          {
+            id: 'call_ask_2',
+            name: 'ask_user',
+            arguments: JSON.stringify({ question: 'What is your name?' }),
+          },
+        ],
+      },
+      {
+        role: 'tool',
+        content: 'Alice',
+        tool_call_id: 'call_ask_2',
+      },
+    ] as any)
+
+    const questionEntries = entries.filter((e) => e.kind === 'question')
+    expect(questionEntries).toHaveLength(1)
+    expect(questionEntries[0].question_interaction?.response_json).toEqual({ custom_text: 'Alice' })
+  })
 })
 
 describe('updateTranscriptFromStreamEvent', () => {
@@ -943,6 +1002,148 @@ describe('updateTranscriptFromStreamEvent', () => {
     expect(toolEntries[1].details?.map((detail) => detail.key)).toEqual(['call_2'])
     expect(toolEntries[1].status).toBe('running')
   })
+
+	it('renders question interactions as dedicated question entries instead of error blocks', () => {
+		const entries = updateTranscriptFromStreamEvent([], {
+			type: 'interaction.requested',
+			payload: {
+				id: 'interaction_question_1',
+				task_id: 'task_1',
+				conversation_id: 'conv_1',
+				step_index: 3,
+				tool_call_id: 'call_ask',
+				kind: 'question',
+				status: 'pending',
+				request_json: {
+					question: 'Which environment?',
+					options: ['staging', 'production'],
+					allow_custom: true,
+					placeholder: 'Other environment',
+				},
+			},
+		})
+
+		expect(entries).toHaveLength(1)
+		expect(entries[0]).toMatchObject({
+			kind: 'question',
+			title: '等待回答',
+			question_interaction: {
+				id: 'interaction_question_1',
+				status: 'pending',
+			},
+		})
+	})
+
+	it('starts a fresh tool group after the previous group has fully settled', () => {
+		let entries: TranscriptEntry[] = [{ id: 'user-1', kind: 'user', title: '', content: 'go' }]
+
+		entries = updateTranscriptFromStreamEvent(entries, {
+			type: 'tool.started',
+			payload: { ToolCallID: 'call_1', ToolName: 'bash', Arguments: 'echo hi' },
+		})
+		entries = updateTranscriptFromStreamEvent(entries, {
+			type: 'tool.finished',
+			payload: { ToolCallID: 'call_1', ToolName: 'bash', Output: 'hi' },
+		})
+
+		entries = updateTranscriptFromStreamEvent(entries, {
+			type: 'tool.started',
+			payload: { ToolCallID: 'call_2', ToolName: 'read_file', Arguments: '{"path":"a.ts"}' },
+		})
+
+		const toolEntries = entries.filter((e) => e.kind === 'tool')
+		expect(toolEntries).toHaveLength(2)
+		expect(toolEntries[0].details?.map((d) => d.key)).toEqual(['call_1'])
+		expect(toolEntries[0].status).toBe('done')
+		expect(toolEntries[1].details?.map((d) => d.key)).toEqual(['call_2'])
+		expect(toolEntries[1].status).toBe('running')
+	})
+
+	it('starts a fresh tool group after an approval entry even without a user or reply boundary', () => {
+		let entries: TranscriptEntry[] = []
+
+		entries = updateTranscriptFromStreamEvent(entries, {
+			type: 'tool.started',
+			payload: { ToolCallID: 'call_1', ToolName: 'bash', Arguments: 'echo 1' },
+		})
+
+		entries = updateTranscriptFromStreamEvent(entries, {
+			type: 'approval.requested',
+			payload: {
+				approval_id: 'appr_1',
+				task_id: 'task_1',
+				conversation_id: 'conv_1',
+				tool_call_id: 'call_1',
+				tool_name: 'bash',
+				arguments_summary: 'echo 1',
+				risk_level: 'medium',
+				status: 'pending',
+			},
+		})
+
+		entries = updateTranscriptFromStreamEvent(entries, {
+			type: 'tool.started',
+			payload: { ToolCallID: 'call_2', ToolName: 'glob', Arguments: '{}' },
+		})
+
+		const toolEntries = entries.filter((e) => e.kind === 'tool')
+		expect(toolEntries).toHaveLength(2)
+		expect(toolEntries[0].details?.map((d) => d.key)).toEqual(['call_1'])
+		expect(toolEntries[1].details?.map((d) => d.key)).toEqual(['call_2'])
+	})
+
+	it('starts a fresh tool group after a question interaction entry', () => {
+		let entries: TranscriptEntry[] = []
+
+		entries = updateTranscriptFromStreamEvent(entries, {
+			type: 'tool.started',
+			payload: { ToolCallID: 'call_1', ToolName: 'bash', Arguments: 'echo 1' },
+		})
+		entries = updateTranscriptFromStreamEvent(entries, {
+			type: 'tool.finished',
+			payload: { ToolCallID: 'call_1', ToolName: 'bash', Output: 'ok' },
+		})
+
+		entries = updateTranscriptFromStreamEvent(entries, {
+			type: 'interaction.requested',
+			payload: {
+				id: 'iq_1',
+				task_id: 'task_1',
+				conversation_id: 'conv_1',
+				kind: 'question',
+				status: 'pending',
+				request_json: { question: 'Pick one', options: ['a', 'b'] },
+			},
+		})
+
+		entries = updateTranscriptFromStreamEvent(entries, {
+			type: 'tool.started',
+			payload: { ToolCallID: 'call_2', ToolName: 'read_file', Arguments: '{}' },
+		})
+
+		const toolEntries = entries.filter((e) => e.kind === 'tool')
+		expect(toolEntries).toHaveLength(2)
+		expect(toolEntries[0].details?.map((d) => d.key)).toEqual(['call_1'])
+		expect(toolEntries[1].details?.map((d) => d.key)).toEqual(['call_2'])
+	})
+
+	it('resolves step from lowercase payload fields for tool.started and tool.finished events', () => {
+		let entries: TranscriptEntry[] = []
+
+		entries = updateTranscriptFromStreamEvent(entries, {
+			type: 'tool.started',
+			payload: { tool_call_id: 'call_1', tool_name: 'bash', step: 5 },
+		})
+		entries = updateTranscriptFromStreamEvent(entries, {
+			type: 'tool.started',
+			payload: { tool_call_id: 'call_2', tool_name: 'glob', step: 5 },
+		})
+
+		const toolEntries = entries.filter((e) => e.kind === 'tool')
+		expect(toolEntries).toHaveLength(1)
+		expect(toolEntries[0].group_key).toBe('step-5')
+		expect(toolEntries[0].details).toHaveLength(2)
+	})
 })
 
 describe('summarizeToolResult', () => {

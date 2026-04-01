@@ -20,6 +20,7 @@ import type {
   TaskSnapshot,
   ToolApproval,
   ToolApprovalDecisionInput,
+  InteractionRecord,
   TranscriptTokenUsage,
   UpdatePromptDocumentInput,
   UserRole,
@@ -435,6 +436,37 @@ export async function decideTaskApproval(taskId: string, approvalId: string, inp
   return normalizeToolApproval(approval)
 }
 
+export function normalizeInteractionRecord(value: Partial<InteractionRecord> & Record<string, unknown>): InteractionRecord {
+  return {
+    id: String(value.id ?? ''),
+    task_id: String(value.task_id ?? ''),
+    conversation_id: String(value.conversation_id ?? ''),
+    step_index: normalizeIntegerValue(value.step_index),
+    tool_call_id: normalizeStringValue(value.tool_call_id) ?? '',
+    kind: String(value.kind ?? ''),
+    status: String(value.status ?? ''),
+    request_json: value.request_json && typeof value.request_json === 'object' ? (value.request_json as Record<string, unknown>) : undefined,
+    response_json: value.response_json && typeof value.response_json === 'object' ? (value.response_json as Record<string, unknown>) : undefined,
+    responded_by: normalizeStringValue(value.responded_by),
+    responded_at: normalizeStringValue(value.responded_at),
+    created_at: normalizeStringValue(value.created_at),
+    updated_at: normalizeStringValue(value.updated_at),
+  }
+}
+
+export async function fetchTaskInteractions(taskId: string) {
+  const interactions = await request<Array<Partial<InteractionRecord>>>(`/tasks/${taskId}/interactions`)
+  return interactions.map((interaction) => normalizeInteractionRecord(interaction as Partial<InteractionRecord> & Record<string, unknown>))
+}
+
+export async function respondTaskInteraction(taskId: string, interactionId: string, input: { selected_option_id?: string; selected_option_ids?: string[]; custom_text?: string }) {
+  const interaction = await request<Partial<InteractionRecord>>(`/tasks/${taskId}/interactions/${interactionId}/respond`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+  return normalizeInteractionRecord(interaction as Partial<InteractionRecord> & Record<string, unknown>)
+}
+
 export async function cancelTask(taskId: string) {
   const task = await request<TaskDetails>(`/tasks/${taskId}/cancel`, {
     method: 'POST',
@@ -565,6 +597,8 @@ export async function streamRunTask(
     stream.addEventListener('tool.finished', handleEvent)
     stream.addEventListener('approval.requested', handleEvent)
     stream.addEventListener('approval.resolved', handleEvent)
+    stream.addEventListener('interaction.requested', handleEvent)
+    stream.addEventListener('interaction.responded', handleEvent)
     stream.addEventListener('task.finished', handleEvent)
   
     stream.onerror = () => {
