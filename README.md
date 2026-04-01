@@ -56,6 +56,16 @@
 
 ## 🚀 快速开始
 
+### 0. 环境要求
+
+| 运行时 | 最低版本 | 说明 |
+|--------|----------|------|
+| Go | 1.25.0 | 见 `go.mod` |
+| Node.js | 20.19 / 22.12+ | Vite 8 与 Vitest 4 的最低要求；推荐 22.x LTS |
+| pnpm | 10.x | `webapp/package.json` 的 `packageManager` 字段声明为 10.26.0 |
+
+主要依赖版本（前端）：Vue 3.5、TypeScript 5.9、Vite 8、Vitest 4。
+
 ### 1. 安装依赖
 
 ```bash
