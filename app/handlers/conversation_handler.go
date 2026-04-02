@@ -264,9 +264,14 @@ func (h *ConversationHandler) enrichConversation(ctx context.Context, conversati
 	if h.auditStore == nil || conversation.ID == "" {
 		return enriched
 	}
-	run, err := h.auditStore.GetLatestRunByConversationID(ctx, conversation.ID)
-	if err == nil && run != nil {
-		enriched.AuditRunID = run.ID
+	runs, err := h.auditStore.ListRunsByConversationID(ctx, conversation.ID)
+	if err == nil && len(runs) > 0 {
+		enriched.AuditRunID = runs[len(runs)-1].ID // 保持向后兼容
+		ids := make([]string, len(runs))
+		for i, r := range runs {
+			ids[i] = r.ID
+		}
+		enriched.AuditRunIDs = ids
 	}
 	return enriched
 }

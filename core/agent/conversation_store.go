@@ -33,6 +33,7 @@ type Conversation struct {
 	LastMessageAt *time.Time `json:"last_message_at,omitempty" gorm:"index"`
 	CreatedBy     string     `json:"created_by" gorm:"type:varchar(128)"`
 	AuditRunID    string     `json:"audit_run_id,omitempty" gorm:"-"`
+	AuditRunIDs   []string   `json:"audit_run_ids,omitempty" gorm:"-"`
 	CreatedAt     time.Time  `json:"created_at"`
 	UpdatedAt     time.Time  `json:"updated_at"`
 }
