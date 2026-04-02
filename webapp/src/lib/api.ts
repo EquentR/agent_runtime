@@ -353,6 +353,14 @@ export async function fetchAuditRunReplay(runId: string) {
   return request<AuditReplayBundle>(`/audit/runs/${runId}/replay`)
 }
 
+export async function fetchAuditConversationRuns(conversationId: string) {
+  return request<AuditRun[]>(`/audit/conversations/${conversationId}/runs`)
+}
+
+export async function fetchAuditConversationEvents(conversationId: string) {
+  return request<AuditEvent[]>(`/audit/conversations/${conversationId}/events`)
+}
+
 export async function fetchPromptDocuments() {
   return request<PromptDocument[]>('/prompts/documents')
 }

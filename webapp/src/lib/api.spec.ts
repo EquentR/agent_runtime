@@ -309,6 +309,134 @@ describe('audit API helpers', () => {
       artifacts: [],
     })
   })
+
+  it('fetches all audit runs for a conversation via the conversation-level endpoint', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        code: 200,
+        message: 'OK',
+        data: [
+          {
+            id: 'run_1',
+            task_id: 'task_1',
+            conversation_id: 'conv_1',
+            task_type: 'agent.run',
+            status: 'succeeded',
+            created_by: 'alice',
+            schema_version: 'v1',
+            created_at: '2026-03-22T09:00:00Z',
+          },
+          {
+            id: 'run_2',
+            task_id: 'task_2',
+            conversation_id: 'conv_1',
+            task_type: 'agent.run',
+            status: 'succeeded',
+            created_by: 'alice',
+            schema_version: 'v1',
+            created_at: '2026-03-22T09:05:00Z',
+          },
+        ],
+        time: '',
+      }),
+    } as Response)
+
+    const api = (await import('./api')) as Record<string, unknown>
+
+    expect(typeof api.fetchAuditConversationRuns).toBe('function')
+
+    if (typeof api.fetchAuditConversationRuns !== 'function') {
+      return
+    }
+
+    const runs = await api.fetchAuditConversationRuns('conv_1')
+
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/v1/audit/conversations/conv_1/runs',
+      expect.objectContaining({ credentials: 'include' }),
+    )
+    expect(runs).toHaveLength(2)
+    expect(runs).toEqual([
+      expect.objectContaining({ id: 'run_1', conversation_id: 'conv_1' }),
+      expect.objectContaining({ id: 'run_2', conversation_id: 'conv_1' }),
+    ])
+  })
+
+  it('fetches all audit events for a conversation via the conversation-level endpoint', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        code: 200,
+        message: 'OK',
+        data: [
+          {
+            id: 1,
+            run_id: 'run_1',
+            task_id: 'task_1',
+            seq: 1,
+            phase: 'run',
+            event_type: 'step.started',
+            level: 'info',
+            step_index: 0,
+            parent_seq: 0,
+            payload: {},
+            created_at: '2026-03-22T09:00:00Z',
+          },
+          {
+            id: 2,
+            run_id: 'run_1',
+            task_id: 'task_1',
+            seq: 2,
+            phase: 'run',
+            event_type: 'step.finished',
+            level: 'info',
+            step_index: 0,
+            parent_seq: 1,
+            payload: {},
+            created_at: '2026-03-22T09:00:01Z',
+          },
+          {
+            id: 3,
+            run_id: 'run_2',
+            task_id: 'task_2',
+            seq: 1,
+            phase: 'run',
+            event_type: 'step.started',
+            level: 'info',
+            step_index: 0,
+            parent_seq: 0,
+            payload: {},
+            created_at: '2026-03-22T09:05:00Z',
+          },
+        ],
+        time: '',
+      }),
+    } as Response)
+
+    const api = (await import('./api')) as Record<string, unknown>
+
+    expect(typeof api.fetchAuditConversationEvents).toBe('function')
+
+    if (typeof api.fetchAuditConversationEvents !== 'function') {
+      return
+    }
+
+    const events = await api.fetchAuditConversationEvents('conv_1')
+
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/v1/audit/conversations/conv_1/events',
+      expect.objectContaining({ credentials: 'include' }),
+    )
+    expect(events).toHaveLength(3)
+    expect(events).toEqual([
+      expect.objectContaining({ run_id: 'run_1', event_type: 'step.started' }),
+      expect.objectContaining({ run_id: 'run_1', event_type: 'step.finished' }),
+      expect.objectContaining({ run_id: 'run_2', event_type: 'step.started' }),
+    ])
+  })
 })
 
 describe('prompt API helpers', () => {

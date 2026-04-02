@@ -95,6 +95,7 @@ export interface Conversation {
   updated_at: string
   last_message_at?: string
   audit_run_id?: string
+  audit_run_ids?: string[]
   auditRunId?: string
   run_id?: string
   runId?: string
