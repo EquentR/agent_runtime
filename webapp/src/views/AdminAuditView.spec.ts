@@ -2,8 +2,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const api = vi.hoisted(() => ({
-  fetchAuditRun: vi.fn(),
-  fetchAuditRunEvents: vi.fn(),
+  fetchAuditConversationRuns: vi.fn(),
   fetchAuditRunReplay: vi.fn(),
   fetchConversation: vi.fn(),
   fetchConversations: vi.fn(),
@@ -17,8 +16,7 @@ describe('AdminAuditView', () => {
   beforeEach(() => {
     api.fetchConversations.mockReset()
     api.fetchConversation.mockReset()
-    api.fetchAuditRun.mockReset()
-    api.fetchAuditRunEvents.mockReset()
+    api.fetchAuditConversationRuns.mockReset()
     api.fetchAuditRunReplay.mockReset()
   })
 
@@ -73,22 +71,45 @@ describe('AdminAuditView', () => {
       updated_at: conversationId === 'conv_2' ? '2026-03-22T10:02:00Z' : conversationId === 'conv_3' ? '2026-03-22T11:02:00Z' : '2026-03-22T09:01:00Z',
       audit_run_id: conversationId === 'conv_2' ? 'run_2' : conversationId === 'conv_3' ? 'run_3' : 'run_1',
     }))
-    api.fetchAuditRun.mockImplementation(async (runId: string) => ({
-      id: runId,
-      task_id: runId === 'run_2' ? 'tsk_2' : runId === 'run_3' ? 'tsk_3' : 'tsk_1',
-      conversation_id: runId === 'run_2' ? 'conv_2' : runId === 'run_3' ? 'conv_3' : 'conv_1',
-      task_type: 'agent.run',
-      provider_id: 'openai',
-      model_id: 'gpt-5.4',
-      runner_id: 'runner_1',
-      status: 'succeeded',
-      created_by: runId === 'run_2' ? 'bob' : runId === 'run_3' ? 'cindy' : 'alice',
-      replayable: true,
-      schema_version: 'v1',
-      created_at: runId === 'run_3' ? '2026-03-22T11:00:00Z' : '2026-03-22T10:00:00Z',
-      updated_at: runId === 'run_3' ? '2026-03-22T11:02:00Z' : '2026-03-22T10:02:00Z',
-    }))
-    api.fetchAuditRunEvents.mockResolvedValue([])
+    api.fetchAuditConversationRuns.mockImplementation(async (conversationId: string) => {
+      if (conversationId === 'conv_2') {
+        return [{
+          id: 'run_2',
+          task_id: 'tsk_2',
+          conversation_id: 'conv_2',
+          task_type: 'agent.run',
+          status: 'succeeded',
+          created_by: 'bob',
+          schema_version: 'v1',
+          created_at: '2026-03-22T10:00:00Z',
+          updated_at: '2026-03-22T10:02:00Z',
+        }]
+      }
+      if (conversationId === 'conv_3') {
+        return [{
+          id: 'run_3',
+          task_id: 'tsk_3',
+          conversation_id: 'conv_3',
+          task_type: 'agent.run',
+          status: 'succeeded',
+          created_by: 'cindy',
+          schema_version: 'v1',
+          created_at: '2026-03-22T11:00:00Z',
+          updated_at: '2026-03-22T11:02:00Z',
+        }]
+      }
+      return [{
+        id: 'run_1',
+        task_id: 'tsk_1',
+        conversation_id: 'conv_1',
+        task_type: 'agent.run',
+        status: 'succeeded',
+        created_by: 'alice',
+        schema_version: 'v1',
+        created_at: '2026-03-22T09:00:00Z',
+        updated_at: '2026-03-22T09:01:00Z',
+      }]
+    })
     api.fetchAuditRunReplay.mockImplementation(async (runId: string) => {
       if (runId === 'run_3') {
         return {
@@ -328,8 +349,7 @@ describe('AdminAuditView', () => {
 
     expect(api.fetchConversations).toHaveBeenCalledTimes(1)
     expect(api.fetchConversation).toHaveBeenCalledWith('conv_2')
-    expect(api.fetchAuditRun).toHaveBeenCalledWith('run_2')
-    expect(api.fetchAuditRunEvents).toHaveBeenCalledWith('run_2')
+    expect(api.fetchAuditConversationRuns).toHaveBeenCalledWith('conv_2')
     expect(api.fetchAuditRunReplay).toHaveBeenCalledWith('run_2')
     expect(wrapper.find('.admin-audit-back-link').attributes('title')).toBe('返回聊天')
     expect(wrapper.find('.admin-audit-back-link svg').exists()).toBe(true)
@@ -406,5 +426,202 @@ describe('AdminAuditView', () => {
     await flushPromises()
     expect(wrapper.find('.admin-audit-filter-bar').exists()).toBe(true)
     expect(wrapper.find('.admin-audit-timeline-panel').text()).toContain('当前筛选条件下没有可展示的时间线')
+  })
+
+  it('shows turn selector and merged timeline for multi-turn conversations', async () => {
+    api.fetchConversations.mockResolvedValue([
+      {
+        id: 'conv_multi',
+        title: 'Multi-turn chat',
+        last_message: 'hello',
+        message_count: 4,
+        provider_id: 'openai',
+        model_id: 'gpt-5.4',
+        created_by: 'alice',
+        created_at: '2026-03-22T09:00:00Z',
+        updated_at: '2026-03-22T09:10:00Z',
+        audit_run_ids: ['run_a', 'run_b'],
+      },
+    ])
+    api.fetchConversation.mockResolvedValue({
+      id: 'conv_multi',
+      title: 'Multi-turn chat',
+      last_message: 'hello',
+      message_count: 4,
+      provider_id: 'openai',
+      model_id: 'gpt-5.4',
+      created_by: 'alice',
+      created_at: '2026-03-22T09:00:00Z',
+      updated_at: '2026-03-22T09:10:00Z',
+      audit_run_ids: ['run_a', 'run_b'],
+    })
+    api.fetchAuditConversationRuns.mockResolvedValue([
+      {
+        id: 'run_a',
+        task_id: 'task_a',
+        conversation_id: 'conv_multi',
+        task_type: 'agent.run',
+        status: 'succeeded',
+        created_by: 'alice',
+        schema_version: 'v1',
+        created_at: '2026-03-22T09:00:00Z',
+        updated_at: '2026-03-22T09:01:00Z',
+      },
+      {
+        id: 'run_b',
+        task_id: 'task_b',
+        conversation_id: 'conv_multi',
+        task_type: 'agent.run',
+        status: 'succeeded',
+        created_by: 'alice',
+        schema_version: 'v1',
+        created_at: '2026-03-22T09:05:00Z',
+        updated_at: '2026-03-22T09:06:00Z',
+      },
+    ])
+    api.fetchAuditRunReplay.mockImplementation(async (runId: string) => {
+      if (runId === 'run_a') {
+        return {
+          run: {
+            id: 'run_a',
+            task_id: 'task_a',
+            conversation_id: 'conv_multi',
+            task_type: 'agent.run',
+            status: 'succeeded',
+            created_by: 'alice',
+            schema_version: 'v1',
+            created_at: '2026-03-22T09:00:00Z',
+            updated_at: '2026-03-22T09:01:00Z',
+          },
+          timeline: [
+            {
+              seq: 1,
+              phase: 'run',
+              event_type: 'run.started',
+              level: 'info',
+              step_index: 0,
+              parent_seq: 0,
+              payload: { status: 'running' },
+              created_at: '2026-03-22T09:00:00Z',
+            },
+            {
+              seq: 2,
+              phase: 'tool',
+              event_type: 'tool.called',
+              level: 'info',
+              step_index: 1,
+              parent_seq: 1,
+              payload: { tool_name: 'read_file' },
+              created_at: '2026-03-22T09:00:01Z',
+            },
+            {
+              seq: 3,
+              phase: 'run',
+              event_type: 'run.succeeded',
+              level: 'info',
+              step_index: 1,
+              parent_seq: 2,
+              payload: { status: 'done' },
+              created_at: '2026-03-22T09:00:02Z',
+            },
+          ],
+          artifacts: [],
+        }
+      }
+      return {
+        run: {
+          id: 'run_b',
+          task_id: 'task_b',
+          conversation_id: 'conv_multi',
+          task_type: 'agent.run',
+          status: 'succeeded',
+          created_by: 'alice',
+          schema_version: 'v1',
+          created_at: '2026-03-22T09:05:00Z',
+          updated_at: '2026-03-22T09:06:00Z',
+        },
+        timeline: [
+          {
+            seq: 1,
+            phase: 'run',
+            event_type: 'run.started',
+            level: 'info',
+            step_index: 0,
+            parent_seq: 0,
+            payload: { status: 'running' },
+            created_at: '2026-03-22T09:05:00Z',
+          },
+          {
+            seq: 2,
+            phase: 'run',
+            event_type: 'run.succeeded',
+            level: 'info',
+            step_index: 1,
+            parent_seq: 1,
+            payload: { status: 'done' },
+            created_at: '2026-03-22T09:05:01Z',
+          },
+        ],
+        artifacts: [],
+      }
+    })
+
+    const wrapper = mount(AdminAuditView, {
+      global: {
+        stubs: {
+          RouterLink: {
+            props: ['to'],
+            template: '<a :href="to" v-bind="$attrs"><slot /></a>',
+          },
+        },
+      },
+    })
+
+    await flushPromises()
+    await wrapper.find('[data-conversation-id="conv_multi"]').trigger('click')
+    await flushPromises()
+
+    // Verify conversation-level APIs were called
+    expect(api.fetchAuditConversationRuns).toHaveBeenCalledWith('conv_multi')
+    expect(api.fetchAuditRunReplay).toHaveBeenCalledWith('run_a')
+    expect(api.fetchAuditRunReplay).toHaveBeenCalledWith('run_b')
+
+    // Turn selector should be visible (2 runs)
+    expect(wrapper.find('[data-testid="turn-bar"]').exists()).toBe(true)
+    expect(wrapper.findAll('.admin-audit-turn')).toHaveLength(3) // 全部轮次 + 轮次 1 + 轮次 2
+    expect(wrapper.find('[data-turn="all"]').text()).toContain('全部轮次')
+    expect(wrapper.find('[data-turn="0"]').text()).toContain('轮次 1')
+    expect(wrapper.find('[data-turn="1"]').text()).toContain('轮次 2')
+
+    // 轮次数 should show 2
+    expect(wrapper.text()).toContain('2')
+
+    // All timeline items merged: 3 from run_a + 2 from run_b = 5
+    expect(wrapper.findAll('.admin-audit-timeline-item')).toHaveLength(5)
+
+    // Timeline items should show turn labels
+    expect(wrapper.text()).toContain('轮次 1')
+    expect(wrapper.text()).toContain('轮次 2')
+
+    // Filter by turn 1 only
+    await wrapper.find('[data-turn="0"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.findAll('.admin-audit-timeline-item')).toHaveLength(3)
+
+    // Filter by turn 2 only
+    await wrapper.find('[data-turn="1"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.findAll('.admin-audit-timeline-item')).toHaveLength(2)
+
+    // Back to all turns
+    await wrapper.find('[data-turn="all"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.findAll('.admin-audit-timeline-item')).toHaveLength(5)
+
+    // Tool filter should work across turns
+    await wrapper.find('[data-filter="tool"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.findAll('.admin-audit-timeline-item')).toHaveLength(1)
+    expect(wrapper.text()).toContain('tool.called')
   })
 })

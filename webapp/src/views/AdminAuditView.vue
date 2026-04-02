@@ -4,8 +4,7 @@ import { RouterLink } from 'vue-router'
 import { ArrowLeft, CircleCheck, Cpu, InfoFilled, Operation, WarningFilled } from '@element-plus/icons-vue'
 
 import {
-  fetchAuditRun,
-  fetchAuditRunEvents,
+  fetchAuditConversationRuns,
   fetchAuditRunReplay,
   fetchConversation,
   fetchConversations,
@@ -20,9 +19,10 @@ const errorMessage = ref('')
 const conversations = ref<Conversation[]>([])
 const selectedConversationId = ref('')
 const selectedConversation = ref<Conversation | null>(null)
-const auditRun = ref<AuditRun | null>(null)
-const auditReplay = ref<AuditReplayBundle | null>(null)
-const expandedTimelineSeq = ref<number | null>(null)
+const auditRuns = ref<AuditRun[]>([])
+const auditReplays = ref<AuditReplayBundle[]>([])
+const selectedTurnIndex = ref<number | null>(null)
+const expandedTimelineKey = ref<string | null>(null)
 const activeFilter = ref<TimelineFilter>('all')
 
 const selectedConversationSummary = computed(() => {
@@ -32,16 +32,40 @@ const selectedConversationSummary = computed(() => {
   return conversations.value.find((conversation) => conversation.id === selectedConversationId.value) ?? null
 })
 
-const replayArtifactsById = computed(() => {
+const selectedAuditRun = computed(() => {
+  if (selectedTurnIndex.value != null && selectedTurnIndex.value < auditRuns.value.length) {
+    return auditRuns.value[selectedTurnIndex.value] ?? null
+  }
+  return auditRuns.value[auditRuns.value.length - 1] ?? null
+})
+
+const mergedTimeline = computed(() => {
+  const entries: Array<AuditReplayEvent & { turnIndex: number }> = []
+  for (let i = 0; i < auditReplays.value.length; i++) {
+    const replay = auditReplays.value[i]
+    if (!replay) continue
+    for (const entry of replay.timeline) {
+      entries.push({ ...entry, turnIndex: i })
+    }
+  }
+  return entries
+})
+
+const mergedArtifactsById = computed(() => {
   const map = new Map<string, AuditReplayArtifact>()
-  for (const artifact of auditReplay.value?.artifacts ?? []) {
-    map.set(artifact.id, artifact)
+  for (const replay of auditReplays.value) {
+    for (const artifact of replay.artifacts ?? []) {
+      map.set(artifact.id, artifact)
+    }
   }
   return map
 })
 
 const filteredTimeline = computed(() => {
-  const timeline = auditReplay.value?.timeline ?? []
+  let timeline = mergedTimeline.value
+  if (selectedTurnIndex.value != null) {
+    timeline = timeline.filter((entry) => entry.turnIndex === selectedTurnIndex.value)
+  }
   switch (activeFilter.value) {
     case 'tool':
       return timeline.filter((entry) => entry.phase === 'tool')
@@ -54,11 +78,15 @@ const filteredTimeline = computed(() => {
   }
 })
 
+function timelineEntryKey(entry: AuditReplayEvent & { turnIndex: number }) {
+  return `${entry.turnIndex}-${entry.seq}`
+}
+
 const activeTimelineEntry = computed(() => {
-  if (expandedTimelineSeq.value == null) {
+  if (expandedTimelineKey.value == null) {
     return filteredTimeline.value[0] ?? null
   }
-  return filteredTimeline.value.find((entry) => entry.seq === expandedTimelineSeq.value) ?? filteredTimeline.value[0] ?? null
+  return filteredTimeline.value.find((entry) => timelineEntryKey(entry) === expandedTimelineKey.value) ?? filteredTimeline.value[0] ?? null
 })
 
 const activeArtifact = computed(() => {
@@ -66,7 +94,7 @@ const activeArtifact = computed(() => {
   if (!artifactId) {
     return null
   }
-  return replayArtifactsById.value.get(artifactId) ?? null
+  return mergedArtifactsById.value.get(artifactId) ?? null
 })
 
 const activeArtifactBody = computed(() => {
@@ -215,13 +243,20 @@ function iconForEntry(entry: AuditReplayEvent) {
   return InfoFilled
 }
 
-function toggleTimelineEntry(entry: AuditReplayEvent) {
-  expandedTimelineSeq.value = entry.seq
+function toggleTimelineEntry(entry: AuditReplayEvent & { turnIndex: number }) {
+  expandedTimelineKey.value = timelineEntryKey(entry)
 }
 
 function applyFilter(filter: TimelineFilter) {
   activeFilter.value = filter
-  expandedTimelineSeq.value = filteredTimeline.value[0]?.seq ?? null
+  const first = filteredTimeline.value[0]
+  expandedTimelineKey.value = first ? timelineEntryKey(first) : null
+}
+
+function selectTurn(index: number | null) {
+  selectedTurnIndex.value = index
+  const first = filteredTimeline.value[0]
+  expandedTimelineKey.value = first ? timelineEntryKey(first) : null
 }
 
 async function loadConversationList() {
@@ -241,29 +276,27 @@ async function selectConversation(conversationId: string) {
   selectedConversationId.value = conversationId
   detailLoading.value = true
   errorMessage.value = ''
-  auditRun.value = null
-  auditReplay.value = null
-  expandedTimelineSeq.value = null
+  auditRuns.value = []
+  auditReplays.value = []
+  selectedTurnIndex.value = null
+  expandedTimelineKey.value = null
   activeFilter.value = 'all'
 
   try {
     const conversation = await fetchConversation(conversationId)
     selectedConversation.value = conversation
-    const runId = resolveAuditRunId(conversation)
 
-    if (!runId) {
+    const runs = await fetchAuditConversationRuns(conversationId)
+    auditRuns.value = runs
+
+    if (runs.length === 0) {
       return
     }
 
-    const [run, , replay] = await Promise.all([
-      fetchAuditRun(runId),
-      fetchAuditRunEvents(runId),
-      fetchAuditRunReplay(runId),
-    ])
-
-    auditRun.value = run
-    auditReplay.value = replay
-    expandedTimelineSeq.value = replay.timeline[0]?.seq ?? null
+    const replays = await Promise.all(runs.map((run) => fetchAuditRunReplay(run.id)))
+    auditReplays.value = replays
+    const first = mergedTimeline.value[0]
+    expandedTimelineKey.value = first ? timelineEntryKey(first) : null
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '加载审计详情失败'
   } finally {
@@ -318,7 +351,7 @@ onMounted(async () => {
         <div class="topbar-title-block">
           <h1 class="topbar-conversation-title">{{ selectedConversationSummary?.title || '选择一个会话' }}</h1>
         </div>
-        <div class="status-pill idle">{{ auditRun?.status || '未加载' }}</div>
+        <div class="status-pill idle">{{ selectedAuditRun?.status || '未加载' }}</div>
       </header>
 
       <p v-if="errorMessage" class="error-banner">{{ errorMessage }}</p>
@@ -347,16 +380,20 @@ onMounted(async () => {
             <h2>执行信息</h2>
             <dl>
               <div>
+                <dt>轮次数</dt>
+                <dd>{{ auditRuns.length }}</dd>
+              </div>
+              <div>
                 <dt>Run ID</dt>
-                <dd>{{ auditRun?.id || resolveAuditRunId(selectedConversationSummary) || '未暴露 run_id' }}</dd>
+                <dd>{{ selectedAuditRun?.id || resolveAuditRunId(selectedConversationSummary) || '未暴露 run_id' }}</dd>
               </div>
               <div>
                 <dt>Task ID</dt>
-                <dd>{{ auditRun?.task_id || '-' }}</dd>
+                <dd>{{ selectedAuditRun?.task_id || '-' }}</dd>
               </div>
               <div>
                 <dt>状态</dt>
-                <dd>{{ auditRun?.status || '未找到审计运行' }}</dd>
+                <dd>{{ selectedAuditRun?.status || '未找到审计运行' }}</dd>
               </div>
             </dl>
           </article>
@@ -366,6 +403,19 @@ onMounted(async () => {
           <article class="admin-audit-card admin-audit-timeline-panel">
             <div class="messages-header">
               <div><h2>操作时间线</h2></div>
+            </div>
+
+            <div v-if="auditRuns.length > 1" class="admin-audit-turn-bar" data-testid="turn-bar">
+              <button class="admin-audit-turn" :class="{ active: selectedTurnIndex == null }" type="button" data-turn="all" @click="selectTurn(null)">全部轮次</button>
+              <button
+                v-for="(run, index) in auditRuns"
+                :key="run.id"
+                class="admin-audit-turn"
+                :class="{ active: selectedTurnIndex === index }"
+                type="button"
+                :data-turn="index"
+                @click="selectTurn(index)"
+              >轮次 {{ index + 1 }}</button>
             </div>
 
             <div class="admin-audit-filter-bar">
@@ -378,9 +428,9 @@ onMounted(async () => {
             <div v-if="filteredTimeline.length" class="admin-audit-timeline">
               <button
                 v-for="entry in filteredTimeline"
-                :key="entry.seq"
+                :key="`${entry.turnIndex}-${entry.seq}`"
                 class="admin-audit-timeline-item"
-                :class="[`tone-${statusTone(entry)}`, { active: activeTimelineEntry?.seq === entry.seq }]"
+                :class="[`tone-${statusTone(entry)}`, { active: activeTimelineEntry && timelineEntryKey(activeTimelineEntry) === timelineEntryKey(entry) }]"
                 type="button"
                 @click="toggleTimelineEntry(entry)"
               >
@@ -390,7 +440,7 @@ onMounted(async () => {
                   </span>
                   <div>
                     <strong>{{ entry.event_type }}</strong>
-                    <p>{{ formatPhase(entry.phase) }} · #{{ entry.seq }}</p>
+                    <p>{{ formatPhase(entry.phase) }} · #{{ entry.seq }}<template v-if="auditRuns.length > 1"> · 轮次 {{ entry.turnIndex + 1 }}</template></p>
                   </div>
                 </div>
                 <span class="admin-audit-artifact-chip">{{ formatEventType(entry.event_type) }}</span>
@@ -408,6 +458,7 @@ onMounted(async () => {
               <div class="admin-audit-detail-meta">
                 <span>{{ formatPhase(activeTimelineEntry.phase) }}</span>
                 <span>#{{ activeTimelineEntry.seq }}</span>
+                <span v-if="auditRuns.length > 1">轮次 {{ (activeTimelineEntry as any).turnIndex + 1 }}</span>
               </div>
               <pre v-if="activeArtifactBody" class="trace-detail-content admin-audit-json">{{ activeArtifactBody }}</pre>
               <pre v-else-if="activeTimelineEntry.payload" class="trace-detail-content admin-audit-json">{{ JSON.stringify(activeTimelineEntry.payload, null, 2) }}</pre>
