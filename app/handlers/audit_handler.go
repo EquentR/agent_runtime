@@ -35,6 +35,8 @@ func (h *AuditHandler) Register(rg *gin.RouterGroup) {
 		resp.NewJsonOptionsHandler(h.handleGetRun),
 		resp.NewJsonOptionsHandler(h.handleGetRunEvents),
 		resp.NewJsonOptionsHandler(h.handleGetRunReplay),
+		resp.NewJsonOptionsHandler(h.handleListConversationRuns),
+		resp.NewJsonOptionsHandler(h.handleListConversationEvents),
 	}, options...)
 }
 
@@ -113,6 +115,68 @@ func (h *AuditHandler) handleGetRunReplay() (method, relativePath string, wrappe
 		default:
 			return bundle, nil, nil
 		}
+	}, nil
+}
+
+// handleListConversationRuns 返回指定 conversation 下所有审计运行列表的接口定义。
+//
+// @Summary 按会话列出审计运行
+// @Description 按 conversation_id 返回该会话下所有审计运行，按创建时间升序排列。
+// @Tags audit
+// @Produce json
+// @Param conversation_id path string true "会话 ID"
+// @Success 200 {array} coreaudit.Run
+// @Failure 401 {object} ErrorSwaggerResponse
+// @Router /audit/conversations/{conversation_id}/runs [get]
+func (h *AuditHandler) handleListConversationRuns() (method, relativePath string, wrapper resp.JsonOptionsResultWrapper, opts []resp.WrapperOption) {
+	return http.MethodGet, "/conversations/:conversation_id/runs", func(c *gin.Context) (any, []resp.ResOpt, error) {
+		if h.store == nil {
+			return nil, nil, fmt.Errorf("audit store is not configured")
+		}
+		conversationID := c.Param("conversation_id")
+		runs, err := h.store.ListRunsByConversationID(c.Request.Context(), conversationID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if len(runs) > 0 {
+			if err := h.ensureRunAccess(c, &runs[0]); err != nil {
+				return nil, []resp.ResOpt{resp.WithCode(http.StatusUnauthorized)}, err
+			}
+		}
+		return runs, nil, nil
+	}, nil
+}
+
+// handleListConversationEvents 返回指定 conversation 下所有审计事件的聚合列表接口定义。
+//
+// @Summary 按会话列出审计事件
+// @Description 按 conversation_id 返回该会话下跨审计运行的所有事件，按时间和序列升序排列。
+// @Tags audit
+// @Produce json
+// @Param conversation_id path string true "会话 ID"
+// @Success 200 {array} coreaudit.Event
+// @Failure 401 {object} ErrorSwaggerResponse
+// @Router /audit/conversations/{conversation_id}/events [get]
+func (h *AuditHandler) handleListConversationEvents() (method, relativePath string, wrapper resp.JsonOptionsResultWrapper, opts []resp.WrapperOption) {
+	return http.MethodGet, "/conversations/:conversation_id/events", func(c *gin.Context) (any, []resp.ResOpt, error) {
+		if h.store == nil {
+			return nil, nil, fmt.Errorf("audit store is not configured")
+		}
+		conversationID := c.Param("conversation_id")
+		runs, err := h.store.ListRunsByConversationID(c.Request.Context(), conversationID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if len(runs) > 0 {
+			if err := h.ensureRunAccess(c, &runs[0]); err != nil {
+				return nil, []resp.ResOpt{resp.WithCode(http.StatusUnauthorized)}, err
+			}
+		}
+		events, err := h.store.ListEventsByConversationID(c.Request.Context(), conversationID)
+		if err != nil {
+			return nil, nil, err
+		}
+		return events, nil, nil
 	}, nil
 }
 

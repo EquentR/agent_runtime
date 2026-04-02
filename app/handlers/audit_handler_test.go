@@ -268,6 +268,87 @@ func TestAuditHandlerGetReplayBundleReturnsConflictForRunningRun(t *testing.T) {
 	}
 }
 
+func TestAuditHandlerListConversationRunsReturnsAllRuns(t *testing.T) {
+	server, store := newAuditHandlerTestServer(t)
+	seedMultiTurnAuditRuns(t, store, "conv_1", 3)
+
+	response, err := http.Get(server.URL + "/api/v1/audit/conversations/conv_1/runs")
+	if err != nil {
+		t.Fatalf("http.Get() error = %v", err)
+	}
+	defer response.Body.Close()
+
+	runs := decodeAuditRunsResponse(t, response.Body)
+	if len(runs) != 3 {
+		t.Fatalf("len(runs) = %d, want 3", len(runs))
+	}
+	for i := 1; i < len(runs); i++ {
+		if runs[i].CreatedAt.Before(runs[i-1].CreatedAt) {
+			t.Fatalf("runs[%d].CreatedAt before runs[%d].CreatedAt, want ascending order", i, i-1)
+		}
+	}
+}
+
+func TestAuditHandlerListConversationRunsReturnsEmptyForUnknown(t *testing.T) {
+	server, _ := newAuditHandlerTestServer(t)
+
+	response, err := http.Get(server.URL + "/api/v1/audit/conversations/no_such_conv/runs")
+	if err != nil {
+		t.Fatalf("http.Get() error = %v", err)
+	}
+	defer response.Body.Close()
+
+	runs := decodeAuditRunsResponse(t, response.Body)
+	if len(runs) != 0 {
+		t.Fatalf("len(runs) = %d, want 0", len(runs))
+	}
+}
+
+func TestAuditHandlerListConversationEventsReturnsAllEvents(t *testing.T) {
+	server, store := newAuditHandlerTestServer(t)
+	seedMultiTurnAuditRuns(t, store, "conv_1", 2)
+
+	response, err := http.Get(server.URL + "/api/v1/audit/conversations/conv_1/events")
+	if err != nil {
+		t.Fatalf("http.Get() error = %v", err)
+	}
+	defer response.Body.Close()
+
+	events := decodeAuditEventsResponse(t, response.Body)
+	// seedMultiTurnAuditRuns creates 2 events per run
+	if len(events) != 4 {
+		t.Fatalf("len(events) = %d, want 4", len(events))
+	}
+}
+
+func TestAuditHandlerListConversationRunsRejectsCrossUserAccess(t *testing.T) {
+	deps, server := newAuthenticatedAuditHandlerTestServer(t)
+	registerAuditHandlerUser(t, deps.authLogic, "owner")
+	registerAuditHandlerUser(t, deps.authLogic, "guest")
+	seedMultiTurnAuditRunsWithOwner(t, deps.store, "conv_1", 2, "owner")
+	cookie := loginAuditHandlerSessionCookie(t, deps.authLogic, "guest")
+
+	request, err := http.NewRequest(http.MethodGet, server.URL+"/api/v1/audit/conversations/conv_1/runs", nil)
+	if err != nil {
+		t.Fatalf("http.NewRequest() error = %v", err)
+	}
+	request.AddCookie(cookie)
+
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("Do() error = %v", err)
+	}
+	defer response.Body.Close()
+
+	envelope := decodeEnvelope(t, response.Body)
+	if envelope.OK {
+		t.Fatal("response ok = true, want false for cross-user conversation audit access")
+	}
+	if envelope.Code != http.StatusUnauthorized {
+		t.Fatalf("envelope.Code = %d, want %d", envelope.Code, http.StatusUnauthorized)
+	}
+}
+
 type authenticatedAuditHandlerTestDeps struct {
 	store     *coreaudit.Store
 	authLogic *logics.AuthLogic
@@ -500,4 +581,64 @@ func decodeAuditReplayResponse(t *testing.T, body io.Reader) coreaudit.ReplayBun
 		t.Fatalf("Unmarshal() replay bundle error = %v", err)
 	}
 	return bundle
+}
+
+func decodeAuditRunsResponse(t *testing.T, body io.Reader) []coreaudit.Run {
+	t.Helper()
+
+	var envelope taskTestResponse
+	if err := json.NewDecoder(body).Decode(&envelope); err != nil {
+		t.Fatalf("Decode() envelope error = %v", err)
+	}
+	if !envelope.OK {
+		t.Fatalf("response ok = false, raw data = %s", string(envelope.Data))
+	}
+	var runs []coreaudit.Run
+	if err := json.Unmarshal(envelope.Data, &runs); err != nil {
+		t.Fatalf("Unmarshal() runs error = %v", err)
+	}
+	return runs
+}
+
+func seedMultiTurnAuditRuns(t *testing.T, store *coreaudit.Store, conversationID string, turnCount int) {
+	t.Helper()
+	seedMultiTurnAuditRunsWithOwner(t, store, conversationID, turnCount, "tester")
+}
+
+func seedMultiTurnAuditRunsWithOwner(t *testing.T, store *coreaudit.Store, conversationID string, turnCount int, createdBy string) {
+	t.Helper()
+
+	ctx := context.Background()
+	base := time.Date(2026, time.March, 21, 18, 0, 0, 0, time.UTC)
+	for i := 0; i < turnCount; i++ {
+		taskID := fmt.Sprintf("task_%d", i+1)
+		runID := fmt.Sprintf("run_%d", i+1)
+		startedAt := base.Add(time.Duration(i) * time.Minute)
+
+		run, err := store.CreateRun(ctx, coreaudit.StartRunInput{
+			RunID:          runID,
+			TaskID:         taskID,
+			ConversationID: conversationID,
+			TaskType:       "agent.run",
+			CreatedBy:      createdBy,
+			SchemaVersion:  coreaudit.SchemaVersionV1,
+			Status:         coreaudit.StatusRunning,
+			StartedAt:      startedAt,
+		})
+		if err != nil {
+			t.Fatalf("CreateRun(%s) error = %v", runID, err)
+		}
+		for _, eventType := range []string{"step.started", "step.finished"} {
+			if _, err := store.AppendEvent(ctx, run.ID, coreaudit.AppendEventInput{
+				EventType: eventType,
+				StepIndex: 1,
+				CreatedAt: startedAt.Add(time.Second),
+			}); err != nil {
+				t.Fatalf("AppendEvent(%s, %s) error = %v", runID, eventType, err)
+			}
+		}
+		if err := store.FinishRun(ctx, run.ID, coreaudit.StatusSucceeded, startedAt.Add(2*time.Second)); err != nil {
+			t.Fatalf("FinishRun(%s) error = %v", runID, err)
+		}
+	}
 }
