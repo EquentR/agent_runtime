@@ -8,6 +8,7 @@ interface ChatState {
   activeTaskEventSeq: number
   entries: TranscriptEntry[]
   draftEntriesByConversation: Record<string, TranscriptEntry[]>
+  selectedSkillsByConversation: Record<string, string[]>
 }
 
 const EMPTY_STATE: ChatState = {
@@ -16,6 +17,7 @@ const EMPTY_STATE: ChatState = {
   activeTaskEventSeq: 0,
   entries: [],
   draftEntriesByConversation: {},
+  selectedSkillsByConversation: {},
 }
 
 export function loadChatState(): ChatState {
@@ -36,6 +38,15 @@ export function loadChatState(): ChatState {
           ? Object.fromEntries(
               Object.entries(parsed.draftEntriesByConversation).filter(
                 ([conversationId, entries]) => typeof conversationId === 'string' && Array.isArray(entries),
+              ),
+            )
+          : {},
+      selectedSkillsByConversation:
+        parsed.selectedSkillsByConversation && typeof parsed.selectedSkillsByConversation === 'object'
+          ? Object.fromEntries(
+              Object.entries(parsed.selectedSkillsByConversation).filter(
+                ([conversationId, skills]) =>
+                  typeof conversationId === 'string' && Array.isArray(skills) && skills.every((skill) => typeof skill === 'string'),
               ),
             )
           : {},

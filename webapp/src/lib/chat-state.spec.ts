@@ -16,6 +16,9 @@ describe('chat-state', () => {
       draftEntriesByConversation: {
         conv_1: [{ id: 'b', kind: 'reply', title: '', content: 'partial' }],
       },
+      selectedSkillsByConversation: {
+        conv_1: ['debugging'],
+      },
     })
 
     expect(loadChatState()).toEqual({
@@ -25,6 +28,9 @@ describe('chat-state', () => {
       entries: [{ id: 'a', kind: 'error', title: 'Failed', content: 'boom' }],
       draftEntriesByConversation: {
         conv_1: [{ id: 'b', kind: 'reply', title: '', content: 'partial' }],
+      },
+      selectedSkillsByConversation: {
+        conv_1: ['debugging'],
       },
     })
   })
@@ -36,10 +42,18 @@ describe('chat-state', () => {
       activeTaskEventSeq: 4,
       entries: [{ id: 'a', kind: 'user', title: 'You', content: 'hi' }],
       draftEntriesByConversation: { conv_1: [{ id: 'b', kind: 'reply', title: '', content: 'partial' }] },
+      selectedSkillsByConversation: { conv_1: ['review'] },
     })
 
     clearChatState()
 
-    expect(loadChatState()).toEqual({ activeConversationId: '', activeTaskId: '', activeTaskEventSeq: 0, entries: [], draftEntriesByConversation: {} })
+    expect(loadChatState()).toEqual({
+      activeConversationId: '',
+      activeTaskId: '',
+      activeTaskEventSeq: 0,
+      entries: [],
+      draftEntriesByConversation: {},
+      selectedSkillsByConversation: {},
+    })
   })
 })

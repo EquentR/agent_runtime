@@ -176,6 +176,59 @@ func (r *Resolver) appendDefaultBindings(ctx context.Context, resolved *Resolved
 	return nil
 }
 
+func (r *ResolvedPrompt) AppendSegment(segment ResolvedPromptSegment) {
+	if r == nil {
+		return
+	}
+	order := 0
+	if len(r.Segments) > 0 {
+		order = r.Segments[len(r.Segments)-1].Order
+		if order <= 0 {
+			order = len(r.Segments)
+		}
+	}
+	r.appendSegment(&order, segment)
+}
+
+func (r *ResolvedPrompt) InsertSessionSegmentsBeforeLaterPhases(segments []ResolvedPromptSegment) {
+	if r == nil || len(segments) == 0 {
+		return
+	}
+	insertAt := len(r.Segments)
+	for i, existing := range r.Segments {
+		if strings.TrimSpace(existing.Phase) != promptPhaseSession {
+			insertAt = i
+			break
+		}
+	}
+
+	prepared := make([]ResolvedPromptSegment, 0, len(segments))
+	for _, segment := range segments {
+		if strings.TrimSpace(segment.Phase) != promptPhaseSession || strings.TrimSpace(segment.Content) == "" {
+			continue
+		}
+		segment.Order = 0
+		prepared = append(prepared, segment)
+	}
+	if len(prepared) == 0 {
+		return
+	}
+
+	merged := make([]ResolvedPromptSegment, 0, len(r.Segments)+len(prepared))
+	merged = append(merged, r.Segments[:insertAt]...)
+	merged = append(merged, prepared...)
+	merged = append(merged, r.Segments[insertAt:]...)
+
+	r.Segments = nil
+	r.Session = nil
+	r.StepPreModel = nil
+	r.ToolResult = nil
+	order := 0
+	for _, segment := range merged {
+		r.appendSegment(&order, segment)
+	}
+}
+
 func (r *ResolvedPrompt) appendSegment(order *int, segment ResolvedPromptSegment) {
 	if r == nil || order == nil {
 		return

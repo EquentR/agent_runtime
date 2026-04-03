@@ -13,10 +13,11 @@ const api = vi.hoisted(() => ({
   createRunTask: vi.fn(),
   decideTaskApproval: vi.fn(),
   deleteConversation: vi.fn(),
-	fetchModelCatalog: vi.fn(),
+  fetchModelCatalog: vi.fn(),
   fetchConversationMessages: vi.fn(),
   fetchConversations: vi.fn(),
-	fetchTaskInteractions: vi.fn(),
+  fetchSkills: vi.fn(),
+  fetchTaskInteractions: vi.fn(),
   fetchTaskApprovals: vi.fn(),
   findRunningTaskByConversation: vi.fn(),
   fetchTaskDetails: vi.fn(),
@@ -97,7 +98,7 @@ describe('ChatView', () => {
     api.fetchModelCatalog.mockReset()
     api.fetchConversations.mockReset()
     api.fetchConversationMessages.mockReset()
-    api.cancelTask.mockReset()
+    api.fetchSkills.mockReset()
     api.createRunTask.mockReset()
     api.decideTaskApproval.mockReset()
     api.deleteConversation.mockReset()
@@ -115,17 +116,22 @@ describe('ChatView', () => {
           id: 'openai',
           name: 'openai',
           models: [
-            { id: 'gpt-5.4', name: 'GPT 5.4', type: 'openai_responses' },
-            { id: 'gpt-4.1-mini', name: 'GPT 4.1 Mini', type: 'openai_responses' },
+            { id: 'gpt-5.4', name: 'GPT-5.4', type: 'chat' },
           ],
         },
         {
           id: 'google',
           name: 'google',
-          models: [{ id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', type: 'google' }],
+          models: [
+            { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', type: 'chat' },
+          ],
         },
       ],
     })
+    api.fetchSkills.mockResolvedValue([
+      { name: 'debugging', title: 'Debugging', source_ref: 'skills/debugging/SKILL.md' },
+      { name: 'review', title: 'Review', source_ref: 'skills/review/SKILL.md' },
+    ])
   })
 
   afterEach(() => {
@@ -1503,7 +1509,92 @@ describe('ChatView', () => {
     expect(wrapper.findAll('select')).toHaveLength(0)
   })
 
-  it('places the compact model menu before the conversation title in the topbar', async () => {
+
+  it('sends selected skills with the run task request', async () => {
+    api.fetchConversations.mockResolvedValue([])
+    api.createRunTask.mockResolvedValue({ id: 'task_1' })
+    api.streamRunTask.mockResolvedValue({ conversation_id: 'conv_new', provider_id: 'openai', model_id: 'gpt-5.4' })
+
+    const router = makeRouter()
+    await router.push('/chat')
+    await router.isReady()
+
+    const wrapper = mount(ChatView, {
+      attachTo: document.body,
+      global: {
+        plugins: [router],
+      },
+    })
+
+    await flushPromises()
+
+    const debugging = wrapper.find('[data-skill-name="debugging"]')
+    expect(debugging.exists()).toBe(true)
+    await debugging.setValue(true)
+    await flushPromises()
+
+    await wrapper.find('textarea').setValue('hello')
+    await wrapper.find('form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(api.createRunTask).toHaveBeenCalledWith({
+      createdBy: 'demo-user',
+      conversationId: undefined,
+      providerId: 'openai',
+      modelId: 'gpt-5.4',
+      message: 'hello',
+      skills: ['debugging'],
+    })
+  })
+
+  it('restores per-conversation skill selection from local storage', async () => {
+    localStorage.setItem(
+      'agent-runtime.chat-state',
+      JSON.stringify({
+        activeConversationId: 'conv_1',
+        activeTaskId: '',
+        activeTaskEventSeq: 0,
+        entries: [],
+        draftEntriesByConversation: {},
+        selectedSkillsByConversation: {
+          conv_1: ['review'],
+        },
+      }),
+    )
+    api.fetchConversations.mockResolvedValue([
+      {
+        id: 'conv_1',
+        title: 'First chat',
+        last_message: 'hello',
+        message_count: 2,
+        provider_id: 'openai',
+        model_id: 'gpt-5.4',
+        created_by: 'demo-user',
+        created_at: '',
+        updated_at: '',
+      },
+    ])
+    api.fetchConversationMessages.mockResolvedValue([{ role: 'assistant', content: 'hello' }])
+
+    const router = makeRouter()
+    await router.push('/chat')
+    await router.isReady()
+
+    const wrapper = mount(ChatView, {
+      attachTo: document.body,
+      global: {
+        plugins: [router],
+      },
+    })
+
+    await flushPromises()
+
+    const review = wrapper.find('[data-skill-name="review"]')
+    expect(review.exists()).toBe(true)
+    expect((review.element as HTMLInputElement).checked).toBe(true)
+  })
+
+  it('keeps the model menu inline with the title block', async () => {
     api.fetchConversations.mockResolvedValue([])
 
     const router = makeRouter()

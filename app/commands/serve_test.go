@@ -41,7 +41,7 @@ func TestPromptBuildRouterDependenciesExposePromptRuntime(t *testing.T) {
 		t.Fatalf("initPromptRuntime() error = %v", err)
 	}
 
-	deps := buildRouterDependencies(nil, nil, nil, nil, nil, promptRuntime.Store, promptRuntime.Resolver, nil)
+	deps := buildRouterDependencies(nil, nil, nil, nil, nil, promptRuntime.Store, promptRuntime.Resolver, nil, nil)
 	if deps.PromptStore != promptRuntime.Store {
 		t.Fatalf("PromptStore = %#v, want %#v", deps.PromptStore, promptRuntime.Store)
 	}
@@ -53,7 +53,7 @@ func TestPromptBuildRouterDependenciesExposePromptRuntime(t *testing.T) {
 func TestBuildRouterDependenciesExposeApprovalStore(t *testing.T) {
 	db := newServeTestDB(t)
 	approvalStore := approvals.NewStore(db)
-	deps := buildRouterDependencies(nil, approvalStore, nil, nil, nil, nil, nil, nil)
+	deps := buildRouterDependencies(nil, approvalStore, nil, nil, nil, nil, nil, nil, nil)
 	if deps.ApprovalStore != approvalStore {
 		t.Fatalf("ApprovalStore = %#v, want %#v", deps.ApprovalStore, approvalStore)
 	}
@@ -186,6 +186,13 @@ func TestNewDefaultToolRegistryUsesConfiguredWebSearchOptions(t *testing.T) {
 	}
 	if len(result.Results) != 1 || result.Results[0].Title != "Tavily Result" {
 		t.Fatalf("result.Results = %#v, want one Tavily Result", result.Results)
+	}
+}
+
+func TestBuildAgentRunExecutorDependenciesProvideSkillsResolver(t *testing.T) {
+	deps := buildAgentRunExecutorDependencies(nil, nil, nil, nil, nil, nil, t.TempDir(), nil, nil)
+	if deps.SkillsResolver == nil {
+		t.Fatal("SkillsResolver = nil, want workspace skills resolver")
 	}
 }
 

@@ -271,6 +271,50 @@ type PromptDeleteSwaggerData struct {
 	Deleted bool `json:"deleted"`
 }
 
+// SkillSwaggerResponse 描述技能详情接口的成功响应结构。
+type SkillSwaggerResponse struct {
+	Code    int             `json:"code"`
+	Message string          `json:"message"`
+	Data    SkillSwaggerDoc `json:"data"`
+	OK      bool            `json:"ok"`
+	Time    string          `json:"time"`
+}
+
+// SkillListSwaggerResponse 描述技能列表接口的成功响应结构。
+type SkillListSwaggerResponse struct {
+	Code    int                `json:"code"`
+	Message string             `json:"message"`
+	Data    []SkillListItemDoc `json:"data"`
+	OK      bool               `json:"ok"`
+	Time    string             `json:"time"`
+}
+
+// SkillListItemDoc 描述技能列表项的文档结构。
+type SkillListItemDoc struct {
+	Name        string   `json:"name"`
+	Title       string   `json:"title"`
+	Description string   `json:"description,omitempty"`
+	Tags        []string `json:"tags,omitempty"`
+	Tools       []string `json:"tools,omitempty"`
+	Version     string   `json:"version,omitempty"`
+	Hidden      bool     `json:"hidden,omitempty"`
+	SourceRef   string   `json:"source_ref"`
+}
+
+// SkillSwaggerDoc 描述 workspace skill 详情的文档结构。
+type SkillSwaggerDoc struct {
+	Name         string   `json:"name"`
+	Title        string   `json:"title"`
+	Description  string   `json:"description,omitempty"`
+	Tags         []string `json:"tags,omitempty"`
+	Tools        []string `json:"tools,omitempty"`
+	Version      string   `json:"version,omitempty"`
+	Hidden       bool     `json:"hidden,omitempty"`
+	SourceRef    string   `json:"source_ref"`
+	Content      string   `json:"content,omitempty"`
+	ResourceRefs []string `json:"resource_refs,omitempty"`
+}
+
 // TaskSwaggerResponse 描述任务接口的成功响应结构。
 type TaskSwaggerResponse struct {
 	Code    int            `json:"code"`

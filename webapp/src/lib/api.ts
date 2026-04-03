@@ -24,6 +24,8 @@ import type {
   TranscriptTokenUsage,
   UpdatePromptDocumentInput,
   UserRole,
+  WorkspaceSkill,
+  WorkspaceSkillListItem,
 } from '../types/api'
 
 const API_BASE = '/api/v1'
@@ -57,6 +59,7 @@ export function buildRunTaskRequest(input: {
   providerId: string
   modelId: string
   message: string
+  skills?: string[]
 }): RunTaskRequest {
   const request: RunTaskRequest = {
     task_type: 'agent.run',
@@ -71,6 +74,9 @@ export function buildRunTaskRequest(input: {
 
   if (input.conversationId) {
     request.input.conversation_id = input.conversationId
+  }
+  if (input.skills && input.skills.length > 0) {
+    request.input.skills = input.skills
   }
 
   return request
@@ -361,6 +367,14 @@ export async function fetchAuditConversationEvents(conversationId: string) {
   return request<AuditEvent[]>(`/audit/conversations/${conversationId}/events`)
 }
 
+export async function fetchSkills() {
+  return request<WorkspaceSkillListItem[]>('/skills')
+}
+
+export async function fetchSkill(name: string) {
+  return request<WorkspaceSkill>(`/skills/${encodeURIComponent(name)}`)
+}
+
 export async function fetchPromptDocuments() {
   return request<PromptDocument[]>('/prompts/documents')
 }
@@ -415,6 +429,7 @@ export async function createRunTask(input: {
   providerId: string
   modelId: string
   message: string
+  skills?: string[]
 }) {
   return request<TaskSnapshot>('/tasks', {
     method: 'POST',

@@ -12,7 +12,7 @@ import (
 	coretypes "github.com/EquentR/agent_runtime/core/types"
 )
 
-const DefaultMaxSteps = 8
+const DefaultMaxSteps = 128
 
 type Runner struct {
 	client   model.LlmClient

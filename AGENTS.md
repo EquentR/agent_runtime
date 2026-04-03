@@ -24,6 +24,7 @@
 - `core/agent`：agent 执行器、runner、流式事件、会话持久化。
 - `core/tasks`：任务存储、管理器、worker pool、事件、重试、取消、挂起恢复。
 - `core/prompt`：提示词文档、绑定与解析器。
+- `core/skills`：工作目录技能包扫描、解析、只读查询与运行时解析。
 - `core/approvals`：审批记录持久化。
 - `core/interactions`：人工交互记录持久化。
 - `core/audit`：任务运行审计与事件轨迹。
@@ -40,6 +41,7 @@
 - 应用装配：`app/commands/serve.go`、`app/config/app.go`。
 - Handler 模式：`app/handlers/task_handler.go`、`app/handlers/interaction_handler.go`、`app/handlers/approval_handler.go`、`app/handlers/prompt_handler.go`。
 - Agent runtime 主路径：`core/agent/executor.go`、`core/agent/stream.go`、`core/agent/conversation_store.go`。
+- Workspace skills：`core/skills/loader.go`、`core/skills/resolver.go`。
 - 任务系统：`core/tasks/manager.go`、`core/tasks/store.go`、`core/tasks/runtime.go`。
 - 人工介入链路：`core/approvals/store.go`、`core/interactions/store.go`、`core/tools/builtin/ask_user.go`。
 - 审计：`core/audit/store.go`。
@@ -56,6 +58,7 @@
 - 全仓库 Go 包列表：`go list ./...`
 - 全仓库 Go 构建：`go build ./cmd/...`
 - 全仓库 Go 测试：`go test ./...`
+- `core/skills` 聚焦测试：`go test ./core/skills`
 - 单个 Go 测试示例：`go test ./app/handlers -run TestSwaggerUIRoutesExposeHTMLAndGeneratedDocs`
 - `core` 下单个 Go 测试示例：`go test ./core/tasks -run TestStoreCreateTaskPersistsQueuedSnapshotAndCreatedEvent`
 - 前端类型检查：`pnpm --dir webapp exec vue-tsc -b`
@@ -95,6 +98,7 @@
 - 审批、交互、审计分别复用 `core/approvals`、`core/interactions`、`core/audit`，不要散落成局部表或局部日志。
 - provider 专属 SDK 细节留在 `core/providers/client/*` 或 `core/mcp`，不要泄漏到 `app`。
 - 提示词分发逻辑留在 `core/prompt`，不要在 handler 或前端里手写路由分发规则。
+- Workspace skills 以工作目录 `skills/<name>/SKILL.md` 为唯一事实来源，不入数据库，不在前端维护第二套配置源。
 
 ## HTTP 与 Handler 约定
 - 路由通过带 `Register` 方法的 handler 类型统一注册。

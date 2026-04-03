@@ -15,6 +15,7 @@ import {
   fetchConversationMessages,
   fetchConversations,
   fetchModelCatalog,
+  fetchSkills,
   fetchTaskApprovals,
   fetchTaskDetails,
   findRunningTaskByConversation,
@@ -40,6 +41,7 @@ import type {
   TaskDetails,
   TranscriptEntry,
   TranscriptTokenUsage,
+  WorkspaceSkillListItem,
 } from '../types/api'
 
 const router = useRouter()
@@ -63,6 +65,8 @@ const questionResponseStateById = ref<Record<string, { pending: boolean }>>({})
 const errorMessage = ref('')
 const modelCatalog = ref<ModelCatalog | null>(null)
 const catalogLoading = ref(false)
+const availableSkills = ref<WorkspaceSkillListItem[]>([])
+const selectedSkillsByConversation = ref<Record<string, string[]>>({})
 const selectedProviderId = ref('')
 const selectedModelId = ref('')
 const modelMenuOpen = ref(false)
@@ -103,6 +107,7 @@ const selectedModel = computed<ModelCatalogEntry | null>(
   () => availableModels.value.find((item) => item.id === selectedModelId.value) ?? availableModels.value[0] ?? null,
 )
 const selectedModelLabel = computed(() => selectedModel.value?.name || selectedModelId.value || '选择模型')
+const selectedSkillNames = computed(() => selectedSkillsByConversation.value[activeConversationId.value] ?? [])
 const modelMenuDisabled = computed(() => sending.value || catalogLoading.value || availableProviders.value.length === 0)
 const composerDisabled = computed(() => catalogLoading.value || !selectedProviderId.value || !selectedModelId.value)
 const stoppingTask = ref(false)
@@ -128,10 +133,11 @@ function syncChatState() {
     activeTaskEventSeq: activeTaskEventSeq.value,
     entries: entries.value,
     draftEntriesByConversation: draftEntriesByConversation.value,
+    selectedSkillsByConversation: selectedSkillsByConversation.value,
   })
 }
 
-watch([activeConversationId, activeTaskId, activeTaskEventSeq, entries, draftEntriesByConversation], syncChatState, { deep: true })
+watch([activeConversationId, activeTaskId, activeTaskEventSeq, entries, draftEntriesByConversation, selectedSkillsByConversation], syncChatState, { deep: true })
 
 function setDraftEntries(conversationId: string, nextEntries: TranscriptEntry[]) {
   if (!conversationId) {
@@ -518,6 +524,16 @@ async function handleStopTask() {
   }
 }
 
+function toggleSkillSelection(skillName: string, checked: boolean) {
+  const conversationId = activeConversationId.value
+  const current = selectedSkillsByConversation.value[conversationId] ?? []
+  const next = checked ? [...current, skillName] : current.filter((name) => name !== skillName)
+  selectedSkillsByConversation.value = {
+    ...selectedSkillsByConversation.value,
+    [conversationId]: next,
+  }
+}
+
 function syncSelectionFromConversation(conversationId: string) {
   const conversation = conversations.value.find((item) => item.id === conversationId)
   if (!conversation) {
@@ -538,6 +554,14 @@ async function loadCatalog() {
     errorMessage.value = error instanceof Error ? error.message : '加载模型目录失败'
   } finally {
     catalogLoading.value = false
+  }
+}
+
+async function loadAvailableSkills() {
+  try {
+    availableSkills.value = await fetchSkills()
+  } catch {
+    availableSkills.value = []
   }
 }
 
@@ -721,6 +745,7 @@ async function handleSend(message: string) {
       providerId: selectedProviderId.value,
       modelId: selectedModelId.value,
       message,
+      ...(selectedSkillNames.value.length > 0 ? { skills: selectedSkillNames.value } : {}),
     })
     const createdConversationId = task.input?.conversation_id ?? ''
     if (createdConversationId && !previousConversationId) {
@@ -775,7 +800,9 @@ onMounted(async () => {
   activeTaskEventSeq.value = saved.activeTaskEventSeq
   entries.value = saved.entries
   draftEntriesByConversation.value = saved.draftEntriesByConversation
+  selectedSkillsByConversation.value = saved.selectedSkillsByConversation
   await loadCatalog()
+  await loadAvailableSkills()
   await loadConversations()
   if (!activeConversationId.value || !syncSelectionFromConversation(activeConversationId.value)) {
     applyDefaultSelection()
@@ -903,6 +930,21 @@ onBeforeUnmount(() => {
           @approval-decision="handleApprovalDecision"
           @interaction-respond="handleInteractionRespond"
         />
+      </div>
+      <div v-if="availableSkills.length > 0" class="chat-skill-picker">
+        <label
+          v-for="skill in availableSkills"
+          :key="skill.name"
+          class="chat-skill-option"
+        >
+          <input
+            :data-skill-name="skill.name"
+            type="checkbox"
+            :checked="selectedSkillNames.includes(skill.name)"
+            @change="toggleSkillSelection(skill.name, ($event.target as HTMLInputElement).checked)"
+          />
+          <span>{{ skill.title }}</span>
+        </label>
       </div>
       <div class="chat-composer-dock">
         <MessageComposer

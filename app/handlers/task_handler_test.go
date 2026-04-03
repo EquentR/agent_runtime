@@ -257,6 +257,34 @@ func TestCreateTaskPersistsConversationConcurrencyKey(t *testing.T) {
 	}
 }
 
+func TestTaskHandlerCreateTaskTransparentlyPassesSkillsInInput(t *testing.T) {
+	manager, server := newTaskHandlerTestServer(t, nil, false)
+
+	created := createTaskViaHTTP(t, server.URL, map[string]any{
+		"task_type": "agent.run",
+		"input": map[string]any{
+			"conversation_id": "conv_1",
+			"provider_id":     "openai",
+			"model_id":        "gpt-5.4",
+			"message":         "hello",
+			"skills":          []string{"debugging", "review"},
+		},
+	})
+
+	persisted, err := manager.GetTask(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("GetTask() error = %v", err)
+	}
+	persistedInput := decodeJSONRaw(t, persisted.InputJSON)
+	rawSkills, ok := persistedInput["skills"].([]any)
+	if !ok {
+		t.Fatalf("persisted input.skills = %#v, want JSON array", persistedInput["skills"])
+	}
+	if len(rawSkills) != 2 || rawSkills[0] != "debugging" || rawSkills[1] != "review" {
+		t.Fatalf("persisted input.skills = %#v, want [debugging review]", rawSkills)
+	}
+}
+
 func TestTaskHandlerAgentRunEndToEndAppendsConversationHistory(t *testing.T) {
 	manager, server := newAgentRunTaskTestServer(t)
 	first := createTaskViaHTTP(t, server.URL, map[string]any{

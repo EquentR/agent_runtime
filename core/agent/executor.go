@@ -13,6 +13,7 @@ import (
 	"github.com/EquentR/agent_runtime/core/memory"
 	coreprompt "github.com/EquentR/agent_runtime/core/prompt"
 	model "github.com/EquentR/agent_runtime/core/providers/types"
+	coreskills "github.com/EquentR/agent_runtime/core/skills"
 	coretasks "github.com/EquentR/agent_runtime/core/tasks"
 	"github.com/EquentR/agent_runtime/core/tools"
 	coretypes "github.com/EquentR/agent_runtime/core/types"
@@ -48,17 +49,19 @@ type ModelOptionEntry struct {
 }
 
 type RunTaskInput struct {
-	ConversationID string `json:"conversation_id"`
-	ProviderID     string `json:"provider_id"`
-	ModelID        string `json:"model_id"`
-	UserID         string `json:"user_id,omitempty"`
-	Message        string `json:"message"`
-	Scene          string `json:"scene,omitempty"`
-	SystemPrompt   string `json:"system_prompt,omitempty"`
-	CreatedBy      string `json:"created_by,omitempty"`
+	ConversationID string   `json:"conversation_id"`
+	ProviderID     string   `json:"provider_id"`
+	ModelID        string   `json:"model_id"`
+	UserID         string   `json:"user_id,omitempty"`
+	Message        string   `json:"message"`
+	Scene          string   `json:"scene,omitempty"`
+	SystemPrompt   string   `json:"system_prompt,omitempty"`
+	CreatedBy      string   `json:"created_by,omitempty"`
+	Skills         []string `json:"skills,omitempty"`
 }
 
 const defaultRunTaskScene = "agent.run.default"
+const promptSourceKindWorkspaceSkill = "workspace_skill"
 
 type RunTaskResult struct {
 	ConversationID   string                   `json:"conversation_id"`
@@ -83,6 +86,7 @@ type ExecutorDependencies struct {
 	ApprovalStore     *approvals.Store
 	InteractionStore  *interactions.Store
 	PromptResolver    *coreprompt.Resolver
+	SkillsResolver    *coreskills.Resolver
 	WorkspaceRoot     string
 	ClientFactory     ClientFactory
 	MemoryFactory     MemoryFactory
@@ -168,6 +172,43 @@ func (r *ModelResolver) findProvider(providerID string) *coretypes.LLMProvider {
 	return nil
 }
 
+func normalizeSkillNames(names []string) []string {
+	if len(names) == 0 {
+		return []string{}
+	}
+	seen := make(map[string]struct{}, len(names))
+	result := make([]string, 0, len(names))
+	for _, name := range names {
+		trimmed := strings.TrimSpace(name)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		result = append(result, trimmed)
+	}
+	return result
+}
+
+func appendResolvedSkillsToPrompt(resolvedPrompt *coreprompt.ResolvedPrompt, resolvedSkills []coreskills.ResolvedSkill) {
+	if resolvedPrompt == nil {
+		return
+	}
+	segments := make([]coreprompt.ResolvedPromptSegment, 0, len(resolvedSkills))
+	for _, skill := range resolvedSkills {
+		segments = append(segments, coreprompt.ResolvedPromptSegment{
+			Phase:       "session",
+			Content:     skill.Content,
+			SourceKind:  promptSourceKindWorkspaceSkill,
+			SourceRef:   skill.SourceRef,
+			RuntimeOnly: skill.RuntimeOnly,
+		})
+	}
+	resolvedPrompt.InsertSessionSegmentsBeforeLaterPhases(segments)
+}
+
 func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 	return func(ctx context.Context, task *coretasks.Task, runtime *coretasks.Runtime) (output any, execErr error) {
 		if task == nil {
@@ -206,6 +247,7 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 		if err := json.Unmarshal(task.InputJSON, &input); err != nil {
 			return nil, err
 		}
+		input.Skills = normalizeSkillNames(input.Skills)
 		auditor.setInput(input)
 
 		resolved, err := deps.Resolver.Resolve(input.ProviderID, input.ModelID)
@@ -223,6 +265,16 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 		})
 		if err != nil {
 			return nil, err
+		}
+		if len(input.Skills) > 0 {
+			if deps.SkillsResolver == nil {
+				return nil, fmt.Errorf("skills resolver is required when skills are selected")
+			}
+			resolvedSkills, err := deps.SkillsResolver.Resolve(ctx, coreskills.ResolveInput{Names: input.Skills})
+			if err != nil {
+				return nil, err
+			}
+			appendResolvedSkillsToPrompt(resolvedPrompt, resolvedSkills)
 		}
 		conversation, err := deps.ConversationStore.EnsureConversation(ctx, EnsureConversationInput{
 			ID:         input.ConversationID,

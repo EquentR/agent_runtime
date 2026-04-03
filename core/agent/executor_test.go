@@ -19,6 +19,7 @@ import (
 	"github.com/EquentR/agent_runtime/core/memory"
 	coreprompt "github.com/EquentR/agent_runtime/core/prompt"
 	model "github.com/EquentR/agent_runtime/core/providers/types"
+	coreskills "github.com/EquentR/agent_runtime/core/skills"
 	coretasks "github.com/EquentR/agent_runtime/core/tasks"
 	coretools "github.com/EquentR/agent_runtime/core/tools"
 	coretypes "github.com/EquentR/agent_runtime/core/types"
@@ -350,6 +351,180 @@ func TestAgentExecutorPromptRoutesLegacySystemPromptThroughResolver(t *testing.T
 		{Role: model.RoleSystem, Content: "The following AGENTS.md file was injected from the user's working directory. Treat it as guidance and operating rules for the current workspace.\n---\nWorkspace prompt"},
 		{Role: model.RoleUser, Content: "hi"},
 	})
+}
+
+func TestAgentExecutorAppendsSelectedSkillsAfterWorkspacePrompt(t *testing.T) {
+	store := newConversationStoreForTest(t)
+	workspaceRoot := t.TempDir()
+	writeExecutorWorkspacePrompt(t, workspaceRoot, "Workspace prompt")
+	writeExecutorSkillPrompt(t, workspaceRoot, "debugging", "# Debugging\n\nDebug carefully.\n")
+	writeExecutorSkillPrompt(t, workspaceRoot, "review", "# Review\n\nReview carefully.\n")
+	promptResolver := newExecutorPromptResolverForTest(t, func(store *coreprompt.Store) {
+		mustCreateExecutorPromptDocument(t, store, coreprompt.CreateDocumentInput{ID: "doc-default", Name: "Default", Content: "DB prompt", Scope: "admin", Status: "active"})
+		mustCreateExecutorPromptDocument(t, store, coreprompt.CreateDocumentInput{ID: "doc-step", Name: "Step", Content: "Step prompt", Scope: "admin", Status: "active"})
+		mustCreateExecutorPromptBinding(t, store, coreprompt.CreateBindingInput{PromptID: "doc-default", Scene: "agent.run.default", Phase: "session", IsDefault: true, Status: "active"})
+		mustCreateExecutorPromptBinding(t, store, coreprompt.CreateBindingInput{PromptID: "doc-step", Scene: "agent.run.default", Phase: "step_pre_model", IsDefault: true, Status: "active"})
+	})
+	client := &stubClient{streams: []model.Stream{newStubStream(
+		[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "hello"}}},
+		model.Message{Role: model.RoleAssistant, Content: "hello"},
+		nil,
+	)}}
+	executor := newTaskExecutorForTest(t, ExecutorDependencies{
+		Resolver:          newExecutorResolverForTest(),
+		ConversationStore: store,
+		PromptResolver:    promptResolver,
+		SkillsResolver:    coreskills.NewResolver(coreskills.NewLoader(workspaceRoot)),
+		WorkspaceRoot:     workspaceRoot,
+		ClientFactory:     func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return client, nil },
+	})
+
+	payload := marshalExecutorTaskInput(t, map[string]any{
+		"provider_id": "openai",
+		"model_id":    "gpt-5.4",
+		"message":     "hi",
+		"skills":      []string{"debugging", "review"},
+	})
+	task := &coretasks.Task{ID: "task_prompt_selected_skills", TaskType: "agent.run", InputJSON: payload}
+
+	result, err := executor(context.Background(), task, nil)
+	if err != nil {
+		t.Fatalf("executor() error = %v", err)
+	}
+	runResult := result.(RunTaskResult)
+	assertExecutorRequestMessages(t, client, []model.Message{
+		{Role: model.RoleSystem, Content: "DB prompt"},
+		{Role: model.RoleSystem, Content: "The following AGENTS.md file was injected from the user's working directory. Treat it as guidance and operating rules for the current workspace.\n---\nWorkspace prompt"},
+		{Role: model.RoleSystem, Content: "The following skill was loaded from the user's workspace. Treat it as an active skill package for this run.\nSkill: debugging\nSource: skills/debugging/SKILL.md\n---\n# Debugging\n\nDebug carefully.\n"},
+		{Role: model.RoleSystem, Content: "The following skill was loaded from the user's workspace. Treat it as an active skill package for this run.\nSkill: review\nSource: skills/review/SKILL.md\n---\n# Review\n\nReview carefully.\n"},
+		{Role: model.RoleSystem, Content: "Step prompt"},
+		{Role: model.RoleUser, Content: "hi"},
+	})
+
+	resolvedPrompt, err := promptResolver.Resolve(context.Background(), coreprompt.ResolveInput{
+		Scene:         "agent.run.default",
+		ProviderID:    "openai",
+		ModelID:       "gpt-5.4",
+		WorkspaceRoot: workspaceRoot,
+	})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	resolvedSkills, err := coreskills.NewResolver(coreskills.NewLoader(workspaceRoot)).Resolve(context.Background(), coreskills.ResolveInput{Names: []string{"debugging", "review"}})
+	if err != nil {
+		t.Fatalf("skills Resolve() error = %v", err)
+	}
+	appendResolvedSkillsToPrompt(resolvedPrompt, resolvedSkills)
+	if len(resolvedPrompt.Segments) != 5 {
+		t.Fatalf("len(resolvedPrompt.Segments) = %d, want 5", len(resolvedPrompt.Segments))
+	}
+	if resolvedPrompt.Segments[0].SourceKind != "db_default_binding" {
+		t.Fatalf("segments[0].SourceKind = %q, want db_default_binding", resolvedPrompt.Segments[0].SourceKind)
+	}
+	if resolvedPrompt.Segments[1].SourceKind != "workspace_file" {
+		t.Fatalf("segments[1].SourceKind = %q, want workspace_file", resolvedPrompt.Segments[1].SourceKind)
+	}
+	if resolvedPrompt.Segments[2].SourceKind != promptSourceKindWorkspaceSkill || resolvedPrompt.Segments[2].Phase != "session" || !resolvedPrompt.Segments[2].RuntimeOnly {
+		t.Fatalf("segments[2] = %#v, want first runtime-only workspace skill session segment", resolvedPrompt.Segments[2])
+	}
+	if resolvedPrompt.Segments[3].SourceKind != promptSourceKindWorkspaceSkill || resolvedPrompt.Segments[3].Phase != "session" || !resolvedPrompt.Segments[3].RuntimeOnly {
+		t.Fatalf("segments[3] = %#v, want second runtime-only workspace skill session segment", resolvedPrompt.Segments[3])
+	}
+	if resolvedPrompt.Segments[4].Phase != "step_pre_model" {
+		t.Fatalf("segments[4].Phase = %q, want step_pre_model", resolvedPrompt.Segments[4].Phase)
+	}
+	if resolvedPrompt.Segments[2].SourceRef != "skills/debugging/SKILL.md" {
+		t.Fatalf("debugging skill source ref = %q, want %q", resolvedPrompt.Segments[2].SourceRef, "skills/debugging/SKILL.md")
+	}
+	if resolvedPrompt.Segments[3].SourceRef != "skills/review/SKILL.md" {
+		t.Fatalf("review skill source ref = %q, want %q", resolvedPrompt.Segments[3].SourceRef, "skills/review/SKILL.md")
+	}
+	if resolvedPrompt.Segments[3].Order >= resolvedPrompt.Segments[4].Order {
+		t.Fatalf("last skill segment order = %d, step segment order = %d, want skills before step", resolvedPrompt.Segments[3].Order, resolvedPrompt.Segments[4].Order)
+	}
+	messages, err := store.ListMessages(context.Background(), runResult.ConversationID)
+	if err != nil {
+		t.Fatalf("ListMessages() error = %v", err)
+	}
+	for _, message := range messages {
+		if strings.Contains(message.Content, "The following skill was loaded from the user's workspace") {
+			t.Fatalf("persisted conversation message leaked skill content: %#v", message)
+		}
+	}
+}
+
+func TestAgentExecutorLeavesPromptUnchangedWhenNoSkillsSelected(t *testing.T) {
+	store := newConversationStoreForTest(t)
+	workspaceRoot := t.TempDir()
+	writeExecutorWorkspacePrompt(t, workspaceRoot, "Workspace prompt")
+	promptResolver := newExecutorPromptResolverForTest(t, func(store *coreprompt.Store) {
+		mustCreateExecutorPromptDocument(t, store, coreprompt.CreateDocumentInput{ID: "doc-default", Name: "Default", Content: "DB prompt", Scope: "admin", Status: "active"})
+		mustCreateExecutorPromptDocument(t, store, coreprompt.CreateDocumentInput{ID: "doc-step", Name: "Step", Content: "Step prompt", Scope: "admin", Status: "active"})
+		mustCreateExecutorPromptBinding(t, store, coreprompt.CreateBindingInput{PromptID: "doc-default", Scene: "agent.run.default", Phase: "session", IsDefault: true, Status: "active"})
+		mustCreateExecutorPromptBinding(t, store, coreprompt.CreateBindingInput{PromptID: "doc-step", Scene: "agent.run.default", Phase: "step_pre_model", IsDefault: true, Status: "active"})
+	})
+	client := &stubClient{streams: []model.Stream{newStubStream(
+		[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "hello"}}},
+		model.Message{Role: model.RoleAssistant, Content: "hello"},
+		nil,
+	)}}
+	executor := newTaskExecutorForTest(t, ExecutorDependencies{
+		Resolver:          newExecutorResolverForTest(),
+		ConversationStore: store,
+		PromptResolver:    promptResolver,
+		WorkspaceRoot:     workspaceRoot,
+		ClientFactory:     func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return client, nil },
+	})
+
+	payload := marshalExecutorTaskInput(t, map[string]any{
+		"provider_id": "openai",
+		"model_id":    "gpt-5.4",
+		"message":     "hi",
+	})
+	task := &coretasks.Task{ID: "task_prompt_no_skills", TaskType: "agent.run", InputJSON: payload}
+
+	_, err := executor(context.Background(), task, nil)
+	if err != nil {
+		t.Fatalf("executor() error = %v", err)
+	}
+	assertExecutorRequestMessages(t, client, []model.Message{
+		{Role: model.RoleSystem, Content: "DB prompt"},
+		{Role: model.RoleSystem, Content: "The following AGENTS.md file was injected from the user's working directory. Treat it as guidance and operating rules for the current workspace.\n---\nWorkspace prompt"},
+		{Role: model.RoleSystem, Content: "Step prompt"},
+		{Role: model.RoleUser, Content: "hi"},
+	})
+}
+
+func TestAgentExecutorFailsWhenSelectedSkillIsMissing(t *testing.T) {
+	store := newConversationStoreForTest(t)
+	workspaceRoot := t.TempDir()
+	promptResolver := newExecutorPromptResolverForTest(t, nil)
+	client := &stubClient{streams: []model.Stream{newStubStream(
+		[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "hello"}}},
+		model.Message{Role: model.RoleAssistant, Content: "hello"},
+		nil,
+	)}}
+	executor := newTaskExecutorForTest(t, ExecutorDependencies{
+		Resolver:          newExecutorResolverForTest(),
+		ConversationStore: store,
+		PromptResolver:    promptResolver,
+		SkillsResolver:    coreskills.NewResolver(coreskills.NewLoader(workspaceRoot)),
+		WorkspaceRoot:     workspaceRoot,
+		ClientFactory:     func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return client, nil },
+	})
+
+	payload := marshalExecutorTaskInput(t, map[string]any{
+		"provider_id": "openai",
+		"model_id":    "gpt-5.4",
+		"message":     "hi",
+		"skills":      []string{"missing-skill"},
+	})
+	task := &coretasks.Task{ID: "task_prompt_missing_skill", TaskType: "agent.run", InputJSON: payload}
+
+	_, err := executor(context.Background(), task, nil)
+	if !errors.Is(err, coreskills.ErrSkillNotFound) {
+		t.Fatalf("executor() error = %v, want ErrSkillNotFound", err)
+	}
 }
 
 func TestAgentExecutorPromptUsesCanonicalResolvedProviderAndModelForPromptSelection(t *testing.T) {
@@ -2185,6 +2360,25 @@ func newExecutorResolverForTest() *ModelResolver {
 	}}}
 }
 
+func TestRunTaskInputDeserializesSkillsFromJSON(t *testing.T) {
+	var input RunTaskInput
+	payload := []byte(`{"conversation_id":"conv_1","provider_id":"openai","model_id":"gpt-5.4","message":"hello","skills":["debugging","review"]}`)
+	if err := json.Unmarshal(payload, &input); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if !reflect.DeepEqual(input.Skills, []string{"debugging", "review"}) {
+		t.Fatalf("input.Skills = %#v, want [debugging review]", input.Skills)
+	}
+}
+
+func TestNormalizeSkillNamesTrimsDeduplicatesAndFiltersEmpty(t *testing.T) {
+	got := normalizeSkillNames([]string{" debugging ", "", "review", "debugging", "  ", "review"})
+	want := []string{"debugging", "review"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("normalizeSkillNames() = %#v, want %#v", got, want)
+	}
+}
+
 func assertExecutorAuditEventTypes(t *testing.T, recorder *recordingExecutorAuditRecorder, runID string, want ...string) {
 	t.Helper()
 
@@ -2452,6 +2646,19 @@ func writeExecutorWorkspacePrompt(t *testing.T, workspaceRoot string, content st
 	t.Helper()
 
 	path := filepath.Join(workspaceRoot, "AGENTS.md")
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("os.WriteFile(%q) error = %v", path, err)
+	}
+}
+
+func writeExecutorSkillPrompt(t *testing.T, workspaceRoot string, name string, content string) {
+	t.Helper()
+
+	dir := filepath.Join(workspaceRoot, "skills", name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", dir, err)
+	}
+	path := filepath.Join(dir, "SKILL.md")
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("os.WriteFile(%q) error = %v", path, err)
 	}

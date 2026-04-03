@@ -223,6 +223,7 @@ export interface TaskInput {
   model_id?: string
   message?: string
   created_by?: string
+  skills?: string[]
 }
 
 export interface TaskDetails extends TaskSnapshot {
@@ -341,6 +342,22 @@ export interface TranscriptEntryDetailBlock {
   loading?: boolean
 }
 
+export interface WorkspaceSkillListItem {
+  name: string
+  title: string
+  description?: string
+  tags?: string[]
+  tools?: string[]
+  version?: string
+  hidden?: boolean
+  source_ref: string
+}
+
+export interface WorkspaceSkill extends WorkspaceSkillListItem {
+  content: string
+  resource_refs?: string[]
+}
+
 export interface RunTaskRequest {
   task_type: 'agent.run'
   created_by: string
@@ -350,5 +367,6 @@ export interface RunTaskRequest {
     model_id: string
     message: string
     created_by: string
+    skills?: string[]
   }
 }

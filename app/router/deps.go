@@ -7,6 +7,7 @@ import (
 	coreaudit "github.com/EquentR/agent_runtime/core/audit"
 	"github.com/EquentR/agent_runtime/core/interactions"
 	coreprompt "github.com/EquentR/agent_runtime/core/prompt"
+	coreskills "github.com/EquentR/agent_runtime/core/skills"
 	coretasks "github.com/EquentR/agent_runtime/core/tasks"
 )
 
@@ -20,5 +21,6 @@ type Dependencies struct {
 	ModelResolver     *coreagent.ModelResolver
 	PromptStore       *coreprompt.Store
 	PromptResolver    *coreprompt.Resolver
+	SkillLoader       *coreskills.Loader
 	AuthLogic         *logics.AuthLogic
 }

@@ -21,6 +21,7 @@ import (
 	openaicompletions "github.com/EquentR/agent_runtime/core/providers/client/openai_completions"
 	openairesponses "github.com/EquentR/agent_runtime/core/providers/client/openai_responses"
 	model "github.com/EquentR/agent_runtime/core/providers/types"
+	coreskills "github.com/EquentR/agent_runtime/core/skills"
 	coretasks "github.com/EquentR/agent_runtime/core/tasks"
 	coretools "github.com/EquentR/agent_runtime/core/tools"
 	builtin "github.com/EquentR/agent_runtime/core/tools/builtin"
@@ -69,6 +70,7 @@ func Serve(c *config.Config, version, commit string) {
 	if err != nil {
 		log.Panicf("Failed to resolve workspace root: %v", err)
 	}
+	skillLoader := coreskills.NewLoader(workspaceRoot)
 	authLogic, err := logics.NewAuthLogic(db.DB(), logics.AuthConfig{})
 	if err != nil {
 		log.Panicf("Failed to init auth logic: %v", err)
@@ -84,7 +86,7 @@ func Serve(c *config.Config, version, commit string) {
 	taskManager.Start(globalCtx)
 
 	// 将任务管理器作为依赖注入路由层。
-	router.Init(engine, c.Server.ApiBasePath, c.Server.StaticPaths, buildRouterDependencies(taskManager, approvalStore, conversationStore, auditRuntime.Store, resolver, promptRuntime.Store, promptRuntime.Resolver, authLogic, interactionStore))
+	router.Init(engine, c.Server.ApiBasePath, c.Server.StaticPaths, buildRouterDependencies(taskManager, approvalStore, conversationStore, auditRuntime.Store, resolver, promptRuntime.Store, promptRuntime.Resolver, skillLoader, authLogic, interactionStore))
 
 	addr := fmt.Sprintf("%s:%d", c.Server.Host, c.Server.Port)
 	ln, err := net.Listen("tcp", addr)
@@ -132,7 +134,7 @@ func registerAgentRunExecutor(taskManager *coretasks.Manager, approvalStore *app
 	return taskManager.RegisterExecutor("agent.run", coreagent.NewTaskExecutor(buildAgentRunExecutorDependencies(resolver, conversationStore, toolRegistry, approvalStore, interactionStore, promptResolver, workspaceRoot, clientFactory, auditRecorder)))
 }
 
-func buildRouterDependencies(taskManager *coretasks.Manager, approvalStore *approvals.Store, conversationStore *coreagent.ConversationStore, auditStore *coreaudit.Store, resolver *coreagent.ModelResolver, promptStore *coreprompt.Store, promptResolver *coreprompt.Resolver, authLogic *logics.AuthLogic, interactionStores ...*interactions.Store) router.Dependencies {
+func buildRouterDependencies(taskManager *coretasks.Manager, approvalStore *approvals.Store, conversationStore *coreagent.ConversationStore, auditStore *coreaudit.Store, resolver *coreagent.ModelResolver, promptStore *coreprompt.Store, promptResolver *coreprompt.Resolver, skillLoader *coreskills.Loader, authLogic *logics.AuthLogic, interactionStores ...*interactions.Store) router.Dependencies {
 	var interactionStore *interactions.Store
 	if len(interactionStores) > 0 {
 		interactionStore = interactionStores[0]
@@ -146,6 +148,7 @@ func buildRouterDependencies(taskManager *coretasks.Manager, approvalStore *appr
 		ModelResolver:     resolver,
 		PromptStore:       promptStore,
 		PromptResolver:    promptResolver,
+		SkillLoader:       skillLoader,
 		AuthLogic:         authLogic,
 	}
 }
@@ -194,6 +197,7 @@ func buildAgentRunExecutorDependencies(resolver *coreagent.ModelResolver, conver
 		ApprovalStore:     approvalStore,
 		InteractionStore:  interactionStore,
 		PromptResolver:    promptResolver,
+		SkillsResolver:    coreskills.NewResolver(coreskills.NewLoader(workspaceRoot)),
 		WorkspaceRoot:     workspaceRoot,
 		ClientFactory:     clientFactory,
 		AuditRecorder:     auditRecorder,
