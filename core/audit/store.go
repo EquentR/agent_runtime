@@ -85,6 +85,63 @@ func (s *Store) GetLatestRunByConversationID(ctx context.Context, conversationID
 	return &run, nil
 }
 
+// ListRunsByConversationID 返回指定 conversation 下的所有审计运行记录，按创建时间升序排列。
+func (s *Store) ListRunsByConversationID(ctx context.Context, conversationID string) ([]Run, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("store db cannot be nil")
+	}
+	conversationID = strings.TrimSpace(conversationID)
+	if conversationID == "" {
+		return nil, nil
+	}
+
+	var runs []Run
+	err := s.db.WithContext(ctx).
+		Where("conversation_id = ?", conversationID).
+		Order("created_at asc").
+		Order("id asc").
+		Find(&runs).Error
+	if err != nil {
+		return nil, err
+	}
+	return runs, nil
+}
+
+// ListEventsByConversationID 返回指定 conversation 下所有审计运行的事件，跨 run 聚合并按时间和序列升序排列。
+func (s *Store) ListEventsByConversationID(ctx context.Context, conversationID string) ([]Event, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("store db cannot be nil")
+	}
+	conversationID = strings.TrimSpace(conversationID)
+	if conversationID == "" {
+		return nil, nil
+	}
+
+	var runIDs []string
+	if err := s.db.WithContext(ctx).
+		Model(&Run{}).
+		Where("conversation_id = ?", conversationID).
+		Order("created_at asc, id asc").
+		Pluck("id", &runIDs).Error; err != nil {
+		return nil, err
+	}
+	if len(runIDs) == 0 {
+		return nil, nil
+	}
+
+	var events []Event
+	err := s.db.WithContext(ctx).
+		Where("run_id IN ?", runIDs).
+		Order("created_at asc").
+		Order("seq asc").
+		Order("id asc").
+		Find(&events).Error
+	if err != nil {
+		return nil, err
+	}
+	return events, nil
+}
+
 func (s *Store) ListEvents(ctx context.Context, runID string) ([]Event, error) {
 	if s == nil || s.db == nil {
 		return nil, fmt.Errorf("store db cannot be nil")

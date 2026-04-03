@@ -590,6 +590,57 @@ func TestConversationHandlerListConversationsOrdersByVisibleRecencyNotHiddenSyst
 	}
 }
 
+func TestConversationDetailIncludesAllAuditRunIDs(t *testing.T) {
+	store, auditStore, server := newConversationHandlerTestServer(t)
+	ctx := context.Background()
+	if _, err := store.CreateConversation(ctx, coreagent.CreateConversationInput{
+		ID:         "conv_1",
+		ProviderID: "openai",
+		ModelID:    "gpt-5.4",
+		CreatedBy:  "tester",
+	}); err != nil {
+		t.Fatalf("CreateConversation() error = %v", err)
+	}
+	// Create 3 audit runs for the same conversation (simulating 3 turns)
+	base := time.Date(2026, time.March, 21, 18, 0, 0, 0, time.UTC)
+	for i, taskID := range []string{"task_1", "task_2", "task_3"} {
+		if _, err := auditStore.CreateRun(ctx, coreaudit.StartRunInput{
+			RunID:          fmt.Sprintf("run_%d", i+1),
+			TaskID:         taskID,
+			ConversationID: "conv_1",
+			TaskType:       "agent.run",
+			CreatedBy:      "tester",
+			Status:         coreaudit.StatusSucceeded,
+			SchemaVersion:  coreaudit.SchemaVersionV1,
+			StartedAt:      base.Add(time.Duration(i) * time.Minute),
+		}); err != nil {
+			t.Fatalf("CreateRun(%s) error = %v", taskID, err)
+		}
+	}
+
+	resp, err := http.Get(server.URL + "/api/v1/conversations/conv_1")
+	if err != nil {
+		t.Fatalf("http.Get() error = %v", err)
+	}
+	defer resp.Body.Close()
+
+	got := decodeConversationResponse(t, resp.Body)
+	if got.ID != "conv_1" {
+		t.Fatalf("conversation.ID = %q, want conv_1", got.ID)
+	}
+	// Backward compatibility: AuditRunID should be the latest run
+	if got.AuditRunID != "run_3" {
+		t.Fatalf("conversation.AuditRunID = %q, want run_3 (latest)", got.AuditRunID)
+	}
+	// New field: all run IDs in chronological order
+	if len(got.AuditRunIDs) != 3 {
+		t.Fatalf("len(conversation.AuditRunIDs) = %d, want 3", len(got.AuditRunIDs))
+	}
+	if got.AuditRunIDs[0] != "run_1" || got.AuditRunIDs[1] != "run_2" || got.AuditRunIDs[2] != "run_3" {
+		t.Fatalf("conversation.AuditRunIDs = %v, want [run_1 run_2 run_3]", got.AuditRunIDs)
+	}
+}
+
 func TestConversationHandlerDeleteConversation(t *testing.T) {
 	store, _, server := newConversationHandlerTestServer(t)
 	_, err := store.CreateConversation(context.Background(), coreagent.CreateConversationInput{ID: "conv_1", ProviderID: "openai", ModelID: "gpt-5.4"})

@@ -740,6 +740,145 @@ func TestNoopRecorderSynthesizesPlaceholderIDsAndSeq(t *testing.T) {
 	}
 }
 
+func TestStoreListRunsByConversationIDReturnsAllRunsChronologically(t *testing.T) {
+	db := newTestDB(t)
+	store := NewStore(db)
+	if err := store.AutoMigrate(); err != nil {
+		t.Fatalf("AutoMigrate() error = %v", err)
+	}
+	ctx := context.Background()
+
+	for i, taskID := range []string{"task_1", "task_2", "task_3"} {
+		_, err := store.CreateRun(ctx, StartRunInput{
+			TaskID:         taskID,
+			ConversationID: "conv_1",
+			TaskType:       "agent.run",
+			SchemaVersion:  SchemaVersionV1,
+			Status:         StatusRunning,
+			StartedAt:      time.Now().UTC().Add(time.Duration(i) * time.Second),
+		})
+		if err != nil {
+			t.Fatalf("CreateRun(%s) error = %v", taskID, err)
+		}
+	}
+	// 另一个 conversation 的 run，不应出现在结果中
+	if _, err := store.CreateRun(ctx, StartRunInput{
+		TaskID: "task_other", ConversationID: "conv_2",
+		TaskType: "agent.run", SchemaVersion: SchemaVersionV1, Status: StatusRunning,
+	}); err != nil {
+		t.Fatalf("CreateRun(other) error = %v", err)
+	}
+
+	runs, err := store.ListRunsByConversationID(ctx, "conv_1")
+	if err != nil {
+		t.Fatalf("ListRunsByConversationID() error = %v", err)
+	}
+	if len(runs) != 3 {
+		t.Fatalf("got %d runs, want 3", len(runs))
+	}
+	for i := 1; i < len(runs); i++ {
+		if runs[i].CreatedAt.Before(runs[i-1].CreatedAt) {
+			t.Fatalf("runs[%d].CreatedAt (%v) before runs[%d].CreatedAt (%v)", i, runs[i].CreatedAt, i-1, runs[i-1].CreatedAt)
+		}
+	}
+}
+
+func TestStoreListRunsByConversationIDReturnsEmptyForUnknown(t *testing.T) {
+	db := newTestDB(t)
+	store := NewStore(db)
+	if err := store.AutoMigrate(); err != nil {
+		t.Fatalf("AutoMigrate() error = %v", err)
+	}
+
+	runs, err := store.ListRunsByConversationID(context.Background(), "no_such_conv")
+	if err != nil {
+		t.Fatalf("ListRunsByConversationID() error = %v", err)
+	}
+	if len(runs) != 0 {
+		t.Fatalf("got %d runs, want 0", len(runs))
+	}
+}
+
+func TestStoreListEventsByConversationIDReturnsEventsAcrossRuns(t *testing.T) {
+	db := newTestDB(t)
+	store := NewStore(db)
+	if err := store.AutoMigrate(); err != nil {
+		t.Fatalf("AutoMigrate() error = %v", err)
+	}
+	ctx := context.Background()
+
+	run1, err := store.CreateRun(ctx, StartRunInput{
+		TaskID: "task_1", ConversationID: "conv_1",
+		TaskType: "agent.run", SchemaVersion: SchemaVersionV1, Status: StatusRunning,
+	})
+	if err != nil {
+		t.Fatalf("CreateRun(1) error = %v", err)
+	}
+	run2, err := store.CreateRun(ctx, StartRunInput{
+		TaskID: "task_2", ConversationID: "conv_1",
+		TaskType: "agent.run", SchemaVersion: SchemaVersionV1, Status: StatusRunning,
+	})
+	if err != nil {
+		t.Fatalf("CreateRun(2) error = %v", err)
+	}
+	for _, input := range []struct {
+		runID     string
+		eventType string
+	}{
+		{run1.ID, "step.started"},
+		{run1.ID, "step.finished"},
+		{run2.ID, "step.started"},
+		{run2.ID, "step.finished"},
+	} {
+		if _, err := store.AppendEvent(ctx, input.runID, AppendEventInput{EventType: input.eventType, StepIndex: 1}); err != nil {
+			t.Fatalf("AppendEvent(%s, %s) error = %v", input.runID, input.eventType, err)
+		}
+	}
+
+	// 另一个 conversation 的 event，不应出现在结果中
+	runOther, err := store.CreateRun(ctx, StartRunInput{
+		TaskID: "task_other", ConversationID: "conv_2",
+		TaskType: "agent.run", SchemaVersion: SchemaVersionV1, Status: StatusRunning,
+	})
+	if err != nil {
+		t.Fatalf("CreateRun(other) error = %v", err)
+	}
+	if _, err := store.AppendEvent(ctx, runOther.ID, AppendEventInput{EventType: "step.started", StepIndex: 1}); err != nil {
+		t.Fatalf("AppendEvent(other) error = %v", err)
+	}
+
+	events, err := store.ListEventsByConversationID(ctx, "conv_1")
+	if err != nil {
+		t.Fatalf("ListEventsByConversationID() error = %v", err)
+	}
+	if len(events) != 4 {
+		t.Fatalf("got %d events, want 4", len(events))
+	}
+	for i := 1; i < len(events); i++ {
+		prev := events[i-1]
+		curr := events[i]
+		if prev.RunID == curr.RunID && prev.Seq >= curr.Seq {
+			t.Fatalf("events[%d].Seq (%d) >= events[%d].Seq (%d) within same run", i-1, prev.Seq, i, curr.Seq)
+		}
+	}
+}
+
+func TestStoreListEventsByConversationIDReturnsEmptyForUnknown(t *testing.T) {
+	db := newTestDB(t)
+	store := NewStore(db)
+	if err := store.AutoMigrate(); err != nil {
+		t.Fatalf("AutoMigrate() error = %v", err)
+	}
+
+	events, err := store.ListEventsByConversationID(context.Background(), "no_such_conv")
+	if err != nil {
+		t.Fatalf("ListEventsByConversationID() error = %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("got %d events, want 0", len(events))
+	}
+}
+
 func newTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 
