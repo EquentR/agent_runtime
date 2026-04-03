@@ -311,12 +311,15 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 				return nil, coretasks.ErrTaskSuspended
 			}
 			snapshotErr = err
-			partialMessages = cloneMessages(result.Messages)
-			if len(result.Messages) > 0 {
-				if appendErr := deps.ConversationStore.AppendMessages(ctx, conversation.ID, task.ID, result.Messages); appendErr != nil {
+			// Trim trailing incomplete tool-call assistant messages before persisting,
+			// so that the conversation history remains valid for the next turn.
+			safeMessages := trimIncompleteToolCallMessages(result.Messages)
+			partialMessages = cloneMessages(safeMessages)
+			if len(safeMessages) > 0 {
+				if appendErr := deps.ConversationStore.AppendMessages(ctx, conversation.ID, task.ID, safeMessages); appendErr != nil {
 					return nil, appendErr
 				}
-				auditor.recordMessagesPersisted(ctx, result.Messages)
+				auditor.recordMessagesPersisted(ctx, safeMessages)
 			}
 			failureMessage := newVisibleFailureSystemMessage(fmt.Sprintf("Run failed: %s", err.Error()))
 			if appendErr := deps.ConversationStore.AppendMessages(ctx, conversation.ID, task.ID, []model.Message{failureMessage}); appendErr != nil {
@@ -563,4 +566,42 @@ func bridgeLegacySystemPromptFromResolvedPromptSession(resolved *coreprompt.Reso
 		}
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+// trimIncompleteToolCallMessages removes trailing assistant messages that have
+// unresolved tool calls (i.e. tool calls without matching tool result messages).
+// Such dangling tool_calls make the conversation history invalid for subsequent
+// turns and must be stripped before persisting a partial run on error.
+func trimIncompleteToolCallMessages(messages []model.Message) []model.Message {
+	if len(messages) == 0 {
+		return messages
+	}
+	// Collect tool result IDs present in the message list.
+	toolResultIDs := make(map[string]struct{})
+	for _, msg := range messages {
+		if msg.Role == model.RoleTool && msg.ToolCallId != "" {
+			toolResultIDs[msg.ToolCallId] = struct{}{}
+		}
+	}
+	// Find the last index that is safe to include: drop trailing assistant
+	// messages whose tool calls have no corresponding tool result.
+	end := len(messages)
+	for end > 0 {
+		msg := messages[end-1]
+		if msg.Role != model.RoleAssistant || len(msg.ToolCalls) == 0 {
+			break
+		}
+		allResolved := true
+		for _, tc := range msg.ToolCalls {
+			if _, ok := toolResultIDs[tc.ID]; !ok {
+				allResolved = false
+				break
+			}
+		}
+		if allResolved {
+			break
+		}
+		end--
+	}
+	return messages[:end]
 }

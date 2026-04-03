@@ -366,9 +366,16 @@ func (r *Runner) executeAssistantToolCalls(ctx context.Context, step int, title 
 		*toolCalls = *toolCalls + 1
 		arguments, err := decodeToolArguments(call)
 		if err != nil {
-			wrapped := fmt.Errorf("decode tool arguments for %q: %w", call.Name, err)
-			r.emitToolFinish(ctx, step, call, "", wrapped)
-			return false, wrapped
+			decodeError := fmt.Sprintf("tool %q argument decode error: %s", call.Name, err.Error())
+			r.emitToolFinish(ctx, step, call, "", err)
+			toolMessage := model.Message{Role: model.RoleTool, ToolCallId: call.ID, Content: decodeError}
+			*baseConversation = append(*baseConversation, toolMessage)
+			*produced = append(*produced, toolMessage)
+			if r.options.Memory != nil {
+				r.options.Memory.AddMessage(toolMessage)
+				*memoryInsertedCount = *memoryInsertedCount + 1
+			}
+			continue
 		}
 
 		syntheticOutput := ""
@@ -416,9 +423,16 @@ func (r *Runner) executeAssistantToolCalls(ctx context.Context, step int, title 
 		r.emitToolStart(ctx, step, call)
 		output, err := r.registry.Execute(r.executionToolContext(ctx, step), call.Name, arguments)
 		if err != nil {
-			wrapped := fmt.Errorf("execute tool %q: %w", call.Name, err)
-			r.emitToolFinish(ctx, step, call, "", wrapped)
-			return false, wrapped
+			toolError := fmt.Sprintf("tool %q execution error: %s", call.Name, err.Error())
+			r.emitToolFinish(ctx, step, call, "", err)
+			toolMessage := model.Message{Role: model.RoleTool, ToolCallId: call.ID, Content: toolError}
+			*baseConversation = append(*baseConversation, toolMessage)
+			*produced = append(*produced, toolMessage)
+			if r.options.Memory != nil {
+				r.options.Memory.AddMessage(toolMessage)
+				*memoryInsertedCount = *memoryInsertedCount + 1
+			}
+			continue
 		}
 		toolMessage := model.Message{Role: model.RoleTool, ToolCallId: call.ID, Content: output}
 		*baseConversation = append(*baseConversation, toolMessage)
