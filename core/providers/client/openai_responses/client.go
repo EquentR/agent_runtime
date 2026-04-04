@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -24,8 +25,9 @@ type responseAPI interface {
 }
 
 type Client struct {
-	api responseAPI
-	cli *openai.Client
+	api            responseAPI
+	cli            *openai.Client
+	requestTimeout time.Duration
 }
 
 func NewOpenAiResponsesClient(apiKey, baseURL string, requestTimeout time.Duration) *Client {
@@ -34,10 +36,12 @@ func NewOpenAiResponsesClient(apiKey, baseURL string, requestTimeout time.Durati
 		opts = append(opts, option.WithBaseURL(baseURL))
 	}
 	if requestTimeout > 0 {
-		opts = append(opts, option.WithRequestTimeout(requestTimeout))
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		transport.ResponseHeaderTimeout = requestTimeout
+		opts = append(opts, option.WithHTTPClient(&http.Client{Transport: transport}))
 	}
 	cli := openai.NewClient(opts...)
-	return &Client{api: &cli.Responses, cli: &cli}
+	return &Client{api: &cli.Responses, cli: &cli, requestTimeout: requestTimeout}
 }
 
 func (c *Client) Chat(ctx context.Context, req model.ChatRequest) (model.ChatResponse, error) {
@@ -99,6 +103,37 @@ func (c *Client) ChatStream(ctx context.Context, req model.ChatRequest) (model.S
 		var reasoningBuilder strings.Builder
 		var contentBuilder strings.Builder
 		reasoningItemsByOutputIndex := make(map[int64]model.ReasoningItem)
+
+		var firstEventOnce sync.Once
+		firstEventArrived := make(chan struct{})
+		closeFirstEvent := func() {
+			firstEventOnce.Do(func() {
+				close(firstEventArrived)
+			})
+		}
+		if c.requestTimeout > 0 {
+			timer := time.NewTimer(c.requestTimeout)
+			defer func() {
+				closeFirstEvent()
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+			}()
+			go func() {
+				select {
+				case <-timer.C:
+					s.setStreamError(context.DeadlineExceeded)
+					cancel()
+				case <-firstEventArrived:
+				case <-streamCtx.Done():
+				}
+			}()
+		}
+		markFirstEvent := closeFirstEvent
+
 		defer func() {
 			if pending := splitter.Finalize(); pending != "" {
 				contentBuilder.WriteString(pending)
@@ -142,6 +177,7 @@ func (c *Client) ChatStream(ctx context.Context, req model.ChatRequest) (model.S
 		}()
 
 		for remote.Next() {
+			markFirstEvent()
 			if streamCtx.Err() != nil {
 				return
 			}

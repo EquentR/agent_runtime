@@ -80,7 +80,7 @@ func Serve(c *config.Config, version, commit string) {
 		log.Panicf("Failed to register builtin tools: %v", err)
 	}
 	resolver := &coreagent.ModelResolver{Providers: c.LLM}
-	if err := registerAgentRunExecutor(taskManager, approvalStore, interactionStore, resolver, conversationStore, toolRegistry, promptRuntime.Resolver, workspaceRoot, buildLLMClientFactory(), auditRuntime.RunRecorder); err != nil {
+	if err := registerAgentRunExecutor(taskManager, approvalStore, interactionStore, resolver, conversationStore, toolRegistry, promptRuntime.Resolver, workspaceRoot, buildConfiguredLLMClientFactory(c), auditRuntime.RunRecorder); err != nil {
 		log.Panicf("Failed to register agent.run executor: %v", err)
 	}
 	taskManager.Start(globalCtx)
@@ -109,22 +109,29 @@ func Serve(c *config.Config, version, commit string) {
 	}
 }
 
-func buildLLMClientFactory() coreagent.ClientFactory {
+func buildLLMClientFactory(requestTimeout time.Duration) coreagent.ClientFactory {
 	return func(provider *coretypes.LLMProvider, llmModel *coretypes.LLMModel) (model.LlmClient, error) {
 		if provider == nil {
 			return nil, fmt.Errorf("llm provider is not configured")
 		}
 		switch llmModel.ModelType() {
 		case coretypes.LLMTypeOpenAIResponses:
-			return openairesponses.NewOpenAiResponsesClient(provider.AuthKey(), provider.BaseURL(), 30*time.Second), nil
+			return openairesponses.NewOpenAiResponsesClient(provider.AuthKey(), provider.BaseURL(), requestTimeout), nil
 		case coretypes.LLMTypeOpenAICompletions:
-			return openaicompletions.NewOpenAiCompletionsClient(provider.BaseURL(), provider.AuthKey()), nil
+			return openaicompletions.NewOpenAiCompletionsClient(provider.BaseURL(), provider.AuthKey(), requestTimeout), nil
 		case coretypes.LLMTypeGoogle:
 			return googleclient.NewGoogleGenAIClient(provider.BaseURL(), provider.AuthKey())
 		default:
 			return nil, fmt.Errorf("unsupported llm model type %q", llmModel.ModelType())
 		}
 	}
+}
+
+func buildConfiguredLLMClientFactory(cfg *config.Config) coreagent.ClientFactory {
+	if cfg == nil {
+		return buildLLMClientFactory(0)
+	}
+	return buildLLMClientFactory(cfg.ResolvedLLMRequestTimeout())
 }
 
 func registerAgentRunExecutor(taskManager *coretasks.Manager, approvalStore *approvals.Store, interactionStore *interactions.Store, resolver *coreagent.ModelResolver, conversationStore *coreagent.ConversationStore, toolRegistry *coretools.Registry, promptResolver *coreprompt.Resolver, workspaceRoot string, clientFactory coreagent.ClientFactory, auditRecorder coreaudit.Recorder) error {

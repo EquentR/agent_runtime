@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/EquentR/agent_runtime/core/providers/tools"
@@ -13,16 +15,23 @@ import (
 )
 
 type Client struct {
-	client *openai.Client
+	client         *openai.Client
+	requestTimeout time.Duration
 }
 
-func NewOpenAiCompletionsClient(baseUrl, apiKey string) *Client {
+func NewOpenAiCompletionsClient(baseUrl, apiKey string, requestTimeout time.Duration) *Client {
 	cfg := openai.DefaultConfig(apiKey)
 	if baseUrl != "" {
 		cfg.BaseURL = baseUrl
 	}
+	if requestTimeout > 0 {
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		transport.ResponseHeaderTimeout = requestTimeout
+		cfg.HTTPClient = &http.Client{Transport: transport}
+	}
 	return &Client{
-		client: openai.NewClientWithConfig(cfg),
+		client:         openai.NewClientWithConfig(cfg),
+		requestTimeout: requestTimeout,
 	}
 }
 
@@ -100,10 +109,8 @@ func (c *Client) ChatStream(ctx context.Context, req model.ChatRequest) (model.S
 		startTime: start,
 	}
 
-	// 初始化token计数器（使用tokenizer模式）
 	asyncCounter, err := tools.NewCl100kAsyncTokenCounter()
 	if err != nil {
-		// 降级到rune模式
 		asyncCounter, _ = tools.NewAsyncTokenCounter(tools.CountModeRune, "")
 	}
 	s.asyncTokenCounter = asyncCounter
@@ -122,9 +129,36 @@ func (c *Client) ChatStream(ctx context.Context, req model.ChatRequest) (model.S
 		var rawContentBuilder strings.Builder
 		var refusalBuilder strings.Builder
 		nativeMessage := openai.ChatCompletionMessage{Role: model.RoleAssistant}
-		// 新版兼容接口可能把 reasoning content 与正文分开下发，
-		// 这里单独累积，避免只依赖 <think> 切分导致信息丢失。
 		var reasoningBuilder strings.Builder
+
+		var firstEventOnce sync.Once
+		firstEventArrived := make(chan struct{})
+		if c.requestTimeout > 0 {
+			timer := time.NewTimer(c.requestTimeout)
+			defer func() {
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+			}()
+			go func() {
+				select {
+				case <-timer.C:
+					s.setStreamError(context.DeadlineExceeded)
+					cancel()
+				case <-firstEventArrived:
+				case <-streamCtx.Done():
+				}
+			}()
+		}
+		markFirstEvent := func() {
+			firstEventOnce.Do(func() {
+				close(firstEventArrived)
+			})
+		}
+
 		defer func() {
 			if pending := splitter.Finalize(); pending != "" && streamCtx.Err() == nil && s.streamError() == nil {
 				contentBuilder.WriteString(pending)
@@ -157,10 +191,8 @@ func (c *Client) ChatStream(ctx context.Context, req model.ChatRequest) (model.S
 		for {
 			select {
 			case <-streamCtx.Done():
-				// 在退出前进行最终计数
 				if s.asyncTokenCounter != nil {
 					s.stats.LocalTokenCount = s.asyncTokenCounter.FinallyCalc()
-					// 填充Usage数据（如果API未返回）
 					if s.stats.Usage.TotalTokens == 0 {
 						s.stats.Usage.PromptTokens = s.asyncTokenCounter.GetPromptCount()
 						s.stats.Usage.CompletionTokens = s.stats.LocalTokenCount
@@ -174,11 +206,9 @@ func (c *Client) ChatStream(ctx context.Context, req model.ChatRequest) (model.S
 					if !errors.Is(err, io.EOF) {
 						s.setStreamError(err)
 					}
-					// stream 结束，进行最终计数
 					s.stats.TotalLatency = time.Since(s.startTime)
 					if s.asyncTokenCounter != nil {
 						s.stats.LocalTokenCount = s.asyncTokenCounter.FinallyCalc()
-						// 填充Usage数据（如果API未返回）
 						if s.stats.Usage.TotalTokens == 0 {
 							s.stats.Usage.PromptTokens = s.asyncTokenCounter.GetPromptCount()
 							s.stats.Usage.CompletionTokens = s.stats.LocalTokenCount
@@ -187,8 +217,8 @@ func (c *Client) ChatStream(ctx context.Context, req model.ChatRequest) (model.S
 					}
 					return
 				}
+				markFirstEvent()
 
-				// 记录首token延迟
 				if len(chunk.Choices) > 0 {
 					choice := chunk.Choices[0]
 					if choice.Delta.Role != "" {
@@ -246,7 +276,6 @@ func (c *Client) ChatStream(ctx context.Context, req model.ChatRequest) (model.S
 					}
 				}
 
-				// 处理usage数据（如果API返回）
 				if chunk.Usage != nil && chunk.Usage.TotalTokens > 0 {
 					s.stats.Usage.PromptTokens = int64(chunk.Usage.PromptTokens)
 					s.stats.Usage.CachedPromptTokens = cachedPromptTokens(*chunk.Usage)

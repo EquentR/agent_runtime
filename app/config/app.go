@@ -1,6 +1,8 @@
 package config
 
 import (
+	"time"
+
 	coretasks "github.com/EquentR/agent_runtime/core/tasks"
 	builtin "github.com/EquentR/agent_runtime/core/tools/builtin"
 	coretypes "github.com/EquentR/agent_runtime/core/types"
@@ -9,16 +11,26 @@ import (
 	"github.com/EquentR/agent_runtime/pkg/rest"
 )
 
+const defaultLLMRequestTimeout = 10 * time.Minute
+
 type Config struct {
-	WorkspaceDir string                      `yaml:"workspaceDir"`
-	Server       rest.Config                 `yaml:"server"`
-	Sqlite       db.Database                 `yaml:"sqlite"`
-	Log          log.Config                  `yaml:"log"`
-	Tasks        TaskManagerConfig           `yaml:"tasks"`
-	Tools        ToolsConfig                 `yaml:"tools"`
-	LLM          []coretypes.LLMProvider     `yaml:"llmProviders"`
-	Embedding    coretypes.EmbeddingProvider `yaml:"embeddingProvider"`
-	Rerank       coretypes.RerankingProvider `yaml:"rerankProvider"`
+	WorkspaceDir      string                      `yaml:"workspaceDir"`
+	Server            rest.Config                 `yaml:"server"`
+	Sqlite            db.Database                 `yaml:"sqlite"`
+	Log               log.Config                  `yaml:"log"`
+	Tasks             TaskManagerConfig           `yaml:"tasks"`
+	Tools             ToolsConfig                 `yaml:"tools"`
+	LLMRequestTimeout time.Duration               `yaml:"llmRequestTimeout"`
+	LLM               []coretypes.LLMProvider     `yaml:"llmProviders"`
+	Embedding         coretypes.EmbeddingProvider `yaml:"embeddingProvider"`
+	Rerank            coretypes.RerankingProvider `yaml:"rerankProvider"`
+}
+
+func (c Config) ResolvedLLMRequestTimeout() time.Duration {
+	if c.LLMRequestTimeout > 0 {
+		return c.LLMRequestTimeout
+	}
+	return defaultLLMRequestTimeout
 }
 
 type TaskManagerConfig struct {

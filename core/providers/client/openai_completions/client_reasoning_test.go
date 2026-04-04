@@ -42,6 +42,61 @@ func (f *fakeChatStream) ResponseType() model.StreamResponseType {
 func (f *fakeChatStream) FinishReason() string { return "stop" }
 func (f *fakeChatStream) Reasoning() string    { return "" }
 
+func TestNewOpenAiCompletionsClient_HonorsConfiguredHTTPTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			http.NotFound(w, r)
+			return
+		}
+		time.Sleep(150 * time.Millisecond)
+	}))
+	defer server.Close()
+
+	client := NewOpenAiCompletionsClient(server.URL+"/v1", "test-key", 50*time.Millisecond)
+	_, err := client.Chat(context.Background(), model.ChatRequest{
+		Model:    "gpt-4o-mini",
+		Messages: []model.Message{{Role: model.RoleUser, Content: "hello"}},
+	})
+	if err == nil {
+		t.Fatal("Chat() error = nil, want timeout error")
+	}
+	lower := strings.ToLower(err.Error())
+	if !strings.Contains(lower, "timeout") && !strings.Contains(lower, "deadline") {
+		t.Fatalf("Chat() error = %v, want timeout/deadline error", err)
+	}
+}
+
+func TestNewOpenAiCompletionsClient_DoesNotTimeoutActiveLongStreamAfterFirstChunk(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		if flusher, ok := w.(http.Flusher); ok {
+			_, _ = w.Write([]byte("data: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-4o-mini\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"hel\"}}]}\n\n"))
+			flusher.Flush()
+			time.Sleep(120 * time.Millisecond)
+			_, _ = w.Write([]byte("data: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-4o-mini\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"lo\"},\"finish_reason\":\"stop\"}]}\n\n"))
+			_, _ = w.Write([]byte("data: [DONE]\n\n"))
+			flusher.Flush()
+		}
+	}))
+	defer server.Close()
+
+	client := NewOpenAiCompletionsClient(server.URL+"/v1", "test-key", 50*time.Millisecond)
+	resp, err := client.Chat(context.Background(), model.ChatRequest{
+		Model:    "gpt-4o-mini",
+		Messages: []model.Message{{Role: model.RoleUser, Content: "hello"}},
+	})
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	if resp.Content != "hello" || resp.Message.Content != "hello" {
+		t.Fatalf("response content/message = %#v, want hello", resp)
+	}
+}
+
 func TestChatResponseFromStream_UsesFinalMessage(t *testing.T) {
 	resp, err := chatResponseFromStream(time.Now(), &fakeChatStream{
 		ctx:  context.Background(),
@@ -122,7 +177,7 @@ func TestClientChat_PreservesReasoningContentFromStream(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewOpenAiCompletionsClient(server.URL+"/v1", "test-key")
+	client := NewOpenAiCompletionsClient(server.URL+"/v1", "test-key", time.Minute)
 	resp, err := client.Chat(context.Background(), model.ChatRequest{
 		Model: "gpt-4o-mini",
 		Messages: []model.Message{{
@@ -175,7 +230,7 @@ func TestClientChat_StreamProviderStateRoundTripsIntoReplay(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewOpenAiCompletionsClient(server.URL+"/v1", "test-key")
+	client := NewOpenAiCompletionsClient(server.URL+"/v1", "test-key", time.Minute)
 	resp, err := client.Chat(context.Background(), model.ChatRequest{
 		Model: "gpt-4o-mini",
 		Messages: []model.Message{{
@@ -241,7 +296,7 @@ func TestClientChatStream_ToolCallDeltaKeepsIdentityAcrossArgumentChunks(t *test
 	}))
 	defer server.Close()
 
-	client := NewOpenAiCompletionsClient(server.URL+"/v1", "test-key")
+	client := NewOpenAiCompletionsClient(server.URL+"/v1", "test-key", time.Minute)
 	stream, err := client.ChatStream(context.Background(), model.ChatRequest{
 		Model: "gpt-4o-mini",
 		Messages: []model.Message{{
