@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import { ArrowLeft, CircleCheck, Cpu, InfoFilled, Operation, WarningFilled } from '@element-plus/icons-vue'
 
@@ -12,6 +12,7 @@ import {
 import type { AuditReplayArtifact, AuditReplayBundle, AuditReplayEvent, AuditRun, Conversation } from '../types/api'
 
 type TimelineFilter = 'all' | 'request' | 'tool' | 'error'
+type SummaryFact = { label: string; value: string }
 
 const loading = ref(false)
 const detailLoading = ref(false)
@@ -24,6 +25,9 @@ const auditReplays = ref<AuditReplayBundle[]>([])
 const selectedTurnIndex = ref<number | null>(null)
 const expandedTimelineKey = ref<string | null>(null)
 const activeFilter = ref<TimelineFilter>('all')
+const summaryExpanded = ref(false)
+const turnMenuOpen = ref(false)
+const turnMenuRef = ref<HTMLElement | null>(null)
 
 const selectedConversationSummary = computed(() => {
   if (selectedConversation.value) {
@@ -37,6 +41,33 @@ const selectedAuditRun = computed(() => {
     return auditRuns.value[selectedTurnIndex.value] ?? null
   }
   return auditRuns.value[auditRuns.value.length - 1] ?? null
+})
+
+const summaryFacts = computed<SummaryFact[]>(() => {
+  const conversation = selectedConversationSummary.value
+  return [
+    { label: '创建者', value: conversation?.created_by || '-' },
+    { label: '开始时间', value: formatConversationTime(conversation?.created_at) },
+    { label: '轮次数', value: String(auditRuns.value.length) },
+    { label: '状态', value: selectedAuditRun.value?.status || '未找到审计运行' },
+    { label: 'Run ID', value: selectedAuditRun.value?.id || resolveAuditRunId(conversation) || '未暴露 run_id' },
+    { label: 'Task ID', value: selectedAuditRun.value?.task_id || '-' },
+    { label: '对话 ID', value: conversation?.id || '-' },
+  ]
+})
+
+const visibleSummaryFacts = computed(() => {
+  if (summaryExpanded.value) {
+    return summaryFacts.value
+  }
+  return summaryFacts.value.slice(0, 4)
+})
+
+const selectedTurnLabel = computed(() => {
+  if (selectedTurnIndex.value == null) {
+    return '全部轮次'
+  }
+  return `轮次 ${selectedTurnIndex.value + 1}`
 })
 
 const mergedTimeline = computed(() => {
@@ -109,10 +140,51 @@ const detailHeading = computed(() => {
     return formatArtifactTitle(activeArtifact.value.kind)
   }
   if (activeTimelineEntry.value) {
-    return formatEventType(activeTimelineEntry.value.event_type)
+    return displayTimelineTitle(activeTimelineEntry.value)
   }
   return '选择时间线条目'
 })
+
+function displayTimelineTitle(entry: AuditReplayEvent) {
+  return entry.display_name || formatEventType(entry.event_type)
+}
+
+function toggleSummaryExpanded() {
+  summaryExpanded.value = !summaryExpanded.value
+}
+
+function closeTurnMenu() {
+  turnMenuOpen.value = false
+}
+
+function toggleTurnMenu() {
+  turnMenuOpen.value = !turnMenuOpen.value
+}
+
+function handleGlobalPointerDown(event: PointerEvent) {
+  if (!turnMenuOpen.value) {
+    return
+  }
+  const target = event.target
+  if (target instanceof Node && turnMenuRef.value?.contains(target)) {
+    return
+  }
+  closeTurnMenu()
+}
+
+function handleGlobalKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape') {
+    closeTurnMenu()
+  }
+}
+
+function resolveDetailMetaLabel(entry: AuditReplayEvent & { turnIndex: number }) {
+  return `${displayTimelineTitle(entry)} · ${entry.event_type}`
+}
+
+function resolveTimelineSummary(entry: AuditReplayEvent & { turnIndex: number }) {
+  return `${formatPhase(entry.phase)} · #${entry.seq}${auditRuns.value.length > 1 ? ` · 轮次 ${entry.turnIndex + 1}` : ''}`
+}
 
 function resolveAuditRunId(conversation: Conversation | null) {
   if (!conversation) {
@@ -255,6 +327,7 @@ function applyFilter(filter: TimelineFilter) {
 
 function selectTurn(index: number | null) {
   selectedTurnIndex.value = index
+  closeTurnMenu()
   const first = filteredTimeline.value[0]
   expandedTimelineKey.value = first ? timelineEntryKey(first) : null
 }
@@ -281,6 +354,8 @@ async function selectConversation(conversationId: string) {
   selectedTurnIndex.value = null
   expandedTimelineKey.value = null
   activeFilter.value = 'all'
+  summaryExpanded.value = false
+  closeTurnMenu()
 
   try {
     const conversation = await fetchConversation(conversationId)
@@ -305,7 +380,14 @@ async function selectConversation(conversationId: string) {
 }
 
 onMounted(async () => {
+  window.addEventListener('pointerdown', handleGlobalPointerDown)
+  window.addEventListener('keydown', handleGlobalKeydown)
   await loadConversationList()
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('pointerdown', handleGlobalPointerDown)
+  window.removeEventListener('keydown', handleGlobalKeydown)
 })
 </script>
 
@@ -358,42 +440,17 @@ onMounted(async () => {
       <p v-else-if="detailLoading" class="messages-empty">正在加载详情...</p>
       <div v-else-if="selectedConversationSummary" class="admin-audit-content">
         <section class="admin-audit-summary-grid">
-          <article class="admin-audit-summary-card">
-            <h2>对话信息</h2>
+          <article class="admin-audit-summary-card" data-testid="summary-card">
+            <div class="messages-header">
+              <div><h2>审计概览</h2></div>
+              <button type="button" class="ghost-button" data-testid="summary-toggle" @click="toggleSummaryExpanded">
+                {{ summaryExpanded ? '收起详情' : '展开详情' }}
+              </button>
+            </div>
             <dl>
-              <div>
-                <dt>ID</dt>
-                <dd>{{ selectedConversationSummary.id }}</dd>
-              </div>
-              <div>
-                <dt>创建者</dt>
-                <dd>{{ selectedConversationSummary.created_by }}</dd>
-              </div>
-              <div>
-                <dt>开始时间</dt>
-                <dd>{{ formatConversationTime(selectedConversationSummary.created_at) }}</dd>
-              </div>
-            </dl>
-          </article>
-
-          <article class="admin-audit-summary-card">
-            <h2>执行信息</h2>
-            <dl>
-              <div>
-                <dt>轮次数</dt>
-                <dd>{{ auditRuns.length }}</dd>
-              </div>
-              <div>
-                <dt>Run ID</dt>
-                <dd>{{ selectedAuditRun?.id || resolveAuditRunId(selectedConversationSummary) || '未暴露 run_id' }}</dd>
-              </div>
-              <div>
-                <dt>Task ID</dt>
-                <dd>{{ selectedAuditRun?.task_id || '-' }}</dd>
-              </div>
-              <div>
-                <dt>状态</dt>
-                <dd>{{ selectedAuditRun?.status || '未找到审计运行' }}</dd>
+              <div v-for="fact in visibleSummaryFacts" :key="fact.label">
+                <dt>{{ fact.label }}</dt>
+                <dd>{{ fact.value }}</dd>
               </div>
             </dl>
           </article>
@@ -403,19 +460,51 @@ onMounted(async () => {
           <article class="admin-audit-card admin-audit-timeline-panel">
             <div class="messages-header">
               <div><h2>操作时间线</h2></div>
-            </div>
-
-            <div v-if="auditRuns.length > 1" class="admin-audit-turn-bar" data-testid="turn-bar">
-              <button class="admin-audit-turn" :class="{ active: selectedTurnIndex == null }" type="button" data-turn="all" @click="selectTurn(null)">全部轮次</button>
-              <button
-                v-for="(run, index) in auditRuns"
-                :key="run.id"
-                class="admin-audit-turn"
-                :class="{ active: selectedTurnIndex === index }"
-                type="button"
-                :data-turn="index"
-                @click="selectTurn(index)"
-              >轮次 {{ index + 1 }}</button>
+              <div v-if="auditRuns.length > 1" ref="turnMenuRef" class="model-menu admin-audit-turn-menu" data-testid="turn-menu">
+                <button
+                  class="model-menu-trigger"
+                  type="button"
+                  aria-haspopup="menu"
+                  :aria-expanded="turnMenuOpen ? 'true' : 'false'"
+                  data-testid="turn-menu-trigger"
+                  @click="toggleTurnMenu"
+                >
+                  <span class="model-menu-trigger-label">{{ selectedTurnLabel }}</span>
+                  <span class="model-menu-trigger-caret" :class="{ open: turnMenuOpen }" aria-hidden="true"></span>
+                </button>
+                <transition name="model-menu-fade">
+                  <div v-if="turnMenuOpen" class="model-menu-panel" role="menu" data-testid="turn-menu-panel">
+                    <div class="model-menu-group">
+                      <button
+                        class="model-menu-option"
+                        :class="{ active: selectedTurnIndex == null }"
+                        type="button"
+                        role="menuitemradio"
+                        :aria-checked="selectedTurnIndex == null ? 'true' : 'false'"
+                        data-testid="turn-option-all"
+                        @click="selectTurn(null)"
+                      >
+                        <span class="model-menu-option-check" aria-hidden="true"></span>
+                        <span class="model-menu-option-label">全部轮次</span>
+                      </button>
+                      <button
+                        v-for="(run, index) in auditRuns"
+                        :key="run.id"
+                        class="model-menu-option"
+                        :class="{ active: selectedTurnIndex === index }"
+                        type="button"
+                        role="menuitemradio"
+                        :aria-checked="selectedTurnIndex === index ? 'true' : 'false'"
+                        :data-testid="`turn-option-${index}`"
+                        @click="selectTurn(index)"
+                      >
+                        <span class="model-menu-option-check" aria-hidden="true"></span>
+                        <span class="model-menu-option-label">轮次 {{ index + 1 }}</span>
+                      </button>
+                    </div>
+                  </div>
+                </transition>
+              </div>
             </div>
 
             <div class="admin-audit-filter-bar">
@@ -440,10 +529,10 @@ onMounted(async () => {
                   </span>
                   <div>
                     <strong>{{ entry.event_type }}</strong>
-                    <p>{{ formatPhase(entry.phase) }} · #{{ entry.seq }}<template v-if="auditRuns.length > 1"> · 轮次 {{ entry.turnIndex + 1 }}</template></p>
+                    <p>{{ resolveTimelineSummary(entry) }}</p>
                   </div>
                 </div>
-                <span class="admin-audit-artifact-chip">{{ formatEventType(entry.event_type) }}</span>
+                <span class="admin-audit-artifact-chip">{{ displayTimelineTitle(entry) }}</span>
               </button>
             </div>
             <p v-else class="messages-empty admin-audit-timeline-empty">当前筛选条件下没有可展示的时间线。</p>
@@ -456,9 +545,10 @@ onMounted(async () => {
 
             <div v-if="activeTimelineEntry" class="admin-audit-artifact-detail">
               <div class="admin-audit-detail-meta">
-                <span>{{ formatPhase(activeTimelineEntry.phase) }}</span>
+                <span>{{ resolveDetailMetaLabel(activeTimelineEntry) }}</span>
                 <span>#{{ activeTimelineEntry.seq }}</span>
-                <span v-if="auditRuns.length > 1">轮次 {{ (activeTimelineEntry as any).turnIndex + 1 }}</span>
+                <span>{{ formatPhase(activeTimelineEntry.phase) }}</span>
+                <span v-if="auditRuns.length > 1">轮次 {{ activeTimelineEntry.turnIndex + 1 }}</span>
               </div>
               <pre v-if="activeArtifactBody" class="trace-detail-content admin-audit-json">{{ activeArtifactBody }}</pre>
               <pre v-else-if="activeTimelineEntry.payload" class="trace-detail-content admin-audit-json">{{ JSON.stringify(activeTimelineEntry.payload, null, 2) }}</pre>

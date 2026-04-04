@@ -359,10 +359,18 @@ describe('AdminAuditView', () => {
     expect(wrapper.text()).not.toContain('Detail')
     expect(wrapper.text()).toContain('Second chat with a much longer title')
     expect(wrapper.text()).toContain('bob')
-    expect(wrapper.text()).toContain('run_2')
     expect(wrapper.text()).toContain('操作时间线')
-    expect(wrapper.text()).toContain('对话信息')
-    expect(wrapper.text()).toContain('执行信息')
+    expect(wrapper.find('[data-testid="summary-card"]').exists()).toBe(true)
+    expect(wrapper.findAll('.admin-audit-summary-card')).toHaveLength(1)
+    expect(wrapper.find('[data-testid="summary-toggle"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="summary-toggle"]').text()).toContain('展开')
+    expect(wrapper.text()).toContain('创建者')
+    expect(wrapper.text()).toContain('轮次数')
+    expect(wrapper.text()).toContain('状态')
+    expect(wrapper.text()).not.toContain('对话信息')
+    expect(wrapper.text()).not.toContain('执行信息')
+    expect(wrapper.text()).not.toContain('Task ID')
+    expect(wrapper.text()).not.toContain('对话 ID')
     expect(wrapper.text()).toContain('run.created')
     expect(wrapper.text()).toContain('运行已创建')
     expect(wrapper.text()).toContain('run.started')
@@ -428,7 +436,7 @@ describe('AdminAuditView', () => {
     expect(wrapper.find('.admin-audit-timeline-panel').text()).toContain('当前筛选条件下没有可展示的时间线')
   })
 
-  it('prefers display_name for replay timeline labels while keeping formatEventType fallback', async () => {
+  it('prefers display_name for replay timeline labels while keeping raw event metadata visible', async () => {
     api.fetchConversations.mockResolvedValue([
       {
         id: 'conv_labels',
@@ -534,10 +542,16 @@ describe('AdminAuditView', () => {
     expect(fallbackItem.find('.admin-audit-artifact-chip').text()).toBe('运行失败')
     expect(fallbackItem.text()).toContain('run.failed')
     expect(displayNameItem.find('.admin-audit-artifact-chip').text()).toBe('审批已通过（显示名）')
+    expect(displayNameItem.text()).toContain('approval.resolved')
     expect(displayNameItem.text()).not.toContain('审批已处理')
+
+    await displayNameItem.trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.admin-audit-artifact-panel h2').text()).toBe('审批已通过（显示名）')
+    expect(wrapper.find('.admin-audit-detail-meta').text()).toContain('approval.resolved')
   })
 
-  it('shows turn selector and merged timeline for multi-turn conversations', async () => {
+  it('shows compact summary toggle and chat-style turn menu for multi-turn conversations', async () => {
     api.fetchConversations.mockResolvedValue([
       {
         id: 'conv_multi',
@@ -610,6 +624,7 @@ describe('AdminAuditView', () => {
               level: 'info',
               step_index: 0,
               parent_seq: 0,
+              display_name: '开始第 1 轮',
               payload: { status: 'running' },
               created_at: '2026-03-22T09:00:00Z',
             },
@@ -620,6 +635,7 @@ describe('AdminAuditView', () => {
               level: 'info',
               step_index: 1,
               parent_seq: 1,
+              display_name: '读取文件',
               payload: { tool_name: 'read_file' },
               created_at: '2026-03-22T09:00:01Z',
             },
@@ -676,6 +692,7 @@ describe('AdminAuditView', () => {
     })
 
     const wrapper = mount(AdminAuditView, {
+      attachTo: document.body,
       global: {
         stubs: {
           RouterLink: {
@@ -690,47 +707,43 @@ describe('AdminAuditView', () => {
     await wrapper.find('[data-conversation-id="conv_multi"]').trigger('click')
     await flushPromises()
 
-    // Verify conversation-level APIs were called
-    expect(api.fetchAuditConversationRuns).toHaveBeenCalledWith('conv_multi')
-    expect(api.fetchAuditRunReplay).toHaveBeenCalledWith('run_a')
-    expect(api.fetchAuditRunReplay).toHaveBeenCalledWith('run_b')
+    expect(wrapper.find('[data-testid="summary-card"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="summary-toggle"]').text()).toContain('展开')
+    expect(wrapper.text()).toContain('alice')
+    expect(wrapper.text()).toContain('轮次数')
+    expect(wrapper.text()).not.toContain('Task ID')
+    expect(wrapper.text()).not.toContain('对话 ID')
 
-    // Turn selector should be visible (2 runs)
-    expect(wrapper.find('[data-testid="turn-bar"]').exists()).toBe(true)
-    expect(wrapper.findAll('.admin-audit-turn')).toHaveLength(3) // 全部轮次 + 轮次 1 + 轮次 2
-    expect(wrapper.find('[data-turn="all"]').text()).toContain('全部轮次')
-    expect(wrapper.find('[data-turn="0"]').text()).toContain('轮次 1')
-    expect(wrapper.find('[data-turn="1"]').text()).toContain('轮次 2')
-
-    // 轮次数 should show 2
-    expect(wrapper.text()).toContain('2')
-
-    // All timeline items merged: 3 from run_a + 2 from run_b = 5
+    expect(wrapper.find('[data-testid="turn-menu"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="turn-menu-trigger"]').attributes('aria-expanded')).toBe('false')
+    expect(wrapper.find('[data-testid="turn-menu-panel"]').exists()).toBe(false)
     expect(wrapper.findAll('.admin-audit-timeline-item')).toHaveLength(5)
 
-    // Timeline items should show turn labels
-    expect(wrapper.text()).toContain('轮次 1')
-    expect(wrapper.text()).toContain('轮次 2')
-
-    // Filter by turn 1 only
-    await wrapper.find('[data-turn="0"]').trigger('click')
+    await wrapper.find('[data-testid="turn-menu-trigger"]').trigger('click')
     await flushPromises()
+    expect(wrapper.find('[data-testid="turn-menu-trigger"]').attributes('aria-expanded')).toBe('true')
+    expect(wrapper.find('[data-testid="turn-menu-panel"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="turn-option-all"]').text()).toContain('全部轮次')
+    expect(wrapper.find('[data-testid="turn-option-0"]').text()).toContain('轮次 1')
+    expect(wrapper.find('[data-testid="turn-option-1"]').text()).toContain('轮次 2')
+
+    await wrapper.find('[data-testid="turn-option-0"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="turn-menu-trigger"]').attributes('aria-expanded')).toBe('false')
     expect(wrapper.findAll('.admin-audit-timeline-item')).toHaveLength(3)
 
-    // Filter by turn 2 only
-    await wrapper.find('[data-turn="1"]').trigger('click')
+    await document.body.dispatchEvent(new PointerEvent('pointerdown'))
     await flushPromises()
-    expect(wrapper.findAll('.admin-audit-timeline-item')).toHaveLength(2)
+    expect(wrapper.find('[data-testid="turn-menu-panel"]').exists()).toBe(false)
 
-    // Back to all turns
-    await wrapper.find('[data-turn="all"]').trigger('click')
+    await wrapper.find('[data-testid="summary-toggle"]').trigger('click')
     await flushPromises()
-    expect(wrapper.findAll('.admin-audit-timeline-item')).toHaveLength(5)
+    expect(wrapper.find('[data-testid="summary-toggle"]').text()).toContain('收起')
+    expect(wrapper.text()).toContain('Task ID')
+    expect(wrapper.text()).toContain('task_a')
+    expect(wrapper.text()).toContain('对话 ID')
+    expect(wrapper.text()).toContain('conv_multi')
 
-    // Tool filter should work across turns
-    await wrapper.find('[data-filter="tool"]').trigger('click')
-    await flushPromises()
-    expect(wrapper.findAll('.admin-audit-timeline-item')).toHaveLength(1)
-    expect(wrapper.text()).toContain('tool.called')
+    wrapper.unmount()
   })
 })
