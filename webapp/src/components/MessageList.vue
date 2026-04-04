@@ -7,13 +7,15 @@ import ApprovalRecordCard from './ApprovalRecordCard.vue'
 import { formatMessageContent } from '../lib/chat'
 import type { QuestionInteractionSubmitInput, TranscriptEntry, TranscriptEntryDetail } from '../types/api'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   loading: boolean
   entries: TranscriptEntry[]
   showThinkingAndTools?: boolean
   approvalDecisionStateById?: Record<string, { pending: boolean; decision: 'approve' | 'reject' }>
   questionResponseStateById?: Record<string, { pending: boolean }>
-}>()
+}>(), {
+  showThinkingAndTools: true,
+})
 
 const emit = defineEmits<{
   'approval-decision': [payload: { taskId: string; approvalId: string; decision: 'approve' | 'reject'; reason: string }]
@@ -728,56 +730,58 @@ function showCopyToast(message: string, variant: 'success' | 'error') {
               </details>
             </div>
           </details>
-          <details
-            v-else-if="entry.kind === 'reasoning'"
-            v-for="detail in detailSections(entry)"
-            :key="detail.key ?? `${entry.id}-${detail.label}`"
-            class="trace-detail trace-flat-shell"
-            :open="detail.collapsed ? undefined : true"
-          >
-            <summary class="trace-detail-summary">
-              <span class="trace-summary-leading">
-                <span class="trace-kind-badge reasoning" aria-hidden="true"></span>
-                <span class="trace-detail-label" :class="{ 'loading-marquee': detail.loading }">{{ detail.label }}</span>
-              </span>
-              <span class="trace-detail-preview">{{ detail.preview }}</span>
-              <span v-if="detail.loading" class="trace-loading" aria-hidden="true"></span>
-            </summary>
-            <pre v-if="primaryBlockValue(detail)" class="trace-detail-content">{{ formatMessageContent(primaryBlockValue(detail)) }}</pre>
-          </details>
-          <details
-            v-else
-            v-for="detail in detailSections(entry)"
-            :key="detail.key ?? `${entry.id}-${detail.label}`"
-            class="trace-detail"
-            :class="{ 'trace-flat-shell': entry.kind === 'tool' }"
-            :open="detail.collapsed ? undefined : true"
-          >
-            <summary class="trace-detail-summary">
-              <template v-if="entry.kind === 'tool'">
+          <template v-else-if="entry.kind === 'reasoning'">
+            <details
+              v-for="detail in detailSections(entry)"
+              :key="detail.key ?? `${entry.id}-${detail.label}`"
+              class="trace-detail trace-flat-shell"
+              :open="detail.collapsed ? undefined : true"
+            >
+              <summary class="trace-detail-summary">
                 <span class="trace-summary-leading">
-                  <span class="trace-kind-badge tool operation-badge" aria-hidden="true"><Operation /></span>
-                  <span class="trace-detail-label" :class="{ 'loading-marquee': detail.loading }">{{ entry.title }}</span>
-                  <span class="trace-tool-name">{{ detail.label }}</span>
+                  <span class="trace-kind-badge reasoning" aria-hidden="true"></span>
+                  <span class="trace-detail-label" :class="{ 'loading-marquee': detail.loading }">{{ detail.label }}</span>
                 </span>
-                <span v-if="detail.preview" class="trace-status subtle">{{ detail.preview }}</span>
-              </template>
-              <template v-else>
-                <span class="trace-detail-label" :class="{ 'loading-marquee': detail.loading }">{{ detail.label }}</span>
                 <span class="trace-detail-preview">{{ detail.preview }}</span>
-              </template>
-              <span v-if="detail.loading" class="trace-loading" aria-hidden="true"></span>
-            </summary>
-            <div class="trace-detail-blocks">
-              <div v-for="block in detail.blocks ?? []" :key="`${detail.key ?? detail.label}-${block.label}`" class="trace-detail-block">
-                <div class="trace-detail-block-header">
-                  <span>{{ block.label }}</span>
-                  <span v-if="block.loading" class="trace-loading small" aria-hidden="true"></span>
+                <span v-if="detail.loading" class="trace-loading" aria-hidden="true"></span>
+              </summary>
+              <pre v-if="primaryBlockValue(detail)" class="trace-detail-content">{{ formatMessageContent(primaryBlockValue(detail)) }}</pre>
+            </details>
+          </template>
+          <template v-else>
+            <details
+              v-for="detail in detailSections(entry)"
+              :key="detail.key ?? `${entry.id}-${detail.label}`"
+              class="trace-detail"
+              :class="{ 'trace-flat-shell': entry.kind === 'tool' }"
+              :open="detail.collapsed ? undefined : true"
+            >
+              <summary class="trace-detail-summary">
+                <template v-if="entry.kind === 'tool'">
+                  <span class="trace-summary-leading">
+                    <span class="trace-kind-badge tool operation-badge" aria-hidden="true"><Operation /></span>
+                    <span class="trace-detail-label" :class="{ 'loading-marquee': detail.loading }">{{ entry.title }}</span>
+                    <span class="trace-tool-name">{{ detail.label }}</span>
+                  </span>
+                  <span v-if="detail.preview" class="trace-status subtle">{{ detail.preview }}</span>
+                </template>
+                <template v-else>
+                  <span class="trace-detail-label" :class="{ 'loading-marquee': detail.loading }">{{ detail.label }}</span>
+                  <span class="trace-detail-preview">{{ detail.preview }}</span>
+                </template>
+                <span v-if="detail.loading" class="trace-loading" aria-hidden="true"></span>
+              </summary>
+              <div class="trace-detail-blocks">
+                <div v-for="block in detail.blocks ?? []" :key="`${detail.key ?? detail.label}-${block.label}`" class="trace-detail-block">
+                  <div class="trace-detail-block-header">
+                    <span>{{ block.label }}</span>
+                    <span v-if="block.loading" class="trace-loading small" aria-hidden="true"></span>
+                  </div>
+                  <pre class="trace-detail-content">{{ formatMessageContent(block.value) }}</pre>
                 </div>
-                <pre class="trace-detail-content">{{ formatMessageContent(block.value) }}</pre>
               </div>
-            </div>
-          </details>
+            </details>
+          </template>
         </article>
         <div v-if="props.loading" class="messages-generating-indicator" aria-live="polite">
           <span class="messages-generating-spinner" aria-hidden="true"></span>

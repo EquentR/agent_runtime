@@ -451,15 +451,16 @@ type AuditReplayBundleSwaggerDoc struct {
 
 // AuditReplayEventSwaggerDoc 描述回放时间线事件的文档结构。
 type AuditReplayEventSwaggerDoc struct {
-	Seq       int64                                 `json:"seq"`
-	Phase     string                                `json:"phase"`
-	EventType string                                `json:"event_type"`
-	Level     string                                `json:"level"`
-	StepIndex int                                   `json:"step_index"`
-	ParentSeq int64                                 `json:"parent_seq"`
-	CreatedAt string                                `json:"created_at"`
-	Payload   any                                   `json:"payload"`
-	Artifact  *AuditReplayArtifactSummarySwaggerDoc `json:"artifact"`
+	Seq         int64                                 `json:"seq"`
+	Phase       string                                `json:"phase"`
+	EventType   string                                `json:"event_type"`
+	DisplayName string                                `json:"display_name"`
+	Level       string                                `json:"level"`
+	StepIndex   int                                   `json:"step_index"`
+	ParentSeq   int64                                 `json:"parent_seq"`
+	CreatedAt   string                                `json:"created_at"`
+	Payload     any                                   `json:"payload"`
+	Artifact    *AuditReplayArtifactSummarySwaggerDoc `json:"artifact"`
 }
 
 // AuditReplayArtifactSummarySwaggerDoc 描述回放时间线中引用的工件摘要。

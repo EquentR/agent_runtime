@@ -149,6 +149,7 @@ export interface AuditReplayEvent {
   seq: number
   phase: string
   event_type: string
+  display_name?: string
   level: string
   step_index: number
   parent_seq: number

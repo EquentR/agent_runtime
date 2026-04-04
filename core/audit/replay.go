@@ -34,15 +34,16 @@ type RunSummary struct {
 }
 
 type ReplayEventEntry struct {
-	Seq       int64            `json:"seq"`
-	Phase     Phase            `json:"phase"`
-	EventType string           `json:"event_type"`
-	Level     string           `json:"level"`
-	StepIndex int              `json:"step_index,omitempty"`
-	ParentSeq int64            `json:"parent_seq,omitempty"`
-	CreatedAt time.Time        `json:"created_at"`
-	Payload   json.RawMessage  `json:"payload,omitempty"`
-	Artifact  *ArtifactSummary `json:"artifact,omitempty"`
+	Seq         int64            `json:"seq"`
+	Phase       Phase            `json:"phase"`
+	EventType   string           `json:"event_type"`
+	DisplayName string           `json:"display_name"`
+	Level       string           `json:"level"`
+	StepIndex   int              `json:"step_index,omitempty"`
+	ParentSeq   int64            `json:"parent_seq,omitempty"`
+	CreatedAt   time.Time        `json:"created_at"`
+	Payload     json.RawMessage  `json:"payload,omitempty"`
+	Artifact    *ArtifactSummary `json:"artifact,omitempty"`
 }
 
 type ArtifactSummary struct {
@@ -73,6 +74,30 @@ var replayRetainedArtifactKinds = map[ArtifactKind]struct{}{
 	ArtifactKindModelResponse:   {},
 	ArtifactKindToolArguments:   {},
 	ArtifactKindToolOutput:      {},
+}
+
+var replayEventDisplayNames = map[string]string{
+	"run.created":           "运行已创建",
+	"run.started":           "运行开始",
+	"run.waiting":           "运行等待中",
+	"run.finished":          "运行完成",
+	"run.succeeded":         "运行成功",
+	"run.failed":            "运行失败",
+	"conversation.loaded":   "会话已加载",
+	"user_message.appended": "用户消息追加",
+	"step.started":          "步骤开始",
+	"step.finished":         "步骤完成",
+	"prompt.resolved":       "提示词解析",
+	"request.built":         "构建 LLM 请求",
+	"model.completed":       "模型生成",
+	"tool.started":          "工具调用开始",
+	"tool.called":           "工具调用",
+	"tool.finished":         "工具调用完成",
+	"approval.requested":    "审批请求",
+	"approval.resolved":     "审批已处理",
+	"interaction.requested": "用户交互请求",
+	"interaction.responded": "用户交互已响应",
+	"messages.persisted":    "消息已持久化",
 }
 
 func BuildReplayBundle(ctx context.Context, store *Store, runID string) (*ReplayBundle, error) {
@@ -112,14 +137,15 @@ func BuildReplayBundle(ctx context.Context, store *Store, runID string) (*Replay
 
 	for _, event := range events {
 		entry := ReplayEventEntry{
-			Seq:       event.Seq,
-			Phase:     event.Phase,
-			EventType: event.EventType,
-			Level:     event.Level,
-			StepIndex: event.StepIndex,
-			ParentSeq: event.ParentSeq,
-			CreatedAt: event.CreatedAt,
-			Payload:   cloneRawJSON(event.PayloadJSON),
+			Seq:         event.Seq,
+			Phase:       event.Phase,
+			EventType:   event.EventType,
+			DisplayName: replayEventDisplayName(event.EventType),
+			Level:       event.Level,
+			StepIndex:   event.StepIndex,
+			ParentSeq:   event.ParentSeq,
+			CreatedAt:   event.CreatedAt,
+			Payload:     cloneRawJSON(event.PayloadJSON),
 		}
 		if event.RefArtifactID != "" {
 			artifact, ok := artifactsByID[event.RefArtifactID]
@@ -253,6 +279,18 @@ func shouldInlineReplayArtifactBody(artifact Artifact) bool {
 func shouldRetainReplayArtifact(artifact Artifact) bool {
 	_, ok := replayRetainedArtifactKinds[artifact.Kind]
 	return ok
+}
+
+func replayEventDisplayName(eventType string) string {
+	trimmed := strings.TrimSpace(eventType)
+	if trimmed == "" {
+		return "审计事件"
+	}
+
+	if displayName, ok := replayEventDisplayNames[trimmed]; ok {
+		return displayName
+	}
+	return trimmed
 }
 
 func cloneRawJSON(raw json.RawMessage) json.RawMessage {
