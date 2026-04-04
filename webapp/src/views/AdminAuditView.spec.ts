@@ -262,62 +262,40 @@ describe('AdminAuditView', () => {
         {
           seq: 7,
           phase: 'run',
-          event_type: 'interaction.requested',
+          event_type: 'step.finished',
           level: 'info',
           step_index: 1,
           parent_seq: 6,
-          display_name: '用户交互请求',
-          payload: { kind: 'question', reason: 'requires user input' },
+          payload: { step: 'tool-call' },
           created_at: '2026-03-22T10:00:07Z',
         },
         {
           seq: 8,
           phase: 'run',
-          event_type: 'run.waiting',
-          level: 'info',
+          event_type: 'run.failed',
+          level: 'error',
           step_index: 1,
           parent_seq: 7,
-          display_name: '运行等待中',
-          payload: { status: 'waiting' },
-          created_at: '2026-03-22T10:00:08Z',
+          payload: { error: 'timeout' },
+          created_at: '2026-03-22T10:00:09Z',
         },
         {
           seq: 9,
           phase: 'run',
-          event_type: 'step.finished',
+          event_type: 'messages.persisted',
           level: 'info',
-          step_index: 1,
+          step_index: 2,
           parent_seq: 8,
-          payload: { step: 'tool-call' },
-          created_at: '2026-03-22T10:00:09Z',
+          payload: { count: 2 },
+          created_at: '2026-03-22T10:00:11Z',
         },
         {
           seq: 10,
           phase: 'run',
-          event_type: 'run.failed',
-          level: 'error',
-          step_index: 1,
-          parent_seq: 9,
-          payload: { error: 'timeout' },
-          created_at: '2026-03-22T10:00:11Z',
-        },
-        {
-          seq: 11,
-          phase: 'run',
-          event_type: 'messages.persisted',
-          level: 'info',
-          step_index: 2,
-          parent_seq: 10,
-          payload: { count: 2 },
-          created_at: '2026-03-22T10:00:12Z',
-        },
-        {
-          seq: 12,
-          phase: 'run',
           event_type: 'run.succeeded',
           level: 'info',
           step_index: 2,
-          parent_seq: 11,
+          parent_seq: 9,
           payload: { status: 'done' },
           created_at: '2026-03-22T10:00:13Z',
         },
@@ -393,13 +371,11 @@ describe('AdminAuditView', () => {
     expect(wrapper.text()).toContain('步骤开始')
     expect(wrapper.text()).toContain('审批请求')
     expect(wrapper.text()).toContain('审批已处理')
-    expect(wrapper.text()).toContain('用户交互请求')
-    expect(wrapper.text()).toContain('运行等待中')
     expect(wrapper.text()).toContain('步骤完成')
     expect(wrapper.text()).toContain('运行成功')
     expect(wrapper.text()).toContain('消息已持久化')
     expect(wrapper.find('.admin-audit-timeline').exists()).toBe(true)
-    expect(wrapper.findAll('.admin-audit-timeline-item')).toHaveLength(13)
+    expect(wrapper.findAll('.admin-audit-timeline-item')).toHaveLength(11)
     expect(wrapper.text()).not.toContain('暂无回放时间线')
     expect(wrapper.text()).not.toContain('暂无事件')
     expect(wrapper.find('.conversation-compact-dot').exists()).toBe(false)
@@ -450,6 +426,115 @@ describe('AdminAuditView', () => {
     await flushPromises()
     expect(wrapper.find('.admin-audit-filter-bar').exists()).toBe(true)
     expect(wrapper.find('.admin-audit-timeline-panel').text()).toContain('当前筛选条件下没有可展示的时间线')
+  })
+
+  it('prefers display_name for replay timeline labels while keeping formatEventType fallback', async () => {
+    api.fetchConversations.mockResolvedValue([
+      {
+        id: 'conv_labels',
+        title: 'Replay labels chat',
+        last_message: 'labels',
+        message_count: 1,
+        provider_id: 'openai',
+        model_id: 'gpt-5.4',
+        created_by: 'alice',
+        created_at: '2026-03-22T12:00:00Z',
+        updated_at: '2026-03-22T12:01:00Z',
+        audit_run_id: 'run_labels',
+      },
+    ])
+    api.fetchConversation.mockResolvedValue({
+      id: 'conv_labels',
+      title: 'Replay labels chat',
+      last_message: 'labels',
+      message_count: 1,
+      provider_id: 'openai',
+      model_id: 'gpt-5.4',
+      created_by: 'alice',
+      created_at: '2026-03-22T12:00:00Z',
+      updated_at: '2026-03-22T12:01:00Z',
+      audit_run_id: 'run_labels',
+    })
+    api.fetchAuditConversationRuns.mockResolvedValue([
+      {
+        id: 'run_labels',
+        task_id: 'task_labels',
+        conversation_id: 'conv_labels',
+        task_type: 'agent.run',
+        status: 'succeeded',
+        created_by: 'alice',
+        schema_version: 'v1',
+        created_at: '2026-03-22T12:00:00Z',
+        updated_at: '2026-03-22T12:01:00Z',
+      },
+    ])
+    api.fetchAuditRunReplay.mockResolvedValue({
+      run: {
+        id: 'run_labels',
+        task_id: 'task_labels',
+        conversation_id: 'conv_labels',
+        task_type: 'agent.run',
+        provider_id: 'openai',
+        model_id: 'gpt-5.4',
+        runner_id: 'runner_1',
+        status: 'succeeded',
+        created_by: 'alice',
+        replayable: true,
+        schema_version: 'v1',
+        created_at: '2026-03-22T12:00:00Z',
+        updated_at: '2026-03-22T12:01:00Z',
+      },
+      timeline: [
+        {
+          seq: 1,
+          phase: 'run',
+          event_type: 'approval.resolved',
+          level: 'info',
+          step_index: 0,
+          parent_seq: 0,
+          display_name: '审批已通过（显示名）',
+          payload: { tool_name: 'search_web', decision: 'approve' },
+          created_at: '2026-03-22T12:00:00Z',
+        },
+        {
+          seq: 2,
+          phase: 'run',
+          event_type: 'run.failed',
+          level: 'error',
+          step_index: 1,
+          parent_seq: 1,
+          payload: { error: 'timeout' },
+          created_at: '2026-03-22T12:00:01Z',
+        },
+      ],
+      artifacts: [],
+    })
+
+    const wrapper = mount(AdminAuditView, {
+      global: {
+        stubs: {
+          RouterLink: {
+            props: ['to'],
+            template: '<a :href="to" v-bind="$attrs"><slot /></a>',
+          },
+        },
+      },
+    })
+
+    await flushPromises()
+    await wrapper.find('[data-conversation-id="conv_labels"]').trigger('click')
+    await flushPromises()
+
+    const timelineItems = wrapper.findAll('.admin-audit-timeline-item')
+    expect(timelineItems).toHaveLength(2)
+
+    const displayNameItem = timelineItems[0]
+    const fallbackItem = timelineItems[1]
+
+    expect(fallbackItem.find('.admin-audit-artifact-chip').text()).toBe('运行失败')
+    expect(fallbackItem.text()).toContain('run.failed')
+    expect(displayNameItem.find('.admin-audit-artifact-chip').text()).toBe('审批已通过（显示名）')
+    expect(displayNameItem.text()).not.toContain('审批已处理')
   })
 
   it('shows turn selector and merged timeline for multi-turn conversations', async () => {
