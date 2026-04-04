@@ -461,9 +461,6 @@ onBeforeUnmount(() => {
             <div class="messages-header admin-audit-panel-header">
               <div><h2>操作时间线</h2></div>
               <div class="admin-audit-panel-controls">
-                <button type="button" class="ghost-button admin-audit-timeline-copy" aria-label="复制当前详情">
-                  复制详情
-                </button>
                 <div v-if="auditRuns.length > 1" ref="turnMenuRef" class="model-menu admin-audit-turn-menu" data-testid="turn-menu">
                   <button
                     class="model-menu-trigger"

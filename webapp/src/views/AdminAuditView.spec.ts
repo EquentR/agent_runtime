@@ -365,7 +365,7 @@ describe('AdminAuditView', () => {
     expect(wrapper.findAll('.admin-audit-summary-card')).toHaveLength(1)
     expect(wrapper.findAll('.admin-audit-panel-header')).toHaveLength(3)
     expect(wrapper.find('.admin-audit-timeline-panel .admin-audit-panel-controls').exists()).toBe(true)
-    expect(wrapper.find('.admin-audit-timeline-copy').exists()).toBe(true)
+    expect(wrapper.find('.admin-audit-timeline-copy').exists()).toBe(false)
     expect(wrapper.find('[data-testid="summary-toggle"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="summary-toggle"]').text()).toContain('展开')
     expect(wrapper.text()).toContain('创建者')

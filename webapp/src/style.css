@@ -2153,8 +2153,7 @@ p {
   grid-template-rows: auto minmax(0, 1fr);
 }
 
-.admin-audit-turn-menu .model-menu-trigger,
-.admin-audit-timeline-copy {
+.admin-audit-turn-menu .model-menu-trigger {
   appearance: none;
   -webkit-appearance: none;
 }
@@ -2190,18 +2189,6 @@ p {
 
 .admin-audit-turn-menu .model-menu-option-label {
   font-size: 0.78rem;
-}
-
-.admin-audit-timeline-copy {
-  border: 1px solid rgba(25, 50, 59, 0.08);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.82);
-  color: #53707a;
-  padding: 0.36rem 0.68rem;
-  font-size: 0.74rem;
-  font-weight: 700;
-  line-height: 1.1;
-  box-shadow: none;
 }
 
 .admin-audit-filter-bar {
