@@ -436,7 +436,7 @@ describe('AdminAuditView', () => {
     expect(wrapper.find('.admin-audit-timeline-panel').text()).toContain('当前筛选条件下没有可展示的时间线')
   })
 
-  it('prefers display_name for replay timeline labels while keeping raw event metadata visible', async () => {
+  it('renders display_name as the primary timeline title and keeps raw event_type in metadata', async () => {
     api.fetchConversations.mockResolvedValue([
       {
         id: 'conv_labels',
@@ -539,11 +539,13 @@ describe('AdminAuditView', () => {
     const displayNameItem = timelineItems[0]
     const fallbackItem = timelineItems[1]
 
-    expect(fallbackItem.find('.admin-audit-artifact-chip').text()).toBe('运行失败')
-    expect(fallbackItem.text()).toContain('run.failed')
-    expect(displayNameItem.find('.admin-audit-artifact-chip').text()).toBe('审批已通过（显示名）')
-    expect(displayNameItem.text()).toContain('approval.resolved')
-    expect(displayNameItem.text()).not.toContain('审批已处理')
+    expect(displayNameItem.find('strong').text()).toBe('审批已通过（显示名）')
+    expect(displayNameItem.find('p').text()).toContain('approval.resolved')
+    expect(displayNameItem.find('p').text()).not.toContain('审批已通过（显示名）')
+
+    expect(fallbackItem.find('strong').text()).toBe('运行失败')
+    expect(fallbackItem.find('p').text()).toContain('run.failed')
+    expect(fallbackItem.find('p').text()).not.toContain('运行失败')
 
     await displayNameItem.trigger('click')
     await flushPromises()

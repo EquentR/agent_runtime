@@ -183,7 +183,7 @@ function resolveDetailMetaLabel(entry: AuditReplayEvent & { turnIndex: number })
 }
 
 function resolveTimelineSummary(entry: AuditReplayEvent & { turnIndex: number }) {
-  return `${formatPhase(entry.phase)} · #${entry.seq}${auditRuns.value.length > 1 ? ` · 轮次 ${entry.turnIndex + 1}` : ''}`
+  return `${entry.event_type} · ${formatPhase(entry.phase)} · #${entry.seq}${auditRuns.value.length > 1 ? ` · 轮次 ${entry.turnIndex + 1}` : ''}`
 }
 
 function resolveAuditRunId(conversation: Conversation | null) {
@@ -528,7 +528,7 @@ onBeforeUnmount(() => {
                     <component :is="iconForEntry(entry)" />
                   </span>
                   <div>
-                    <strong>{{ entry.event_type }}</strong>
+                    <strong>{{ displayTimelineTitle(entry) }}</strong>
                     <p>{{ resolveTimelineSummary(entry) }}</p>
                   </div>
                 </div>
