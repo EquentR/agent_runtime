@@ -395,7 +395,7 @@ describe('AdminAuditView', () => {
 
     await wrapper.findAll('.admin-audit-timeline-item')[1].trigger('click')
     await flushPromises()
-    expect(wrapper.text()).toContain('对话历史')
+    expect(wrapper.find('.admin-audit-artifact-panel h2').text()).toBe('运行开始')
     expect(wrapper.text()).toContain('hello')
     expect(wrapper.text()).toContain('assistant')
 
@@ -404,7 +404,7 @@ describe('AdminAuditView', () => {
     expect(wrapper.findAll('.admin-audit-timeline-item')).toHaveLength(1)
     expect(wrapper.text()).toContain('tool.called')
     expect(wrapper.text()).toContain('工具调用')
-    expect(wrapper.text()).toContain('工具调用参数')
+    expect(wrapper.find('.admin-audit-artifact-panel h2').text()).toBe('工具调用')
 
     await wrapper.find('.admin-audit-timeline-item').trigger('click')
     await flushPromises()
@@ -503,6 +503,15 @@ describe('AdminAuditView', () => {
           display_name: '审批已通过（显示名）',
           payload: { tool_name: 'search_web', decision: 'approve' },
           created_at: '2026-03-22T12:00:00Z',
+          artifact: {
+            id: 'art_approval',
+            kind: 'tool_output',
+            mime_type: 'application/json',
+            encoding: 'utf-8',
+            size_bytes: 64,
+            redaction_state: 'raw',
+            created_at: '2026-03-22T12:00:00Z',
+          },
         },
         {
           seq: 2,
@@ -515,7 +524,20 @@ describe('AdminAuditView', () => {
           created_at: '2026-03-22T12:00:01Z',
         },
       ],
-      artifacts: [],
+      artifacts: [
+        {
+          id: 'art_approval',
+          kind: 'tool_output',
+          mime_type: 'application/json',
+          encoding: 'utf-8',
+          size_bytes: 64,
+          redaction_state: 'raw',
+          created_at: '2026-03-22T12:00:00Z',
+          body: {
+            decision: 'approve',
+          },
+        },
+      ],
     })
 
     const wrapper = mount(AdminAuditView, {
@@ -553,82 +575,195 @@ describe('AdminAuditView', () => {
     expect(wrapper.find('.admin-audit-detail-meta').text()).toContain('approval.resolved')
   })
 
-  it('shows compact summary toggle and chat-style turn menu for multi-turn conversations', async () => {
+  it('keeps the selected event title when its artifact is shown', async () => {
     api.fetchConversations.mockResolvedValue([
       {
-        id: 'conv_multi',
-        title: 'Multi-turn chat',
-        last_message: 'hello',
+        id: 'conv_heading',
+        title: 'Heading precedence chat',
+        last_message: 'heading',
+        message_count: 1,
+        provider_id: 'openai',
+        model_id: 'gpt-5.4',
+        created_by: 'alice',
+        created_at: '2026-03-22T13:00:00Z',
+        updated_at: '2026-03-22T13:01:00Z',
+        audit_run_id: 'run_heading',
+      },
+    ])
+    api.fetchConversation.mockResolvedValue({
+      id: 'conv_heading',
+      title: 'Heading precedence chat',
+      last_message: 'heading',
+      message_count: 1,
+      provider_id: 'openai',
+      model_id: 'gpt-5.4',
+      created_by: 'alice',
+      created_at: '2026-03-22T13:00:00Z',
+      updated_at: '2026-03-22T13:01:00Z',
+      audit_run_id: 'run_heading',
+    })
+    api.fetchAuditConversationRuns.mockResolvedValue([
+      {
+        id: 'run_heading',
+        task_id: 'task_heading',
+        conversation_id: 'conv_heading',
+        task_type: 'agent.run',
+        status: 'succeeded',
+        created_by: 'alice',
+        schema_version: 'v1',
+        created_at: '2026-03-22T13:00:00Z',
+        updated_at: '2026-03-22T13:01:00Z',
+      },
+    ])
+    api.fetchAuditRunReplay.mockResolvedValue({
+      run: {
+        id: 'run_heading',
+        task_id: 'task_heading',
+        conversation_id: 'conv_heading',
+        task_type: 'agent.run',
+        provider_id: 'openai',
+        model_id: 'gpt-5.4',
+        runner_id: 'runner_1',
+        status: 'succeeded',
+        created_by: 'alice',
+        replayable: true,
+        schema_version: 'v1',
+        created_at: '2026-03-22T13:00:00Z',
+        updated_at: '2026-03-22T13:01:00Z',
+      },
+      timeline: [
+        {
+          seq: 1,
+          phase: 'tool',
+          event_type: 'tool.called',
+          level: 'info',
+          step_index: 0,
+          parent_seq: 0,
+          display_name: '调用搜索工具',
+          payload: { tool_name: 'search_web' },
+          created_at: '2026-03-22T13:00:00Z',
+          artifact: {
+            id: 'art_tool_output',
+            kind: 'tool_output',
+            mime_type: 'application/json',
+            encoding: 'utf-8',
+            size_bytes: 64,
+            redaction_state: 'raw',
+            created_at: '2026-03-22T13:00:00Z',
+          },
+        },
+      ],
+      artifacts: [
+        {
+          id: 'art_tool_output',
+          kind: 'tool_output',
+          mime_type: 'application/json',
+          encoding: 'utf-8',
+          size_bytes: 64,
+          redaction_state: 'raw',
+          created_at: '2026-03-22T13:00:00Z',
+          body: {
+            result: 'ok',
+          },
+        },
+      ],
+    })
+
+    const wrapper = mount(AdminAuditView, {
+      global: {
+        stubs: {
+          RouterLink: {
+            props: ['to'],
+            template: '<a :href="to" v-bind="$attrs"><slot /></a>',
+          },
+        },
+      },
+    })
+
+    await flushPromises()
+    await wrapper.find('[data-conversation-id="conv_heading"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('.admin-audit-artifact-panel h2').text()).toBe('调用搜索工具')
+    expect(wrapper.text()).toContain('ok')
+  })
+
+  it('preserves active filters when selecting a turn', async () => {
+    api.fetchConversations.mockResolvedValue([
+      {
+        id: 'conv_filter_turns',
+        title: 'Filter and turn chat',
+        last_message: 'filters',
         message_count: 4,
         provider_id: 'openai',
         model_id: 'gpt-5.4',
         created_by: 'alice',
-        created_at: '2026-03-22T09:00:00Z',
-        updated_at: '2026-03-22T09:10:00Z',
-        audit_run_ids: ['run_a', 'run_b'],
+        created_at: '2026-03-22T14:00:00Z',
+        updated_at: '2026-03-22T14:05:00Z',
+        audit_run_ids: ['run_filter_a', 'run_filter_b'],
       },
     ])
     api.fetchConversation.mockResolvedValue({
-      id: 'conv_multi',
-      title: 'Multi-turn chat',
-      last_message: 'hello',
+      id: 'conv_filter_turns',
+      title: 'Filter and turn chat',
+      last_message: 'filters',
       message_count: 4,
       provider_id: 'openai',
       model_id: 'gpt-5.4',
       created_by: 'alice',
-      created_at: '2026-03-22T09:00:00Z',
-      updated_at: '2026-03-22T09:10:00Z',
-      audit_run_ids: ['run_a', 'run_b'],
+      created_at: '2026-03-22T14:00:00Z',
+      updated_at: '2026-03-22T14:05:00Z',
+      audit_run_ids: ['run_filter_a', 'run_filter_b'],
     })
     api.fetchAuditConversationRuns.mockResolvedValue([
       {
-        id: 'run_a',
-        task_id: 'task_a',
-        conversation_id: 'conv_multi',
+        id: 'run_filter_a',
+        task_id: 'task_filter_a',
+        conversation_id: 'conv_filter_turns',
         task_type: 'agent.run',
         status: 'succeeded',
         created_by: 'alice',
         schema_version: 'v1',
-        created_at: '2026-03-22T09:00:00Z',
-        updated_at: '2026-03-22T09:01:00Z',
+        created_at: '2026-03-22T14:00:00Z',
+        updated_at: '2026-03-22T14:01:00Z',
       },
       {
-        id: 'run_b',
-        task_id: 'task_b',
-        conversation_id: 'conv_multi',
+        id: 'run_filter_b',
+        task_id: 'task_filter_b',
+        conversation_id: 'conv_filter_turns',
         task_type: 'agent.run',
         status: 'succeeded',
         created_by: 'alice',
         schema_version: 'v1',
-        created_at: '2026-03-22T09:05:00Z',
-        updated_at: '2026-03-22T09:06:00Z',
+        created_at: '2026-03-22T14:03:00Z',
+        updated_at: '2026-03-22T14:04:00Z',
       },
     ])
     api.fetchAuditRunReplay.mockImplementation(async (runId: string) => {
-      if (runId === 'run_a') {
+      if (runId === 'run_filter_a') {
         return {
           run: {
-            id: 'run_a',
-            task_id: 'task_a',
-            conversation_id: 'conv_multi',
+            id: 'run_filter_a',
+            task_id: 'task_filter_a',
+            conversation_id: 'conv_filter_turns',
             task_type: 'agent.run',
             status: 'succeeded',
             created_by: 'alice',
             schema_version: 'v1',
-            created_at: '2026-03-22T09:00:00Z',
-            updated_at: '2026-03-22T09:01:00Z',
+            created_at: '2026-03-22T14:00:00Z',
+            updated_at: '2026-03-22T14:01:00Z',
           },
           timeline: [
             {
               seq: 1,
-              phase: 'run',
+              phase: 'request',
               event_type: 'run.started',
               level: 'info',
               step_index: 0,
               parent_seq: 0,
-              display_name: '开始第 1 轮',
+              display_name: '第 1 轮请求',
               payload: { status: 'running' },
-              created_at: '2026-03-22T09:00:00Z',
+              created_at: '2026-03-22T14:00:00Z',
             },
             {
               seq: 2,
@@ -637,56 +772,49 @@ describe('AdminAuditView', () => {
               level: 'info',
               step_index: 1,
               parent_seq: 1,
-              display_name: '读取文件',
+              display_name: '第 1 轮工具',
               payload: { tool_name: 'read_file' },
-              created_at: '2026-03-22T09:00:01Z',
-            },
-            {
-              seq: 3,
-              phase: 'run',
-              event_type: 'run.succeeded',
-              level: 'info',
-              step_index: 1,
-              parent_seq: 2,
-              payload: { status: 'done' },
-              created_at: '2026-03-22T09:00:02Z',
+              created_at: '2026-03-22T14:00:01Z',
             },
           ],
           artifacts: [],
         }
       }
+
       return {
         run: {
-          id: 'run_b',
-          task_id: 'task_b',
-          conversation_id: 'conv_multi',
+          id: 'run_filter_b',
+          task_id: 'task_filter_b',
+          conversation_id: 'conv_filter_turns',
           task_type: 'agent.run',
           status: 'succeeded',
           created_by: 'alice',
           schema_version: 'v1',
-          created_at: '2026-03-22T09:05:00Z',
-          updated_at: '2026-03-22T09:06:00Z',
+          created_at: '2026-03-22T14:03:00Z',
+          updated_at: '2026-03-22T14:04:00Z',
         },
         timeline: [
           {
             seq: 1,
-            phase: 'run',
-            event_type: 'run.started',
+            phase: 'request',
+            event_type: 'request.built',
             level: 'info',
             step_index: 0,
             parent_seq: 0,
-            payload: { status: 'running' },
-            created_at: '2026-03-22T09:05:00Z',
+            display_name: '第 2 轮请求',
+            payload: { status: 'built' },
+            created_at: '2026-03-22T14:03:00Z',
           },
           {
             seq: 2,
-            phase: 'run',
-            event_type: 'run.succeeded',
+            phase: 'tool',
+            event_type: 'tool.finished',
             level: 'info',
             step_index: 1,
             parent_seq: 1,
-            payload: { status: 'done' },
-            created_at: '2026-03-22T09:05:01Z',
+            display_name: '第 2 轮工具',
+            payload: { tool_name: 'read_file' },
+            created_at: '2026-03-22T14:03:01Z',
           },
         ],
         artifacts: [],
@@ -706,46 +834,27 @@ describe('AdminAuditView', () => {
     })
 
     await flushPromises()
-    await wrapper.find('[data-conversation-id="conv_multi"]').trigger('click')
+    await wrapper.find('[data-conversation-id="conv_filter_turns"]').trigger('click')
     await flushPromises()
 
-    expect(wrapper.find('[data-testid="summary-card"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="summary-toggle"]').text()).toContain('展开')
-    expect(wrapper.text()).toContain('alice')
-    expect(wrapper.text()).toContain('轮次数')
-    expect(wrapper.text()).not.toContain('Task ID')
-    expect(wrapper.text()).not.toContain('对话 ID')
-
-    expect(wrapper.find('[data-testid="turn-menu"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="turn-menu-trigger"]').attributes('aria-expanded')).toBe('false')
-    expect(wrapper.find('[data-testid="turn-menu-panel"]').exists()).toBe(false)
-    expect(wrapper.findAll('.admin-audit-timeline-item')).toHaveLength(5)
+    await wrapper.find('[data-filter="tool"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.findAll('.admin-audit-timeline-item')).toHaveLength(2)
+    expect(wrapper.find('.admin-audit-timeline').text()).toContain('第 1 轮工具')
+    expect(wrapper.find('.admin-audit-timeline').text()).toContain('第 2 轮工具')
+    expect(wrapper.find('.admin-audit-timeline').text()).not.toContain('第 1 轮请求')
+    expect(wrapper.find('.admin-audit-timeline').text()).not.toContain('第 2 轮请求')
 
     await wrapper.find('[data-testid="turn-menu-trigger"]').trigger('click')
     await flushPromises()
-    expect(wrapper.find('[data-testid="turn-menu-trigger"]').attributes('aria-expanded')).toBe('true')
-    expect(wrapper.find('[data-testid="turn-menu-panel"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="turn-option-all"]').text()).toContain('全部轮次')
-    expect(wrapper.find('[data-testid="turn-option-0"]').text()).toContain('轮次 1')
-    expect(wrapper.find('[data-testid="turn-option-1"]').text()).toContain('轮次 2')
-
-    await wrapper.find('[data-testid="turn-option-0"]').trigger('click')
+    await wrapper.find('[data-testid="turn-option-1"]').trigger('click')
     await flushPromises()
-    expect(wrapper.find('[data-testid="turn-menu-trigger"]').attributes('aria-expanded')).toBe('false')
-    expect(wrapper.findAll('.admin-audit-timeline-item')).toHaveLength(3)
 
-    await document.body.dispatchEvent(new PointerEvent('pointerdown'))
-    await flushPromises()
-    expect(wrapper.find('[data-testid="turn-menu-panel"]').exists()).toBe(false)
-
-    await wrapper.find('[data-testid="summary-toggle"]').trigger('click')
-    await flushPromises()
-    expect(wrapper.find('[data-testid="summary-toggle"]').text()).toContain('收起')
-    expect(wrapper.text()).toContain('Task ID')
-    expect(wrapper.text()).toContain('task_a')
-    expect(wrapper.text()).toContain('对话 ID')
-    expect(wrapper.text()).toContain('conv_multi')
+    expect(wrapper.findAll('.admin-audit-timeline-item')).toHaveLength(1)
+    expect(wrapper.find('.admin-audit-timeline').text()).toContain('第 2 轮工具')
+    expect(wrapper.find('.admin-audit-timeline').text()).not.toContain('第 2 轮请求')
 
     wrapper.unmount()
   })
+
 })

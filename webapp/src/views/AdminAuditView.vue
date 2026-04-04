@@ -136,11 +136,11 @@ const activeArtifactBody = computed(() => {
 })
 
 const detailHeading = computed(() => {
-  if (activeArtifact.value) {
-    return formatArtifactTitle(activeArtifact.value.kind)
-  }
   if (activeTimelineEntry.value) {
     return displayTimelineTitle(activeTimelineEntry.value)
+  }
+  if (activeArtifact.value) {
+    return formatArtifactTitle(activeArtifact.value.kind)
   }
   return '选择时间线条目'
 })
