@@ -3,6 +3,7 @@ package config
 import (
 	"reflect"
 	"testing"
+	"time"
 
 	coretasks "github.com/EquentR/agent_runtime/core/tasks"
 	builtin "github.com/EquentR/agent_runtime/core/tools/builtin"
@@ -105,6 +106,35 @@ tools:
 	}
 	if options.Bing.BaseURL != "https://api.bing.microsoft.com" {
 		t.Fatalf("options.Bing.BaseURL = %q, want %q", options.Bing.BaseURL, "https://api.bing.microsoft.com")
+	}
+}
+
+func TestConfigUnmarshalSupportsLLMRequestTimeout(t *testing.T) {
+	var cfg Config
+	if err := yaml.Unmarshal([]byte(`
+llmRequestTimeout: 3m
+`), &cfg); err != nil {
+		t.Fatalf("yaml.Unmarshal() error = %v", err)
+	}
+
+	if got := cfg.LLMRequestTimeout; got != 3*time.Minute {
+		t.Fatalf("cfg.LLMRequestTimeout = %v, want %v", got, 3*time.Minute)
+	}
+}
+
+func TestConfigResolvedLLMRequestTimeoutDefaultsToTenMinutes(t *testing.T) {
+	var cfg Config
+
+	if got := cfg.ResolvedLLMRequestTimeout(); got != 10*time.Minute {
+		t.Fatalf("ResolvedLLMRequestTimeout() = %v, want %v", got, 10*time.Minute)
+	}
+}
+
+func TestConfigResolvedLLMRequestTimeoutPreservesConfiguredValue(t *testing.T) {
+	cfg := Config{LLMRequestTimeout: 3 * time.Minute}
+
+	if got := cfg.ResolvedLLMRequestTimeout(); got != 3*time.Minute {
+		t.Fatalf("ResolvedLLMRequestTimeout() = %v, want %v", got, 3*time.Minute)
 	}
 }
 

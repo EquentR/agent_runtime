@@ -45,6 +45,8 @@ tools:
     #   apiKey: ${BING_SEARCH_API_KEY}
     #   baseUrl: https://api.bing.microsoft.com
 
+llmRequestTimeout: 10m
+
 llmProviders:
   # UI 侧会通过 provider_id + model_id 选择具体模型，
   # 其中 provider_id 对应这里的 name，model_id 对应 models[].id。

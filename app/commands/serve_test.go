@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -32,6 +33,93 @@ import (
 type serveRouterEnvelope struct {
 	Code int  `json:"code"`
 	OK   bool `json:"ok"`
+}
+
+func TestBuildLLMClientFactoryUsesConfiguredRequestTimeout(t *testing.T) {
+	factory := buildLLMClientFactory(50 * time.Millisecond)
+
+	t.Run("responses", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/responses" {
+				http.NotFound(w, r)
+				return
+			}
+			time.Sleep(150 * time.Millisecond)
+		}))
+		defer server.Close()
+
+		provider := &coretypes.LLMProvider{BaseProvider: coretypes.BaseProvider{Name: "openai", BaseUrl: server.URL, APIKey: "test-key"}}
+		llmModel := &coretypes.LLMModel{BaseModel: coretypes.BaseModel{ID: "gpt-5.4", Name: "GPT 5.4"}, Type: coretypes.LLMTypeOpenAIResponses}
+		client, err := factory(provider, llmModel)
+		if err != nil {
+			t.Fatalf("factory(responses) error = %v", err)
+		}
+
+		_, err = client.Chat(context.Background(), model.ChatRequest{Model: "gpt-5.4", Messages: []model.Message{{Role: model.RoleUser, Content: "hello"}}})
+		if err == nil {
+			t.Fatal("responses Chat() error = nil, want timeout error")
+		}
+		lower := strings.ToLower(err.Error())
+		if !strings.Contains(lower, "timeout") && !strings.Contains(lower, "deadline") {
+			t.Fatalf("responses Chat() error = %v, want timeout/deadline error", err)
+		}
+	})
+
+	t.Run("completions", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/v1/chat/completions" {
+				http.NotFound(w, r)
+				return
+			}
+			time.Sleep(150 * time.Millisecond)
+		}))
+		defer server.Close()
+
+		provider := &coretypes.LLMProvider{BaseProvider: coretypes.BaseProvider{Name: "openai", BaseUrl: server.URL + "/v1", APIKey: "test-key"}}
+		llmModel := &coretypes.LLMModel{BaseModel: coretypes.BaseModel{ID: "glm-5", Name: "GLM-5"}, Type: coretypes.LLMTypeOpenAICompletions}
+		client, err := factory(provider, llmModel)
+		if err != nil {
+			t.Fatalf("factory(completions) error = %v", err)
+		}
+
+		_, err = client.Chat(context.Background(), model.ChatRequest{Model: "glm-5", Messages: []model.Message{{Role: model.RoleUser, Content: "hello"}}})
+		if err == nil {
+			t.Fatal("completions Chat() error = nil, want timeout error")
+		}
+		lower := strings.ToLower(err.Error())
+		if !strings.Contains(lower, "timeout") && !strings.Contains(lower, "deadline") {
+			t.Fatalf("completions Chat() error = %v, want timeout/deadline error", err)
+		}
+	})
+}
+
+func TestBuildConfiguredLLMClientFactoryUsesResolvedTimeout(t *testing.T) {
+	factory := buildConfiguredLLMClientFactory(&config.Config{LLMRequestTimeout: 50 * time.Millisecond})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			http.NotFound(w, r)
+			return
+		}
+		time.Sleep(150 * time.Millisecond)
+	}))
+	defer server.Close()
+
+	provider := &coretypes.LLMProvider{BaseProvider: coretypes.BaseProvider{Name: "openai", BaseUrl: server.URL + "/v1", APIKey: "test-key"}}
+	llmModel := &coretypes.LLMModel{BaseModel: coretypes.BaseModel{ID: "glm-5", Name: "GLM-5"}, Type: coretypes.LLMTypeOpenAICompletions}
+	client, err := factory(provider, llmModel)
+	if err != nil {
+		t.Fatalf("factory(completions) error = %v", err)
+	}
+
+	_, err = client.Chat(context.Background(), model.ChatRequest{Model: "glm-5", Messages: []model.Message{{Role: model.RoleUser, Content: "hello"}}})
+	if err == nil {
+		t.Fatal("completions Chat() error = nil, want timeout error")
+	}
+	lower := strings.ToLower(err.Error())
+	if !strings.Contains(lower, "timeout") && !strings.Contains(lower, "deadline") {
+		t.Fatalf("completions Chat() error = %v, want timeout/deadline error", err)
+	}
 }
 
 func TestPromptBuildRouterDependenciesExposePromptRuntime(t *testing.T) {

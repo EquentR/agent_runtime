@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
 	openaiclient "github.com/EquentR/agent_runtime/core/providers/client/openai_completions"
 	model "github.com/EquentR/agent_runtime/core/providers/types"
@@ -19,7 +20,7 @@ func TestOpenAICompletionsChat_SameProviderReplayPrefersProviderState(t *testing
 	server := newOpenAICompletionsCaptureServer(t, &requestBody)
 	defer server.Close()
 
-	client := openaiclient.NewOpenAiCompletionsClient(server.URL+"/v1", "test-key")
+	client := openaiclient.NewOpenAiCompletionsClient(server.URL+"/v1", "test-key", time.Minute)
 	_, err := client.Chat(context.Background(), model.ChatRequest{
 		Model: "gpt-4o-mini",
 		Messages: []model.Message{{
@@ -69,7 +70,7 @@ func TestOpenAICompletionsChat_MissingProviderStateFallsBackToNormalizedFields(t
 	server := newOpenAICompletionsCaptureServer(t, &requestBody)
 	defer server.Close()
 
-	client := openaiclient.NewOpenAiCompletionsClient(server.URL+"/v1", "test-key")
+	client := openaiclient.NewOpenAiCompletionsClient(server.URL+"/v1", "test-key", time.Minute)
 	_, err := client.Chat(context.Background(), model.ChatRequest{
 		Model: "gpt-4o-mini",
 		Messages: []model.Message{{
@@ -105,7 +106,7 @@ func TestOpenAICompletionsChat_CrossProviderReplayIgnoresForeignStateAndFallsBac
 	server := newOpenAICompletionsCaptureServer(t, &requestBody)
 	defer server.Close()
 
-	client := openaiclient.NewOpenAiCompletionsClient(server.URL+"/v1", "test-key")
+	client := openaiclient.NewOpenAiCompletionsClient(server.URL+"/v1", "test-key", time.Minute)
 	resp, err := client.Chat(context.Background(), model.ChatRequest{
 		Model: "gpt-4o-mini",
 		Messages: []model.Message{{
@@ -179,7 +180,7 @@ func TestOpenAICompletionsChat_RoundTripsClientProducedProviderState(t *testing.
 	}))
 	defer server.Close()
 
-	client := openaiclient.NewOpenAiCompletionsClient(server.URL+"/v1", "test-key")
+	client := openaiclient.NewOpenAiCompletionsClient(server.URL+"/v1", "test-key", time.Minute)
 	first, err := client.Chat(context.Background(), model.ChatRequest{
 		Model:    "gpt-4o-mini",
 		Messages: []model.Message{{Role: model.RoleUser, Content: "first"}},
