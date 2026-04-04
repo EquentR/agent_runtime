@@ -262,40 +262,62 @@ describe('AdminAuditView', () => {
         {
           seq: 7,
           phase: 'run',
-          event_type: 'step.finished',
+          event_type: 'interaction.requested',
           level: 'info',
           step_index: 1,
           parent_seq: 6,
-          payload: { step: 'tool-call' },
+          display_name: '用户交互请求',
+          payload: { kind: 'question', reason: 'requires user input' },
           created_at: '2026-03-22T10:00:07Z',
         },
         {
           seq: 8,
           phase: 'run',
-          event_type: 'run.failed',
-          level: 'error',
+          event_type: 'run.waiting',
+          level: 'info',
           step_index: 1,
           parent_seq: 7,
-          payload: { error: 'timeout' },
-          created_at: '2026-03-22T10:00:09Z',
+          display_name: '运行等待中',
+          payload: { status: 'waiting' },
+          created_at: '2026-03-22T10:00:08Z',
         },
         {
           seq: 9,
           phase: 'run',
-          event_type: 'messages.persisted',
+          event_type: 'step.finished',
           level: 'info',
-          step_index: 2,
+          step_index: 1,
           parent_seq: 8,
-          payload: { count: 2 },
-          created_at: '2026-03-22T10:00:11Z',
+          payload: { step: 'tool-call' },
+          created_at: '2026-03-22T10:00:09Z',
         },
         {
           seq: 10,
           phase: 'run',
+          event_type: 'run.failed',
+          level: 'error',
+          step_index: 1,
+          parent_seq: 9,
+          payload: { error: 'timeout' },
+          created_at: '2026-03-22T10:00:11Z',
+        },
+        {
+          seq: 11,
+          phase: 'run',
+          event_type: 'messages.persisted',
+          level: 'info',
+          step_index: 2,
+          parent_seq: 10,
+          payload: { count: 2 },
+          created_at: '2026-03-22T10:00:12Z',
+        },
+        {
+          seq: 12,
+          phase: 'run',
           event_type: 'run.succeeded',
           level: 'info',
           step_index: 2,
-          parent_seq: 9,
+          parent_seq: 11,
           payload: { status: 'done' },
           created_at: '2026-03-22T10:00:13Z',
         },
@@ -371,11 +393,13 @@ describe('AdminAuditView', () => {
     expect(wrapper.text()).toContain('步骤开始')
     expect(wrapper.text()).toContain('审批请求')
     expect(wrapper.text()).toContain('审批已处理')
+    expect(wrapper.text()).toContain('用户交互请求')
+    expect(wrapper.text()).toContain('运行等待中')
     expect(wrapper.text()).toContain('步骤完成')
     expect(wrapper.text()).toContain('运行成功')
     expect(wrapper.text()).toContain('消息已持久化')
     expect(wrapper.find('.admin-audit-timeline').exists()).toBe(true)
-    expect(wrapper.findAll('.admin-audit-timeline-item')).toHaveLength(11)
+    expect(wrapper.findAll('.admin-audit-timeline-item')).toHaveLength(13)
     expect(wrapper.text()).not.toContain('暂无回放时间线')
     expect(wrapper.text()).not.toContain('暂无事件')
     expect(wrapper.find('.conversation-compact-dot').exists()).toBe(false)
