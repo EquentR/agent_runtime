@@ -27,6 +27,15 @@ func TestBuildReplayBundleReturnsOrderedTimeline(t *testing.T) {
 	if bundle.Timeline[0].Seq != 1 || bundle.Timeline[1].Seq != 2 || bundle.Timeline[2].Seq != 3 {
 		t.Fatalf("timeline seqs = [%d %d %d], want [1 2 3]", bundle.Timeline[0].Seq, bundle.Timeline[1].Seq, bundle.Timeline[2].Seq)
 	}
+	if bundle.Timeline[0].DisplayName != "运行开始" {
+		t.Fatalf("timeline[0].DisplayName = %q, want 运行开始", bundle.Timeline[0].DisplayName)
+	}
+	if bundle.Timeline[1].DisplayName != "构建 LLM 请求" {
+		t.Fatalf("timeline[1].DisplayName = %q, want 构建 LLM 请求", bundle.Timeline[1].DisplayName)
+	}
+	if bundle.Timeline[2].DisplayName != "工具调用完成" {
+		t.Fatalf("timeline[2].DisplayName = %q, want 工具调用完成", bundle.Timeline[2].DisplayName)
+	}
 	if bundle.Timeline[1].Artifact == nil || bundle.Timeline[1].Artifact.ID != "art_request" {
 		t.Fatalf("timeline[1].artifact = %#v, want art_request summary", bundle.Timeline[1].Artifact)
 	}
