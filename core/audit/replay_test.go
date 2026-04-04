@@ -254,6 +254,94 @@ func TestBuildReplayBundleRejectsUnsupportedRunState(t *testing.T) {
 	}
 }
 
+func TestBuildReplayBundleSetsDisplayNames(t *testing.T) {
+	store := newReplayStore(t)
+	now := time.Date(2026, time.March, 21, 17, 0, 0, 0, time.UTC)
+
+	run := &Run{
+		ID:            "run_display_names",
+		TaskID:        "task_display_names",
+		TaskType:      "agent.run",
+		Status:        StatusSucceeded,
+		Replayable:    true,
+		SchemaVersion: SchemaVersionV1,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	if err := store.db.Create(run).Error; err != nil {
+		t.Fatalf("create run error = %v", err)
+	}
+
+	events := []*Event{
+		{
+			RunID:       run.ID,
+			TaskID:      run.TaskID,
+			Seq:         1,
+			Phase:       PhaseInteraction,
+			EventType:   "interaction.requested",
+			Level:       "info",
+			PayloadJSON: json.RawMessage(`{"id":"interaction_1"}`),
+			CreatedAt:   now.Add(time.Second),
+		},
+		{
+			RunID:       run.ID,
+			TaskID:      run.TaskID,
+			Seq:         2,
+			Phase:       PhaseRun,
+			EventType:   "run.waiting",
+			Level:       "info",
+			PayloadJSON: json.RawMessage(`{"reason":"approval"}`),
+			CreatedAt:   now.Add(2 * time.Second),
+		},
+		{
+			RunID:       run.ID,
+			TaskID:      run.TaskID,
+			Seq:         3,
+			Phase:       PhaseRun,
+			EventType:   "  custom.event  ",
+			Level:       "info",
+			PayloadJSON: json.RawMessage(`{"state":"custom"}`),
+			CreatedAt:   now.Add(3 * time.Second),
+		},
+		{
+			RunID:       run.ID,
+			TaskID:      run.TaskID,
+			Seq:         4,
+			Phase:       PhaseRun,
+			EventType:   "   ",
+			Level:       "info",
+			PayloadJSON: json.RawMessage(`{"state":"empty"}`),
+			CreatedAt:   now.Add(4 * time.Second),
+		},
+	}
+	for _, event := range events {
+		if err := store.db.Create(event).Error; err != nil {
+			t.Fatalf("create event seq %d error = %v", event.Seq, err)
+		}
+	}
+
+	bundle, err := BuildReplayBundle(context.Background(), store, run.ID)
+	if err != nil {
+		t.Fatalf("BuildReplayBundle() error = %v", err)
+	}
+	if len(bundle.Timeline) != 4 {
+		t.Fatalf("len(bundle.Timeline) = %d, want 4", len(bundle.Timeline))
+	}
+
+	if got := bundle.Timeline[0].DisplayName; got != "用户交互请求" {
+		t.Fatalf("timeline[0].display_name = %q, want 用户交互请求", got)
+	}
+	if got := bundle.Timeline[1].DisplayName; got != "运行等待中" {
+		t.Fatalf("timeline[1].display_name = %q, want 运行等待中", got)
+	}
+	if got := bundle.Timeline[2].DisplayName; got != "custom.event" {
+		t.Fatalf("timeline[2].display_name = %q, want custom.event", got)
+	}
+	if got := bundle.Timeline[3].DisplayName; got != "审计事件" {
+		t.Fatalf("timeline[3].display_name = %q, want 审计事件", got)
+	}
+}
+
 func seededReplayStore(t *testing.T) *Store {
 	t.Helper()
 
