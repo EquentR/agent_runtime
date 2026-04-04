@@ -440,8 +440,8 @@ onBeforeUnmount(() => {
       <p v-else-if="detailLoading" class="messages-empty">正在加载详情...</p>
       <div v-else-if="selectedConversationSummary" class="admin-audit-content">
         <section class="admin-audit-summary-grid">
-          <article class="admin-audit-summary-card" data-testid="summary-card">
-            <div class="messages-header">
+          <article class="admin-audit-summary-card admin-audit-summary-compact" data-testid="summary-card">
+            <div class="messages-header admin-audit-panel-header">
               <div><h2>审计概览</h2></div>
               <button type="button" class="ghost-button" data-testid="summary-toggle" @click="toggleSummaryExpanded">
                 {{ summaryExpanded ? '收起详情' : '展开详情' }}
@@ -458,52 +458,57 @@ onBeforeUnmount(() => {
 
         <section class="admin-audit-detail-grid">
           <article class="admin-audit-card admin-audit-timeline-panel">
-            <div class="messages-header">
+            <div class="messages-header admin-audit-panel-header">
               <div><h2>操作时间线</h2></div>
-              <div v-if="auditRuns.length > 1" ref="turnMenuRef" class="model-menu admin-audit-turn-menu" data-testid="turn-menu">
-                <button
-                  class="model-menu-trigger"
-                  type="button"
-                  aria-haspopup="menu"
-                  :aria-expanded="turnMenuOpen ? 'true' : 'false'"
-                  data-testid="turn-menu-trigger"
-                  @click="toggleTurnMenu"
-                >
-                  <span class="model-menu-trigger-label">{{ selectedTurnLabel }}</span>
-                  <span class="model-menu-trigger-caret" :class="{ open: turnMenuOpen }" aria-hidden="true"></span>
+              <div class="admin-audit-panel-controls">
+                <button type="button" class="ghost-button admin-audit-timeline-copy" aria-label="复制当前详情">
+                  复制详情
                 </button>
-                <transition name="model-menu-fade">
-                  <div v-if="turnMenuOpen" class="model-menu-panel" role="menu" data-testid="turn-menu-panel">
-                    <div class="model-menu-group">
-                      <button
-                        class="model-menu-option"
-                        :class="{ active: selectedTurnIndex == null }"
-                        type="button"
-                        role="menuitemradio"
-                        :aria-checked="selectedTurnIndex == null ? 'true' : 'false'"
-                        data-testid="turn-option-all"
-                        @click="selectTurn(null)"
-                      >
-                        <span class="model-menu-option-check" aria-hidden="true"></span>
-                        <span class="model-menu-option-label">全部轮次</span>
-                      </button>
-                      <button
-                        v-for="(run, index) in auditRuns"
-                        :key="run.id"
-                        class="model-menu-option"
-                        :class="{ active: selectedTurnIndex === index }"
-                        type="button"
-                        role="menuitemradio"
-                        :aria-checked="selectedTurnIndex === index ? 'true' : 'false'"
-                        :data-testid="`turn-option-${index}`"
-                        @click="selectTurn(index)"
-                      >
-                        <span class="model-menu-option-check" aria-hidden="true"></span>
-                        <span class="model-menu-option-label">轮次 {{ index + 1 }}</span>
-                      </button>
+                <div v-if="auditRuns.length > 1" ref="turnMenuRef" class="model-menu admin-audit-turn-menu" data-testid="turn-menu">
+                  <button
+                    class="model-menu-trigger"
+                    type="button"
+                    aria-haspopup="menu"
+                    :aria-expanded="turnMenuOpen ? 'true' : 'false'"
+                    data-testid="turn-menu-trigger"
+                    @click="toggleTurnMenu"
+                  >
+                    <span class="model-menu-trigger-label">{{ selectedTurnLabel }}</span>
+                    <span class="model-menu-trigger-caret" :class="{ open: turnMenuOpen }" aria-hidden="true"></span>
+                  </button>
+                  <transition name="model-menu-fade">
+                    <div v-if="turnMenuOpen" class="model-menu-panel" role="menu" data-testid="turn-menu-panel">
+                      <div class="model-menu-group">
+                        <button
+                          class="model-menu-option"
+                          :class="{ active: selectedTurnIndex == null }"
+                          type="button"
+                          role="menuitemradio"
+                          :aria-checked="selectedTurnIndex == null ? 'true' : 'false'"
+                          data-testid="turn-option-all"
+                          @click="selectTurn(null)"
+                        >
+                          <span class="model-menu-option-check" aria-hidden="true"></span>
+                          <span class="model-menu-option-label">全部轮次</span>
+                        </button>
+                        <button
+                          v-for="(run, index) in auditRuns"
+                          :key="run.id"
+                          class="model-menu-option"
+                          :class="{ active: selectedTurnIndex === index }"
+                          type="button"
+                          role="menuitemradio"
+                          :aria-checked="selectedTurnIndex === index ? 'true' : 'false'"
+                          :data-testid="`turn-option-${index}`"
+                          @click="selectTurn(index)"
+                        >
+                          <span class="model-menu-option-check" aria-hidden="true"></span>
+                          <span class="model-menu-option-label">轮次 {{ index + 1 }}</span>
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                </transition>
+                  </transition>
+                </div>
               </div>
             </div>
 
@@ -539,7 +544,7 @@ onBeforeUnmount(() => {
           </article>
 
           <article class="admin-audit-card admin-audit-artifact-panel">
-            <div class="messages-header">
+            <div class="messages-header admin-audit-panel-header">
               <div><h2>{{ detailHeading }}</h2></div>
             </div>
 
