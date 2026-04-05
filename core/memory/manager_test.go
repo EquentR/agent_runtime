@@ -199,6 +199,86 @@ func TestContextMessagesCompressionUsesRollingPreviousSummary(t *testing.T) {
 	}
 }
 
+func TestRuntimeContextReturnsSummaryAndReplayableBodySeparately(t *testing.T) {
+	mgr, err := NewManager(Options{
+		MaxContextTokens: 100,
+		Counter:          fakeTokenCounter{},
+		Compressor: func(_ context.Context, request CompressionRequest) (string, error) {
+			return "compressed memory", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+
+	mgr.AddMessages([]model.Message{
+		{Role: model.RoleUser, Content: strings.Repeat("a", 60)},
+		{Role: model.RoleAssistant, Content: strings.Repeat("b", 60)},
+	})
+
+	got, err := mgr.RuntimeContext(context.Background())
+	if err != nil {
+		t.Fatalf("RuntimeContext() error = %v", err)
+	}
+	if got.Summary == nil {
+		t.Fatal("Summary = nil, want rendered compressed summary")
+	}
+	if got.Summary.Role != model.RoleSystem || !strings.Contains(got.Summary.Content, "compressed memory") {
+		t.Fatalf("Summary = %#v, want rendered compressed summary", got.Summary)
+	}
+	if len(got.Body) != 0 {
+		t.Fatalf("len(Body) = %d, want 0 after compression", len(got.Body))
+	}
+}
+
+func TestContextMessagesWrapsRuntimeContextIntoLegacySliceShape(t *testing.T) {
+	mgr, err := NewManager(Options{
+		MaxContextTokens: 100,
+		Counter:          fakeTokenCounter{},
+		Compressor: func(_ context.Context, request CompressionRequest) (string, error) {
+			return "compressed memory", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+
+	mgr.AddMessages([]model.Message{
+		{Role: model.RoleUser, Content: strings.Repeat("a", 60)},
+		{Role: model.RoleAssistant, Content: strings.Repeat("b", 60)},
+	})
+	if _, err := mgr.RuntimeContext(context.Background()); err != nil {
+		t.Fatalf("RuntimeContext() error = %v", err)
+	}
+
+	mgr.AddMessage(model.Message{Role: model.RoleUser, Content: "follow up"})
+
+	runtimeContext, err := mgr.RuntimeContext(context.Background())
+	if err != nil {
+		t.Fatalf("RuntimeContext() error = %v", err)
+	}
+	got, err := mgr.ContextMessages(context.Background())
+	if err != nil {
+		t.Fatalf("ContextMessages() error = %v", err)
+	}
+
+	if runtimeContext.Summary == nil {
+		t.Fatal("Summary = nil, want rendered summary")
+	}
+	if len(runtimeContext.Body) != 1 {
+		t.Fatalf("len(Body) = %d, want 1", len(runtimeContext.Body))
+	}
+	if len(got) != 2 {
+		t.Fatalf("len(ContextMessages()) = %d, want 2", len(got))
+	}
+	if got[0].Content != runtimeContext.Summary.Content {
+		t.Fatalf("ContextMessages()[0].Content = %q, want %q", got[0].Content, runtimeContext.Summary.Content)
+	}
+	if got[1].Role != runtimeContext.Body[0].Role || got[1].Content != runtimeContext.Body[0].Content {
+		t.Fatalf("ContextMessages()[1] = %#v, want %#v", got[1], runtimeContext.Body[0])
+	}
+}
+
 func TestContextMessagesKeepsOriginalStateWhenCompressorFails(t *testing.T) {
 	original := []model.Message{
 		{Role: model.RoleUser, Content: strings.Repeat("a", 60)},

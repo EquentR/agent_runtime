@@ -351,6 +351,66 @@ func TestBuildReplayBundleSetsDisplayNames(t *testing.T) {
 	}
 }
 
+func TestBuildReplayBundleRetainsRuntimePromptEnvelopeArtifacts(t *testing.T) {
+	store := newReplayStore(t)
+	now := time.Date(2026, time.April, 4, 10, 0, 0, 0, time.UTC)
+
+	run := &Run{
+		ID:            "run_runtime_prompt",
+		TaskID:        "task_runtime_prompt",
+		TaskType:      "agent.run",
+		Status:        StatusSucceeded,
+		Replayable:    true,
+		SchemaVersion: SchemaVersionV1,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	if err := store.db.Create(run).Error; err != nil {
+		t.Fatalf("create run error = %v", err)
+	}
+
+	artifact := &Artifact{
+		ID:             "art_runtime_prompt",
+		RunID:          run.ID,
+		Kind:           ArtifactKindRuntimePromptEnvelope,
+		MimeType:       "application/json",
+		Encoding:       "utf-8",
+		SizeBytes:      int64(len(`{"source_counts":{"forced_block":3}}`)),
+		RedactionState: "raw",
+		BodyJSON:       json.RawMessage(`{"source_counts":{"forced_block":3}}`),
+		CreatedAt:      now.Add(time.Second),
+	}
+	if err := store.db.Create(artifact).Error; err != nil {
+		t.Fatalf("create artifact error = %v", err)
+	}
+
+	event := &Event{
+		RunID:         run.ID,
+		TaskID:        run.TaskID,
+		Seq:           1,
+		Phase:         PhasePrompt,
+		EventType:     "prompt.resolved",
+		Level:         "info",
+		RefArtifactID: artifact.ID,
+		PayloadJSON:   json.RawMessage(`{"segment_count":3}`),
+		CreatedAt:     now.Add(2 * time.Second),
+	}
+	if err := store.db.Create(event).Error; err != nil {
+		t.Fatalf("create event error = %v", err)
+	}
+
+	bundle, err := BuildReplayBundle(context.Background(), store, run.ID)
+	if err != nil {
+		t.Fatalf("BuildReplayBundle() error = %v", err)
+	}
+	if len(bundle.Artifacts) != 1 {
+		t.Fatalf("len(bundle.Artifacts) = %d, want 1", len(bundle.Artifacts))
+	}
+	if bundle.Artifacts[0].Kind != ArtifactKindRuntimePromptEnvelope {
+		t.Fatalf("artifact kind = %q, want runtime_prompt_envelope", bundle.Artifacts[0].Kind)
+	}
+}
+
 func seededReplayStore(t *testing.T) *Store {
 	t.Helper()
 

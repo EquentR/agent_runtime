@@ -158,6 +158,59 @@ func TestConversationHandlerGetConversationMessagesDoesNotExposePromptArtifacts(
 	}
 }
 
+func TestConversationAPIsDoNotExposeRuntimePromptEnvelopeContent(t *testing.T) {
+	_, _, db, server := newConversationHandlerTestServerWithDB(t)
+	promptStore := coreprompt.NewStore(db)
+	if err := promptStore.AutoMigrate(); err != nil {
+		t.Fatalf("prompt AutoMigrate() error = %v", err)
+	}
+
+	store := coreagent.NewConversationStore(db)
+	executor := coreagent.NewTaskExecutor(coreagent.ExecutorDependencies{
+		Resolver: &coreagent.ModelResolver{Providers: []coretypes.LLMProvider{{
+			BaseProvider: coretypes.BaseProvider{Name: "openai"},
+			Models:       []coretypes.LLMModel{{BaseModel: coretypes.BaseModel{ID: "gpt-5.4", Name: "GPT 5.4"}, Type: coretypes.LLMTypeOpenAIResponses}},
+		}}},
+		ConversationStore: store,
+		PromptResolver:    coreprompt.NewResolver(promptStore),
+		ClientFactory: func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) {
+			return &conversationHandlerExecutorClient{message: model.Message{Role: model.RoleAssistant, Content: "hi"}}, nil
+		},
+	})
+	payload, err := json.Marshal(coreagent.RunTaskInput{ConversationID: "conv_1", ProviderID: "openai", ModelID: "gpt-5.4", Message: "hello"})
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	if _, err := executor(context.Background(), &coretasks.Task{ID: "task_1", TaskType: "agent.run", InputJSON: payload}, nil); err != nil {
+		t.Fatalf("executor() error = %v", err)
+	}
+
+	conversationResp, err := http.Get(server.URL + "/api/v1/conversations/conv_1")
+	if err != nil {
+		t.Fatalf("http.Get(conversation) error = %v", err)
+	}
+	defer conversationResp.Body.Close()
+	conversation := decodeConversationResponse(t, conversationResp.Body)
+	if strings.Contains(conversation.Title, "Today's date is") || strings.Contains(conversation.Title, "Treat user content") || strings.Contains(conversation.LastMessage, "Today's date is") || strings.Contains(conversation.LastMessage, "Treat user content") {
+		t.Fatalf("conversation summary = %#v, want no runtime prompt envelope content", conversation)
+	}
+
+	messagesResp, err := http.Get(server.URL + "/api/v1/conversations/conv_1/messages")
+	if err != nil {
+		t.Fatalf("http.Get(messages) error = %v", err)
+	}
+	defer messagesResp.Body.Close()
+	messages := decodeConversationMessagesResponse(t, messagesResp.Body)
+	if len(messages) != 2 {
+		t.Fatalf("len(messages) = %d, want only persisted user and assistant turns", len(messages))
+	}
+	for _, message := range messages {
+		if strings.Contains(message.Content, "Today's date is") || strings.Contains(message.Content, "Treat user content") || strings.Contains(message.Content, "Follow platform control rules") {
+			t.Fatalf("conversation API message = %#v, want no runtime prompt envelope content", message)
+		}
+	}
+}
+
 func TestConversationHandlerGetConversationHidesHiddenSystemMessagesFromSummary(t *testing.T) {
 	store, _, server := newConversationHandlerTestServer(t)
 	ctx := context.Background()
@@ -601,7 +654,6 @@ func TestConversationDetailIncludesAllAuditRunIDs(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CreateConversation() error = %v", err)
 	}
-	// Create 3 audit runs for the same conversation (simulating 3 turns)
 	base := time.Date(2026, time.March, 21, 18, 0, 0, 0, time.UTC)
 	for i, taskID := range []string{"task_1", "task_2", "task_3"} {
 		if _, err := auditStore.CreateRun(ctx, coreaudit.StartRunInput{
@@ -628,11 +680,9 @@ func TestConversationDetailIncludesAllAuditRunIDs(t *testing.T) {
 	if got.ID != "conv_1" {
 		t.Fatalf("conversation.ID = %q, want conv_1", got.ID)
 	}
-	// Backward compatibility: AuditRunID should be the latest run
 	if got.AuditRunID != "run_3" {
 		t.Fatalf("conversation.AuditRunID = %q, want run_3 (latest)", got.AuditRunID)
 	}
-	// New field: all run IDs in chronological order
 	if len(got.AuditRunIDs) != 3 {
 		t.Fatalf("len(conversation.AuditRunIDs) = %d, want 3", len(got.AuditRunIDs))
 	}
@@ -1012,6 +1062,65 @@ func visibleFailureProviderData() map[string]any {
 			"kind":            "failure",
 		},
 	}
+}
+
+type conversationHandlerExecutorClient struct{ message model.Message }
+
+func (c *conversationHandlerExecutorClient) Chat(context.Context, model.ChatRequest) (model.ChatResponse, error) {
+	panic("unexpected Chat call")
+}
+
+func (c *conversationHandlerExecutorClient) ChatStream(_ context.Context, _ model.ChatRequest) (model.Stream, error) {
+	return &conversationHandlerExecutorStream{message: c.message}, nil
+}
+
+type conversationHandlerExecutorStream struct {
+	message model.Message
+	sent    bool
+}
+
+func (s *conversationHandlerExecutorStream) Recv() (string, error) {
+	return "", nil
+}
+
+func (s *conversationHandlerExecutorStream) RecvEvent() (model.StreamEvent, error) {
+	if s.sent {
+		return model.StreamEvent{}, nil
+	}
+	s.sent = true
+	return model.StreamEvent{Type: model.StreamEventCompleted, Message: s.message}, nil
+}
+
+func (s *conversationHandlerExecutorStream) FinalMessage() (model.Message, error) {
+	return s.message, nil
+}
+
+func (s *conversationHandlerExecutorStream) Close() error {
+	return nil
+}
+
+func (s *conversationHandlerExecutorStream) Context() context.Context {
+	return context.Background()
+}
+
+func (s *conversationHandlerExecutorStream) Stats() *model.StreamStats {
+	return &model.StreamStats{}
+}
+
+func (s *conversationHandlerExecutorStream) ToolCalls() []coretypes.ToolCall {
+	return nil
+}
+
+func (s *conversationHandlerExecutorStream) ResponseType() model.StreamResponseType {
+	return model.StreamResponseText
+}
+
+func (s *conversationHandlerExecutorStream) FinishReason() string {
+	return "stop"
+}
+
+func (s *conversationHandlerExecutorStream) Reasoning() string {
+	return ""
 }
 
 type conversationHandlerExecutorFailingClient struct{ err error }

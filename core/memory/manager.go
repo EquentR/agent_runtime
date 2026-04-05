@@ -160,20 +160,39 @@ func (m *Manager) ClearShortTerm() {
 	m.shortTerm = nil
 }
 
-func (m *Manager) ContextMessages(ctx context.Context) ([]model.Message, error) {
+type RuntimeContext struct {
+	Summary *model.Message
+	Body    []model.Message
+}
+
+func (m *Manager) RuntimeContext(ctx context.Context) (RuntimeContext, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if m.requiresCompressionLocked() {
 		if err := m.compressLocked(ctx); err != nil {
-			return nil, err
+			return RuntimeContext{}, err
 		}
 	}
 	if err := m.validateContextBudgetLocked(); err != nil {
+		return RuntimeContext{}, err
+	}
+
+	return m.runtimeContextLocked(), nil
+}
+
+func (m *Manager) ContextMessages(ctx context.Context) ([]model.Message, error) {
+	state, err := m.RuntimeContext(ctx)
+	if err != nil {
 		return nil, err
 	}
 
-	return m.contextMessagesLocked(), nil
+	out := make([]model.Message, 0, len(state.Body)+1)
+	if state.Summary != nil {
+		out = append(out, cloneMessage(*state.Summary))
+	}
+	out = append(out, cloneMessages(state.Body)...)
+	return out, nil
 }
 
 func (m *Manager) requiresCompressionLocked() bool {
@@ -267,15 +286,25 @@ func validateShortTermBudget(counter TokenCounter, messages []model.Message, bud
 	return nil
 }
 
-func (m *Manager) contextMessagesLocked() []model.Message {
-	out := make([]model.Message, 0, len(m.shortTerm)+1)
+func (m *Manager) runtimeContextLocked() RuntimeContext {
+	state := RuntimeContext{Body: cloneMessages(m.shortTerm)}
 	if m.summary != "" {
-		out = append(out, model.Message{
+		summary := model.Message{
 			Role:    model.RoleSystem,
 			Content: renderSummaryWithinBudget(m.summaryTemplate, m.summary, m.summaryLimitTokens, m.counter),
-		})
+		}
+		state.Summary = &summary
 	}
-	out = append(out, cloneMessages(m.shortTerm)...)
+	return state
+}
+
+func (m *Manager) contextMessagesLocked() []model.Message {
+	state := m.runtimeContextLocked()
+	out := make([]model.Message, 0, len(state.Body)+1)
+	if state.Summary != nil {
+		out = append(out, cloneMessage(*state.Summary))
+	}
+	out = append(out, cloneMessages(state.Body)...)
 	return out
 }
 

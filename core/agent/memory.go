@@ -3,93 +3,66 @@ package agent
 import (
 	"context"
 	"encoding/json"
-	"strings"
+	"time"
 
+	"github.com/EquentR/agent_runtime/core/forcedprompt"
+	"github.com/EquentR/agent_runtime/core/memory"
 	model "github.com/EquentR/agent_runtime/core/providers/types"
+	"github.com/EquentR/agent_runtime/core/runtimeprompt"
 	coretypes "github.com/EquentR/agent_runtime/core/types"
 )
 
-func (r *Runner) prepareConversationMessages(ctx context.Context, input []model.Message) ([]model.Message, error) {
-	return r.prepareConversationMessagesWithPersistedCount(ctx, input, 0)
+type preparedConversationContext struct {
+	Memory           memory.RuntimeContext
+	ConversationBody []model.Message
 }
 
-func (r *Runner) prepareConversationMessagesWithPersistedCount(ctx context.Context, input []model.Message, persistedCount int) ([]model.Message, error) {
+func (r *Runner) prepareConversationContextWithPersistedCount(ctx context.Context, input []model.Message, persistedCount int) (preparedConversationContext, error) {
 	conversation := cloneMessages(input)
+	prepared := preparedConversationContext{ConversationBody: conversation}
 	if r.options.Memory == nil {
-		return conversation, nil
+		prepared.Memory = memory.RuntimeContext{Body: cloneMessages(conversation)}
+		return prepared, nil
 	}
 
-	if persistedCount <= 0 {
-		newMessages := unpersistedConversationTail(conversation, persistedCount)
-		if len(newMessages) > 0 {
-			r.options.Memory.AddMessages(newMessages)
-		}
+	newMessages := unpersistedConversationTail(conversation, persistedCount)
+	if len(newMessages) > 0 {
+		r.options.Memory.AddMessages(newMessages)
 	}
-	contextMessages, err := r.options.Memory.ContextMessages(ctx)
+	memoryContext, err := r.options.Memory.RuntimeContext(ctx)
 	if err != nil {
-		return nil, err
+		return preparedConversationContext{}, err
 	}
-	return contextMessages, nil
+	prepared.Memory = memoryContext
+	return prepared, nil
 }
 
-func (r *Runner) buildRequestMessages(conversation []model.Message, afterToolTurn bool) []model.Message {
-	base := cloneMessages(conversation)
-	if r.options.ResolvedPrompt != nil {
-		request := make([]model.Message, 0, len(base)+len(r.options.ResolvedPrompt.Session)+len(r.options.ResolvedPrompt.StepPreModel)+len(r.options.ResolvedPrompt.ToolResult))
-		request = appendPromptMessages(request, r.options.ResolvedPrompt.Session)
-		request = appendPromptMessages(request, r.options.ResolvedPrompt.StepPreModel)
-		if afterToolTurn {
-			base = injectToolResultPromptMessages(base, r.options.ResolvedPrompt.ToolResult)
-		}
-		request = append(request, base...)
-		return request
+func (r *Runner) buildRequestMessages(runtimeContext memory.RuntimeContext, afterToolTurn bool) (runtimeprompt.BuildResult, []model.Message, error) {
+	builder := r.options.RuntimePromptBuilder
+	if builder == nil {
+		builder = runtimeprompt.NewBuilder(forcedprompt.NewProvider())
 	}
-	return prependSystemPrompt(r.options.SystemPrompt, base)
-}
-
-func prependSystemPrompt(systemPrompt string, messages []model.Message) []model.Message {
-	conversation := cloneMessages(messages)
-	if systemPrompt == "" {
-		return conversation
+	now := time.Now
+	if r.options.Now != nil {
+		now = r.options.Now
 	}
-	conversation = append([]model.Message{{
-		Role:    model.RoleSystem,
-		Content: systemPrompt,
-	}}, conversation...)
-	return conversation
-}
-
-func appendPromptMessages(dst []model.Message, prompts []model.Message) []model.Message {
-	for _, prompt := range prompts {
-		if strings.TrimSpace(prompt.Content) == "" {
-			continue
-		}
-		dst = append(dst, cloneMessage(prompt))
+	memorySummary := ""
+	if runtimeContext.Summary != nil {
+		memorySummary = runtimeContext.Summary.Content
 	}
-	return dst
-}
-
-func injectToolResultPromptMessages(conversation []model.Message, prompts []model.Message) []model.Message {
-	if len(conversation) == 0 {
-		return appendPromptMessages(conversation, prompts)
+	buildResult, err := builder.Build(runtimeprompt.BuildInput{
+		Time:               now(),
+		ConversationBody:   cloneMessages(runtimeContext.Body),
+		MemorySummary:      memorySummary,
+		ResolvedPrompt:     r.options.ResolvedPrompt,
+		AfterToolTurn:      afterToolTurn,
+		LegacySystemPrompt: r.options.SystemPrompt,
+	})
+	if err != nil {
+		return runtimeprompt.BuildResult{}, nil, err
 	}
-
-	firstTrailingTool := len(conversation)
-	for firstTrailingTool > 0 && conversation[firstTrailingTool-1].Role == model.RoleTool {
-		firstTrailingTool--
-	}
-	if firstTrailingTool == len(conversation) {
-		return appendPromptMessages(conversation, prompts)
-	}
-	if firstTrailingTool == 0 || conversation[firstTrailingTool-1].Role != model.RoleAssistant {
-		return appendPromptMessages(conversation, prompts)
-	}
-
-	result := make([]model.Message, 0, len(conversation)+len(prompts))
-	result = append(result, conversation[:firstTrailingTool]...)
-	result = appendPromptMessages(result, prompts)
-	result = append(result, conversation[firstTrailingTool:]...)
-	return result
+	messages := runtimeprompt.NewRenderer().Render(buildResult)
+	return buildResult, messages, nil
 }
 
 func unpersistedConversationTail(messages []model.Message, persistedCount int) []model.Message {

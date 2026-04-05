@@ -211,6 +211,7 @@ function formatArtifactTitle(kind?: string) {
     case 'request_messages':
       return '对话历史'
     case 'resolved_prompt':
+    case 'runtime_prompt_envelope':
       return '系统提示'
     case 'model_request':
       return '模型请求'

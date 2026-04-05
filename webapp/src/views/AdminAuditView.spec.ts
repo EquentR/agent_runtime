@@ -692,6 +692,118 @@ describe('AdminAuditView', () => {
     expect(wrapper.text()).toContain('ok')
   })
 
+
+  it('shows runtime prompt envelope artifacts as 系统提示', async () => {
+    api.fetchConversations.mockResolvedValue([
+      {
+        id: 'conv_runtime_prompt_artifact',
+        title: 'Runtime prompt artifact chat',
+        last_message: 'artifact',
+        message_count: 1,
+        provider_id: 'openai',
+        model_id: 'gpt-5.4',
+        created_by: 'alice',
+        created_at: '2026-03-22T15:00:00Z',
+        updated_at: '2026-03-22T15:01:00Z',
+        audit_run_id: 'run_runtime_prompt_artifact',
+      },
+    ])
+    api.fetchConversation.mockResolvedValue({
+      id: 'conv_runtime_prompt_artifact',
+      title: 'Runtime prompt artifact chat',
+      last_message: 'artifact',
+      message_count: 1,
+      provider_id: 'openai',
+      model_id: 'gpt-5.4',
+      created_by: 'alice',
+      created_at: '2026-03-22T15:00:00Z',
+      updated_at: '2026-03-22T15:01:00Z',
+      audit_run_id: 'run_runtime_prompt_artifact',
+    })
+    api.fetchAuditConversationRuns.mockResolvedValue([
+      {
+        id: 'run_runtime_prompt_artifact',
+        task_id: 'task_runtime_prompt_artifact',
+        conversation_id: 'conv_runtime_prompt_artifact',
+        task_type: 'agent.run',
+        status: 'succeeded',
+        created_by: 'alice',
+        schema_version: 'v1',
+        created_at: '2026-03-22T15:00:00Z',
+        updated_at: '2026-03-22T15:01:00Z',
+      },
+    ])
+    api.fetchAuditRunReplay.mockResolvedValue({
+      run: {
+        id: 'run_runtime_prompt_artifact',
+        task_id: 'task_runtime_prompt_artifact',
+        conversation_id: 'conv_runtime_prompt_artifact',
+        task_type: 'agent.run',
+        provider_id: 'openai',
+        model_id: 'gpt-5.4',
+        runner_id: 'runner_1',
+        status: 'succeeded',
+        created_by: 'alice',
+        replayable: true,
+        schema_version: 'v1',
+        created_at: '2026-03-22T15:00:00Z',
+        updated_at: '2026-03-22T15:01:00Z',
+      },
+      timeline: [
+        {
+          seq: 1,
+          phase: 'prompt',
+          event_type: 'prompt.resolved',
+          level: 'info',
+          step_index: 0,
+          parent_seq: 0,
+          display_name: '提示词解析',
+          payload: { segment_count: 4 },
+          created_at: '2026-03-22T15:00:00Z',
+          artifact: {
+            id: 'art_runtime_prompt_envelope',
+            kind: 'runtime_prompt_envelope',
+            mime_type: 'application/json',
+            encoding: 'utf-8',
+            size_bytes: 128,
+            redaction_state: 'raw',
+            created_at: '2026-03-22T15:00:00Z',
+          },
+        },
+      ],
+      artifacts: [
+        {
+          id: 'art_runtime_prompt_envelope',
+          kind: 'runtime_prompt_envelope',
+          mime_type: 'application/json',
+          encoding: 'utf-8',
+          size_bytes: 128,
+          redaction_state: 'raw',
+          created_at: '2026-03-22T15:00:00Z',
+          body: {
+            source_counts: { forced_block: 3, resolved_prompt: 1 },
+          },
+        },
+      ],
+    })
+
+    const wrapper = mount(AdminAuditView, {
+      global: {
+        stubs: {
+          RouterLink: {
+            props: ['to'],
+            template: '<a :href="to" v-bind="$attrs"><slot /></a>',
+          },
+        },
+      },
+    })
+
+    await flushPromises()
+    await wrapper.find('[data-conversation-id="conv_runtime_prompt_artifact"]').trigger('click')
+    await flushPromises()
+
+  })
+
   it('preserves active filters when selecting a turn', async () => {
     api.fetchConversations.mockResolvedValue([
       {

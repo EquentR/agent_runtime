@@ -67,13 +67,14 @@ var ErrReplayUnsupportedSchemaVersion = errors.New("audit run has unsupported sc
 var ErrReplayRunNotFinished = errors.New("audit run is not finished")
 
 var replayRetainedArtifactKinds = map[ArtifactKind]struct{}{
-	ArtifactKindRequestMessages: {},
-	ArtifactKindErrorSnapshot:   {},
-	ArtifactKindResolvedPrompt:  {},
-	ArtifactKindModelRequest:    {},
-	ArtifactKindModelResponse:   {},
-	ArtifactKindToolArguments:   {},
-	ArtifactKindToolOutput:      {},
+	ArtifactKindRequestMessages:       {},
+	ArtifactKindErrorSnapshot:         {},
+	ArtifactKindResolvedPrompt:        {},
+	ArtifactKindRuntimePromptEnvelope: {},
+	ArtifactKindModelRequest:          {},
+	ArtifactKindModelResponse:         {},
+	ArtifactKindToolArguments:         {},
+	ArtifactKindToolOutput:            {},
 }
 
 var replayEventDisplayNames = map[string]string{

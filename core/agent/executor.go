@@ -9,10 +9,12 @@ import (
 
 	"github.com/EquentR/agent_runtime/core/approvals"
 	coreaudit "github.com/EquentR/agent_runtime/core/audit"
+	"github.com/EquentR/agent_runtime/core/forcedprompt"
 	"github.com/EquentR/agent_runtime/core/interactions"
 	"github.com/EquentR/agent_runtime/core/memory"
 	coreprompt "github.com/EquentR/agent_runtime/core/prompt"
 	model "github.com/EquentR/agent_runtime/core/providers/types"
+	"github.com/EquentR/agent_runtime/core/runtimeprompt"
 	coreskills "github.com/EquentR/agent_runtime/core/skills"
 	coretasks "github.com/EquentR/agent_runtime/core/tasks"
 	"github.com/EquentR/agent_runtime/core/tools"
@@ -307,15 +309,15 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 		}
 		runID := auditor.ensureRun(ctx)
 		runner, err := NewRunner(client, deps.Registry, Options{
-			LLMModel:       llmModel,
-			Memory:         memoryManager,
-			SystemPrompt:   bridgeLegacySystemPromptFromResolvedPromptSession(resolvedPrompt),
-			ResolvedPrompt: resolvedPrompt,
-			EventSink:      sink,
-			TaskID:         task.ID,
-			AuditRecorder:  deps.AuditRecorder,
-			AuditRunID:     runID,
-			Actor:          "agent.run",
+			LLMModel:             llmModel,
+			Memory:               memoryManager,
+			ResolvedPrompt:       resolvedPrompt,
+			RuntimePromptBuilder: runtimeprompt.NewBuilder(forcedprompt.NewProvider()),
+			EventSink:            sink,
+			TaskID:               task.ID,
+			AuditRecorder:        deps.AuditRecorder,
+			AuditRunID:           runID,
+			Actor:                "agent.run",
 			Metadata: map[string]string{
 				"conversation_id": conversation.ID,
 				"provider_id":     conversation.ProviderID,
@@ -604,20 +606,6 @@ func resolveRunTaskScene(scene string) string {
 		return trimmed
 	}
 	return defaultRunTaskScene
-}
-
-func bridgeLegacySystemPromptFromResolvedPromptSession(resolved *coreprompt.ResolvedPrompt) string {
-	if resolved == nil || len(resolved.Session) == 0 {
-		return ""
-	}
-
-	parts := make([]string, 0, len(resolved.Session))
-	for _, message := range resolved.Session {
-		if content := strings.TrimSpace(message.Content); content != "" {
-			parts = append(parts, content)
-		}
-	}
-	return strings.Join(parts, "\n\n")
 }
 
 // trimIncompleteToolCallMessages removes trailing assistant messages that have
