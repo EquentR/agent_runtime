@@ -54,7 +54,7 @@ describe('MessageList', () => {
     expect(wrapper.find('.status-pill').exists()).toBe(false)
   })
 
-  it('shows Chinese empty-state copy for a new conversation', () => {
+  it('renders no messages-stack when entries are empty', () => {
     const wrapper = mount(MessageList, {
       props: {
         loading: false,
@@ -62,7 +62,7 @@ describe('MessageList', () => {
       },
     })
 
-    expect(wrapper.find('.messages-empty').text()).toContain('请尽情使唤 ~')
+    expect(wrapper.find('.messages-stack').exists()).toBe(false)
   })
 
   it('shows a generating indicator at the bottom while syncing', () => {

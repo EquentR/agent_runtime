@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { Close, Menu } from '@element-plus/icons-vue'
 
@@ -71,6 +71,7 @@ const selectedProviderId = ref('')
 const selectedModelId = ref('')
 const modelMenuOpen = ref(false)
 const modelMenuRef = ref<HTMLElement | null>(null)
+const composerRef = ref<InstanceType<typeof MessageComposer> | null>(null)
 const showThinkingAndTools = ref(true)
 let activeStreamAbortController: AbortController | null = null
 let activeStreamingTaskId = ''
@@ -252,6 +253,9 @@ function startNewConversation() {
   sidebarDrawerOpen.value = false
   modelMenuOpen.value = false
   applyDefaultSelection()
+  void nextTick(() => {
+    composerRef.value?.focus()
+  })
 }
 
 function toggleSidebarCollapsed() {
@@ -524,13 +528,11 @@ async function handleStopTask() {
   }
 }
 
-function toggleSkillSelection(skillName: string, checked: boolean) {
+function handleSkillSelectionChange(names: string[]) {
   const conversationId = activeConversationId.value
-  const current = selectedSkillsByConversation.value[conversationId] ?? []
-  const next = checked ? [...current, skillName] : current.filter((name) => name !== skillName)
   selectedSkillsByConversation.value = {
     ...selectedSkillsByConversation.value,
-    [conversationId]: next,
+    [conversationId]: names,
   }
 }
 
@@ -850,7 +852,7 @@ onBeforeUnmount(() => {
       @toggle-collapse="toggleSidebarCollapsed"
     />
 
-    <section class="chat-stage">
+    <section class="chat-stage" :class="{ 'composer-centered': entries.length === 0 }">
       <header class="topbar">
         <button
           v-if="sidebarMobile || sidebarCollapsed"
@@ -931,28 +933,18 @@ onBeforeUnmount(() => {
           @interaction-respond="handleInteractionRespond"
         />
       </div>
-      <div v-if="availableSkills.length > 0" class="chat-skill-picker">
-        <label
-          v-for="skill in availableSkills"
-          :key="skill.name"
-          class="chat-skill-option"
-        >
-          <input
-            :data-skill-name="skill.name"
-            type="checkbox"
-            :checked="selectedSkillNames.includes(skill.name)"
-            @change="toggleSkillSelection(skill.name, ($event.target as HTMLInputElement).checked)"
-          />
-          <span>{{ skill.title }}</span>
-        </label>
-      </div>
       <div class="chat-composer-dock">
+        <p class="composer-welcome">请尽情使唤 ~</p>
         <MessageComposer
+          ref="composerRef"
           :disabled="composerDisabled"
           :busy="sending"
           :stop-disabled="stoppingTask"
+          :skills="availableSkills"
+          :selected-skill-names="selectedSkillNames"
           @send="handleSend"
           @stop="handleStopTask"
+          @update:selected-skill-names="handleSkillSelectionChange"
         />
       </div>
     </section>

@@ -1523,14 +1523,17 @@ describe('ChatView', () => {
       attachTo: document.body,
       global: {
         plugins: [router],
+        stubs: { ElSelect: true, ElOption: true },
       },
     })
 
     await flushPromises()
 
-    const debugging = wrapper.find('[data-skill-name="debugging"]')
-    expect(debugging.exists()).toBe(true)
-    await debugging.setValue(true)
+    /* Skills are now passed as props to MessageComposer and selection is managed via events.
+       Simulate the MessageComposer emitting the skill selection update. */
+    const composer = wrapper.findComponent({ name: 'MessageComposer' })
+    expect(composer.exists()).toBe(true)
+    composer.vm.$emit('update:selectedSkillNames', ['debugging'])
     await flushPromises()
 
     await wrapper.find('textarea').setValue('hello')
@@ -1584,14 +1587,17 @@ describe('ChatView', () => {
       attachTo: document.body,
       global: {
         plugins: [router],
+        stubs: { ElSelect: true, ElOption: true },
       },
     })
 
     await flushPromises()
 
-    const review = wrapper.find('[data-skill-name="review"]')
-    expect(review.exists()).toBe(true)
-    expect((review.element as HTMLInputElement).checked).toBe(true)
+    /* Skills selection is now passed as props to MessageComposer.
+       Verify the composer receives the correct selected skill names. */
+    const composer = wrapper.findComponent({ name: 'MessageComposer' })
+    expect(composer.exists()).toBe(true)
+    expect(composer.props('selectedSkillNames')).toEqual(['review'])
   })
 
   it('keeps the model menu inline with the title block', async () => {

@@ -19,6 +19,8 @@ describe('MessageComposer', () => {
       global: {
         stubs: {
           RouterLink: routerLinkStub,
+          ElSelect: true,
+          ElOption: true,
         },
       },
       props: {
@@ -35,6 +37,9 @@ describe('MessageComposer', () => {
 
   it('does not render a separate approval entry button next to the send action', () => {
     const wrapper = mount(MessageComposer, {
+      global: {
+        stubs: { ElSelect: true, ElOption: true },
+      },
       props: {
         disabled: false,
       },
@@ -43,10 +48,9 @@ describe('MessageComposer', () => {
     expect(wrapper.find('.composer-approval-entry').exists()).toBe(false)
   })
 
-  it('keeps the send button pinned to the bottom-right corner of the textarea', () => {
-    expect(chatStyles).toMatch(/\.composer-submit\s*\{[\s\S]*?position:\s*absolute;/)
-    expect(chatStyles).toMatch(/\.composer-submit\s*\{[\s\S]*?right:\s*0\.72rem;/)
-    expect(chatStyles).toMatch(/\.composer-submit\s*\{[\s\S]*?bottom:\s*0\.72rem;/)
+  it('places the send button in the composer toolbar', () => {
+    expect(chatStyles).toMatch(/\.composer-submit\s*\{[\s\S]*?border-radius:\s*999px;/)
+    expect(chatStyles).toMatch(/\.composer-toolbar\s*\{[\s\S]*?display:\s*flex;/)
   })
 
   it('hides the textarea vertical scrollbar while auto-resizing', () => {
@@ -58,6 +62,8 @@ describe('MessageComposer', () => {
       global: {
         stubs: {
           RouterLink: routerLinkStub,
+          ElSelect: true,
+          ElOption: true,
         },
       },
       props: {
@@ -79,6 +85,8 @@ describe('MessageComposer', () => {
       global: {
         stubs: {
           RouterLink: routerLinkStub,
+          ElSelect: true,
+          ElOption: true,
         },
       },
       props: {
@@ -99,11 +107,13 @@ describe('MessageComposer', () => {
     expect((textarea.element as HTMLTextAreaElement).value).toBe('line one')
   })
 
-  it('adds half a line of default height before growing with content', async () => {
+  it('auto-resizes textarea up to 4-line max height', async () => {
     const wrapper = mount(MessageComposer, {
       global: {
         stubs: {
           RouterLink: routerLinkStub,
+          ElSelect: true,
+          ElOption: true,
         },
       },
       props: {
@@ -117,18 +127,68 @@ describe('MessageComposer', () => {
 
     Object.defineProperty(element, 'scrollHeight', {
       configurable: true,
-      get: () => (element.value.includes('\n') ? 120 : 56),
+      get: () => (element.value.includes('\n') ? 120 : 24),
     })
 
     await textarea.setValue('first line')
     await textarea.trigger('input')
 
-    expect(textarea.attributes('rows')).toBe('2')
-    expect(element.style.height).toBe('72px')
+    expect(textarea.attributes('rows')).toBe('1')
+    expect(element.style.height).toBe('24px')
 
     await textarea.setValue('first line\nsecond line\nthird line')
     await textarea.trigger('input')
 
-    expect(element.style.height).toBe('120px')
+    /* 120px > maxTextareaHeight (96px), so it should be capped at 96px with overflow-y: auto */
+    expect(element.style.height).toBe('96px')
+    expect(element.style.overflowY).toBe('auto')
+  })
+
+  it('renders the unified card container layout', () => {
+    const wrapper = mount(MessageComposer, {
+      global: {
+        stubs: { ElSelect: true, ElOption: true },
+      },
+      props: {
+        disabled: false,
+      },
+    })
+
+    expect(wrapper.find('.composer-card').exists()).toBe(true)
+    expect(wrapper.find('.composer-textarea-wrapper').exists()).toBe(true)
+    expect(wrapper.find('.composer-toolbar').exists()).toBe(true)
+    expect(wrapper.find('.composer-attach-btn').exists()).toBe(true)
+  })
+
+  it('renders skills selector when skills are provided', () => {
+    const wrapper = mount(MessageComposer, {
+      global: {
+        stubs: { ElSelect: true, ElOption: true },
+      },
+      props: {
+        disabled: false,
+        skills: [
+          { name: 'test-skill', title: 'Test Skill', source_ref: 'test' },
+        ],
+        selectedSkillNames: [],
+      },
+    })
+
+    expect(wrapper.find('.composer-skill-select').exists()).toBe(true)
+  })
+
+  it('does not render skills selector when no skills are available', () => {
+    const wrapper = mount(MessageComposer, {
+      global: {
+        stubs: { ElSelect: true, ElOption: true },
+      },
+      props: {
+        disabled: false,
+        skills: [],
+        selectedSkillNames: [],
+      },
+    })
+
+    expect(wrapper.find('.composer-skill-select').exists()).toBe(false)
   })
 })

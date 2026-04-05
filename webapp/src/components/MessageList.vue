@@ -553,11 +553,7 @@ function showCopyToast(message: string, variant: 'success' | 'error') {
 <template>
   <section class="messages-panel">
     <div ref="messagesBody" class="messages-body" @scroll="handleScroll">
-      <div v-if="normalizedEntries.length === 0" class="messages-empty">
-        <p>请尽情使唤 ~</p>
-      </div>
-
-      <div v-else class="messages-stack wide-stack">
+      <div v-if="normalizedEntries.length > 0" class="messages-stack wide-stack">
         <article
           v-for="entry in normalizedEntries"
           :key="entry.id"
