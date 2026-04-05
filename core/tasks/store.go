@@ -130,9 +130,13 @@ func (s *Store) claimNextTaskOnce(ctx context.Context, runnerID string, lease ti
 			for offset := 0; ; offset += claimCandidateBatchSize {
 				var candidates []Task
 				// 1. 按创建顺序分批扫描 queued 候选任务，直到成功领取任务或耗尽队列。
-				if err := tx.Where("status = ?", StatusQueued).
-					Order("created_at asc").
-					Order("id asc").
+				if err := tx.Model(&Task{}).
+					Select("tasks.*").
+					Joins("LEFT JOIN task_events created_events ON created_events.task_id = tasks.id AND created_events.event_type = ? AND created_events.seq = 1", EventTaskCreated).
+					Where("tasks.status = ?", StatusQueued).
+					Order("tasks.created_at asc").
+					Order("created_events.id asc").
+					Order("tasks.id asc").
 					Limit(claimCandidateBatchSize).
 					Offset(offset).
 					Find(&candidates).Error; err != nil {

@@ -4,6 +4,9 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 // TestStoreCreateTaskPersistsQueuedSnapshotAndCreatedEvent 验证创建任务时会同时写入快照与 created 事件。
@@ -358,6 +361,71 @@ func TestStoreClaimNextTaskAllowsParallelClaimsWithoutConcurrencyKey(t *testing.
 	}
 	if claimedSecond.Status != StatusRunning {
 		t.Fatalf("second claimed status = %q, want %q", claimedSecond.Status, StatusRunning)
+	}
+}
+
+func TestStoreClaimNextTaskPreservesCreationOrderWhenCreatedAtTies(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+
+	createdAt := time.Date(2026, time.April, 5, 12, 0, 0, 0, time.UTC)
+
+	first, err := newTask(CreateTaskInput{TaskType: "agent.run"})
+	if err != nil {
+		t.Fatalf("newTask() first error = %v", err)
+	}
+	first.ID = "tsk_z_" + uuid.NewString()
+	first.RootTaskID = first.ID
+	first.CreatedAt = createdAt
+	first.UpdatedAt = createdAt
+
+	second, err := newTask(CreateTaskInput{TaskType: "agent.run"})
+	if err != nil {
+		t.Fatalf("newTask() second error = %v", err)
+	}
+	second.ID = "tsk_a_" + uuid.NewString()
+	second.RootTaskID = second.ID
+	second.CreatedAt = createdAt
+	second.UpdatedAt = createdAt
+
+	if err := store.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&first).Error; err != nil {
+			return err
+		}
+		if _, err := appendEventTx(tx, first.ID, EventTaskCreated, "info", map[string]any{
+			"status":    first.Status,
+			"task_type": first.TaskType,
+		}); err != nil {
+			return err
+		}
+		if err := tx.Create(&second).Error; err != nil {
+			return err
+		}
+		if _, err := appendEventTx(tx, second.ID, EventTaskCreated, "info", map[string]any{
+			"status":    second.Status,
+			"task_type": second.TaskType,
+		}); err != nil {
+			return err
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed tied tasks: %v", err)
+	}
+
+	claimedFirst, _, err := store.ClaimNextTask(ctx, "runner-1", time.Minute)
+	if err != nil {
+		t.Fatalf("ClaimNextTask() first error = %v", err)
+	}
+	if claimedFirst == nil || claimedFirst.ID != first.ID {
+		t.Fatalf("first claimed id = %v, want %q", claimedFirst, first.ID)
+	}
+
+	claimedSecond, _, err := store.ClaimNextTask(ctx, "runner-2", time.Minute)
+	if err != nil {
+		t.Fatalf("ClaimNextTask() second error = %v", err)
+	}
+	if claimedSecond == nil || claimedSecond.ID != second.ID {
+		t.Fatalf("second claimed id = %v, want %q", claimedSecond, second.ID)
 	}
 }
 
