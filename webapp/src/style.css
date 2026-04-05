@@ -275,7 +275,15 @@ p {
   color: #5e767d;
 }
 
+.conversation-list-item {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
 .conversation-card {
+  flex: 1 1 auto;
   width: 100%;
   min-width: 0;
   text-align: left;
@@ -287,6 +295,10 @@ p {
   border: 1px solid rgba(25, 50, 59, 0.08);
   background: rgba(245, 249, 249, 0.9);
   overflow: hidden;
+}
+
+.sidebar-panel.collapsed .conversation-list-item {
+  justify-content: center;
 }
 
 .sidebar-panel.collapsed .conversation-card {
@@ -320,7 +332,6 @@ p {
 
 .conversation-delete-button {
   flex: 0 0 auto;
-  margin-left: auto;
   width: 1.8rem;
   height: 1.8rem;
   min-width: 1.8rem;

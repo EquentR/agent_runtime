@@ -1052,7 +1052,44 @@ describe('MessageList', () => {
 		expect(wrapper.find('[data-question-submit]').exists()).toBe(false)
 	})
 
-	it('renders a direct text input when allow_custom is true but no options are provided', async () => {
+	it('renders multi-select final answers with custom text summary unchanged', () => {
+			const wrapper = mount(MessageList, {
+				props: {
+					loading: false,
+					entries: [
+						{
+							id: 'question-entry-8b',
+							kind: 'question',
+							title: '已回答问题',
+							question_interaction: {
+								id: 'interaction_question_8b',
+								task_id: 'task_8b',
+								conversation_id: 'conv_8b',
+								kind: 'question',
+								status: 'responded',
+								request_json: {
+									question: 'Which environments?',
+									options: ['staging', 'preview', 'production'],
+									allow_custom: true,
+									multiple: true,
+								},
+								response_json: {
+									selected_option_ids: ['staging', 'preview'],
+									custom_text: 'Blue env',
+								},
+								responded_by: 'demo-user',
+							},
+						} as any,
+					],
+				},
+			})
+
+			expect(wrapper.text()).toContain('最终回答')
+			expect(wrapper.text()).toContain('staging、preview')
+			expect(wrapper.text()).toContain('Blue env')
+		})
+
+		it('renders a direct text input when allow_custom is true but no options are provided', async () => {
 		const wrapper = mount(MessageList, {
 			props: {
 				loading: false,

@@ -12,12 +12,136 @@ vi.mock('../lib/api', () => api)
 
 import AdminAuditView from './AdminAuditView.vue'
 
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
+
 describe('AdminAuditView', () => {
   beforeEach(() => {
     api.fetchConversations.mockReset()
     api.fetchConversation.mockReset()
     api.fetchAuditConversationRuns.mockReset()
     api.fetchAuditRunReplay.mockReset()
+  })
+
+
+  it('starts conversation and run loading together before fetching replays', async () => {
+    const conversationDeferred = createDeferred<{
+      id: string
+      title: string
+      last_message: string
+      message_count: number
+      provider_id: string
+      model_id: string
+      created_by: string
+      created_at: string
+      updated_at: string
+      audit_run_id: string
+    }>()
+    const runsDeferred = createDeferred<Array<{
+      id: string
+      task_id: string
+      conversation_id: string
+      task_type: string
+      status: 'succeeded'
+      created_by: string
+      schema_version: string
+      created_at: string
+      updated_at: string
+    }>>()
+
+    api.fetchConversations.mockResolvedValue([
+      {
+        id: 'conv_parallel',
+        title: 'Parallel loading chat',
+        last_message: 'hello',
+        message_count: 1,
+        provider_id: 'openai',
+        model_id: 'gpt-5.4',
+        created_by: 'alice',
+        created_at: '2026-03-22T14:00:00Z',
+        updated_at: '2026-03-22T14:01:00Z',
+        audit_run_id: 'run_parallel',
+      },
+    ])
+    api.fetchConversation.mockImplementation(() => conversationDeferred.promise)
+    api.fetchAuditConversationRuns.mockImplementation(() => runsDeferred.promise)
+    api.fetchAuditRunReplay.mockResolvedValue({
+      run: {
+        id: 'run_parallel',
+        task_id: 'task_parallel',
+        conversation_id: 'conv_parallel',
+        task_type: 'agent.run',
+        provider_id: 'openai',
+        model_id: 'gpt-5.4',
+        runner_id: 'runner_1',
+        status: 'succeeded',
+        created_by: 'alice',
+        replayable: true,
+        schema_version: 'v1',
+        created_at: '2026-03-22T14:00:00Z',
+        updated_at: '2026-03-22T14:01:00Z',
+      },
+      timeline: [],
+      artifacts: [],
+    })
+
+    const wrapper = mount(AdminAuditView, {
+      global: {
+        stubs: {
+          RouterLink: {
+            props: ['to'],
+            template: '<a :href="to" v-bind="$attrs"><slot /></a>',
+          },
+        },
+      },
+    })
+
+    await flushPromises()
+    await wrapper.find('[data-conversation-id="conv_parallel"]').trigger('click')
+
+    expect(api.fetchConversation).toHaveBeenCalledWith('conv_parallel')
+    expect(api.fetchAuditConversationRuns).toHaveBeenCalledWith('conv_parallel')
+    expect(api.fetchAuditRunReplay).not.toHaveBeenCalled()
+
+    conversationDeferred.resolve({
+      id: 'conv_parallel',
+      title: 'Parallel loading chat',
+      last_message: 'hello',
+      message_count: 1,
+      provider_id: 'openai',
+      model_id: 'gpt-5.4',
+      created_by: 'alice',
+      created_at: '2026-03-22T14:00:00Z',
+      updated_at: '2026-03-22T14:01:00Z',
+      audit_run_id: 'run_parallel',
+    })
+    await flushPromises()
+
+    expect(api.fetchAuditRunReplay).not.toHaveBeenCalled()
+
+    runsDeferred.resolve([
+      {
+        id: 'run_parallel',
+        task_id: 'task_parallel',
+        conversation_id: 'conv_parallel',
+        task_type: 'agent.run',
+        status: 'succeeded',
+        created_by: 'alice',
+        schema_version: 'v1',
+        created_at: '2026-03-22T14:00:00Z',
+        updated_at: '2026-03-22T14:01:00Z',
+      },
+    ])
+    await flushPromises()
+
+    expect(api.fetchAuditRunReplay).toHaveBeenCalledWith('run_parallel')
   })
 
   it('loads conversations and selected conversation audit details', async () => {
@@ -972,6 +1096,407 @@ describe('AdminAuditView', () => {
     expect(wrapper.find('.admin-audit-timeline').text()).not.toContain('第 2 轮请求')
 
     wrapper.unmount()
+  })
+  it('keeps the newly selected conversation summary visible when runs loading fails', async () => {
+    api.fetchConversations.mockResolvedValue([
+      {
+        id: 'conv_a',
+        title: 'Sidebar conversation A',
+        last_message: 'alpha',
+        message_count: 2,
+        provider_id: 'openai',
+        model_id: 'gpt-5.4',
+        created_by: 'alice',
+        created_at: '2026-03-22T09:00:00Z',
+        updated_at: '2026-03-22T09:01:00Z',
+        audit_run_id: 'run_a',
+      },
+      {
+        id: 'conv_b',
+        title: 'Sidebar conversation B',
+        last_message: 'beta',
+        message_count: 1,
+        provider_id: 'openai',
+        model_id: 'gpt-5.4',
+        created_by: 'bob',
+        created_at: '2026-03-22T10:00:00Z',
+        updated_at: '2026-03-22T10:01:00Z',
+        audit_run_id: 'run_b',
+      },
+    ])
+    api.fetchConversation.mockImplementation(async (conversationId: string) => ({
+      id: conversationId,
+      title: conversationId === 'conv_a' ? 'Loaded conversation A' : 'Loaded conversation B',
+      last_message: conversationId === 'conv_a' ? 'alpha' : 'beta',
+      message_count: conversationId === 'conv_a' ? 2 : 1,
+      provider_id: 'openai',
+      model_id: 'gpt-5.4',
+      created_by: conversationId === 'conv_a' ? 'alice' : 'bob',
+      created_at: conversationId === 'conv_a' ? '2026-03-22T09:00:00Z' : '2026-03-22T10:00:00Z',
+      updated_at: conversationId === 'conv_a' ? '2026-03-22T09:01:00Z' : '2026-03-22T10:01:00Z',
+      audit_run_id: conversationId === 'conv_a' ? 'run_a' : 'run_b',
+    }))
+    api.fetchAuditConversationRuns.mockImplementation(async (conversationId: string) => {
+      if (conversationId === 'conv_b') {
+        throw new Error('runs failed for B')
+      }
+      return [
+        {
+          id: 'run_a',
+          task_id: 'task_a',
+          conversation_id: 'conv_a',
+          task_type: 'agent.run',
+          status: 'succeeded',
+          created_by: 'alice',
+          schema_version: 'v1',
+          created_at: '2026-03-22T09:00:00Z',
+          updated_at: '2026-03-22T09:01:00Z',
+        },
+      ]
+    })
+    api.fetchAuditRunReplay.mockResolvedValue({
+      run: {
+        id: 'run_a',
+        task_id: 'task_a',
+        conversation_id: 'conv_a',
+        task_type: 'agent.run',
+        provider_id: 'openai',
+        model_id: 'gpt-5.4',
+        runner_id: 'runner_1',
+        status: 'succeeded',
+        created_by: 'alice',
+        replayable: true,
+        schema_version: 'v1',
+        created_at: '2026-03-22T09:00:00Z',
+        updated_at: '2026-03-22T09:01:00Z',
+      },
+      timeline: [],
+      artifacts: [],
+    })
+
+    const wrapper = mount(AdminAuditView, {
+      global: {
+        stubs: {
+          RouterLink: {
+            props: ['to'],
+            template: '<a :href="to" v-bind="$attrs"><slot /></a>',
+          },
+        },
+      },
+    })
+
+    await flushPromises()
+    await wrapper.find('[data-conversation-id="conv_a"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('.topbar-conversation-title').text()).toBe('Loaded conversation A')
+    expect(wrapper.text()).toContain('alice')
+
+    await wrapper.find('[data-conversation-id="conv_b"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('.topbar-conversation-title').text()).toBe('Sidebar conversation B')
+    expect(wrapper.text()).toContain('runs failed for B')
+    expect(wrapper.text()).toContain('bob')
+    expect(wrapper.text()).not.toContain('Loaded conversation A')
+  })
+
+  it('ignores stale out-of-order selection results and keeps the latest conversation details', async () => {
+    const conversationDeferredA = createDeferred<{
+      id: string
+      title: string
+      last_message: string
+      message_count: number
+      provider_id: string
+      model_id: string
+      created_by: string
+      created_at: string
+      updated_at: string
+      audit_run_id: string
+    }>()
+    const conversationDeferredB = createDeferred<{
+      id: string
+      title: string
+      last_message: string
+      message_count: number
+      provider_id: string
+      model_id: string
+      created_by: string
+      created_at: string
+      updated_at: string
+      audit_run_id: string
+    }>()
+    const runsDeferredA = createDeferred<Array<{
+      id: string
+      task_id: string
+      conversation_id: string
+      task_type: string
+      status: 'succeeded'
+      created_by: string
+      schema_version: string
+      created_at: string
+      updated_at: string
+    }>>()
+    const runsDeferredB = createDeferred<Array<{
+      id: string
+      task_id: string
+      conversation_id: string
+      task_type: string
+      status: 'succeeded'
+      created_by: string
+      schema_version: string
+      created_at: string
+      updated_at: string
+    }>>()
+    const replayDeferredA = createDeferred<{
+      run: {
+        id: string
+        task_id: string
+        conversation_id: string
+        task_type: string
+        provider_id: string
+        model_id: string
+        runner_id: string
+        status: 'succeeded'
+        created_by: string
+        replayable: true
+        schema_version: string
+        created_at: string
+        updated_at: string
+      }
+      timeline: Array<{
+        seq: number
+        phase: string
+        event_type: string
+        level: string
+        step_index: number
+        parent_seq: number
+        display_name: string
+        payload: { owner: string }
+        created_at: string
+      }>
+      artifacts: []
+    }>()
+    const replayDeferredB = createDeferred<{
+      run: {
+        id: string
+        task_id: string
+        conversation_id: string
+        task_type: string
+        provider_id: string
+        model_id: string
+        runner_id: string
+        status: 'succeeded'
+        created_by: string
+        replayable: true
+        schema_version: string
+        created_at: string
+        updated_at: string
+      }
+      timeline: Array<{
+        seq: number
+        phase: string
+        event_type: string
+        level: string
+        step_index: number
+        parent_seq: number
+        display_name: string
+        payload: { owner: string }
+        created_at: string
+      }>
+      artifacts: []
+    }>()
+
+    api.fetchConversations.mockResolvedValue([
+      {
+        id: 'conv_a',
+        title: 'Sidebar conversation A',
+        last_message: 'alpha',
+        message_count: 2,
+        provider_id: 'openai',
+        model_id: 'gpt-5.4',
+        created_by: 'alice',
+        created_at: '2026-03-22T09:00:00Z',
+        updated_at: '2026-03-22T09:01:00Z',
+        audit_run_id: 'run_a',
+      },
+      {
+        id: 'conv_b',
+        title: 'Sidebar conversation B',
+        last_message: 'beta',
+        message_count: 1,
+        provider_id: 'openai',
+        model_id: 'gpt-5.4',
+        created_by: 'bob',
+        created_at: '2026-03-22T10:00:00Z',
+        updated_at: '2026-03-22T10:01:00Z',
+        audit_run_id: 'run_b',
+      },
+    ])
+    api.fetchConversation.mockImplementation((conversationId: string) => {
+      if (conversationId === 'conv_a') {
+        return conversationDeferredA.promise
+      }
+      return conversationDeferredB.promise
+    })
+    api.fetchAuditConversationRuns.mockImplementation((conversationId: string) => {
+      if (conversationId === 'conv_a') {
+        return runsDeferredA.promise
+      }
+      return runsDeferredB.promise
+    })
+    api.fetchAuditRunReplay.mockImplementation((runId: string) => {
+      if (runId === 'run_a') {
+        return replayDeferredA.promise
+      }
+      return replayDeferredB.promise
+    })
+
+    const wrapper = mount(AdminAuditView, {
+      global: {
+        stubs: {
+          RouterLink: {
+            props: ['to'],
+            template: '<a :href="to" v-bind="$attrs"><slot /></a>',
+          },
+        },
+      },
+    })
+
+    await flushPromises()
+    await wrapper.find('[data-conversation-id="conv_a"]').trigger('click')
+    await wrapper.find('[data-conversation-id="conv_b"]').trigger('click')
+
+    conversationDeferredB.resolve({
+      id: 'conv_b',
+      title: 'Loaded conversation B',
+      last_message: 'beta',
+      message_count: 1,
+      provider_id: 'openai',
+      model_id: 'gpt-5.4',
+      created_by: 'bob',
+      created_at: '2026-03-22T10:00:00Z',
+      updated_at: '2026-03-22T10:01:00Z',
+      audit_run_id: 'run_b',
+    })
+    runsDeferredB.resolve([
+      {
+        id: 'run_b',
+        task_id: 'task_b',
+        conversation_id: 'conv_b',
+        task_type: 'agent.run',
+        status: 'succeeded',
+        created_by: 'bob',
+        schema_version: 'v1',
+        created_at: '2026-03-22T10:00:00Z',
+        updated_at: '2026-03-22T10:01:00Z',
+      },
+    ])
+    await flushPromises()
+
+    replayDeferredB.resolve({
+      run: {
+        id: 'run_b',
+        task_id: 'task_b',
+        conversation_id: 'conv_b',
+        task_type: 'agent.run',
+        provider_id: 'openai',
+        model_id: 'gpt-5.4',
+        runner_id: 'runner_1',
+        status: 'succeeded',
+        created_by: 'bob',
+        replayable: true,
+        schema_version: 'v1',
+        created_at: '2026-03-22T10:00:00Z',
+        updated_at: '2026-03-22T10:01:00Z',
+      },
+      timeline: [
+        {
+          seq: 1,
+          phase: 'run',
+          event_type: 'run.started',
+          level: 'info',
+          step_index: 0,
+          parent_seq: 0,
+          display_name: 'B timeline entry',
+          payload: { owner: 'B' },
+          created_at: '2026-03-22T10:00:00Z',
+        },
+      ],
+      artifacts: [],
+    })
+    await flushPromises()
+
+    expect(wrapper.find('.topbar-conversation-title').text()).toBe('Loaded conversation B')
+    expect(wrapper.find('.status-pill').text()).toBe('succeeded')
+    expect(wrapper.find('.admin-audit-timeline').text()).toContain('B timeline entry')
+    expect(wrapper.text()).toContain('bob')
+
+    conversationDeferredA.resolve({
+      id: 'conv_a',
+      title: 'Loaded conversation A',
+      last_message: 'alpha',
+      message_count: 2,
+      provider_id: 'openai',
+      model_id: 'gpt-5.4',
+      created_by: 'alice',
+      created_at: '2026-03-22T09:00:00Z',
+      updated_at: '2026-03-22T09:01:00Z',
+      audit_run_id: 'run_a',
+    })
+    runsDeferredA.resolve([
+      {
+        id: 'run_a',
+        task_id: 'task_a',
+        conversation_id: 'conv_a',
+        task_type: 'agent.run',
+        status: 'succeeded',
+        created_by: 'alice',
+        schema_version: 'v1',
+        created_at: '2026-03-22T09:00:00Z',
+        updated_at: '2026-03-22T09:01:00Z',
+      },
+    ])
+    await flushPromises()
+
+    replayDeferredA.resolve({
+      run: {
+        id: 'run_a',
+        task_id: 'task_a',
+        conversation_id: 'conv_a',
+        task_type: 'agent.run',
+        provider_id: 'openai',
+        model_id: 'gpt-5.4',
+        runner_id: 'runner_1',
+        status: 'succeeded',
+        created_by: 'alice',
+        replayable: true,
+        schema_version: 'v1',
+        created_at: '2026-03-22T09:00:00Z',
+        updated_at: '2026-03-22T09:01:00Z',
+      },
+      timeline: [
+        {
+          seq: 1,
+          phase: 'run',
+          event_type: 'run.started',
+          level: 'info',
+          step_index: 0,
+          parent_seq: 0,
+          display_name: 'A timeline entry',
+          payload: { owner: 'A' },
+          created_at: '2026-03-22T09:00:00Z',
+        },
+      ],
+      artifacts: [],
+    })
+    await flushPromises()
+
+    expect(wrapper.find('.topbar-conversation-title').text()).toBe('Loaded conversation B')
+    expect(wrapper.find('.admin-audit-timeline').text()).toContain('B timeline entry')
+    expect(wrapper.find('.admin-audit-timeline').text()).not.toContain('A timeline entry')
+    expect(wrapper.text()).toContain('bob')
+    expect(wrapper.text()).not.toContain('Loaded conversation A')
   })
 
 })

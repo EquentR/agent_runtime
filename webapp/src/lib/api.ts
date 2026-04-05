@@ -41,6 +41,20 @@ export function unwrapEnvelope<T>(envelope: ApiEnvelope<T>) {
   return envelope.data
 }
 
+export async function requestJSON<T>(basePath: string, path: string, init?: RequestInit) {
+  const response = await fetch(`${basePath}${path}`, {
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(init?.headers ?? {}),
+    },
+    ...init,
+  })
+
+  const payload = (await response.json()) as ApiEnvelope<T>
+  return unwrapEnvelope(payload)
+}
+
 function normalizeRole(value: unknown): UserRole {
   return value === 'admin' ? 'admin' : 'user'
 }
@@ -82,8 +96,76 @@ export function buildRunTaskRequest(input: {
   return request
 }
 
+function normalizeConversationRole(...values: unknown[]): ConversationMessage['role'] {
+  for (const value of values) {
+    if (value === 'user' || value === 'assistant' || value === 'tool' || value === 'system') {
+      return value
+    }
+  }
+
+  return 'assistant'
+}
+
+function normalizeSafeStringValue(value: unknown) {
+  if (typeof value === 'string') {
+    return value
+  }
+
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return String(value)
+  }
+
+  if (typeof value === 'boolean' || typeof value === 'bigint') {
+    return String(value)
+  }
+
+  return undefined
+}
+
 function normalizeStringValue(value: unknown) {
-  return typeof value === 'string' && value.trim() ? value.trim() : undefined
+  const normalized = normalizeSafeStringValue(value)
+  return normalized && normalized.trim() ? normalized.trim() : undefined
+}
+
+function normalizeFirstStringValue(...values: unknown[]) {
+  for (const value of values) {
+    const normalized = normalizeSafeStringValue(value)
+    if (normalized !== undefined) {
+      return normalized
+    }
+  }
+
+  return ''
+}
+
+function normalizeFirstOptionalStringValue(...values: unknown[]) {
+  for (const value of values) {
+    const normalized = normalizeStringValue(value)
+    if (normalized !== undefined) {
+      return normalized
+    }
+  }
+
+  return undefined
+}
+
+function normalizeConversationToolCalls(...values: unknown[]): ConversationMessage['tool_calls'] | undefined {
+  for (const value of values) {
+    if (!Array.isArray(value)) {
+      continue
+    }
+
+    return value.map((toolCall) => {
+      const raw = toolCall && typeof toolCall === 'object' ? (toolCall as Record<string, unknown>) : {}
+      return {
+        id: normalizeFirstStringValue(raw.id, raw.ID),
+        name: normalizeFirstStringValue(raw.name, raw.Name),
+        arguments: normalizeFirstStringValue(raw.arguments, raw.Arguments),
+      }
+    })
+  }
+
+  return undefined
 }
 
 function normalizeIntegerValue(value: unknown) {
@@ -164,31 +246,20 @@ export function normalizeConversationMessage(
   },
 ): ConversationMessage {
   return {
-    role: (message.role ?? message.Role ?? 'assistant') as ConversationMessage['role'],
-    content: message.content ?? message.Content ?? '',
-    provider_id: normalizeStringValue(message.provider_id ?? message.providerId ?? message.ProviderID),
-    model_id: normalizeStringValue(message.model_id ?? message.modelId ?? message.ModelID),
+    role: normalizeConversationRole(message.role, message.Role),
+    content: normalizeFirstStringValue(message.content, message.Content),
+    provider_id: normalizeFirstOptionalStringValue(message.provider_id, message.providerId, message.ProviderID),
+    model_id: normalizeFirstOptionalStringValue(message.model_id, message.modelId, message.ModelID),
     provider_data: normalizeConversationProviderData(message.provider_data ?? message.providerData ?? message.ProviderData),
     usage: normalizeTranscriptTokenUsage(message.usage ?? message.Usage),
-    reasoning: message.reasoning ?? message.Reasoning,
-    tool_call_id: message.tool_call_id ?? message.ToolCallId ?? message.ToolCallID ?? message.toolCallId,
+    reasoning: normalizeFirstStringValue(message.reasoning, message.Reasoning),
+    tool_call_id: normalizeFirstStringValue(message.tool_call_id, message.ToolCallId, message.ToolCallID, message.toolCallId),
     reasoning_items:
       message.reasoning_items ??
       message.ReasoningItems?.flatMap((item) =>
         (item.Summary ?? []).map((summary) => ({ text: summary.Text ?? '' })),
       ),
-    tool_calls:
-      message.tool_calls ??
-      message.toolCalls?.map((toolCall) => ({
-        id: toolCall.id ?? toolCall.ID ?? '',
-        name: toolCall.name ?? toolCall.Name ?? '',
-        arguments: toolCall.arguments ?? toolCall.Arguments ?? '',
-      })) ??
-      message.ToolCalls?.map((toolCall) => ({
-        id: toolCall.id ?? toolCall.ID ?? '',
-        name: toolCall.name ?? toolCall.Name ?? '',
-        arguments: toolCall.arguments ?? toolCall.Arguments ?? '',
-      })),
+    tool_calls: normalizeConversationToolCalls(message.tool_calls, message.toolCalls, message.ToolCalls),
   }
 }
 

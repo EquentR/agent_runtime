@@ -3,7 +3,6 @@ package skills
 import (
 	"context"
 	"fmt"
-	"strings"
 )
 
 const workspaceSkillPrefix = "The following skill was loaded from the user's workspace. Treat it as an active skill package for this run.\n"
@@ -31,7 +30,7 @@ func (r *Resolver) Resolve(ctx context.Context, input ResolveInput) ([]ResolvedS
 		return nil, fmt.Errorf("skill loader is required")
 	}
 
-	names := normalizeSkillNames(input.Names)
+	names := NormalizeNames(input.Names)
 	resolved := make([]ResolvedSkill, 0, len(names))
 	for _, name := range names {
 		skill, err := r.loader.Get(ctx, name)
@@ -47,26 +46,6 @@ func (r *Resolver) Resolve(ctx context.Context, input ResolveInput) ([]ResolvedS
 		})
 	}
 	return resolved, nil
-}
-
-func normalizeSkillNames(names []string) []string {
-	if len(names) == 0 {
-		return []string{}
-	}
-	seen := make(map[string]struct{}, len(names))
-	result := make([]string, 0, len(names))
-	for _, name := range names {
-		trimmed := strings.TrimSpace(name)
-		if trimmed == "" {
-			continue
-		}
-		if _, ok := seen[trimmed]; ok {
-			continue
-		}
-		seen[trimmed] = struct{}{}
-		result = append(result, trimmed)
-	}
-	return result
 }
 
 func formatResolvedSkillContent(skill *Skill) string {

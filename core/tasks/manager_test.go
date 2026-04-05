@@ -759,6 +759,66 @@ func TestManagerAvoidsResolveBeforeSuspendRaceForToolApprovalWaitingTask(t *test
 	}
 }
 
+func TestManagerCreateApprovalCreatesApprovalInteractionExactlyOnce(t *testing.T) {
+	store := newTestStore(t)
+	approvalStore, interactionStore := newApprovalAndInteractionStoresForTest(t, store)
+	manager := NewManager(store, ManagerOptions{ApprovalStore: approvalStore, InteractionStore: interactionStore})
+
+	task, err := manager.CreateTask(context.Background(), CreateTaskInput{TaskType: "agent.run", CreatedBy: "alice"})
+	if err != nil {
+		t.Fatalf("CreateTask() error = %v", err)
+	}
+
+	ctxKey := struct{}{}
+	ctx := context.WithValue(context.Background(), ctxKey, true)
+	callbackName := "test:tasks:create_approval_interaction_exactly_once"
+	interactionQueries := 0
+	if err := store.db.Callback().Query().After("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement == nil || tx.Statement.Schema == nil || tx.Statement.Schema.Table != "interactions" {
+			return
+		}
+		if tx.Statement.Context == nil || tx.Statement.Context.Value(ctxKey) == nil {
+			return
+		}
+		interactionQueries++
+		if interactionQueries == 3 {
+			tx.AddError(fmt.Errorf("duplicate approval interaction ensure query"))
+		}
+	}); err != nil {
+		t.Fatalf("register callback error = %v", err)
+	}
+	defer func() {
+		if err := store.db.Callback().Query().Remove(callbackName); err != nil {
+			t.Fatalf("remove callback error = %v", err)
+		}
+	}()
+
+	created, err := manager.CreateApproval(ctx, approvals.CreateApprovalInput{
+		TaskID:           task.ID,
+		ConversationID:   "conv-1",
+		StepIndex:        1,
+		ToolCallID:       "call-1",
+		ToolName:         "bash",
+		ArgumentsSummary: "rm -rf /tmp/demo",
+		RiskLevel:        "high",
+		Reason:           "dangerous filesystem mutation",
+	})
+	if err != nil {
+		t.Fatalf("CreateApproval() error = %v", err)
+	}
+
+	listed, err := interactionStore.ListTaskInteractions(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("ListTaskInteractions() error = %v", err)
+	}
+	if len(listed) != 1 {
+		t.Fatalf("len(ListTaskInteractions()) = %d, want 1", len(listed))
+	}
+	if listed[0].ToolCallID != created.ToolCallID {
+		t.Fatalf("interaction ToolCallID = %q, want %q", listed[0].ToolCallID, created.ToolCallID)
+	}
+}
+
 func TestApprovalEventPayloadsMatchTaskOneContract(t *testing.T) {
 	store := newTestStore(t)
 	approvalStore := approvals.NewStore(store.db)

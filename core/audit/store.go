@@ -1,7 +1,6 @@
 package audit
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/EquentR/agent_runtime/pkg/jsonutil"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -556,41 +556,7 @@ func shouldPromoteRunStatus(current Status, next Status) bool {
 }
 
 func marshalJSON(value any, objectDefault bool) (json.RawMessage, error) {
-	switch v := value.(type) {
-	case nil:
-		if objectDefault {
-			return json.RawMessage("{}"), nil
-		}
-		return json.RawMessage("null"), nil
-	case json.RawMessage:
-		return normalizeRawJSON(v, objectDefault)
-	case []byte:
-		return normalizeRawJSON(v, objectDefault)
-	default:
-		raw, err := json.Marshal(value)
-		if err != nil {
-			return nil, err
-		}
-		return json.RawMessage(raw), nil
-	}
-}
-
-func normalizeRawJSON(raw []byte, objectDefault bool) (json.RawMessage, error) {
-	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 {
-		if objectDefault {
-			return json.RawMessage("{}"), nil
-		}
-		return json.RawMessage("null"), nil
-	}
-	if !json.Valid(trimmed) {
-		return nil, fmt.Errorf("invalid json")
-	}
-	var compacted bytes.Buffer
-	if err := json.Compact(&compacted, trimmed); err != nil {
-		return nil, err
-	}
-	return json.RawMessage(compacted.Bytes()), nil
+	return jsonutil.MarshalRawMessage(value, objectDefault)
 }
 
 func isUniqueConstraintError(err error) bool {

@@ -2,12 +2,12 @@ package interactions
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/EquentR/agent_runtime/pkg/jsonutil"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -266,7 +266,14 @@ func marshalJSON(value any) ([]byte, error) {
 	if value == nil {
 		return nil, nil
 	}
-	return json.Marshal(value)
+	raw, err := jsonutil.MarshalRawMessage(value, false)
+	if err != nil {
+		return nil, err
+	}
+	if string(raw) == "null" {
+		return nil, nil
+	}
+	return raw, nil
 }
 
 func newInteractionID() string {

@@ -1,6 +1,7 @@
 import type { TranscriptEntry } from '../types/api'
 
 const CHAT_STATE_KEY = 'agent-runtime.chat-state'
+const CHAT_STATE_SAVE_DELAY_MS = 75
 
 interface ChatState {
   activeConversationId: string
@@ -18,6 +19,21 @@ const EMPTY_STATE: ChatState = {
   entries: [],
   draftEntriesByConversation: {},
   selectedSkillsByConversation: {},
+}
+
+let pendingSaveTimer: ReturnType<typeof setTimeout> | null = null
+let pendingState: ChatState | null = null
+
+function persistChatState(state: ChatState) {
+  localStorage.setItem(CHAT_STATE_KEY, JSON.stringify(state))
+}
+
+function clearPendingChatStateSave() {
+  if (!pendingSaveTimer) {
+    return
+  }
+  clearTimeout(pendingSaveTimer)
+  pendingSaveTimer = null
 }
 
 export function loadChatState(): ChatState {
@@ -57,9 +73,27 @@ export function loadChatState(): ChatState {
 }
 
 export function saveChatState(state: ChatState) {
-  localStorage.setItem(CHAT_STATE_KEY, JSON.stringify(state))
+  clearPendingChatStateSave()
+  pendingState = null
+  persistChatState(state)
+}
+
+export function scheduleChatStateSave(state: ChatState) {
+  pendingState = state
+  clearPendingChatStateSave()
+  pendingSaveTimer = setTimeout(() => {
+    pendingSaveTimer = null
+    if (!pendingState) {
+      return
+    }
+    const stateToSave = pendingState
+    pendingState = null
+    persistChatState(stateToSave)
+  }, CHAT_STATE_SAVE_DELAY_MS)
 }
 
 export function clearChatState() {
+  clearPendingChatStateSave()
+  pendingState = null
   localStorage.removeItem(CHAT_STATE_KEY)
 }

@@ -10,7 +10,7 @@ import type {
   TranscriptTokenUsage,
 } from '../types/api'
 
-import { normalizeInteractionRecord, normalizeToolApproval, normalizeTranscriptTokenUsage } from './api'
+import { normalizeConversationMessage, normalizeInteractionRecord, normalizeToolApproval, normalizeTranscriptTokenUsage } from './api'
 
 function createEntryId(prefix: string) {
   return `${prefix}-${Math.random().toString(36).slice(2, 10)}`
@@ -56,69 +56,6 @@ function summarizeReasoning(message: ConversationMessage) {
   return ''
 }
 
-function normalizeStreamMessage(
-  message: Record<string, unknown>,
-): Pick<ConversationMessage, 'role' | 'content' | 'provider_id' | 'model_id' | 'reasoning' | 'tool_call_id' | 'tool_calls'> {
-  const rawToolCalls = Array.isArray(message.tool_calls)
-    ? message.tool_calls
-    : Array.isArray(message.toolCalls)
-      ? message.toolCalls
-      : Array.isArray(message.ToolCalls)
-        ? message.ToolCalls
-        : []
-
-  return {
-    role:
-      typeof message.role === 'string'
-        ? (message.role as ConversationMessage['role'])
-        : typeof message.Role === 'string'
-          ? (String(message.Role) as ConversationMessage['role'])
-          : 'assistant',
-    content: typeof message.content === 'string' ? message.content : typeof message.Content === 'string' ? String(message.Content) : '',
-    provider_id:
-      typeof message.provider_id === 'string'
-        ? message.provider_id
-        : typeof message.providerId === 'string'
-          ? message.providerId
-          : typeof message.ProviderID === 'string'
-            ? String(message.ProviderID)
-            : undefined,
-    model_id:
-      typeof message.model_id === 'string'
-        ? message.model_id
-        : typeof message.modelId === 'string'
-          ? message.modelId
-          : typeof message.ModelID === 'string'
-            ? String(message.ModelID)
-            : undefined,
-    reasoning:
-      typeof message.reasoning === 'string'
-        ? message.reasoning
-        : typeof message.Reasoning === 'string'
-          ? String(message.Reasoning)
-          : '',
-    tool_call_id:
-      typeof message.tool_call_id === 'string'
-        ? message.tool_call_id
-        : typeof message.toolCallId === 'string'
-          ? message.toolCallId
-        : typeof message.ToolCallId === 'string'
-          ? String(message.ToolCallId)
-          : typeof message.ToolCallID === 'string'
-            ? String(message.ToolCallID)
-            : '',
-    tool_calls: (rawToolCalls as Array<Record<string, unknown>>).map((toolCall) => ({
-      id: String(toolCall.id ?? toolCall.ID ?? ''),
-      name: String(toolCall.name ?? toolCall.Name ?? ''),
-      arguments:
-        typeof toolCall.arguments === 'string'
-          ? toolCall.arguments
-          : typeof toolCall.Arguments === 'string'
-            ? toolCall.Arguments
-            : '',
-    })),
-  }
-}
 
 function makeBlocks(argumentsText?: string, resultText?: string, loading?: boolean): TranscriptEntryDetailBlock[] {
   const blocks: TranscriptEntryDetailBlock[] = []
@@ -895,7 +832,7 @@ export function updateTranscriptFromStreamEvent(entries: TranscriptEntry[], even
     }
 
     if (kind === 'completed' && payload.Message && typeof payload.Message === 'object') {
-      const message = normalizeStreamMessage(payload.Message as Record<string, unknown>)
+      const message = normalizeConversationMessage(payload.Message as Partial<ConversationMessage> & Record<string, unknown>)
       if (message.role === 'assistant') {
         return applyCompletedAssistantMessage(entries, message, { groupKey })
       }

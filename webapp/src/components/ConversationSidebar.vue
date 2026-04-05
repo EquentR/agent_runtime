@@ -179,7 +179,7 @@ onBeforeUnmount(() => {
         还没有对话呢~。
       </div>
 
-      <template v-for="conversation in items" :key="conversation.id">
+      <div v-for="conversation in items" :key="conversation.id" class="conversation-list-item">
         <button
           class="conversation-card"
           :class="{ active: conversation.id === activeConversationId }"
@@ -197,17 +197,17 @@ onBeforeUnmount(() => {
           <span v-else class="conversation-compact-label" :title="formatConversationTitle(conversation.title, '未命名对话')">
             {{ formatConversationTitle(conversation.title, '未命名对话').slice(0, 1).toUpperCase() }}
           </span>
-          <button
-            v-if="!compact"
-            class="ghost-button icon-button conversation-delete-button"
-            type="button"
-            aria-label="删除对话"
-            @click.stop="requestDelete(conversation.id)"
-          >
-            <Delete />
-          </button>
         </button>
-      </template>
+        <button
+          v-if="!compact"
+          class="ghost-button icon-button conversation-delete-button"
+          type="button"
+          aria-label="删除对话"
+          @click="requestDelete(conversation.id)"
+        >
+          <Delete />
+        </button>
+      </div>
     </div>
 
     <div class="sidebar-account" :class="{ collapsed: compact }">

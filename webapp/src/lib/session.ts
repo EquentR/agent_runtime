@@ -1,5 +1,5 @@
-import { normalizeAuthUser, unwrapEnvelope } from './api'
-import type { ApiEnvelope, AuthUser, SessionUser, UserRole } from '../types/api'
+import { normalizeAuthUser, requestJSON } from './api'
+import type { AuthUser, SessionUser, UserRole } from '../types/api'
 
 export const SESSION_STORAGE_KEY = 'agent-runtime.user'
 
@@ -49,17 +49,7 @@ function setSessionUser(session: SessionUser | null) {
 }
 
 async function requestAuth<T>(path: string, init?: RequestInit) {
-  const response = await fetch(`/api/v1/auth${path}`, {
-    credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(init?.headers ?? {}),
-    },
-    ...init,
-  })
-
-  const payload = (await response.json()) as ApiEnvelope<T>
-  return unwrapEnvelope(payload)
+  return requestJSON<T>('/api/v1/auth', path, init)
 }
 
 export function saveSession(name: string) {

@@ -429,6 +429,69 @@ func TestConversationHandlerConversationListRecomputesStaleHiddenSystemSummaries
 	}
 }
 
+func TestConversationHandlerListConversationsDoesNotFallbackToStoredSummariesWhenVisibleSummaryRecomputeFails(t *testing.T) {
+	_, auditStore, db, server := newConversationHandlerTestServerWithDB(t)
+	staleSummaryTime := time.Date(2026, time.March, 24, 14, 0, 0, 0, time.UTC)
+	if err := db.Create(&coreagent.Conversation{
+		ID:            "conv_1",
+		ProviderID:    "openai",
+		ModelID:       "gpt-5.4",
+		Title:         "Run failed: hidden stale title",
+		LastMessage:   "Run failed: hidden stale summary",
+		MessageCount:  12,
+		LastMessageAt: &staleSummaryTime,
+	}).Error; err != nil {
+		t.Fatalf("create conversation error = %v", err)
+	}
+	if err := db.Create(&coreagent.ConversationMessage{
+		ConversationID: "conv_1",
+		Seq:            1,
+		Role:           model.RoleAssistant,
+		Content:        "visible answer",
+		MessageJSON:    []byte(`{"version":"v1","message":`),
+		TaskID:         "task_1",
+	}).Error; err != nil {
+		t.Fatalf("insert malformed visible message error = %v", err)
+	}
+	for i, taskID := range []string{"task_1", "task_2"} {
+		if _, err := auditStore.CreateRun(context.Background(), coreaudit.StartRunInput{
+			RunID:          fmt.Sprintf("run_%d", i+1),
+			TaskID:         taskID,
+			ConversationID: "conv_1",
+			TaskType:       "agent.run",
+			CreatedBy:      "tester",
+			Status:         coreaudit.StatusSucceeded,
+			SchemaVersion:  coreaudit.SchemaVersionV1,
+			StartedAt:      staleSummaryTime.Add(time.Duration(i) * time.Minute),
+		}); err != nil {
+			t.Fatalf("CreateRun(%s) error = %v", taskID, err)
+		}
+	}
+
+	resp, err := http.Get(server.URL + "/api/v1/conversations")
+	if err != nil {
+		t.Fatalf("http.Get() error = %v", err)
+	}
+	defer resp.Body.Close()
+
+	got := decodeConversationListResponse(t, resp.Body)
+	if len(got) != 1 {
+		t.Fatalf("len(conversations) = %d, want 1", len(got))
+	}
+	if got[0].Title != "" || got[0].LastMessage != "" || got[0].MessageCount != 0 {
+		t.Fatalf("conversation summary = %#v, want zero-value summary when visible summary recompute fails", got[0])
+	}
+	if got[0].LastMessageAt != nil {
+		t.Fatalf("conversation.LastMessageAt = %v, want nil when visible summary recompute fails", got[0].LastMessageAt)
+	}
+	if got[0].AuditRunID != "run_2" {
+		t.Fatalf("conversation.AuditRunID = %q, want run_2", got[0].AuditRunID)
+	}
+	if len(got[0].AuditRunIDs) != 2 || got[0].AuditRunIDs[0] != "run_1" || got[0].AuditRunIDs[1] != "run_2" {
+		t.Fatalf("conversation.AuditRunIDs = %v, want [run_1 run_2]", got[0].AuditRunIDs)
+	}
+}
+
 func TestConversationHandlerGetConversationMessagesIncludesPersistedUsage(t *testing.T) {
 	_, _, db, server := newConversationHandlerTestServerWithDB(t)
 	if err := db.Create(&coreagent.Conversation{ID: "conv_1", ProviderID: "openai", ModelID: "gpt-5.4"}).Error; err != nil {

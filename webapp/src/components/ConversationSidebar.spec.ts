@@ -46,6 +46,51 @@ describe('ConversationSidebar', () => {
     expect(wrapper.find('.sidebar-user-menu-trigger').exists()).toBe(true)
   })
 
+  it('uses non-nested actions for selection and delete controls', async () => {
+    const wrapper = mount(ConversationSidebar, {
+      global: {
+        stubs: {
+          RouterLink: {
+            props: ['to'],
+            template: '<a :href="to"><slot /></a>',
+          },
+        },
+      },
+      props: {
+        activeConversationId: 'conv_1',
+        loading: false,
+        username: 'demo-user',
+        conversations: [
+          {
+            id: 'conv_1',
+            title: 'First chat',
+            last_message: 'hello',
+            message_count: 2,
+            provider_id: 'openai',
+            model_id: 'gpt-5.4',
+            created_by: 'demo',
+            created_at: '',
+            updated_at: '',
+          },
+        ],
+      },
+    })
+
+    const conversationItem = wrapper.find('.conversation-list-item')
+    expect(conversationItem.exists()).toBe(true)
+    expect(conversationItem.findAll('button')).toHaveLength(2)
+
+    await wrapper.find('.conversation-card').trigger('click')
+    expect(wrapper.emitted('select')).toEqual([['conv_1']])
+
+    await wrapper.find('.conversation-delete-button').trigger('click')
+    expect(wrapper.emitted('select')).toEqual([['conv_1']])
+    expect(wrapper.find('.sidebar-confirm-overlay').exists()).toBe(true)
+
+    await wrapper.find('.sidebar-confirm-confirm').trigger('click')
+    expect(wrapper.emitted('delete')).toEqual([['conv_1']])
+  })
+
   it('supports collapsing workspace and uses fullscreen delete confirmation', async () => {
     const wrapper = mount(ConversationSidebar, {
       global: {

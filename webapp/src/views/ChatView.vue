@@ -23,9 +23,17 @@ import {
   streamRunTask,
   TASK_STREAM_ABORTED_MESSAGE,
 } from '../lib/api'
+import { clearChatState, loadChatState, saveChatState, scheduleChatStateSave } from '../lib/chat-state'
 import { formatConversationTitle, formatDocumentTitle } from '../lib/chat'
-import { clearChatState, loadChatState, saveChatState } from '../lib/chat-state'
+import { resolveModelSelection } from '../lib/model-selection'
 import { getSessionName, getSessionRole, logout } from '../lib/session'
+import {
+  buildApprovalEntriesFromList,
+  isTaskActive,
+  isTaskWaitingForInput,
+  TASK_WAITING_FOR_INTERACTION_REASON,
+  resolveTaskConversationId,
+} from '../lib/task-runtime'
 import {
   attachReplyMetaToLatestReply,
   buildApprovalStreamEvent,
@@ -36,7 +44,6 @@ import type {
   Conversation,
   ModelCatalog,
   ModelCatalogEntry,
-  ModelCatalogProvider,
 	QuestionInteractionSubmitInput,
   TaskDetails,
   TranscriptEntry,
@@ -127,15 +134,23 @@ function syncDocumentTitle() {
 
 watch([activeConversationId, conversations], syncDocumentTitle, { deep: true, immediate: true })
 
-function syncChatState() {
-  saveChatState({
+function currentChatState() {
+  return {
     activeConversationId: activeConversationId.value,
     activeTaskId: activeTaskId.value,
     activeTaskEventSeq: activeTaskEventSeq.value,
     entries: entries.value,
     draftEntriesByConversation: draftEntriesByConversation.value,
     selectedSkillsByConversation: selectedSkillsByConversation.value,
-  })
+  }
+}
+
+function syncChatState() {
+  scheduleChatStateSave(currentChatState())
+}
+
+function flushChatState() {
+  saveChatState(currentChatState())
 }
 
 watch([activeConversationId, activeTaskId, activeTaskEventSeq, entries, draftEntriesByConversation, selectedSkillsByConversation], syncChatState, { deep: true })
@@ -185,15 +200,26 @@ function dropPendingConversation(conversationId: string) {
   pendingConversationById.value = nextPending
 }
 
+function prunePendingConversations(loadedConversations: Conversation[]) {
+  if (Object.keys(pendingConversationById.value).length === 0) {
+    return
+  }
+  const loadedConversationIds = new Set(loadedConversations.map((conversation) => conversation.id))
+  const nextPending = Object.fromEntries(
+    Object.entries(pendingConversationById.value).filter(([conversationId]) => !loadedConversationIds.has(conversationId)),
+  )
+  if (Object.keys(nextPending).length !== Object.keys(pendingConversationById.value).length) {
+    pendingConversationById.value = nextPending
+  }
+}
+
 async function loadConversations(preferredConversationId = '') {
   sidebarLoading.value = true
 
   try {
     const loadedConversations = await fetchConversations()
     conversations.value = Array.isArray(loadedConversations) ? loadedConversations : []
-    for (const conversation of conversations.value) {
-      dropPendingConversation(conversation.id)
-    }
+    prunePendingConversations(conversations.value)
 
     if (preferredConversationId) {
       activeConversationId.value = preferredConversationId
@@ -294,16 +320,8 @@ async function handleDeleteConversation(conversationId: string) {
   }
 }
 
-function resolveTaskConversationId(task: TaskDetails | null | undefined) {
-  return task?.result?.conversation_id ?? task?.result_json?.conversation_id ?? task?.input?.conversation_id ?? ''
-}
-
-function isTaskActive(task: TaskDetails | null | undefined) {
-  return task?.status === 'queued' || task?.status === 'running' || task?.status === 'waiting' || task?.status === 'cancel_requested'
-}
-
 async function hydratePendingApprovals(task: TaskDetails | null | undefined, conversationId = '') {
-  if (!task || task.status !== 'waiting' || (task.suspend_reason !== 'waiting_for_tool_approval' && task.suspend_reason !== 'waiting_for_interaction')) {
+  if (!task || !isTaskWaitingForInput(task)) {
     return
   }
 
@@ -312,36 +330,33 @@ async function hydratePendingApprovals(task: TaskDetails | null | undefined, con
     return
   }
 
-	let nextEntries = draftEntriesByConversation.value[taskConversationId] ?? (taskConversationId === activeConversationId.value ? entries.value : [])
-	if (task.suspend_reason === 'waiting_for_interaction') {
-		try {
-			const interactions = await fetchTaskInteractions(task.id)
-			for (const interaction of interactions.filter((item) => item.status === 'pending')) {
-				nextEntries = updateTranscriptFromStreamEvent(nextEntries, {
-					type: 'interaction.requested',
-					payload: interaction as unknown as Record<string, unknown>,
-				})
-			}
-			applyEntriesForConversation(taskConversationId, nextEntries)
-			return
-		} catch {
-			return
-		}
-	}
-	let approvals
-	try {
-		approvals = await fetchTaskApprovals(task.id)
-	} catch {
-		return
-	}
-	const pendingApprovals = approvals.filter((approval) => approval.status === 'pending')
+  let nextEntries = draftEntriesByConversation.value[taskConversationId] ?? (taskConversationId === activeConversationId.value ? entries.value : [])
+  if (task.suspend_reason === TASK_WAITING_FOR_INTERACTION_REASON) {
+    try {
+      const interactions = await fetchTaskInteractions(task.id)
+      for (const interaction of interactions.filter((item) => item.status === 'pending')) {
+        nextEntries = updateTranscriptFromStreamEvent(nextEntries, {
+          type: 'interaction.requested',
+          payload: interaction as unknown as Record<string, unknown>,
+        })
+      }
+      applyEntriesForConversation(taskConversationId, nextEntries)
+      return
+    } catch {
+      return
+    }
+  }
+  let approvals
+  try {
+    approvals = await fetchTaskApprovals(task.id)
+  } catch {
+    return
+  }
+  const pendingApprovals = approvals.filter((approval) => approval.status === 'pending')
   if (pendingApprovals.length === 0) {
-		return
-	}
-	for (const approval of pendingApprovals) {
-		nextEntries = updateTranscriptFromStreamEvent(nextEntries, buildApprovalStreamEvent(approval, { type: 'approval.requested' }))
-	}
-	applyEntriesForConversation(taskConversationId, nextEntries)
+    return
+  }
+  applyEntriesForConversation(taskConversationId, buildApprovalEntriesFromList(pendingApprovals, nextEntries))
 }
 
 function stopActiveStream() {
@@ -381,24 +396,10 @@ async function completeTaskConversation(conversationId: string, usage?: Transcri
   syncSelectionFromConversation(conversationId)
 }
 
-function resolveProvider(providerId: string) {
-  return availableProviders.value.find((provider) => provider.id === providerId) ?? null
-}
-
-function resolveProviderDefaultModel(provider: ModelCatalogProvider | null, fallbackModelId = '') {
-  if (!provider) {
-    return ''
-  }
-  if (fallbackModelId && provider.models.some((model) => model.id === fallbackModelId)) {
-    return fallbackModelId
-  }
-  return provider.models[0]?.id ?? ''
-}
-
 function applySelection(providerId: string, modelId: string) {
-  const provider = resolveProvider(providerId) ?? availableProviders.value[0] ?? null
-  selectedProviderId.value = provider?.id ?? ''
-  selectedModelId.value = resolveProviderDefaultModel(provider, modelId)
+  const nextSelection = resolveModelSelection(modelCatalog.value, providerId, modelId)
+  selectedProviderId.value = nextSelection.providerId
+  selectedModelId.value = nextSelection.modelId
 }
 
 function applyDefaultSelection() {
@@ -803,9 +804,8 @@ onMounted(async () => {
   entries.value = saved.entries
   draftEntriesByConversation.value = saved.draftEntriesByConversation
   selectedSkillsByConversation.value = saved.selectedSkillsByConversation
-  await loadCatalog()
-  await loadAvailableSkills()
-  await loadConversations()
+
+  await Promise.all([loadCatalog(), loadAvailableSkills(), loadConversations()])
   if (!activeConversationId.value || !syncSelectionFromConversation(activeConversationId.value)) {
     applyDefaultSelection()
   }
@@ -817,6 +817,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  flushChatState()
   stopActiveStream()
   window.removeEventListener('resize', syncSidebarViewport)
   window.removeEventListener('pointerdown', handleGlobalPointerDown)

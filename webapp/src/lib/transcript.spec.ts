@@ -414,6 +414,97 @@ describe('updateTranscriptFromStreamEvent', () => {
     expect(entries[1]).toMatchObject({ title: '工具调用', status: 'running' })
   })
 
+
+  it('uses the shared conversation normalizer for completed stream assistant messages', () => {
+    const entries = updateTranscriptFromStreamEvent([], {
+      type: 'log.message',
+      payload: {
+        Kind: 'completed',
+        Message: {
+          role: 'assistant',
+          content: 'Final answer',
+          providerId: 'openai',
+          modelId: 'gpt-5.4',
+          Usage: {
+            PromptTokens: 240,
+            CompletionTokens: 80,
+            TotalTokens: 320,
+          },
+        },
+      },
+    })
+
+    expect(entries).toHaveLength(1)
+    expect(entries[0]).toMatchObject({
+      kind: 'reply',
+      content: 'Final answer',
+      provider_id: 'openai',
+      model_id: 'gpt-5.4',
+      token_usage: {
+        prompt_tokens: 240,
+        completion_tokens: 80,
+        total_tokens: 320,
+      },
+    })
+  })
+
+  it('does not throw and emits safe output for completed stream payloads with malformed message fields', () => {
+    expect(() =>
+      updateTranscriptFromStreamEvent([], {
+        type: 'log.message',
+        payload: {
+          Kind: 'completed',
+          Message: {
+            role: 'assistant',
+            Content: { nested: true },
+            Reasoning: ['trace'],
+            ToolCallID: 42,
+            providerId: { bad: true },
+            modelId: 99,
+            tool_calls: [{ id: 123, name: { nested: true }, arguments: { json: true } }],
+          },
+        },
+      }),
+    ).not.toThrow()
+
+    const entries = updateTranscriptFromStreamEvent([], {
+      type: 'log.message',
+      payload: {
+        Kind: 'completed',
+        Message: {
+          role: 'assistant',
+          Content: { nested: true },
+          Reasoning: ['trace'],
+          ToolCallID: 42,
+          providerId: { bad: true },
+          modelId: 99,
+          tool_calls: [{ id: 123, name: { nested: true }, arguments: { json: true } }],
+        },
+      },
+    })
+
+    expect(entries).toEqual([
+      expect.objectContaining({
+        kind: 'tool',
+        status: 'running',
+        details: [
+          expect.objectContaining({
+            key: '123',
+            label: 'Tool',
+            blocks: [
+              expect.objectContaining({
+                label: 'Result',
+                value: 'Running...',
+              }),
+            ],
+          }),
+        ],
+      }),
+    ])
+    expect(entries.some((entry) => typeof entry.content !== 'undefined' && typeof entry.content !== 'string')).toBe(false)
+    expect(entries[0].details?.some((detail) => detail.blocks?.some((block) => typeof block.value !== 'string'))).toBe(false)
+  })
+
   it('stops the matching tool spinner when a tool message arrives for the same tool_call_id', () => {
     let entries: TranscriptEntry[] = []
 

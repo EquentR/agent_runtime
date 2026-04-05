@@ -79,14 +79,7 @@ func (r *Runtime) CreateApproval(ctx context.Context, input approvals.CreateAppr
 	if input.TaskID == "" {
 		input.TaskID = r.taskID
 	}
-	approval, err := r.manager.CreateApproval(ctx, input)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := r.manager.ensureApprovalInteraction(ctx, approval); err != nil {
-		return nil, err
-	}
-	return approval, nil
+	return r.manager.CreateApproval(ctx, input)
 }
 
 // CreateInteraction 基于当前任务创建可恢复的人工交互记录。

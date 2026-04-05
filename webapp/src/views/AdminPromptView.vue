@@ -15,10 +15,11 @@ import {
   updatePromptBinding,
   updatePromptDocument,
 } from '../lib/api'
+import { resolveModelSelection } from '../lib/model-selection'
+import { formatCompactTimestamp } from '../lib/time'
 import type {
   ModelCatalog,
   ModelCatalogEntry,
-  ModelCatalogProvider,
   PromptBinding,
   PromptBindingInput,
   PromptDocument,
@@ -91,7 +92,7 @@ const isCreatingDocument = computed(() => !selectedDocument.value)
 const bindingPaneLocked = computed(() => savingDocument.value || savingBinding.value)
 const bindingFormVisible = computed(() => bindingEditorMode.value !== 'idle')
 const selectedBindingId = computed(() => (bindingEditorMode.value === 'edit' ? bindingDraft.value.id : null))
-const availableBindingProviders = computed<ModelCatalogProvider[]>(() => {
+const availableBindingProviders = computed(() => {
   const providers = modelCatalog.value?.providers ?? []
   const currentProviderId = bindingDraft.value.provider_id.trim()
   if (!currentProviderId || providers.some((provider) => provider.id === currentProviderId)) {
@@ -359,25 +360,15 @@ function patchBindingDraft(patch: Partial<BindingDraft>) {
   bindingDraft.value = { ...bindingDraft.value, ...patch }
 }
 
-function resolveBindingProvider(providerId: string) {
-  return availableBindingProviders.value.find((provider) => provider.id === providerId) ?? null
-}
-
-function resolveBindingProviderDefaultModel(provider: ModelCatalogProvider | null, fallbackModelId = '') {
-  if (!provider) {
-    return fallbackModelId
-  }
-  if (fallbackModelId && provider.models.some((model) => model.id === fallbackModelId)) {
-    return fallbackModelId
-  }
-  return provider.models[0]?.id ?? ''
-}
-
 function patchBindingProvider(providerId: string) {
-  const provider = resolveBindingProvider(providerId)
+  const { providerId: nextProviderId, modelId } = resolveModelSelection(
+    availableBindingProviders.value,
+    providerId,
+    bindingDraft.value.model_id,
+  )
   patchBindingDraft({
-    provider_id: providerId,
-    model_id: providerId ? resolveBindingProviderDefaultModel(provider, bindingDraft.value.model_id) : '',
+    provider_id: providerId ? nextProviderId : '',
+    model_id: providerId ? modelId : '',
   })
 }
 
@@ -392,11 +383,6 @@ async function ensureModelCatalogLoaded() {
   } finally {
     catalogLoading.value = false
   }
-}
-
-function formatTime(value: string) {
-  if (!value) return '--'
-  return value.replace('T', ' ').slice(0, 16)
 }
 
 async function openBindingDialog() {
@@ -656,7 +642,7 @@ onBeforeUnmount(() => {
             </div>
             <div class="admin-audit-conversation-meta conversation-meta">
               <span class="truncate-text">{{ document.scope }}</span>
-              <span class="admin-audit-conversation-time">{{ formatTime(document.updated_at) }}</span>
+              <span class="admin-audit-conversation-time">{{ formatCompactTimestamp(document.updated_at) }}</span>
             </div>
           </div>
           <button class="ghost-button icon-button conversation-delete-button" type="button" :data-document-delete="document.id" :disabled="savingDocument || deletingDocumentId === document.id" aria-label="删除提示词" @click.stop="handleDeleteDocument(document.id)">

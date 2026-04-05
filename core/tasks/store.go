@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/EquentR/agent_runtime/pkg/jsonutil"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -975,17 +976,7 @@ func appendEventTx(tx *gorm.DB, taskID string, eventType string, level string, p
 
 // marshalJSON 将任意值规范化为 JSON 原始字节。
 func marshalJSON(value any, objectDefault bool) (json.RawMessage, error) {
-	if value == nil {
-		if objectDefault {
-			return json.RawMessage("{}"), nil
-		}
-		return json.RawMessage("null"), nil
-	}
-	raw, err := json.Marshal(value)
-	if err != nil {
-		return nil, err
-	}
-	return json.RawMessage(raw), nil
+	return jsonutil.MarshalRawMessage(value, objectDefault)
 }
 
 // cloneRawMessage 复制 JSON 原始字节，避免共享底层切片。

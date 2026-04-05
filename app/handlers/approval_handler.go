@@ -165,7 +165,7 @@ func (h *ApprovalHandler) handleDecideApproval() (method, relativePath string, w
 		resolved, err := h.manager.ResolveTaskApproval(c.Request.Context(), task.ID, c.Param("approvalID"), approvals.ResolveApprovalInput{
 			Decision:   decision,
 			Reason:     strings.TrimSpace(request.Reason),
-			DecisionBy: h.resolveDecisionBy(c, task),
+			DecisionBy: resolveTaskActor(c, task),
 		})
 		if err != nil {
 			if errors.Is(err, approvals.ErrApprovalNotFound) {
@@ -184,38 +184,5 @@ func (h *ApprovalHandler) loadAccessibleTask(c *gin.Context) (*coretasks.Task, [
 	if h.approvals == nil {
 		return nil, nil, fmt.Errorf("approval store is not configured")
 	}
-	task, err := h.manager.GetTask(c.Request.Context(), c.Param("id"))
-	if err != nil {
-		if errors.Is(err, coretasks.ErrTaskNotFound) {
-			return nil, []resp.ResOpt{resp.WithCode(http.StatusNotFound)}, err
-		}
-		return nil, nil, err
-	}
-	if err := h.ensureTaskAccess(c, task); err != nil {
-		if errors.Is(err, errConversationAccessDenied) || err.Error() == "无权访问该任务" {
-			return nil, []resp.ResOpt{resp.WithCode(http.StatusUnauthorized)}, err
-		}
-		return nil, nil, err
-	}
-	return task, nil, nil
-}
-
-func (h *ApprovalHandler) ensureTaskAccess(c *gin.Context, task *coretasks.Task) error {
-	if !h.authRequired || task == nil {
-		return nil
-	}
-	if user := currentAuthUser(c); user != nil && user.Username == task.CreatedBy {
-		return nil
-	}
-	return fmt.Errorf("无权访问该任务")
-}
-
-func (h *ApprovalHandler) resolveDecisionBy(c *gin.Context, task *coretasks.Task) string {
-	if user := currentAuthUser(c); user != nil && user.Username != "" {
-		return user.Username
-	}
-	if task == nil {
-		return ""
-	}
-	return task.CreatedBy
+	return loadOwnedTask(c, h.manager, h.authRequired)
 }

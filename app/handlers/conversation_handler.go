@@ -223,7 +223,7 @@ func (h *ConversationHandler) enrichConversations(ctx context.Context, conversat
 	}
 	enriched := make([]coreagent.Conversation, 0, len(conversations))
 	for _, conversation := range conversations {
-		enriched = append(enriched, h.enrichConversation(ctx, &conversation))
+		enriched = append(enriched, h.enrichConversationListItem(ctx, &conversation))
 	}
 	sort.SliceStable(enriched, func(i, j int) bool {
 		left := enriched[i]
@@ -247,6 +247,28 @@ func (h *ConversationHandler) enrichConversations(ctx context.Context, conversat
 	return enriched
 }
 
+func (h *ConversationHandler) enrichConversationListItem(ctx context.Context, conversation *coreagent.Conversation) coreagent.Conversation {
+	if conversation == nil {
+		return coreagent.Conversation{}
+	}
+	enriched := *conversation
+	if h.store != nil && conversation.ID != "" {
+		title, lastMessage, messageCount, lastMessageAt, err := h.store.BuildVisibleConversationSummary(ctx, conversation.ID)
+		if err == nil {
+			enriched.Title = title
+			enriched.LastMessage = lastMessage
+			enriched.MessageCount = messageCount
+			enriched.LastMessageAt = lastMessageAt
+		} else {
+			enriched.Title = ""
+			enriched.LastMessage = ""
+			enriched.MessageCount = 0
+			enriched.LastMessageAt = nil
+		}
+	}
+	return h.enrichConversationAuditMetadata(ctx, enriched)
+}
+
 func (h *ConversationHandler) enrichConversation(ctx context.Context, conversation *coreagent.Conversation) coreagent.Conversation {
 	if conversation == nil {
 		return coreagent.Conversation{}
@@ -261,19 +283,23 @@ func (h *ConversationHandler) enrichConversation(ctx context.Context, conversati
 			enriched.LastMessageAt = lastMessageAt
 		}
 	}
+	return h.enrichConversationAuditMetadata(ctx, enriched)
+}
+
+func (h *ConversationHandler) enrichConversationAuditMetadata(ctx context.Context, conversation coreagent.Conversation) coreagent.Conversation {
 	if h.auditStore == nil || conversation.ID == "" {
-		return enriched
+		return conversation
 	}
 	runs, err := h.auditStore.ListRunsByConversationID(ctx, conversation.ID)
 	if err == nil && len(runs) > 0 {
-		enriched.AuditRunID = runs[len(runs)-1].ID // 保持向后兼容
+		conversation.AuditRunID = runs[len(runs)-1].ID // 保持向后兼容
 		ids := make([]string, len(runs))
 		for i, r := range runs {
 			ids[i] = r.ID
 		}
-		enriched.AuditRunIDs = ids
+		conversation.AuditRunIDs = ids
 	}
-	return enriched
+	return conversation
 }
 
 func isAdminUser(user *models.User) bool {

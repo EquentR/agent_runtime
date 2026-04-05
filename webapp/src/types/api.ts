@@ -204,12 +204,23 @@ export interface ModelCatalogEntry {
   type: string
 }
 
+export type TaskStatus =
+  | 'queued'
+  | 'running'
+  | 'waiting'
+  | 'cancel_requested'
+  | 'cancelled'
+  | 'succeeded'
+  | 'failed'
+
+export type TaskSuspendReason = 'waiting_for_tool_approval' | 'waiting_for_interaction' | string
+
 export interface TaskSnapshot {
   id: string
   task_type: string
-  status: 'queued' | 'running' | 'waiting' | 'cancel_requested' | 'cancelled' | 'succeeded' | 'failed'
+  status: TaskStatus
   input?: TaskInput
-  suspend_reason?: string
+  suspend_reason?: TaskSuspendReason
   created_by: string
   created_at: string
   updated_at: string

@@ -5,6 +5,7 @@ import { CircleCheckFilled, CopyDocument, Operation, WarningFilled } from '@elem
 
 import ApprovalRecordCard from './ApprovalRecordCard.vue'
 import { formatMessageContent } from '../lib/chat'
+import { normalizeQuestionEntry } from '../lib/question-entry'
 import type { QuestionInteractionSubmitInput, TranscriptEntry, TranscriptEntryDetail } from '../types/api'
 
 const props = withDefaults(defineProps<{
@@ -28,40 +29,28 @@ const questionCustomTextById = ref<Record<string, string>>({})
 
 const customQuestionOptionValue = '__custom__'
 
+function normalizedQuestion(entry: TranscriptEntry) {
+  return normalizeQuestionEntry(entry)
+}
+
 function questionOptions(entry: TranscriptEntry) {
-  if (entry.kind !== 'question') {
-    return []
-  }
-  const raw = entry.question_interaction?.request_json?.options
-  return Array.isArray(raw) ? raw.map((item) => String(item)).filter(Boolean) : []
+  return normalizedQuestion(entry).options
 }
 
 function questionPrompt(entry: TranscriptEntry) {
-  if (entry.kind !== 'question') {
-    return ''
-  }
-  return String(entry.question_interaction?.request_json?.question ?? '')
+  return normalizedQuestion(entry).prompt
 }
 
 function questionPlaceholder(entry: TranscriptEntry) {
-  if (entry.kind !== 'question') {
-    return ''
-  }
-  return String(entry.question_interaction?.request_json?.placeholder ?? '补充你的回答')
+  return normalizedQuestion(entry).placeholder
 }
 
 function questionAllowsCustom(entry: TranscriptEntry) {
-  if (entry.kind !== 'question') {
-    return false
-  }
-  return entry.question_interaction?.request_json?.allow_custom === true
+  return normalizedQuestion(entry).allowCustom
 }
 
 function questionMultiple(entry: TranscriptEntry) {
-  if (entry.kind !== 'question') {
-    return false
-  }
-  return entry.question_interaction?.request_json?.multiple === true
+  return normalizedQuestion(entry).multiple
 }
 
 function questionSelection(entry: TranscriptEntry) {
@@ -153,33 +142,7 @@ function questionSubmissionLocked(entry: TranscriptEntry) {
 }
 
 function questionFinalAnswer(entry: TranscriptEntry) {
-  if (entry.kind !== 'question') {
-    return ''
-  }
-
-  const response = entry.question_interaction?.response_json
-  if (!response || typeof response !== 'object') {
-    return ''
-  }
-
-  const parts: string[] = []
-  const selectedOptionId = typeof response.selected_option_id === 'string' ? response.selected_option_id.trim() : ''
-  const selectedOptionIds = Array.isArray(response.selected_option_ids)
-    ? response.selected_option_ids.map((value) => String(value).trim()).filter(Boolean)
-    : []
-  const customText = typeof response.custom_text === 'string' ? response.custom_text.trim() : ''
-
-  if (selectedOptionId) {
-    parts.push(selectedOptionId)
-  }
-  if (selectedOptionIds.length > 0) {
-    parts.push(selectedOptionIds.join('、'))
-  }
-  if (customText) {
-    parts.push(customText)
-  }
-
-  return parts.join('\n')
+  return normalizedQuestion(entry).finalAnswer
 }
 
 function chooseQuestionOption(entry: TranscriptEntry, option: string) {

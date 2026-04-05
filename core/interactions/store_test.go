@@ -131,6 +131,27 @@ func TestStoreCreateInteractionPersistsResponseMetadataForResolvedStatus(t *test
 	}
 }
 
+func TestStoreCreateInteractionTreatsRawNullResponseAsEmpty(t *testing.T) {
+	store := newInteractionStoreForTest(t)
+	now := time.Date(2026, time.April, 5, 12, 0, 0, 0, time.UTC)
+
+	created, err := store.CreateInteraction(context.Background(), CreateInteractionInput{
+		TaskID:      "task_1",
+		Kind:        KindQuestion,
+		Status:      StatusResponded,
+		Request:     map[string]any{"prompt": "Which environment?"},
+		Response:    json.RawMessage(" null "),
+		RespondedBy: "alice",
+		RespondedAt: &now,
+	})
+	if err != nil {
+		t.Fatalf("CreateInteraction() error = %v", err)
+	}
+	if len(created.ResponseJSON) != 0 {
+		t.Fatalf("created.ResponseJSON = %s, want empty response bytes", string(created.ResponseJSON))
+	}
+}
+
 func TestStoreGetInteractionRequiresTaskScope(t *testing.T) {
 	store := newInteractionStoreForTest(t)
 	_, err := store.GetInteraction(context.Background(), "", "interaction_1")

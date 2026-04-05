@@ -291,6 +291,32 @@ describe('AdminPromptView', () => {
     })
   })
 
+
+  it('falls back to the provider default model when a stale binding model is no longer available', async () => {
+    api.fetchPromptBindings.mockResolvedValue([
+      buildBinding({
+        id: 21,
+        provider_id: 'openai',
+        model_id: 'missing-model',
+      }),
+    ])
+
+    const wrapper = await mountAdminPromptView()
+    if (!wrapper) return
+
+    await flushPromises()
+    await openBindingDialog(wrapper)
+    await wrapper.get('[data-binding-edit="21"]').trigger('click')
+    await flushPromises()
+
+    expect((wrapper.get('[data-binding-model-input]').element as HTMLSelectElement).value).toBe('missing-model')
+
+    await wrapper.get('[data-binding-provider-input]').setValue('openai')
+    await flushPromises()
+
+    expect((wrapper.get('[data-binding-model-input]').element as HTMLSelectElement).value).toBe('gpt-5.4')
+  })
+
   it('deletes a binding from the dialog and keeps the panel height stable', async () => {
     api.deletePromptBinding.mockResolvedValue({ deleted: true })
 

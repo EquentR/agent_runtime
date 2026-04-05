@@ -2432,10 +2432,10 @@ func TestRunTaskInputDeserializesSkillsFromJSON(t *testing.T) {
 }
 
 func TestNormalizeSkillNamesTrimsDeduplicatesAndFiltersEmpty(t *testing.T) {
-	got := normalizeSkillNames([]string{" debugging ", "", "review", "debugging", "  ", "review"})
+	got := coreskills.NormalizeNames([]string{" debugging ", "", "review", "debugging", "  ", "review"})
 	want := []string{"debugging", "review"}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("normalizeSkillNames() = %#v, want %#v", got, want)
+		t.Fatalf("NormalizeNames() = %#v, want %#v", got, want)
 	}
 }
 

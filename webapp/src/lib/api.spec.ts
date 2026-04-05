@@ -30,7 +30,39 @@ describe('auth normalization helpers', () => {
   })
 })
 
-describe('approval API helpers', () => {
+describe('conversation message normalization helpers', () => {
+  it('normalizes stream-shaped assistant messages through the shared conversation normalizer', () => {
+    expect(normalizeConversationMessage({
+      role: 'assistant',
+      content: 'Done.',
+      providerId: 'openai',
+      modelId: 'gpt-5.4',
+      Usage: {
+        PromptTokens: 120,
+        CompletionTokens: 30,
+        TotalTokens: 150,
+      },
+      ToolCalls: [{ ID: 'call_1', Name: 'read_file', Arguments: '{"path":"README.md"}' }],
+    } as any)).toEqual({
+      role: 'assistant',
+      content: 'Done.',
+      provider_id: 'openai',
+      model_id: 'gpt-5.4',
+      provider_data: undefined,
+      usage: {
+        prompt_tokens: 120,
+        completion_tokens: 30,
+        total_tokens: 150,
+      },
+      reasoning: '',
+      tool_call_id: '',
+      reasoning_items: undefined,
+      tool_calls: [{ id: 'call_1', name: 'read_file', arguments: '{"path":"README.md"}' }],
+    })
+  })
+})
+
+describe('task approval API helpers', () => {
   beforeEach(() => {
     vi.restoreAllMocks()
     vi.stubGlobal('fetch', vi.fn())
@@ -449,433 +481,6 @@ describe('audit API helpers', () => {
     expect(runs).toEqual([expect.objectContaining({ id: 'run_1', conversation_id: 'conv_1' })])
   })
 })
-describe('auth normalization helpers', () => {
-  it('includes role from backend auth payloads', async () => {
-    const api = (await import('./api')) as Record<string, unknown>
-
-    expect(typeof api.normalizeAuthUser).toBe('function')
-
-    if (typeof api.normalizeAuthUser !== 'function') {
-      return
-    }
-
-    expect(api.normalizeAuthUser({ id: 7, username: ' admin ', role: 'admin' })).toEqual({
-      id: 7,
-      username: 'admin',
-      role: 'admin',
-    })
-  })
-})
-
-describe('approval API helpers', () => {
-  beforeEach(() => {
-    vi.restoreAllMocks()
-    vi.stubGlobal('fetch', vi.fn())
-  })
-
-  it('normalizes approval payloads from REST and SSE shapes', () => {
-    expect(
-      normalizeToolApproval({
-        ID: 'approval_1',
-        TaskID: 'task_1',
-        ConversationID: 'conv_1',
-        StepIndex: 3,
-        ToolCallID: 'call_1',
-        ToolName: 'bash',
-        ArgumentsSummary: 'rm -rf /tmp/demo',
-        RiskLevel: 'high',
-        Reason: 'dangerous filesystem mutation',
-        Status: 'pending',
-      } as any),
-    ).toMatchObject({
-      id: 'approval_1',
-      task_id: 'task_1',
-      conversation_id: 'conv_1',
-      step_index: 3,
-      tool_call_id: 'call_1',
-      tool_name: 'bash',
-      arguments_summary: 'rm -rf /tmp/demo',
-      risk_level: 'high',
-      reason: 'dangerous filesystem mutation',
-      status: 'pending',
-    })
-  })
-
-  it('lists approvals and submits approval decisions with shared helpers', async () => {
-    vi.mocked(fetch)
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          ok: true,
-          code: 200,
-          message: 'OK',
-          data: [
-            {
-              id: 'approval_1',
-              task_id: 'task_1',
-              conversation_id: 'conv_1',
-              step_index: 3,
-              tool_call_id: 'call_1',
-              tool_name: 'bash',
-              arguments_summary: 'rm -rf /tmp/demo',
-              risk_level: 'high',
-              reason: 'dangerous filesystem mutation',
-              status: 'pending',
-              created_at: '2026-03-29T09:00:00Z',
-              updated_at: '2026-03-29T09:00:00Z',
-            },
-          ],
-          time: '',
-        }),
-      } as Response)
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          ok: true,
-          code: 200,
-          message: 'OK',
-          data: {
-            id: 'approval_1',
-            task_id: 'task_1',
-            conversation_id: 'conv_1',
-            step_index: 3,
-            tool_call_id: 'call_1',
-            tool_name: 'bash',
-            arguments_summary: 'rm -rf /tmp/demo',
-            risk_level: 'high',
-            status: 'approved',
-            decision_by: 'demo-user',
-            decision_reason: 'looks safe now',
-            decision_at: '2026-03-29T09:01:00Z',
-            created_at: '2026-03-29T09:00:00Z',
-            updated_at: '2026-03-29T09:01:00Z',
-          },
-          time: '',
-        }),
-      } as Response)
-
-    const api = (await import('./api')) as Record<string, unknown>
-
-    expect(typeof api.fetchTaskApprovals).toBe('function')
-    expect(typeof api.decideTaskApproval).toBe('function')
-
-    if (typeof api.fetchTaskApprovals !== 'function' || typeof api.decideTaskApproval !== 'function') {
-      return
-    }
-
-    const approvals = await api.fetchTaskApprovals('task_1')
-    const resolved = await api.decideTaskApproval('task_1', 'approval_1', {
-      decision: 'approve',
-      reason: 'looks safe now',
-    })
-
-    expect(fetch).toHaveBeenNthCalledWith(1, '/api/v1/tasks/task_1/approvals', expect.objectContaining({ credentials: 'include' }))
-    expect(fetch).toHaveBeenNthCalledWith(
-      2,
-      '/api/v1/tasks/task_1/approvals/approval_1/decision',
-      expect.objectContaining({
-        credentials: 'include',
-        method: 'POST',
-        body: JSON.stringify({ decision: 'approve', reason: 'looks safe now' }),
-      }),
-    )
-    expect(approvals).toEqual([
-      expect.objectContaining({ id: 'approval_1', task_id: 'task_1', reason: 'dangerous filesystem mutation', status: 'pending' }),
-    ])
-    expect(resolved).toMatchObject({ id: 'approval_1', status: 'approved', decision_reason: 'looks safe now' })
-  })
-
-  it('submits task cancellation through the shared helper', async () => {
-    vi.mocked(fetch).mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({
-        ok: true,
-        code: 200,
-        message: 'OK',
-        data: {
-          id: 'task_1',
-          task_type: 'agent.run',
-          status: 'cancel_requested',
-          input: { conversation_id: 'conv_1' },
-          created_by: 'demo-user',
-          created_at: '2026-03-29T09:00:00Z',
-          updated_at: '2026-03-29T09:01:00Z',
-        },
-        time: '',
-      }),
-    } as Response)
-
-    const task = await cancelTask('task_1')
-
-    expect(fetch).toHaveBeenCalledWith(
-      '/api/v1/tasks/task_1/cancel',
-      expect.objectContaining({
-        credentials: 'include',
-        method: 'POST',
-      }),
-    )
-    expect(task).toMatchObject({ id: 'task_1', status: 'cancel_requested' })
-  })
-})
-
-describe('audit API helpers', () => {
-  beforeEach(() => {
-    vi.restoreAllMocks()
-    vi.stubGlobal('fetch', vi.fn())
-  })
-
-  it('fetches audit run, events, and replay payloads from the backend', async () => {
-    vi.mocked(fetch)
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          ok: true,
-          code: 200,
-          message: 'OK',
-          data: {
-            id: 'run_1',
-            task_id: 'task_1',
-            conversation_id: 'conv_1',
-            task_type: 'agent.run',
-            provider_id: 'openai',
-            model_id: 'gpt-5.4',
-            runner_id: 'runner_1',
-            status: 'succeeded',
-            created_by: 'alice',
-            replayable: true,
-            schema_version: 'v1',
-            created_at: '2026-03-22T09:00:00Z',
-            updated_at: '2026-03-22T09:00:02Z',
-          },
-          time: '',
-        }),
-      } as Response)
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          ok: true,
-          code: 200,
-          message: 'OK',
-          data: [
-            {
-              id: 1,
-              run_id: 'run_1',
-              task_id: 'task_1',
-              seq: 1,
-              phase: 'run',
-              event_type: 'run.started',
-              level: 'info',
-              step_index: 0,
-              parent_seq: 0,
-              ref_artifact_id: '',
-              payload: { status: 'running' },
-              created_at: '2026-03-22T09:00:00Z',
-            },
-          ],
-          time: '',
-        }),
-      } as Response)
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          ok: true,
-          code: 200,
-          message: 'OK',
-          data: {
-            run: {
-              id: 'run_1',
-              task_id: 'task_1',
-              conversation_id: 'conv_1',
-              task_type: 'agent.run',
-              provider_id: 'openai',
-              model_id: 'gpt-5.4',
-              runner_id: 'runner_1',
-              status: 'succeeded',
-              created_by: 'alice',
-              replayable: true,
-              schema_version: 'v1',
-              created_at: '2026-03-22T09:00:00Z',
-              updated_at: '2026-03-22T09:00:02Z',
-            },
-            timeline: [
-              {
-                seq: 1,
-                phase: 'run',
-                event_type: 'run.started',
-                level: 'info',
-                step_index: 0,
-                parent_seq: 0,
-                payload: { status: 'running' },
-                created_at: '2026-03-22T09:00:00Z',
-              },
-            ],
-            artifacts: [],
-          },
-          time: '',
-        }),
-      } as Response)
-
-    const api = (await import('./api')) as Record<string, unknown>
-
-    expect(typeof api.fetchAuditRun).toBe('function')
-    expect(typeof api.fetchAuditRunEvents).toBe('function')
-    expect(typeof api.fetchAuditRunReplay).toBe('function')
-
-    if (
-      typeof api.fetchAuditRun !== 'function' ||
-      typeof api.fetchAuditRunEvents !== 'function' ||
-      typeof api.fetchAuditRunReplay !== 'function'
-    ) {
-      return
-    }
-
-    const run = await api.fetchAuditRun('run_1')
-    const events = await api.fetchAuditRunEvents('run_1')
-    const replay = await api.fetchAuditRunReplay('run_1')
-
-    expect(fetch).toHaveBeenNthCalledWith(1, '/api/v1/audit/runs/run_1', expect.objectContaining({ credentials: 'include' }))
-    expect(fetch).toHaveBeenNthCalledWith(2, '/api/v1/audit/runs/run_1/events', expect.objectContaining({ credentials: 'include' }))
-    expect(fetch).toHaveBeenNthCalledWith(3, '/api/v1/audit/runs/run_1/replay', expect.objectContaining({ credentials: 'include' }))
-    expect(run).toMatchObject({ id: 'run_1', conversation_id: 'conv_1', created_by: 'alice' })
-    expect(events).toEqual([
-      expect.objectContaining({ run_id: 'run_1', event_type: 'run.started', payload: { status: 'running' } }),
-    ])
-    expect(replay).toMatchObject({
-      run: expect.objectContaining({ id: 'run_1', conversation_id: 'conv_1' }),
-      timeline: [expect.objectContaining({ event_type: 'run.started' })],
-      artifacts: [],
-    })
-  })
-
-  it('fetches all audit runs for a conversation via the conversation-level endpoint', async () => {
-    vi.mocked(fetch).mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({
-        ok: true,
-        code: 200,
-        message: 'OK',
-        data: [
-          {
-            id: 'run_1',
-            task_id: 'task_1',
-            conversation_id: 'conv_1',
-            task_type: 'agent.run',
-            status: 'succeeded',
-            created_by: 'alice',
-            schema_version: 'v1',
-            created_at: '2026-03-22T09:00:00Z',
-          },
-          {
-            id: 'run_2',
-            task_id: 'task_2',
-            conversation_id: 'conv_1',
-            task_type: 'agent.run',
-            status: 'succeeded',
-            created_by: 'alice',
-            schema_version: 'v1',
-            created_at: '2026-03-22T09:05:00Z',
-          },
-        ],
-        time: '',
-      }),
-    } as Response)
-
-    const api = (await import('./api')) as Record<string, unknown>
-
-    expect(typeof api.fetchAuditConversationRuns).toBe('function')
-
-    if (typeof api.fetchAuditConversationRuns !== 'function') {
-      return
-    }
-
-    const runs = await api.fetchAuditConversationRuns('conv_1')
-
-    expect(fetch).toHaveBeenCalledWith(
-      '/api/v1/audit/conversations/conv_1/runs',
-      expect.objectContaining({ credentials: 'include' }),
-    )
-    expect(runs).toHaveLength(2)
-    expect(runs).toEqual([
-      expect.objectContaining({ id: 'run_1', conversation_id: 'conv_1' }),
-      expect.objectContaining({ id: 'run_2', conversation_id: 'conv_1' }),
-    ])
-  })
-
-  it('fetches all audit events for a conversation via the conversation-level endpoint', async () => {
-    vi.mocked(fetch).mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({
-        ok: true,
-        code: 200,
-        message: 'OK',
-        data: [
-          {
-            id: 1,
-            run_id: 'run_1',
-            task_id: 'task_1',
-            seq: 1,
-            phase: 'run',
-            event_type: 'step.started',
-            level: 'info',
-            step_index: 0,
-            parent_seq: 0,
-            payload: {},
-            created_at: '2026-03-22T09:00:00Z',
-          },
-          {
-            id: 2,
-            run_id: 'run_1',
-            task_id: 'task_1',
-            seq: 2,
-            phase: 'run',
-            event_type: 'step.finished',
-            level: 'info',
-            step_index: 0,
-            parent_seq: 1,
-            payload: {},
-            created_at: '2026-03-22T09:00:01Z',
-          },
-          {
-            id: 3,
-            run_id: 'run_2',
-            task_id: 'task_2',
-            seq: 1,
-            phase: 'run',
-            event_type: 'step.started',
-            level: 'info',
-            step_index: 0,
-            parent_seq: 0,
-            payload: {},
-            created_at: '2026-03-22T09:05:00Z',
-          },
-        ],
-        time: '',
-      }),
-    } as Response)
-
-    const api = (await import('./api')) as Record<string, unknown>
-
-    expect(typeof api.fetchAuditConversationEvents).toBe('function')
-
-    if (typeof api.fetchAuditConversationEvents !== 'function') {
-      return
-    }
-
-    const events = await api.fetchAuditConversationEvents('conv_1')
-
-    expect(fetch).toHaveBeenCalledWith(
-      '/api/v1/audit/conversations/conv_1/events',
-      expect.objectContaining({ credentials: 'include' }),
-    )
-    expect(events).toHaveLength(3)
-    expect(events).toEqual([
-      expect.objectContaining({ run_id: 'run_1', event_type: 'step.started' }),
-      expect.objectContaining({ run_id: 'run_1', event_type: 'step.finished' }),
-      expect.objectContaining({ run_id: 'run_2', event_type: 'step.started' }),
-    ])
-  })
-})
-
 describe('prompt API helpers', () => {
   beforeEach(() => {
     vi.restoreAllMocks()
@@ -1318,11 +923,36 @@ describe('normalizeConversationMessage', () => {
         toolCallId: 'call_1',
         toolCalls: [{ id: 'call_1', name: 'read_file', arguments: '{}' }],
       }),
-    ).toEqual({
+    ).toMatchObject({
       role: 'tool',
       content: 'README line 3',
       tool_call_id: 'call_1',
       tool_calls: [{ id: 'call_1', name: 'read_file', arguments: '{}' }],
+    })
+  })
+
+  it('coerces malformed mixed-shape payloads to safe conversation message values', () => {
+    expect(
+      normalizeConversationMessage({
+        role: 'narrator',
+        Content: { nested: true },
+        Reasoning: ['trace'],
+        ToolCallID: 42,
+        providerId: { bad: true },
+        modelId: 99,
+        tool_calls: [{ id: 123, name: { nested: true }, arguments: { json: true } }],
+      } as any),
+    ).toEqual({
+      role: 'assistant',
+      content: '',
+      provider_id: undefined,
+      model_id: '99',
+      provider_data: undefined,
+      usage: undefined,
+      reasoning: '',
+      tool_call_id: '42',
+      reasoning_items: undefined,
+      tool_calls: [{ id: '123', name: '', arguments: '' }],
     })
   })
 

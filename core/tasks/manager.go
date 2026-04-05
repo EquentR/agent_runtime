@@ -214,9 +214,6 @@ func (m *Manager) CreateApproval(ctx context.Context, input approvals.CreateAppr
 	if len(events) > 0 {
 		m.publish(events...)
 	}
-	if _, err := m.ensureApprovalInteraction(ctx, approval); err != nil {
-		return nil, err
-	}
 	return approval, nil
 }
 

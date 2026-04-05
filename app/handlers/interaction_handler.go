@@ -88,7 +88,7 @@ func (h *InteractionHandler) handleRespondInteraction() (method, relativePath st
 		_, interaction, _, err := h.manager.RespondQuestionInteraction(c.Request.Context(), task.ID, c.Param("interactionID"), interactions.ResponseInput{
 			Status:      interactions.StatusResponded,
 			Response:    responsePayload,
-			RespondedBy: h.resolveDecisionBy(c, task),
+			RespondedBy: resolveTaskActor(c, task),
 			RespondedAt: ptrTime(time.Now().UTC()),
 		})
 		if err != nil {
@@ -212,40 +212,7 @@ func (h *InteractionHandler) loadAccessibleTask(c *gin.Context) (*coretasks.Task
 	if h.interactions == nil {
 		return nil, nil, fmt.Errorf("interaction store is not configured")
 	}
-	task, err := h.manager.GetTask(c.Request.Context(), c.Param("id"))
-	if err != nil {
-		if errors.Is(err, coretasks.ErrTaskNotFound) {
-			return nil, []resp.ResOpt{resp.WithCode(http.StatusNotFound)}, err
-		}
-		return nil, nil, err
-	}
-	if err := h.ensureTaskAccess(c, task); err != nil {
-		if errors.Is(err, errConversationAccessDenied) || err.Error() == "无权访问该任务" {
-			return nil, []resp.ResOpt{resp.WithCode(http.StatusUnauthorized)}, err
-		}
-		return nil, nil, err
-	}
-	return task, nil, nil
-}
-
-func (h *InteractionHandler) ensureTaskAccess(c *gin.Context, task *coretasks.Task) error {
-	if !h.authRequired || task == nil {
-		return nil
-	}
-	if user := currentAuthUser(c); user != nil && user.Username == task.CreatedBy {
-		return nil
-	}
-	return fmt.Errorf("无权访问该任务")
-}
-
-func (h *InteractionHandler) resolveDecisionBy(c *gin.Context, task *coretasks.Task) string {
-	if user := currentAuthUser(c); user != nil && user.Username != "" {
-		return user.Username
-	}
-	if task == nil {
-		return ""
-	}
-	return task.CreatedBy
+	return loadOwnedTask(c, h.manager, h.authRequired)
 }
 
 func ptrTime(value time.Time) *time.Time {

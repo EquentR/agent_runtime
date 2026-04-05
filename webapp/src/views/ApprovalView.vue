@@ -12,7 +12,8 @@ import {
   TASK_STREAM_ABORTED_MESSAGE,
 } from '../lib/api'
 import { buildApprovalStreamEvent, updateTranscriptFromStreamEvent } from '../lib/transcript'
-import type { TaskDetails, ToolApproval, TranscriptEntry } from '../types/api'
+import { buildApprovalEntriesFromList, isTaskActive, resolveTaskConversationId } from '../lib/task-runtime'
+import type { TaskDetails, TranscriptEntry } from '../types/api'
 
 const route = useRoute()
 
@@ -32,31 +33,12 @@ const approvals = computed(() =>
 const pendingCount = computed(() => approvals.value.filter((approval) => approval.status === 'pending').length)
 const resolvedCount = computed(() => approvals.value.length - pendingCount.value)
 const taskStatusLabel = computed(() => task.value?.status || '未加载')
-const taskConversationId = computed(
-  () => task.value?.result?.conversation_id ?? task.value?.result_json?.conversation_id ?? task.value?.input?.conversation_id ?? '',
-)
-
-function isTaskActive(nextTask: TaskDetails | null | undefined) {
-  return (
-    nextTask?.status === 'queued' ||
-    nextTask?.status === 'running' ||
-    nextTask?.status === 'waiting' ||
-    nextTask?.status === 'cancel_requested'
-  )
-}
+const taskConversationId = computed(() => resolveTaskConversationId(task.value))
 
 function stopTaskStream() {
   activeStreamAbortController?.abort()
   activeStreamAbortController = null
   activeStreamingTaskId = ''
-}
-
-function applyApprovalList(nextApprovals: ToolApproval[]) {
-  let nextEntries: TranscriptEntry[] = []
-  for (const approval of nextApprovals) {
-    nextEntries = updateTranscriptFromStreamEvent(nextEntries, buildApprovalStreamEvent(approval))
-  }
-  approvalEntries.value = nextEntries
 }
 
 async function attachTaskStream(taskId: string) {
@@ -119,7 +101,7 @@ async function loadApprovalView(taskId: string) {
       return
     }
     task.value = nextTask
-    applyApprovalList(nextApprovals)
+    approvalEntries.value = buildApprovalEntriesFromList(nextApprovals)
 
     if (isTaskActive(nextTask)) {
       void attachTaskStream(taskId)

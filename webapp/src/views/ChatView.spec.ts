@@ -140,6 +140,50 @@ describe('ChatView', () => {
     })
   })
 
+  it('starts catalog, skills, and conversations loading concurrently on mount', async () => {
+    const catalogDeferred = createDeferred<{
+      default_provider_id: string
+      default_model_id: string
+      providers: Array<{ id: string; name: string; models: Array<{ id: string; name: string; type: string }> }>
+    }>()
+    const skillsDeferred = createDeferred<Array<{ name: string; title: string; source_ref: string }>>()
+    const conversationsDeferred = createDeferred<any[]>()
+
+    api.fetchModelCatalog.mockImplementation(() => catalogDeferred.promise)
+    api.fetchSkills.mockImplementation(() => skillsDeferred.promise)
+    api.fetchConversations.mockImplementation(() => conversationsDeferred.promise)
+
+    const router = makeRouter()
+    await router.push('/chat')
+    await router.isReady()
+
+    mount(ChatView, {
+      global: {
+        plugins: [router],
+      },
+    })
+
+    expect(api.fetchModelCatalog).toHaveBeenCalledTimes(1)
+    expect(api.fetchSkills).toHaveBeenCalledTimes(1)
+    expect(api.fetchConversations).toHaveBeenCalledTimes(1)
+
+    catalogDeferred.resolve({
+      default_provider_id: 'openai',
+      default_model_id: 'gpt-5.4',
+      providers: [
+        {
+          id: 'openai',
+          name: 'openai',
+          models: [{ id: 'gpt-5.4', name: 'GPT-5.4', type: 'chat' }],
+        },
+      ],
+    })
+    skillsDeferred.resolve([{ name: 'debugging', title: 'Debugging', source_ref: 'skills/debugging/SKILL.md' }])
+    conversationsDeferred.resolve([])
+
+    await flushPromises()
+  })
+
   it('resumes SSE for a running task after reopening the chat view', async () => {
     localStorage.setItem(
       'agent-runtime.chat-state',
@@ -1600,6 +1644,36 @@ describe('ChatView', () => {
     expect(composer.props('selectedSkillNames')).toEqual(['review'])
   })
 
+  it('falls back to the provider default model when a saved conversation model is unavailable', async () => {
+    api.fetchConversations.mockResolvedValue([
+      {
+        id: 'conv_missing_model',
+        title: 'Saved chat',
+        last_message: 'hello',
+        message_count: 1,
+        provider_id: 'openai',
+        model_id: 'missing-model',
+        created_by: 'demo-user',
+        created_at: '',
+        updated_at: '',
+      },
+    ])
+    api.fetchConversationMessages.mockResolvedValue([{ role: 'assistant', content: 'hello' }])
+
+    const router = makeRouter()
+    await router.push('/chat')
+    await router.isReady()
+
+    const wrapper = mount(ChatView, {
+      global: {
+        plugins: [router],
+      },
+    })
+
+    await flushPromises()
+
+    expect(wrapper.find('.model-menu-trigger').text()).toContain('GPT-5.4')
+  })
   it('keeps the model menu inline with the title block', async () => {
     api.fetchConversations.mockResolvedValue([])
 

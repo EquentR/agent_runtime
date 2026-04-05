@@ -9,6 +9,7 @@ import {
   fetchConversation,
   fetchConversations,
 } from '../lib/api'
+import { formatCompactTimestamp } from '../lib/time'
 import type { AuditReplayArtifact, AuditReplayBundle, AuditReplayEvent, AuditRun, Conversation } from '../types/api'
 
 type TimelineFilter = 'all' | 'request' | 'tool' | 'error'
@@ -28,6 +29,7 @@ const activeFilter = ref<TimelineFilter>('all')
 const summaryExpanded = ref(false)
 const turnMenuOpen = ref(false)
 const turnMenuRef = ref<HTMLElement | null>(null)
+let activeSelectionRequestToken = 0
 
 const selectedConversationSummary = computed(() => {
   if (selectedConversation.value) {
@@ -47,7 +49,7 @@ const summaryFacts = computed<SummaryFact[]>(() => {
   const conversation = selectedConversationSummary.value
   return [
     { label: '创建者', value: conversation?.created_by || '-' },
-    { label: '开始时间', value: formatConversationTime(conversation?.created_at) },
+    { label: '开始时间', value: formatCompactTimestamp(conversation?.created_at) },
     { label: '轮次数', value: String(auditRuns.value.length) },
     { label: '状态', value: selectedAuditRun.value?.status || '未找到审计运行' },
     { label: 'Run ID', value: selectedAuditRun.value?.id || resolveAuditRunId(conversation) || '未暴露 run_id' },
@@ -271,12 +273,6 @@ function formatEventType(eventType?: string) {
   }
 }
 
-function formatConversationTime(value?: string) {
-  if (!value) {
-    return '--'
-  }
-  return value.replace('T', ' ').slice(0, 16)
-}
 
 function statusTone(entry: AuditReplayEvent) {
   if (entry.level === 'error' || entry.event_type.includes('fail') || entry.event_type.includes('error')) {
@@ -347,7 +343,9 @@ async function loadConversationList() {
 }
 
 async function selectConversation(conversationId: string) {
+  const requestToken = ++activeSelectionRequestToken
   selectedConversationId.value = conversationId
+  selectedConversation.value = null
   detailLoading.value = true
   errorMessage.value = ''
   auditRuns.value = []
@@ -359,10 +357,16 @@ async function selectConversation(conversationId: string) {
   closeTurnMenu()
 
   try {
-    const conversation = await fetchConversation(conversationId)
-    selectedConversation.value = conversation
+    const [conversation, runs] = await Promise.all([
+      fetchConversation(conversationId),
+      fetchAuditConversationRuns(conversationId),
+    ])
 
-    const runs = await fetchAuditConversationRuns(conversationId)
+    if (requestToken !== activeSelectionRequestToken || selectedConversationId.value !== conversationId) {
+      return
+    }
+
+    selectedConversation.value = conversation
     auditRuns.value = runs
 
     if (runs.length === 0) {
@@ -370,13 +374,23 @@ async function selectConversation(conversationId: string) {
     }
 
     const replays = await Promise.all(runs.map((run) => fetchAuditRunReplay(run.id)))
+
+    if (requestToken !== activeSelectionRequestToken || selectedConversationId.value !== conversationId) {
+      return
+    }
+
     auditReplays.value = replays
     const first = mergedTimeline.value[0]
     expandedTimelineKey.value = first ? timelineEntryKey(first) : null
   } catch (error) {
+    if (requestToken !== activeSelectionRequestToken || selectedConversationId.value !== conversationId) {
+      return
+    }
     errorMessage.value = error instanceof Error ? error.message : '加载审计详情失败'
   } finally {
-    detailLoading.value = false
+    if (requestToken === activeSelectionRequestToken && selectedConversationId.value === conversationId) {
+      detailLoading.value = false
+    }
   }
 }
 
@@ -419,7 +433,7 @@ onBeforeUnmount(() => {
             </div>
             <div class="admin-audit-conversation-meta conversation-meta">
               <span class="truncate-text">{{ conversation.created_by }}</span>
-              <span class="admin-audit-conversation-time">{{ formatConversationTime(conversation.created_at) }}</span>
+              <span class="admin-audit-conversation-time">{{ formatCompactTimestamp(conversation.created_at) }}</span>
             </div>
           </div>
         </button>
