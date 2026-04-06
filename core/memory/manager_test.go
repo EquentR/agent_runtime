@@ -316,6 +316,40 @@ func TestContextMessagesKeepsOriginalStateWhenCompressorFails(t *testing.T) {
 	}
 }
 
+func TestRuntimeContextWithReserveTriggersCompressionWhenPromptOverheadPushesRequestOverBudget(t *testing.T) {
+	compressCalls := 0
+	mgr, err := NewManager(Options{
+		MaxContextTokens: 100,
+		Counter:          fakeTokenCounter{},
+		Compressor: func(_ context.Context, request CompressionRequest) (string, error) {
+			compressCalls++
+			return "compressed memory", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+
+	mgr.AddMessages([]model.Message{
+		{Role: model.RoleUser, Content: strings.Repeat("a", 30)},
+		{Role: model.RoleAssistant, Content: strings.Repeat("b", 30)},
+	})
+
+	state, trace, err := mgr.RuntimeContextWithReserve(context.Background(), 50)
+	if err != nil {
+		t.Fatalf("RuntimeContextWithReserve() error = %v", err)
+	}
+	if compressCalls != 1 {
+		t.Fatalf("compressor called %d times, want 1", compressCalls)
+	}
+	if !trace.Attempted || !trace.Succeeded {
+		t.Fatalf("trace = %#v, want attempted and succeeded", trace)
+	}
+	if state.Summary == nil || !strings.Contains(state.Summary.Content, "compressed memory") {
+		t.Fatalf("summary = %#v, want rendered compressed summary", state.Summary)
+	}
+}
+
 func TestContextMessagesCountsTextAttachmentsTowardBudget(t *testing.T) {
 	compressCalls := 0
 	mgr, err := NewManager(Options{

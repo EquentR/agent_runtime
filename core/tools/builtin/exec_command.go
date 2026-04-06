@@ -74,20 +74,33 @@ func newExecCommandTool(env runtimeEnv) coretools.Tool {
 			cmd.Stderr = &stderr
 
 			runErr := cmd.Run()
+			shapedOutput := shapeCommandOutput(stdout.String(), stderr.String(), env.outputBudget)
 			result := struct {
-				Success  bool   `json:"success"`
-				ExitCode int    `json:"exit_code"`
-				Stdout   string `json:"stdout"`
-				Stderr   string `json:"stderr"`
-				TimedOut bool   `json:"timed_out"`
-				Cwd      string `json:"cwd"`
+				Success             bool   `json:"success"`
+				ExitCode            int    `json:"exit_code"`
+				Stdout              string `json:"stdout"`
+				Stderr              string `json:"stderr"`
+				TimedOut            bool   `json:"timed_out"`
+				Cwd                 string `json:"cwd"`
+				StdoutTruncated     bool   `json:"stdout_truncated"`
+				StderrTruncated     bool   `json:"stderr_truncated"`
+				OriginalStdoutBytes int    `json:"original_stdout_bytes"`
+				OriginalStderrBytes int    `json:"original_stderr_bytes"`
+				ReturnedStdoutBytes int    `json:"returned_stdout_bytes"`
+				ReturnedStderrBytes int    `json:"returned_stderr_bytes"`
 			}{
-				Success:  runErr == nil,
-				ExitCode: 0,
-				Stdout:   stdout.String(),
-				Stderr:   stderr.String(),
-				TimedOut: errors.Is(commandCtx.Err(), context.DeadlineExceeded),
-				Cwd:      cwdValue,
+				Success:             runErr == nil,
+				ExitCode:            0,
+				Stdout:              shapedOutput.Stdout,
+				Stderr:              shapedOutput.Stderr,
+				TimedOut:            errors.Is(commandCtx.Err(), context.DeadlineExceeded),
+				Cwd:                 cwdValue,
+				StdoutTruncated:     shapedOutput.StdoutTruncated,
+				StderrTruncated:     shapedOutput.StderrTruncated,
+				OriginalStdoutBytes: shapedOutput.OriginalStdoutBytes,
+				OriginalStderrBytes: shapedOutput.OriginalStderrBytes,
+				ReturnedStdoutBytes: shapedOutput.ReturnedStdoutBytes,
+				ReturnedStderrBytes: shapedOutput.ReturnedStderrBytes,
 			}
 
 			if runErr != nil {

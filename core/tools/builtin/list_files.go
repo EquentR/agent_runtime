@@ -100,9 +100,17 @@ func newListFilesTool(env runtimeEnv) coretools.Tool {
 			sort.Slice(entries, func(i int, j int) bool {
 				return entries[i].Path < entries[j].Path
 			})
+			trimmed, truncated := trimSlice(entries, env.outputBudget.listMaxEntries)
+			remainingCount := 0
+			if truncated {
+				remainingCount = len(entries) - len(trimmed)
+			}
 			return jsonResult(struct {
-				Entries []entry `json:"entries"`
-			}{Entries: entries})
+				Entries         []entry `json:"entries"`
+				ReturnedEntries int     `json:"returned_entries"`
+				RemainingCount  int     `json:"remaining_count"`
+				Truncated       bool    `json:"truncated"`
+			}{Entries: trimmed, ReturnedEntries: len(trimmed), RemainingCount: remainingCount, Truncated: truncated})
 		},
 	}
 }

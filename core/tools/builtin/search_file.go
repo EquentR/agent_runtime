@@ -57,6 +57,7 @@ func newSearchFileTool(env runtimeEnv) coretools.Tool {
 			}
 
 			matches := make([]match, 0)
+			totalMatches := 0
 			err = filepath.WalkDir(dirPath, func(path string, d fs.DirEntry, walkErr error) error {
 				if walkErr != nil {
 					return walkErr
@@ -98,7 +99,8 @@ func newSearchFileTool(env runtimeEnv) coretools.Tool {
 					return err
 				}
 				for _, lineMatch := range findLineMatches(string(data), matcher) {
-					matches = append(matches, match{Path: filepath.ToSlash(relToWorkspace), Line: lineMatch.Line, Text: lineMatch.Text})
+					totalMatches++
+					matches = append(matches, match{Path: filepath.ToSlash(relToWorkspace), Line: lineMatch.Line, Text: truncateMatchText(lineMatch.Text, env.outputBudget.matchTextMaxBytes)})
 				}
 				return nil
 			})
@@ -112,10 +114,13 @@ func newSearchFileTool(env runtimeEnv) coretools.Tool {
 				}
 				return matches[i].Path < matches[j].Path
 			})
-
+			trimmed, truncated := trimSlice(matches, env.outputBudget.searchMaxMatches)
 			return jsonResult(struct {
-				Matches []match `json:"matches"`
-			}{Matches: matches})
+				Matches         []match `json:"matches"`
+				TotalMatches    int     `json:"total_matches"`
+				ReturnedMatches int     `json:"returned_matches"`
+				Truncated       bool    `json:"truncated"`
+			}{Matches: trimmed, TotalMatches: totalMatches, ReturnedMatches: len(trimmed), Truncated: truncated})
 		},
 	}
 }

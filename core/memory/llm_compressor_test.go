@@ -2,7 +2,6 @@ package memory
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"testing"
 
@@ -89,13 +88,24 @@ func TestLLMLongTermCompressorBuildsSystemAndUserMessages(t *testing.T) {
 	}
 }
 
-func TestLLMCompressorPropagatesChatErrors(t *testing.T) {
-	client := &fakeChatClient{err: errors.New("chat failed")}
-	compressor := NewLLMShortTermCompressor(LLMCompressorOptions{Client: client, Model: "gpt-test"})
+func TestLLMShortTermCompressorRejectsEmptySummary(t *testing.T) {
+	client := &fakeChatClient{
+		response: model.ChatResponse{Message: model.Message{Role: model.RoleAssistant, Content: "   "}},
+	}
+	compressor := NewLLMShortTermCompressor(LLMCompressorOptions{
+		Client: client,
+		Model:  "gpt-test",
+	})
 
-	_, err := compressor(context.Background(), CompressionRequest{Instruction: "compress"})
+	_, err := compressor(context.Background(), CompressionRequest{
+		Instruction: "compress carefully",
+		Messages:    []model.Message{{Role: model.RoleUser, Content: "hello"}},
+	})
 	if err == nil {
-		t.Fatal("compressor() error = nil, want chat failure")
+		t.Fatal("compressor() error = nil, want empty summary error")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "empty") {
+		t.Fatalf("compressor() error = %q, want empty summary message", err)
 	}
 }
 

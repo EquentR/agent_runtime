@@ -75,6 +75,7 @@ var replayRetainedArtifactKinds = map[ArtifactKind]struct{}{
 	ArtifactKindModelResponse:         {},
 	ArtifactKindToolArguments:         {},
 	ArtifactKindToolOutput:            {},
+	ArtifactKindRequestBudgetDecision: {},
 }
 
 var replayEventDisplayNames = map[string]string{
@@ -89,6 +90,7 @@ var replayEventDisplayNames = map[string]string{
 	"step.started":          "步骤开始",
 	"step.finished":         "步骤完成",
 	"prompt.resolved":       "提示词解析",
+	"request.budgeted":      "请求预算决策",
 	"request.built":         "构建 LLM 请求",
 	"model.completed":       "模型生成",
 	"tool.started":          "工具调用开始",

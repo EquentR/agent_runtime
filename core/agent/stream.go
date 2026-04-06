@@ -14,6 +14,7 @@ import (
 	"github.com/EquentR/agent_runtime/core/interactions"
 	"github.com/EquentR/agent_runtime/core/memory"
 	model "github.com/EquentR/agent_runtime/core/providers/types"
+	"github.com/EquentR/agent_runtime/core/runtimeprompt"
 	coretypes "github.com/EquentR/agent_runtime/core/types"
 )
 
@@ -67,9 +68,10 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 
 	memoryInsertedCount := len(input.Messages)
 	baseConversation := cloneMessages(input.Messages)
-	conversationState, err := r.prepareConversationContextWithPersistedCount(ctx, baseConversation, 0)
-	if err != nil {
-		return nil, err
+	if r.options.Memory != nil {
+		if _, err := r.prepareConversationContextWithPersistedCount(ctx, baseConversation, 0); err != nil {
+			return nil, err
+		}
 	}
 	requestTools := cloneTools(input.Tools)
 	if r.registry != nil {
@@ -143,31 +145,37 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 				runErr = err
 				return
 			}
-			if step > 1 {
-				if r.options.Memory != nil {
-					conversationState, err = r.prepareConversationContextWithPersistedCount(ctx, baseConversation, memoryInsertedCount)
-					if err != nil {
-						snapshotResult(step - 1)
-						runErr = err
-						return
-					}
-				} else {
-					conversationState = preparedConversationContext{Memory: memory.RuntimeContext{Body: cloneMessages(baseConversation)}, ConversationBody: cloneMessages(baseConversation)}
+			if step > 1 && r.options.Memory != nil {
+				if _, err := r.prepareConversationContextWithPersistedCount(ctx, baseConversation, memoryInsertedCount); err != nil {
+					snapshotResult(step - 1)
+					runErr = err
+					return
 				}
 			}
-			requestBuild, requestMessages, err := r.buildRequestMessages(conversationState.Memory, afterToolTurn)
-			if err != nil {
-				snapshotResult(step - 1)
-				runErr = err
-				return
+			var (
+				buildResult     runtimeprompt.BuildResult
+				requestMessages []model.Message
+				budgetDecision  requestBudgetDecision
+				err             error
+			)
+			if r.options.Memory != nil {
+				buildResult, requestMessages, budgetDecision, err = r.buildBudgetedRequest(ctx, afterToolTurn)
+			} else {
+				buildResult, requestMessages, budgetDecision, err = r.buildBudgetedRequestFromContext(ctx, memory.RuntimeContext{Body: cloneMessages(baseConversation)}, afterToolTurn)
 			}
 			usage = model.TokenUsage{}
 			title := fmt.Sprintf("Agent step %d", step)
 			r.emitStepStart(ctx, step, title)
-			promptArtifact := buildRunnerRuntimePromptArtifact(r.options, requestBuild, requestMessages)
+			promptArtifact := buildRunnerRuntimePromptArtifact(r.options, buildResult, requestMessages)
 			promptArtifactID := r.attachAuditArtifact(ctx, coreaudit.ArtifactKindRuntimePromptEnvelope, promptArtifact)
 			r.appendAuditEvent(ctx, step, coreaudit.PhasePrompt, "prompt.resolved", buildRunnerRuntimePromptPayload(r.options, promptArtifact), promptArtifactID)
-			_ = requestBuild
+			r.recordRequestBudgetDecision(ctx, step, budgetDecision)
+			if err != nil {
+				r.emitStepFinish(ctx, step, title, map[string]any{"error": err.Error()})
+				snapshotResult(step - 1)
+				runErr = err
+				return
+			}
 
 			request := model.ChatRequest{
 				Model:      r.options.Model,

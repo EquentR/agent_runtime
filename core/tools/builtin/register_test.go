@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -220,6 +221,48 @@ func TestWriteFileSupportsInsertAndReplace(t *testing.T) {
 		t.Fatalf("file after replace = %q, want %q", got, "ONE\nTWO\nthree\n")
 	}
 }
+
+func TestReadFileDefaultsToFirst300LinesWhenLineCountOmitted(t *testing.T) {
+	workspace := t.TempDir()
+	mustWriteFile(t, filepath.Join(workspace, "notes.txt"), strings.Repeat("line\n", 320))
+
+	registry := newBuiltinRegistry(t, Options{WorkspaceRoot: workspace})
+	raw, err := registry.Execute(context.Background(), "read_file", map[string]any{
+		"path": "notes.txt",
+	})
+	if err != nil {
+		t.Fatalf("Execute(read_file) error = %v", err)
+	}
+
+	var result struct {
+		StartLine     int    `json:"start_line"`
+		EndLine       int    `json:"end_line"`
+		TotalLines    int    `json:"total_lines"`
+		Content       string `json:"content"`
+		HasMore       bool   `json:"has_more"`
+		NextStartLine *int   `json:"next_start_line"`
+		Truncated     bool   `json:"truncated"`
+		LimitReason   string `json:"limit_reason"`
+	}
+	decodeJSON(t, raw, &result)
+
+	if result.StartLine != 1 || result.EndLine != 300 || result.TotalLines != 320 {
+		t.Fatalf("line window = %#v, want start=1 end=300 total=320", result)
+	}
+	if !result.HasMore {
+		t.Fatal("has_more = false, want true")
+	}
+	if result.NextStartLine == nil || *result.NextStartLine != 301 {
+		t.Fatalf("next_start_line = %#v, want 301", result.NextStartLine)
+	}
+	if !result.Truncated {
+		t.Fatal("truncated = false, want true")
+	}
+	if result.LimitReason != "line_limit" {
+		t.Fatalf("limit_reason = %q, want %q", result.LimitReason, "line_limit")
+	}
+}
+
 
 func TestSearchFileAndGrepFile(t *testing.T) {
 	workspace := t.TempDir()
@@ -492,6 +535,128 @@ func TestExecCommand(t *testing.T) {
 	}
 	if strings.TrimSpace(result.Stdout) != runtime.GOOS {
 		t.Fatalf("stdout = %q, want %q", strings.TrimSpace(result.Stdout), runtime.GOOS)
+	}
+}
+
+func TestExecCommandTruncatesLargeStdout(t *testing.T) {
+	workspace := t.TempDir()
+	registry := newBuiltinRegistry(t, Options{
+		WorkspaceRoot: workspace,
+		OutputBudget: OutputBudgetOptions{CommandStdoutBytes: 32},
+	})
+
+	raw, err := registry.Execute(context.Background(), "exec_command", map[string]any{
+		"command": "python",
+		"args":    []any{"-c", "print('x' * 200)"},
+	})
+	if err != nil {
+		t.Fatalf("Execute(exec_command) error = %v", err)
+	}
+
+	var result struct {
+		Stdout             string `json:"stdout"`
+		StdoutTruncated    bool   `json:"stdout_truncated"`
+		OriginalStdoutSize int    `json:"original_stdout_bytes"`
+		ReturnedStdoutSize int    `json:"returned_stdout_bytes"`
+	}
+	decodeJSON(t, raw, &result)
+
+	if !result.StdoutTruncated {
+		t.Fatalf("stdout truncation metadata = %#v, want truncated output", result)
+	}
+	if result.OriginalStdoutSize <= result.ReturnedStdoutSize {
+		t.Fatalf("stdout byte counters = %#v, want original > returned", result)
+	}
+}
+
+func TestHTTPRequestTruncatesLargeBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, strings.Repeat("abcdef", 100))
+	}))
+	defer server.Close()
+
+	workspace := t.TempDir()
+	registry := newBuiltinRegistry(t, Options{
+		WorkspaceRoot: workspace,
+		HTTPClient:    server.Client(),
+		OutputBudget:  OutputBudgetOptions{TextResultMaxBytes: 40},
+	})
+
+	raw, err := registry.Execute(context.Background(), "http_request", map[string]any{"url": server.URL})
+	if err != nil {
+		t.Fatalf("Execute(http_request) error = %v", err)
+	}
+
+	var result struct {
+		Body         string `json:"body"`
+		Truncated    bool   `json:"truncated"`
+		LimitReason  string `json:"limit_reason"`
+		OriginalSize int    `json:"original_size"`
+		ReturnedSize int    `json:"returned_size"`
+	}
+	decodeJSON(t, raw, &result)
+
+	if !result.Truncated || result.LimitReason != "byte_limit" {
+		t.Fatalf("http truncation metadata = %#v, want byte_limit truncation", result)
+	}
+	if result.OriginalSize <= result.ReturnedSize {
+		t.Fatalf("http size counters = %#v, want original > returned", result)
+	}
+}
+
+func TestSearchFileLimitsMatchesAndReportsTotals(t *testing.T) {
+	workspace := t.TempDir()
+	mustWriteFile(t, filepath.Join(workspace, "matches.txt"), strings.Repeat("needle\n", 20))
+
+	registry := newBuiltinRegistry(t, Options{
+		WorkspaceRoot: workspace,
+		OutputBudget: OutputBudgetOptions{SearchMaxMatches: 5, MatchTextMaxBytes: 8},
+	})
+
+	raw, err := registry.Execute(context.Background(), "search_file", map[string]any{"path": ".", "pattern": "needle"})
+	if err != nil {
+		t.Fatalf("Execute(search_file) error = %v", err)
+	}
+
+	var result struct {
+		Matches         []struct{ Text string `json:"text"` } `json:"matches"`
+		TotalMatches    int                                `json:"total_matches"`
+		ReturnedMatches int                                `json:"returned_matches"`
+		Truncated       bool                               `json:"truncated"`
+	}
+	decodeJSON(t, raw, &result)
+
+	if len(result.Matches) != 5 || result.TotalMatches != 20 || result.ReturnedMatches != 5 || !result.Truncated {
+		t.Fatalf("search result = %#v, want 5 returned matches out of 20", result)
+	}
+}
+
+func TestListFilesLimitsEntriesAndReportsRemainingCount(t *testing.T) {
+	workspace := t.TempDir()
+	for i := 0; i < 6; i++ {
+		mustWriteFile(t, filepath.Join(workspace, fmt.Sprintf("file-%d.txt", i)), "x")
+	}
+
+	registry := newBuiltinRegistry(t, Options{
+		WorkspaceRoot: workspace,
+		OutputBudget: OutputBudgetOptions{ListMaxEntries: 3},
+	})
+
+	raw, err := registry.Execute(context.Background(), "list_files", map[string]any{"path": ".", "recursive": false})
+	if err != nil {
+		t.Fatalf("Execute(list_files) error = %v", err)
+	}
+
+	var result struct {
+		Entries         []struct{ Path string `json:"path"` } `json:"entries"`
+		ReturnedEntries int                               `json:"returned_entries"`
+		RemainingCount  int                               `json:"remaining_count"`
+		Truncated       bool                              `json:"truncated"`
+	}
+	decodeJSON(t, raw, &result)
+
+	if len(result.Entries) != 3 || result.ReturnedEntries != 3 || result.RemainingCount != 3 || !result.Truncated {
+		t.Fatalf("list_files result = %#v, want 3 returned entries and 3 remaining", result)
 	}
 }
 
@@ -851,10 +1016,18 @@ type builtinLogEntry struct {
 	fields map[string]any
 }
 
-func (s *builtinLogSpy) Debug(msg string, fields ...corelog.Field) { s.entries = append(s.entries, newBuiltinLogEntry("debug", msg, fields...)) }
-func (s *builtinLogSpy) Info(msg string, fields ...corelog.Field)  { s.entries = append(s.entries, newBuiltinLogEntry("info", msg, fields...)) }
-func (s *builtinLogSpy) Warn(msg string, fields ...corelog.Field)  { s.entries = append(s.entries, newBuiltinLogEntry("warn", msg, fields...)) }
-func (s *builtinLogSpy) Error(msg string, fields ...corelog.Field) { s.entries = append(s.entries, newBuiltinLogEntry("error", msg, fields...)) }
+func (s *builtinLogSpy) Debug(msg string, fields ...corelog.Field) {
+	s.entries = append(s.entries, newBuiltinLogEntry("debug", msg, fields...))
+}
+func (s *builtinLogSpy) Info(msg string, fields ...corelog.Field) {
+	s.entries = append(s.entries, newBuiltinLogEntry("info", msg, fields...))
+}
+func (s *builtinLogSpy) Warn(msg string, fields ...corelog.Field) {
+	s.entries = append(s.entries, newBuiltinLogEntry("warn", msg, fields...))
+}
+func (s *builtinLogSpy) Error(msg string, fields ...corelog.Field) {
+	s.entries = append(s.entries, newBuiltinLogEntry("error", msg, fields...))
+}
 
 func newBuiltinLogEntry(level string, msg string, fields ...corelog.Field) builtinLogEntry {
 	mapped := make(map[string]any, len(fields))

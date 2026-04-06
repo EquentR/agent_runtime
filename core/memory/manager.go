@@ -76,7 +76,7 @@ func NewManager(options Options) (*Manager, error) {
 
 	counter := options.Counter
 	if counter == nil {
-		counter = newDefaultTokenCounter(options.Model)
+		counter = NewTokenCounterForModel(options.Model)
 	}
 	if counter == nil {
 		return nil, fmt.Errorf("memory token counter is required")
@@ -154,11 +154,22 @@ func (m *Manager) SummaryLimitTokens() int64 {
 	return m.summaryLimitTokens
 }
 
+func (m *Manager) TokenCounter() TokenCounter {
+	return m.counter
+}
+
 func (m *Manager) ClearShortTerm() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	m.shortTerm = nil
+}
+
+type CompressionTrace struct {
+	Attempted    bool
+	Succeeded    bool
+	TokensBefore int64
+	TokensAfter  int64
 }
 
 type RuntimeContext struct {
@@ -167,25 +178,33 @@ type RuntimeContext struct {
 }
 
 func (m *Manager) RuntimeContext(ctx context.Context) (RuntimeContext, error) {
+	state, _, err := m.RuntimeContextWithReserve(ctx, 0)
+	return state, err
+}
+
+func (m *Manager) RuntimeContextWithReserve(ctx context.Context, reserveTokens int64) (RuntimeContext, CompressionTrace, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if m.requiresCompressionLocked() {
-		corelog.Info("memory compression triggered", corelog.String("component", "memory"), corelog.String("module", "manager"), corelog.Int("short_term_messages", len(m.shortTerm)), corelog.Int64("short_term_limit_tokens", m.shortTermLimitTokens))
+	trace := CompressionTrace{TokensBefore: m.estimateShortTermTokensLocked()}
+	if m.requiresCompressionLocked(reserveTokens) {
+		trace.Attempted = true
+		corelog.Info("memory compression triggered", corelog.String("component", "memory"), corelog.String("module", "manager"), corelog.Int("short_term_messages", len(m.shortTerm)), corelog.Int64("short_term_limit_tokens", m.shortTermLimitTokens), corelog.Int64("reserve_tokens", reserveTokens))
 		if err := m.compressLocked(ctx); err != nil {
 			corelog.Error("memory compression failed", corelog.String("component", "memory"), corelog.String("module", "manager"), corelog.Err(err))
-			return RuntimeContext{}, err
+			return RuntimeContext{}, trace, err
 		}
+		trace.Succeeded = true
 	}
-	if err := m.validateContextBudgetLocked(); err != nil {
-		return RuntimeContext{}, err
+	if err := m.validateContextBudgetLocked(reserveTokens); err != nil {
+		return RuntimeContext{}, trace, err
 	}
-
-	return m.runtimeContextLocked(), nil
+	trace.TokensAfter = m.estimateShortTermTokensLocked()
+	return m.runtimeContextLocked(), trace, nil
 }
 
 func (m *Manager) ContextMessages(ctx context.Context) ([]model.Message, error) {
-	state, err := m.RuntimeContext(ctx)
+	state, _, err := m.RuntimeContextWithReserve(ctx, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -198,11 +217,11 @@ func (m *Manager) ContextMessages(ctx context.Context) ([]model.Message, error) 
 	return out, nil
 }
 
-func (m *Manager) requiresCompressionLocked() bool {
+func (m *Manager) requiresCompressionLocked(reserveTokens int64) bool {
 	if len(m.shortTerm) == 0 {
 		return false
 	}
-	if m.estimateShortTermTokensLocked() <= m.shortTermLimitTokens {
+	if m.estimateShortTermTokensLocked()+reserveTokens <= m.shortTermLimitTokens {
 		return false
 	}
 	compressible, _ := splitMessagesForCompression(m.shortTerm)
@@ -258,9 +277,12 @@ func (m *Manager) compressLocked(ctx context.Context) error {
 	return nil
 }
 
-func (m *Manager) validateContextBudgetLocked() error {
+func (m *Manager) validateContextBudgetLocked(reserveTokens int64) error {
 	if err := validateShortTermBudget(m.counter, m.shortTerm, m.shortTermLimitTokens); err != nil {
 		return err
+	}
+	if reserveTokens > 0 && m.estimateShortTermTokensLocked()+reserveTokens > m.maxContextTokens {
+		return fmt.Errorf("runtime context exceeds request budget: %d > %d", m.estimateShortTermTokensLocked()+reserveTokens, m.maxContextTokens)
 	}
 	if m.summary != "" && m.summaryLimitTokens > 0 && int64(m.counter.Count(renderSummaryWithinBudget(m.summaryTemplate, m.summary, m.summaryLimitTokens, m.counter))) > m.summaryLimitTokens {
 		return errors.New("memory summary exceeds summary budget after rendering")

@@ -81,16 +81,25 @@ func newHTTPRequestTool(env runtimeEnv) coretools.Tool {
 			}
 			logToolFinish(ctx, "http_request", corelog.String("method", strings.ToUpper(method)), corelog.String("url", urlValue), corelog.Int("status_code", response.StatusCode), corelog.Int("response_length", len(responseBody)), corelog.Duration("duration", time.Since(startedAt)))
 
+			boundedBody := limitTextByBytes(string(responseBody), env.outputBudget.textResultMaxBytes)
 			return jsonResult(struct {
-				StatusCode  int    `json:"status_code"`
-				Body        string `json:"body"`
-				URL         string `json:"url,omitempty"`
-				ContentType string `json:"content_type,omitempty"`
+				StatusCode   int    `json:"status_code"`
+				Body         string `json:"body"`
+				URL          string `json:"url,omitempty"`
+				ContentType  string `json:"content_type,omitempty"`
+				Truncated    bool   `json:"truncated"`
+				LimitReason  string `json:"limit_reason,omitempty"`
+				OriginalSize int    `json:"original_size,omitempty"`
+				ReturnedSize int    `json:"returned_size,omitempty"`
 			}{
-				StatusCode:  response.StatusCode,
-				Body:        string(responseBody),
-				URL:         response.Request.URL.String(),
-				ContentType: response.Header.Get("Content-Type"),
+				StatusCode:   response.StatusCode,
+				Body:         boundedBody.Text,
+				URL:          response.Request.URL.String(),
+				ContentType:  response.Header.Get("Content-Type"),
+				Truncated:    boundedBody.Truncated,
+				LimitReason:  boundedBody.LimitReason,
+				OriginalSize: boundedBody.OriginalSize,
+				ReturnedSize: boundedBody.ReturnedSize,
 			})
 		},
 	}

@@ -57,6 +57,62 @@ func TestRunnerRunStreamEmitsTextAndCompletedEvents(t *testing.T) {
 	}
 }
 
+func TestRunStreamSkipsProviderCallWhenFinalBudgetGuardFails(t *testing.T) {
+	client := &stubClient{}
+	runner, err := NewRunner(client, nil, Options{
+		Model:    "test-model",
+		LLMModel: &coretypes.LLMModel{Context: coretypes.LLMContextConfig{Max: 20}},
+	})
+	if err != nil {
+		t.Fatalf("NewRunner() error = %v", err)
+	}
+
+	_, err = runner.Run(context.Background(), RunInput{Messages: []model.Message{{Role: model.RoleUser, Content: strings.Repeat("x", 200)}}})
+	if !errors.Is(err, ErrContextBudgetExceeded) {
+		t.Fatalf("Run() error = %v, want ErrContextBudgetExceeded", err)
+	}
+	if len(client.streamRequests) != 0 {
+		t.Fatalf("streamRequests = %d, want 0 when budget guard blocks send", len(client.streamRequests))
+	}
+}
+
+func TestRunStreamRecordsRequestBudgetDecisionWhenGuardBlocksSend(t *testing.T) {
+	recorder := newRecordingRunnerAuditRecorder()
+	client := &stubClient{}
+	runner, err := NewRunner(client, nil, Options{
+		Model:         "test-model",
+		LLMModel:      &coretypes.LLMModel{Context: coretypes.LLMContextConfig{Max: 20}},
+		AuditRecorder: recorder,
+		AuditRunID:    "run_stream_budget_blocked",
+	})
+	if err != nil {
+		t.Fatalf("NewRunner() error = %v", err)
+	}
+
+	_, err = runner.Run(context.Background(), RunInput{Messages: []model.Message{{Role: model.RoleUser, Content: strings.Repeat("x", 200)}}})
+	if !errors.Is(err, ErrContextBudgetExceeded) {
+		t.Fatalf("Run() error = %v, want ErrContextBudgetExceeded", err)
+	}
+
+	budgetEvent := recorder.requireEventForStep(t, "run_stream_budget_blocked", "request.budgeted", 1)
+	budgetPayload := decodeAuditPayload(t, budgetEvent)
+	if budgetPayload["final_path"] != "blocked" {
+		t.Fatalf("budget payload = %#v, want final_path=blocked", budgetPayload)
+	}
+	if budgetPayload["message_count"] == nil {
+		t.Fatalf("budget payload = %#v, want message_count present", budgetPayload)
+	}
+
+	artifact := recorder.requireArtifactByKind(t, "run_stream_budget_blocked", coreaudit.ArtifactKindRequestBudgetDecision)
+	var decision requestBudgetDecision
+	if err := json.Unmarshal(artifact.BodyJSON, &decision); err != nil {
+		t.Fatalf("decode request_budget_decision artifact error = %v", err)
+	}
+	if decision.FinalPath != "blocked" {
+		t.Fatalf("budget decision = %#v, want blocked", decision)
+	}
+}
+
 func TestRunnerRunUsesRunStreamAggregation(t *testing.T) {
 	client := &stubClient{
 		streams: []model.Stream{newStubStream(
@@ -125,6 +181,7 @@ func TestRunnerRunStreamRecordsRuntimePromptEnvelopeArtifact(t *testing.T) {
 	assertRunnerAuditEventTypes(t, recorder, "run_stream_1",
 		"step.started",
 		"prompt.resolved",
+		"request.budgeted",
 		"request.built",
 		"model.completed",
 		"step.finished",

@@ -49,6 +49,9 @@ func newWebSearchTool(env runtimeEnv) coretools.Tool {
 			if err != nil {
 				return "", err
 			}
+			if maxResults <= 0 || maxResults > env.outputBudget.webSearchMaxResults {
+				maxResults = env.outputBudget.webSearchMaxResults
+			}
 			startedAt := time.Now()
 			logToolStart(ctx, "web_search", corelog.String("provider", providerName), corelog.Int("query_length", len(query)), corelog.Int("max_results", maxResults))
 
@@ -62,11 +65,17 @@ func newWebSearchTool(env runtimeEnv) coretools.Tool {
 				logToolFailure(ctx, "web_search", err, corelog.String("provider", resolvedName), corelog.Int("query_length", len(query)), corelog.Duration("duration", time.Since(startedAt)))
 				return "", err
 			}
-			logToolFinish(ctx, "web_search", corelog.String("provider", resolvedName), corelog.Int("query_length", len(query)), corelog.Int("result_count", len(results)), corelog.Duration("duration", time.Since(startedAt)))
+			trimmed, truncated := trimSlice(results, env.outputBudget.webSearchMaxResults)
+			for i := range trimmed {
+				trimmed[i].Snippet = truncateMatchText(trimmed[i].Snippet, env.outputBudget.matchTextMaxBytes)
+			}
+			logToolFinish(ctx, "web_search", corelog.String("provider", resolvedName), corelog.Int("query_length", len(query)), corelog.Int("result_count", len(trimmed)), corelog.Duration("duration", time.Since(startedAt)))
 			return jsonResult(struct {
-				Provider string            `json:"provider"`
-				Results  []webSearchResult `json:"results"`
-			}{Provider: resolvedName, Results: results})
+				Provider        string            `json:"provider"`
+				Results         []webSearchResult `json:"results"`
+				ReturnedResults int               `json:"returned_results"`
+				Truncated       bool              `json:"truncated"`
+			}{Provider: resolvedName, Results: trimmed, ReturnedResults: len(trimmed), Truncated: truncated})
 		},
 	}
 }

@@ -40,11 +40,30 @@ func boolArg(arguments map[string]any, key string, defaultValue bool) (bool, err
 	return b, nil
 }
 
-func intArg(arguments map[string]any, key string, defaultValue int) (int, error) {
+func optionalIntArg(arguments map[string]any, key string) (int, bool, error) {
 	value, ok := arguments[key]
 	if !ok || value == nil {
+		return 0, false, nil
+	}
+	parsed, err := coerceIntArg(value, key)
+	if err != nil {
+		return 0, false, err
+	}
+	return parsed, true, nil
+}
+
+func intArg(arguments map[string]any, key string, defaultValue int) (int, error) {
+	value, ok, err := optionalIntArg(arguments, key)
+	if err != nil {
+		return 0, err
+	}
+	if !ok {
 		return defaultValue, nil
 	}
+	return value, nil
+}
+
+func coerceIntArg(value any, key string) (int, error) {
 	switch typed := value.(type) {
 	case int:
 		return typed, nil

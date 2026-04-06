@@ -1,6 +1,7 @@
 package builtin
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -30,16 +31,18 @@ func newReadFileTool(env runtimeEnv) coretools.Tool {
 			if err != nil {
 				return "", err
 			}
-			lineCount, err := intArg(arguments, "line_count", 0)
+			requestedLineCount, lineCountProvided, err := optionalIntArg(arguments, "line_count")
 			if err != nil {
 				return "", err
 			}
 			if startLine < 1 {
 				return "", fmt.Errorf("start_line must be >= 1")
 			}
-			if lineCount < 0 {
+			if lineCountProvided && requestedLineCount < 0 {
 				return "", fmt.Errorf("line_count must be >= 0")
 			}
+
+			lineCount, limitReason := env.outputBudget.resolveReadFileLineCount(requestedLineCount, lineCountProvided)
 
 			startedAt := time.Now()
 			logToolStart(ctx, "read_file", corelog.String("path", pathArg), corelog.Int("start_line", startLine), corelog.Int("line_count", lineCount))
@@ -54,6 +57,12 @@ func newReadFileTool(env runtimeEnv) coretools.Tool {
 				logToolFailure(ctx, "read_file", err, corelog.String("path", relPath))
 				return "", err
 			}
+			if isBinaryContent(data) {
+				err := fmt.Errorf("binary files are not supported: %s", relPath)
+				logToolFailure(ctx, "read_file", err, corelog.String("path", relPath))
+				return "", err
+			}
+
 			lines := splitLinesWithEndings(string(data))
 			totalLines := len(lines)
 			startIndex := startLine - 1
@@ -69,6 +78,7 @@ func newReadFileTool(env runtimeEnv) coretools.Tool {
 			if startIndex < endIndex {
 				content = joinLines(lines[startIndex:endIndex])
 			}
+			continuation := newContinuationMetadata(endIndex, totalLines, limitReason)
 			logToolFinish(ctx, "read_file", corelog.String("path", relPath), corelog.Int("total_lines", totalLines), corelog.Int("content_length", len(content)), corelog.Duration("duration", time.Since(startedAt)))
 
 			return jsonResult(struct {
@@ -77,13 +87,19 @@ func newReadFileTool(env runtimeEnv) coretools.Tool {
 				EndLine    int    `json:"end_line"`
 				TotalLines int    `json:"total_lines"`
 				Content    string `json:"content"`
+				continuationMetadata
 			}{
-				Path:       relPath,
-				StartLine:  startLine,
-				EndLine:    endIndex,
-				TotalLines: totalLines,
-				Content:    content,
+				Path:                 relPath,
+				StartLine:            startLine,
+				EndLine:              endIndex,
+				TotalLines:           totalLines,
+				Content:              content,
+				continuationMetadata: continuation,
 			})
 		},
 	}
+}
+
+func isBinaryContent(data []byte) bool {
+	return bytes.IndexByte(data, 0) >= 0
 }

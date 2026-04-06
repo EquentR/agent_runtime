@@ -24,6 +24,7 @@ type Options struct {
 	CommandTimeout time.Duration
 	HTTPClient     *http.Client
 	WebSearch      WebSearchOptions
+	OutputBudget   OutputBudgetOptions
 }
 
 type WebSearchOptions struct {
@@ -53,6 +54,7 @@ type runtimeEnv struct {
 	commandTimeout time.Duration
 	httpClient     *http.Client
 	webSearch      WebSearchOptions
+	outputBudget   outputBudgetConfig
 }
 
 func normalizeOptions(options Options) (runtimeEnv, error) {
@@ -97,6 +99,7 @@ func normalizeOptions(options Options) (runtimeEnv, error) {
 		commandTimeout: clampDuration(timeout, minCommandTimeout, maxCommandTimeout),
 		httpClient:     client,
 		webSearch:      options.WebSearch,
+		outputBudget:   normalizeOutputBudgetOptions(options.OutputBudget),
 	}, nil
 }
 

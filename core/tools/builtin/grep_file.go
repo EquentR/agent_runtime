@@ -46,10 +46,19 @@ func newGrepFileTool(env runtimeEnv) coretools.Tool {
 				return "", err
 			}
 
+			matches := findLineMatches(string(data), matcher)
+			trimmed, truncated := trimSlice(matches, env.outputBudget.searchMaxMatches)
+			for i := range trimmed {
+				trimmed[i].Text = truncateMatchText(trimmed[i].Text, env.outputBudget.matchTextMaxBytes)
+			}
+
 			return jsonResult(struct {
-				Path    string      `json:"path"`
-				Matches []lineMatch `json:"matches"`
-			}{Path: relPath, Matches: findLineMatches(string(data), matcher)})
+				Path            string      `json:"path"`
+				Matches         []lineMatch `json:"matches"`
+				TotalMatches    int         `json:"total_matches"`
+				ReturnedMatches int         `json:"returned_matches"`
+				Truncated       bool        `json:"truncated"`
+			}{Path: relPath, Matches: trimmed, TotalMatches: len(matches), ReturnedMatches: len(trimmed), Truncated: truncated})
 		},
 	}
 }

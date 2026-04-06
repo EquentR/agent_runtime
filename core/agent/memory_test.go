@@ -389,6 +389,20 @@ func TestRunnerDoesNotWriteForcedOrResolvedPromptMessagesIntoMemory(t *testing.T
 	}
 }
 
+func TestBuildMemoryManagerUsesLLMShortTermCompressorByDefault(t *testing.T) {
+	client := &stubClient{}
+	llmModel := &coretypes.LLMModel{BaseModel: coretypes.BaseModel{ID: "gpt-test", Name: "gpt-test"}}
+
+	mgr, err := buildMemoryManager(nil, client, llmModel)
+	if err != nil {
+		t.Fatalf("buildMemoryManager() error = %v", err)
+	}
+	if mgr == nil {
+		t.Fatal("buildMemoryManager() = nil, want manager")
+	}
+}
+
+
 func TestNewRunnerUsesLLMModelIDWhenModelStringEmpty(t *testing.T) {
 	runner, err := NewRunner(&stubClient{}, nil, Options{
 		LLMModel: &coretypes.LLMModel{BaseModel: coretypes.BaseModel{ID: "gpt-5.4", Name: "GPT 5.4"}},

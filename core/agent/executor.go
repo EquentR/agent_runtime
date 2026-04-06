@@ -300,7 +300,7 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 		if err != nil {
 			return nil, err
 		}
-		memoryManager, err := buildMemoryManager(deps.MemoryFactory, llmModel)
+		memoryManager, err := buildMemoryManager(deps.MemoryFactory, client, llmModel)
 		if err != nil {
 			return nil, err
 		}
@@ -558,11 +558,15 @@ func boolToInt(value bool) int {
 	return 0
 }
 
-func buildMemoryManager(factory MemoryFactory, llmModel *coretypes.LLMModel) (*memory.Manager, error) {
+func buildMemoryManager(factory MemoryFactory, client model.LlmClient, llmModel *coretypes.LLMModel) (*memory.Manager, error) {
 	if factory != nil {
 		return factory(llmModel)
 	}
-	return memory.NewManager(memory.Options{Model: llmModel})
+	return memory.NewManager(memory.Options{
+		Model:      llmModel,
+		Counter:    memory.NewTokenCounterForModel(llmModel),
+		Compressor: memory.NewLLMShortTermCompressor(memory.LLMCompressorOptions{Client: client, Model: llmModel.ModelID()}),
+	})
 }
 
 func attachUsageToPersistedAssistantReply(result RunResult, providerID string, modelID string) RunResult {

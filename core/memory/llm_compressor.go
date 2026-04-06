@@ -43,6 +43,9 @@ func NewLLMShortTermCompressor(options LLMCompressorOptions) Compressor {
 		if content == "" {
 			content = strings.TrimSpace(resp.Content)
 		}
+		if content == "" {
+			return "", fmt.Errorf("memory compressor returned empty summary")
+		}
 		return content, nil
 	}
 }
@@ -67,6 +70,9 @@ func NewLLMLongTermCompressor(options LLMCompressorOptions) LongTermCompressor {
 		content := strings.TrimSpace(resp.Message.Content)
 		if content == "" {
 			content = strings.TrimSpace(resp.Content)
+		}
+		if content == "" {
+			return "", fmt.Errorf("memory compressor returned empty summary")
 		}
 		return content, nil
 	}
