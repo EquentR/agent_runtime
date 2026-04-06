@@ -224,8 +224,15 @@ func (m *Manager) requiresCompressionLocked(reserveTokens int64) bool {
 	if m.estimateShortTermTokensLocked()+reserveTokens <= m.shortTermLimitTokens {
 		return false
 	}
-	compressible, _ := splitMessagesForCompression(m.shortTerm)
-	return len(compressible) > 0
+	compressible, preservedTail := splitMessagesForCompression(m.shortTerm)
+	if len(compressible) > 0 {
+		return true
+	}
+	// The initial split put everything into the preserved tail (the first
+	// message is the only replayable boundary).  If the tail exceeds budget,
+	// adaptSplitForBudget will strip ProviderState to create compressible
+	// messages, so we should still trigger compression.
+	return len(preservedTail) > 0 && validateShortTermBudget(m.counter, preservedTail, m.shortTermLimitTokens) != nil
 }
 
 func (m *Manager) estimateShortTermTokensLocked() int64 {
@@ -248,7 +255,24 @@ func (m *Manager) estimateShortTermTokensLocked() int64 {
 
 func (m *Manager) compressLocked(ctx context.Context) error {
 	compressible, preservedTail := splitMessagesForCompression(m.shortTerm)
-	if len(compressible) == 0 {
+	if len(compressible) == 0 && len(preservedTail) == 0 {
+		return nil
+	}
+
+	// When the preserved replayable tail exceeds the short-term budget, we
+	// iteratively strip ProviderState from the oldest replayable boundary in
+	// the tail, moving the split point forward.  This sacrifices provider-native
+	// replay fidelity for older turns but guarantees that compression can always
+	// produce a tail that fits within budget.
+	if len(compressible) == 0 && len(preservedTail) > 0 {
+		// All messages are in the tail (first message is the replayable boundary).
+		// Only adapt if the tail actually exceeds budget.
+		if validateShortTermBudget(m.counter, preservedTail, m.shortTermLimitTokens) == nil {
+			return nil
+		}
+	}
+	compressible, preservedTail = adaptSplitForBudget(m.counter, m.shortTerm, m.shortTermLimitTokens)
+	if len(compressible) == 0 && len(preservedTail) == 0 {
 		return nil
 	}
 
@@ -544,6 +568,62 @@ func splitMessagesForCompression(messages []model.Message) ([]model.Message, []m
 		}
 	}
 	return cloneMessages(messages), nil
+}
+
+// adaptSplitForBudget adjusts the compression split point so that the
+// preserved replayable tail fits within the short-term token budget.
+//
+// It starts with the normal split (last assistant+ProviderState boundary) and,
+// if the tail exceeds budget, iteratively strips ProviderState from the oldest
+// replayable boundary in the working copy.  Removing ProviderState from a
+// message makes it no longer a replay boundary, so the next call to
+// splitMessagesForCompression will advance the split point forward (or
+// eliminate the tail entirely if no boundaries remain).
+//
+// The trade-off is controlled loss of provider-native replay fidelity for
+// older turns; the most recent replayable boundary is stripped last.
+func adaptSplitForBudget(counter TokenCounter, messages []model.Message, budget int64) ([]model.Message, []model.Message) {
+	compressible, preservedTail := splitMessagesForCompression(messages)
+	if validateShortTermBudget(counter, preservedTail, budget) == nil {
+		return compressible, preservedTail
+	}
+
+	// Work on a mutable copy so we can strip ProviderState without touching
+	// the caller's slice.
+	working := cloneMessages(messages)
+	for {
+		// Find the oldest assistant+ProviderState in the current tail region
+		// and strip it.  We identify the tail start in the working copy by
+		// re-splitting each iteration.
+		_, tail := splitMessagesForCompression(working)
+		if len(tail) == 0 {
+			break
+		}
+		stripped := false
+		for j := 0; j < len(tail); j++ {
+			if tail[j].Role == model.RoleAssistant && tail[j].ProviderState != nil {
+				// Map back to the working slice.  The tail is a clone, so we
+				// need to find the corresponding index in working.
+				tailOffset := len(working) - len(tail)
+				working[tailOffset+j].ProviderState = nil
+				stripped = true
+				corelog.Info("adaptive split: stripped ProviderState from replayable boundary",
+					corelog.String("component", "memory"),
+					corelog.String("module", "manager"),
+					corelog.Int("message_index", tailOffset+j))
+				break
+			}
+		}
+		if !stripped {
+			break
+		}
+
+		compressible, preservedTail = splitMessagesForCompression(working)
+		if validateShortTermBudget(counter, preservedTail, budget) == nil {
+			return compressible, preservedTail
+		}
+	}
+	return compressible, preservedTail
 }
 
 func summarizeMessage(message model.Message) string {

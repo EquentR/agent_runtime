@@ -526,10 +526,15 @@ func TestContextMessagesCompressionPreservesReplayableTail(t *testing.T) {
 	}
 }
 
-func TestContextMessagesErrorsWhenReplayableTailAloneExceedsBudget(t *testing.T) {
+func TestContextMessagesAdaptsSplitWhenReplayableTailAloneExceedsBudget(t *testing.T) {
+	compressCalls := 0
 	mgr, err := NewManager(Options{
 		MaxContextTokens: 20,
 		Counter:          fakeTokenCounter{},
+		Compressor: func(_ context.Context, request CompressionRequest) (string, error) {
+			compressCalls++
+			return "sum", nil
+		},
 	})
 	if err != nil {
 		t.Fatalf("NewManager() error = %v", err)
@@ -546,16 +551,27 @@ func TestContextMessagesErrorsWhenReplayableTailAloneExceedsBudget(t *testing.T)
 		},
 	})
 
-	_, err = mgr.ContextMessages(context.Background())
-	if err == nil {
-		t.Fatal("ContextMessages() error = nil, want budget validation error")
+	got, err := mgr.ContextMessages(context.Background())
+	if err != nil {
+		t.Fatalf("ContextMessages() error = %v, want adaptive split to succeed", err)
 	}
-	if !strings.Contains(err.Error(), "preserved replayable tail exceeds short-term budget") {
-		t.Fatalf("ContextMessages() error = %v, want replayable tail budget error", err)
+	if compressCalls != 1 {
+		t.Fatalf("compressor called %d times, want 1 (adaptive split should enable compression)", compressCalls)
+	}
+	// After adaptive split: ProviderState stripped, all messages compressed,
+	// result is summary only (tail is empty).
+	if len(got) != 1 || got[0].Role != model.RoleSystem {
+		t.Fatalf("ContextMessages() = %#v, want single summary system message", got)
+	}
+	if mgr.Summary() != "sum" {
+		t.Fatalf("Summary() = %q, want %q", mgr.Summary(), "sum")
+	}
+	if short := mgr.ShortTermMessages(); len(short) != 0 {
+		t.Fatalf("len(ShortTermMessages()) = %d, want 0 (all compressed after adaptive split)", len(short))
 	}
 }
 
-func TestContextMessagesErrorsWhenCompressedResultStillExceedsBudget(t *testing.T) {
+func TestContextMessagesAdaptsSplitWhenCompressedResultExceedsBudget(t *testing.T) {
 	compressCalls := 0
 	mgr, err := NewManager(Options{
 		MaxContextTokens: 40,
@@ -583,21 +599,93 @@ func TestContextMessagesErrorsWhenCompressedResultStillExceedsBudget(t *testing.
 		},
 	})
 
-	_, err = mgr.ContextMessages(context.Background())
-	if err == nil {
-		t.Fatal("ContextMessages() error = nil, want budget validation error")
+	got, err := mgr.ContextMessages(context.Background())
+	if err != nil {
+		t.Fatalf("ContextMessages() error = %v, want adaptive split to succeed", err)
 	}
 	if compressCalls != 1 {
 		t.Fatalf("compressor called %d times, want 1", compressCalls)
 	}
-	if !strings.Contains(err.Error(), "preserved replayable tail exceeds short-term budget") {
-		t.Fatalf("ContextMessages() error = %v, want replayable tail budget error", err)
+	// After adaptive split: ProviderState stripped from assistant, all messages
+	// become compressible, result is summary only.
+	if len(got) != 1 || got[0].Role != model.RoleSystem {
+		t.Fatalf("ContextMessages() = %#v, want single summary system message", got)
 	}
-	if mgr.Summary() != "" {
-		t.Fatalf("Summary() = %q, want unchanged empty summary on failed validation", mgr.Summary())
+	if mgr.Summary() != "sum" {
+		t.Fatalf("Summary() = %q, want %q", mgr.Summary(), "sum")
 	}
-	if short := mgr.ShortTermMessages(); len(short) != 2 {
-		t.Fatalf("len(ShortTermMessages()) = %d, want original messages retained on failure", len(short))
+	if short := mgr.ShortTermMessages(); len(short) != 0 {
+		t.Fatalf("len(ShortTermMessages()) = %d, want 0 (all compressed)", len(short))
+	}
+}
+
+func TestContextMessagesAdaptsSplitStripsOldestBoundaryFirstWithMultipleBoundaries(t *testing.T) {
+	// Two replayable assistant messages; the tail starting from the older one
+	// exceeds budget, but the tail from the newer one fits.  Adaptive split
+	// should strip ProviderState from the older boundary only.
+	compressCalls := 0
+	mgr, err := NewManager(Options{
+		MaxContextTokens: 500,
+		Counter:          fakeTokenCounter{},
+		Compressor: func(_ context.Context, request CompressionRequest) (string, error) {
+			compressCalls++
+			return "compressed", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+
+	mgr.AddMessages([]model.Message{
+		{Role: model.RoleUser, Content: strings.Repeat("u", 50)},
+		{
+			Role:    model.RoleAssistant,
+			Content: "first reply",
+			ProviderState: &model.ProviderState{
+				Provider: "openai_completions",
+				Format:   "openai_chat_message.v1",
+				Version:  "v1",
+				Payload:  []byte(`{"role":"assistant","content":"` + strings.Repeat("a", 200) + `"}`),
+			},
+		},
+		{Role: model.RoleTool, ToolCallId: "call_1", Content: strings.Repeat("t", 50)},
+		{Role: model.RoleUser, Content: "follow up"},
+		{
+			Role:    model.RoleAssistant,
+			Content: "second reply",
+			ProviderState: &model.ProviderState{
+				Provider: "openai_completions",
+				Format:   "openai_chat_message.v1",
+				Version:  "v1",
+				Payload:  []byte(`{"role":"assistant","content":"small"}`),
+			},
+		},
+		{Role: model.RoleUser, Content: "final question"},
+	})
+
+	got, err := mgr.ContextMessages(context.Background())
+	if err != nil {
+		t.Fatalf("ContextMessages() error = %v, want adaptive split to succeed", err)
+	}
+	if compressCalls != 1 {
+		t.Fatalf("compressor called %d times, want 1", compressCalls)
+	}
+	// Summary + preserved tail from second assistant onward (2 messages).
+	if len(got) < 2 {
+		t.Fatalf("len(ContextMessages()) = %d, want >= 2 (summary + preserved tail)", len(got))
+	}
+	if got[0].Role != model.RoleSystem || !strings.Contains(got[0].Content, "compressed") {
+		t.Fatalf("got[0] = %#v, want compressed summary", got[0])
+	}
+	// The newer assistant message should still have ProviderState.
+	foundReplayable := false
+	for _, m := range got[1:] {
+		if m.Role == model.RoleAssistant && m.ProviderState != nil {
+			foundReplayable = true
+		}
+	}
+	if !foundReplayable {
+		t.Fatal("preserved tail has no replayable assistant message, want newest boundary preserved")
 	}
 }
 
@@ -682,10 +770,18 @@ type memoryLogEntry struct {
 	fields map[string]any
 }
 
-func (s *memoryLogSpy) Debug(msg string, fields ...corelog.Field) { s.entries = append(s.entries, newMemoryLogEntry("debug", msg, fields...)) }
-func (s *memoryLogSpy) Info(msg string, fields ...corelog.Field)  { s.entries = append(s.entries, newMemoryLogEntry("info", msg, fields...)) }
-func (s *memoryLogSpy) Warn(msg string, fields ...corelog.Field)  { s.entries = append(s.entries, newMemoryLogEntry("warn", msg, fields...)) }
-func (s *memoryLogSpy) Error(msg string, fields ...corelog.Field) { s.entries = append(s.entries, newMemoryLogEntry("error", msg, fields...)) }
+func (s *memoryLogSpy) Debug(msg string, fields ...corelog.Field) {
+	s.entries = append(s.entries, newMemoryLogEntry("debug", msg, fields...))
+}
+func (s *memoryLogSpy) Info(msg string, fields ...corelog.Field) {
+	s.entries = append(s.entries, newMemoryLogEntry("info", msg, fields...))
+}
+func (s *memoryLogSpy) Warn(msg string, fields ...corelog.Field) {
+	s.entries = append(s.entries, newMemoryLogEntry("warn", msg, fields...))
+}
+func (s *memoryLogSpy) Error(msg string, fields ...corelog.Field) {
+	s.entries = append(s.entries, newMemoryLogEntry("error", msg, fields...))
+}
 
 func newMemoryLogEntry(level string, msg string, fields ...corelog.Field) memoryLogEntry {
 	mapped := make(map[string]any, len(fields))
@@ -731,6 +827,7 @@ func TestContextMessagesLogsCompressionTriggeredAndFailure(t *testing.T) {
 	assertMemoryLogContains(t, spy.entries, "info", "memory compression triggered")
 	assertMemoryLogContains(t, spy.entries, "error", "memory compression failed")
 }
+
 type fakeTokenCounter struct{}
 
 func (fakeTokenCounter) Count(text string) int {

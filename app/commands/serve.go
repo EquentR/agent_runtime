@@ -16,8 +16,8 @@ import (
 	coreagent "github.com/EquentR/agent_runtime/core/agent"
 	"github.com/EquentR/agent_runtime/core/approvals"
 	coreaudit "github.com/EquentR/agent_runtime/core/audit"
-	corelog "github.com/EquentR/agent_runtime/core/log"
 	"github.com/EquentR/agent_runtime/core/interactions"
+	corelog "github.com/EquentR/agent_runtime/core/log"
 	coreprompt "github.com/EquentR/agent_runtime/core/prompt"
 	googleclient "github.com/EquentR/agent_runtime/core/providers/client/google"
 	openaicompletions "github.com/EquentR/agent_runtime/core/providers/client/openai_completions"
@@ -31,6 +31,7 @@ import (
 	"github.com/EquentR/agent_runtime/pkg/db"
 	"github.com/EquentR/agent_runtime/pkg/log"
 	"github.com/EquentR/agent_runtime/pkg/rest"
+	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
@@ -38,7 +39,7 @@ import (
 func Serve(c *config.Config, version, commit string) {
 	GracefulExit()
 	log.Init(&c.Log)
-	corelog.SetLogger(applogging.NewCoreAdapter(log.Log()))
+	corelog.SetLogger(applogging.NewCoreAdapter(log.Log().WithOptions(zap.AddCallerSkip(3))))
 
 	log.Infof("Application: Version: %s, Git Commit: %s", version, commit)
 
