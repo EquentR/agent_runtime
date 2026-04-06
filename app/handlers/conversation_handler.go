@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strings"
 
 	"github.com/EquentR/agent_runtime/app/models"
 	coreagent "github.com/EquentR/agent_runtime/core/agent"
@@ -252,19 +253,23 @@ func (h *ConversationHandler) enrichConversationListItem(ctx context.Context, co
 		return coreagent.Conversation{}
 	}
 	enriched := *conversation
-	if h.store != nil && conversation.ID != "" {
-		title, lastMessage, messageCount, lastMessageAt, err := h.store.BuildVisibleConversationSummary(ctx, conversation.ID)
-		if err == nil {
-			enriched.Title = title
-			enriched.LastMessage = lastMessage
-			enriched.MessageCount = messageCount
-			enriched.LastMessageAt = lastMessageAt
-		} else {
-			enriched.Title = ""
-			enriched.LastMessage = ""
-			enriched.MessageCount = 0
-			enriched.LastMessageAt = nil
-		}
+	if h.store == nil || conversation.ID == "" {
+		return h.enrichConversationAuditMetadata(ctx, enriched)
+	}
+	if conversationHasStoredVisibleSummary(conversation) {
+		return h.enrichConversationAuditMetadata(ctx, enriched)
+	}
+	title, lastMessage, messageCount, lastMessageAt, err := h.store.BuildVisibleConversationSummary(ctx, conversation.ID)
+	if err == nil {
+		enriched.Title = title
+		enriched.LastMessage = lastMessage
+		enriched.MessageCount = messageCount
+		enriched.LastMessageAt = lastMessageAt
+	} else {
+		enriched.Title = ""
+		enriched.LastMessage = ""
+		enriched.MessageCount = 0
+		enriched.LastMessageAt = nil
 	}
 	return h.enrichConversationAuditMetadata(ctx, enriched)
 }
@@ -284,6 +289,25 @@ func (h *ConversationHandler) enrichConversation(ctx context.Context, conversati
 		}
 	}
 	return h.enrichConversationAuditMetadata(ctx, enriched)
+}
+
+func conversationHasStoredVisibleSummary(conversation *coreagent.Conversation) bool {
+	if conversation == nil {
+		return false
+	}
+	if conversation.Title == "" || conversation.LastMessage == "" {
+		return false
+	}
+	if conversation.MessageCount <= 0 {
+		return false
+	}
+	if conversation.LastMessageAt == nil {
+		return false
+	}
+	if strings.HasPrefix(conversation.Title, "Run failed:") || strings.HasPrefix(conversation.LastMessage, "Run failed:") {
+		return false
+	}
+	return true
 }
 
 func (h *ConversationHandler) enrichConversationAuditMetadata(ctx context.Context, conversation coreagent.Conversation) coreagent.Conversation {

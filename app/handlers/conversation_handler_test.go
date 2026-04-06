@@ -429,6 +429,64 @@ func TestConversationHandlerConversationListRecomputesStaleHiddenSystemSummaries
 	}
 }
 
+func TestConversationHandlerListConversationsReusesStoredVisibleSummariesWhenVisibleSummaryRecomputeFails(t *testing.T) {
+	_, auditStore, db, server := newConversationHandlerTestServerWithDB(t)
+	storedSummaryTime := time.Date(2026, time.March, 24, 15, 0, 0, 0, time.UTC)
+	if err := db.Create(&coreagent.Conversation{
+		ID:            "conv_1",
+		ProviderID:    "openai",
+		ModelID:       "gpt-5.4",
+		Title:         "visible stored title",
+		LastMessage:   "visible stored summary",
+		MessageCount:  2,
+		LastMessageAt: &storedSummaryTime,
+	}).Error; err != nil {
+		t.Fatalf("create conversation error = %v", err)
+	}
+	if err := db.Create(&coreagent.ConversationMessage{
+		ConversationID: "conv_1",
+		Seq:            1,
+		Role:           model.RoleAssistant,
+		Content:        "visible answer",
+		MessageJSON:    []byte(`{"version":"v1","message":`),
+		TaskID:         "task_1",
+	}).Error; err != nil {
+		t.Fatalf("insert malformed visible message error = %v", err)
+	}
+	if _, err := auditStore.CreateRun(context.Background(), coreaudit.StartRunInput{
+		RunID:          "run_1",
+		TaskID:         "task_1",
+		ConversationID: "conv_1",
+		TaskType:       "agent.run",
+		CreatedBy:      "tester",
+		Status:         coreaudit.StatusSucceeded,
+		SchemaVersion:  coreaudit.SchemaVersionV1,
+		StartedAt:      storedSummaryTime,
+	}); err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+
+	resp, err := http.Get(server.URL + "/api/v1/conversations")
+	if err != nil {
+		t.Fatalf("http.Get() error = %v", err)
+	}
+	defer resp.Body.Close()
+
+	got := decodeConversationListResponse(t, resp.Body)
+	if len(got) != 1 {
+		t.Fatalf("len(conversations) = %d, want 1", len(got))
+	}
+	if got[0].Title != "visible stored title" || got[0].LastMessage != "visible stored summary" || got[0].MessageCount != 2 {
+		t.Fatalf("conversation summary = %#v, want stored visible summary preserved when recompute fails", got[0])
+	}
+	if got[0].LastMessageAt == nil || !got[0].LastMessageAt.Equal(storedSummaryTime) {
+		t.Fatalf("conversation.LastMessageAt = %v, want stored summary time preserved", got[0].LastMessageAt)
+	}
+	if got[0].AuditRunID != "run_1" {
+		t.Fatalf("conversation.AuditRunID = %q, want run_1", got[0].AuditRunID)
+	}
+}
+
 func TestConversationHandlerListConversationsDoesNotFallbackToStoredSummariesWhenVisibleSummaryRecomputeFails(t *testing.T) {
 	_, auditStore, db, server := newConversationHandlerTestServerWithDB(t)
 	staleSummaryTime := time.Date(2026, time.March, 24, 14, 0, 0, 0, time.UTC)

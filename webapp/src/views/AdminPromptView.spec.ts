@@ -292,6 +292,40 @@ describe('AdminPromptView', () => {
   })
 
 
+  it('prefills the configured default model when the default provider is not first in the catalog', async () => {
+    api.fetchPromptBindings.mockResolvedValue([])
+    api.fetchModelCatalog.mockResolvedValue({
+      default_provider_id: 'google',
+      default_model_id: 'gemini-2.5-pro',
+      providers: [
+        {
+          id: 'openai',
+          name: 'OpenAI',
+          models: [{ id: 'gpt-5.4', name: 'GPT 5.4', type: 'chat' }],
+        },
+        {
+          id: 'google',
+          name: 'Google',
+          models: [
+            { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', type: 'chat' },
+            { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', type: 'chat' },
+          ],
+        },
+      ],
+    })
+
+    const wrapper = await mountAdminPromptView()
+    if (!wrapper) return
+
+    await flushPromises()
+    await openBindingDialog(wrapper)
+    await wrapper.get('[data-create-binding]').trigger('click')
+    await wrapper.get('[data-binding-provider-input]').setValue('google')
+    await flushPromises()
+
+    expect((wrapper.get('[data-binding-model-input]').element as HTMLSelectElement).value).toBe('gemini-2.5-pro')
+  })
+
   it('falls back to the provider default model when a stale binding model is no longer available', async () => {
     api.fetchPromptBindings.mockResolvedValue([
       buildBinding({

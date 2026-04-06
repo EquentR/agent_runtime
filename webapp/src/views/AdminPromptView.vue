@@ -362,7 +362,7 @@ function patchBindingDraft(patch: Partial<BindingDraft>) {
 
 function patchBindingProvider(providerId: string) {
   const { providerId: nextProviderId, modelId } = resolveModelSelection(
-    availableBindingProviders.value,
+    modelCatalog.value,
     providerId,
     bindingDraft.value.model_id,
   )

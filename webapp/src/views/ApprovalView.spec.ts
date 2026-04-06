@@ -155,6 +155,43 @@ describe('ApprovalView', () => {
     stream.reject(new Error('Task event stream aborted'))
   })
 
+  it('resolves the sidebar conversation id from result_json and still streams cancel_requested tasks', async () => {
+    const stream = createDeferred<{ conversation_id: string }>()
+    api.fetchTaskDetails.mockResolvedValue({
+      id: 'task_waiting',
+      status: 'cancel_requested',
+      result_json: { conversation_id: 'conv_from_result_json' },
+      created_by: 'alice',
+      created_at: '',
+      updated_at: '',
+      task_type: 'agent.run',
+    })
+    api.fetchTaskApprovals.mockResolvedValue([buildPendingApproval({ conversation_id: 'conv_from_result_json' })])
+    api.streamRunTask.mockReturnValue(stream.promise)
+
+    const router = makeRouter()
+    await router.push('/approvals/task_waiting')
+    await router.isReady()
+
+    const wrapper = mount(ApprovalView, {
+      global: {
+        plugins: [router],
+      },
+    })
+
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('conv_from_result_json')
+    expect(api.streamRunTask).toHaveBeenCalledWith(
+      'task_waiting',
+      expect.any(Function),
+      expect.any(Function),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    )
+
+    stream.reject(new Error('Task event stream aborted'))
+  })
+
   it('submits an approval decision for the selected task and stays on the same route', async () => {
     const stream = createDeferred<{ conversation_id: string }>()
     api.fetchTaskDetails.mockResolvedValue({
