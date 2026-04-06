@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/EquentR/agent_runtime/core/approvals"
 	coreaudit "github.com/EquentR/agent_runtime/core/audit"
+	corelog "github.com/EquentR/agent_runtime/core/log"
 	"github.com/EquentR/agent_runtime/core/forcedprompt"
 	"github.com/EquentR/agent_runtime/core/interactions"
 	"github.com/EquentR/agent_runtime/core/memory"
@@ -193,9 +195,28 @@ func appendResolvedSkillsToPrompt(resolvedPrompt *coreprompt.ResolvedPrompt, res
 
 func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 	return func(ctx context.Context, task *coretasks.Task, runtime *coretasks.Runtime) (output any, execErr error) {
+		startedAt := time.Now()
+		conversationID := ""
 		if task == nil {
 			return nil, fmt.Errorf("task is required")
 		}
+		corelog.Info("agent executor started", corelog.String("component", "agent"), corelog.String("module", "executor"), corelog.String("task_id", task.ID), corelog.String("task_type", task.TaskType))
+		defer func() {
+			fields := []corelog.Field{
+				corelog.String("component", "agent"),
+				corelog.String("module", "executor"),
+				corelog.String("task_id", task.ID),
+				corelog.Duration("duration", time.Since(startedAt)),
+			}
+			if conversationID != "" {
+				fields = append(fields, corelog.String("conversation_id", conversationID))
+			}
+			if execErr != nil {
+				corelog.Error("agent executor failed", append(fields, corelog.Err(execErr))...)
+				return
+			}
+			corelog.Info("agent executor finished", fields...)
+		}()
 		if deps.Resolver == nil {
 			return nil, fmt.Errorf("model resolver is required")
 		}
@@ -267,11 +288,13 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 		if err != nil {
 			return nil, err
 		}
+		conversationID = conversation.ID
 		auditor.setConversation(conversation)
 		history, err := deps.ConversationStore.ListReplayMessages(ctx, conversation.ID)
 		if err != nil {
 			return nil, err
 		}
+		corelog.Info("conversation history loaded", corelog.String("component", "agent"), corelog.String("module", "executor"), corelog.String("task_id", task.ID), corelog.String("conversation_id", conversation.ID), corelog.Int("message_count", len(history)))
 		auditor.recordConversationLoaded(ctx, history)
 		client, err := deps.ClientFactory(provider, llmModel)
 		if err != nil {

@@ -2,6 +2,7 @@ package log
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"strings"
 	"testing"
@@ -47,7 +48,24 @@ func TestSetLoggerRoutesFacadeCallsToInjectedLogger(t *testing.T) {
 	}
 }
 
-func TestFallbackLoggerWritesReadableStdoutOutput(t *testing.T) {
+func TestInfofFormatsMessageBeforeDelegating(t *testing.T) {
+	original := SetLogger(&fallbackLogger{})
+	defer SetLogger(original)
+
+	spy := &spyLogger{}
+	SetLogger(spy)
+
+	Infof("task %s attempt %d", "task-1", 3)
+
+	if len(spy.entries) != 1 {
+		t.Fatalf("len(entries) = %d, want 1", len(spy.entries))
+	}
+	if spy.entries[0].msg != "task task-1 attempt 3" {
+		t.Fatalf("formatted msg = %q, want %q", spy.entries[0].msg, "task task-1 attempt 3")
+	}
+}
+
+func TestFallbackLoggerWritesPrettierStdoutOutput(t *testing.T) {
 	originalStdout := os.Stdout
 	r, w, err := os.Pipe()
 	if err != nil {
@@ -71,9 +89,13 @@ func TestFallbackLoggerWritesReadableStdoutOutput(t *testing.T) {
 		t.Fatalf("ReadFrom() error = %v", err)
 	}
 	output := buf.String()
-	for _, want := range []string{"WARN", "tool failed", "tool_name=http_request", "timed_out=true", "elapsed=1.5s"} {
+	for _, want := range []string{"[", "] WARN tool failed", " | ", "tool_name=http_request", "timed_out=true", "elapsed=1.5s"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("output = %q, want substring %q", output, want)
 		}
 	}
+}
+
+func TestContextCompilesForFutureLoggerUsage(t *testing.T) {
+	_ = context.Background()
 }

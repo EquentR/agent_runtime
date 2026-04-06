@@ -15,6 +15,7 @@ import (
 
 	"github.com/EquentR/agent_runtime/core/approvals"
 	coreaudit "github.com/EquentR/agent_runtime/core/audit"
+	corelog "github.com/EquentR/agent_runtime/core/log"
 	"github.com/EquentR/agent_runtime/core/interactions"
 	"github.com/EquentR/agent_runtime/core/memory"
 	coreprompt "github.com/EquentR/agent_runtime/core/prompt"
@@ -2529,6 +2530,79 @@ func cloneAuditArtifact(artifact *coreaudit.Artifact) *coreaudit.Artifact {
 		copy.BodyJSON = append([]byte(nil), artifact.BodyJSON...)
 	}
 	return &copy
+}
+
+func TestAgentExecutorLogsConversationLoadAndCompletion(t *testing.T) {
+	store := newConversationStoreForTest(t)
+	spy := &agentLogSpy{}
+	original := corelog.SetLogger(spy)
+	defer corelog.SetLogger(original)
+
+	_, err := store.CreateConversation(context.Background(), CreateConversationInput{ID: "conv_log_1", ProviderID: "openai", ModelID: "gpt-5.4"})
+	if err != nil {
+		t.Fatalf("CreateConversation() error = %v", err)
+	}
+	if err := store.AppendMessages(context.Background(), "conv_log_1", "task_0", []model.Message{{Role: model.RoleUser, Content: "first"}}); err != nil {
+		t.Fatalf("AppendMessages() error = %v", err)
+	}
+	client := &stubClient{streams: []model.Stream{newStubStream(
+		[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "done"}}},
+		model.Message{Role: model.RoleAssistant, Content: "done"},
+		nil,
+	)}}
+	executor := newTaskExecutorForTest(t, ExecutorDependencies{
+		Resolver:          newExecutorResolverForTest(),
+		ConversationStore: store,
+		ClientFactory:     func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return client, nil },
+	})
+	payload := marshalExecutorTaskInput(t, map[string]any{
+		"conversation_id": "conv_log_1",
+		"provider_id":     "openai",
+		"model_id":        "gpt-5.4",
+		"message":         "next",
+	})
+	_, err = executor(context.Background(), &coretasks.Task{ID: "task_log_1", TaskType: "agent.run", InputJSON: payload}, nil)
+	if err != nil {
+		t.Fatalf("executor() error = %v", err)
+	}
+	assertAgentLogContains(t, spy.entries, "info", "agent executor started", "task_id", "task_log_1")
+	assertAgentLogContains(t, spy.entries, "info", "conversation history loaded", "conversation_id", "conv_log_1")
+	assertAgentLogContains(t, spy.entries, "info", "agent executor finished", "conversation_id", "conv_log_1")
+}
+
+type agentLogSpy struct {
+	entries []agentLogEntry
+}
+
+type agentLogEntry struct {
+	level  string
+	msg    string
+	fields map[string]any
+}
+
+func (s *agentLogSpy) Debug(msg string, fields ...corelog.Field) { s.entries = append(s.entries, newAgentLogEntry("debug", msg, fields...)) }
+func (s *agentLogSpy) Info(msg string, fields ...corelog.Field)  { s.entries = append(s.entries, newAgentLogEntry("info", msg, fields...)) }
+func (s *agentLogSpy) Warn(msg string, fields ...corelog.Field)  { s.entries = append(s.entries, newAgentLogEntry("warn", msg, fields...)) }
+func (s *agentLogSpy) Error(msg string, fields ...corelog.Field) { s.entries = append(s.entries, newAgentLogEntry("error", msg, fields...)) }
+
+func newAgentLogEntry(level string, msg string, fields ...corelog.Field) agentLogEntry {
+	mapped := make(map[string]any, len(fields))
+	for _, field := range fields {
+		mapped[field.Key] = field.Value
+	}
+	return agentLogEntry{level: level, msg: msg, fields: mapped}
+}
+
+func assertAgentLogContains(t *testing.T, entries []agentLogEntry, level string, msg string, key string, want any) {
+	t.Helper()
+	for _, entry := range entries {
+		if entry.level == level && entry.msg == msg {
+			if got, ok := entry.fields[key]; ok && got == want {
+				return
+			}
+		}
+	}
+	t.Fatalf("agent log entry not found: level=%s msg=%s %s=%v entries=%#v", level, msg, key, want, entries)
 }
 
 func newTaskExecutorForTest(t *testing.T, deps ExecutorDependencies) coretasks.Executor {

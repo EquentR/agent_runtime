@@ -10,6 +10,7 @@ import (
 	"sync"
 	"unicode/utf8"
 
+	corelog "github.com/EquentR/agent_runtime/core/log"
 	providertools "github.com/EquentR/agent_runtime/core/providers/tools"
 	model "github.com/EquentR/agent_runtime/core/providers/types"
 	coretypes "github.com/EquentR/agent_runtime/core/types"
@@ -170,7 +171,9 @@ func (m *Manager) RuntimeContext(ctx context.Context) (RuntimeContext, error) {
 	defer m.mu.Unlock()
 
 	if m.requiresCompressionLocked() {
+		corelog.Info("memory compression triggered", corelog.String("component", "memory"), corelog.String("module", "manager"), corelog.Int("short_term_messages", len(m.shortTerm)), corelog.Int64("short_term_limit_tokens", m.shortTermLimitTokens))
 		if err := m.compressLocked(ctx); err != nil {
+			corelog.Error("memory compression failed", corelog.String("component", "memory"), corelog.String("module", "manager"), corelog.Err(err))
 			return RuntimeContext{}, err
 		}
 	}
@@ -251,6 +254,7 @@ func (m *Manager) compressLocked(ctx context.Context) error {
 
 	m.summary = summary
 	m.shortTerm = cloneMessages(preservedTail)
+	corelog.Info("memory compression finished", corelog.String("component", "memory"), corelog.String("module", "manager"), corelog.Int("preserved_tail_messages", len(preservedTail)), corelog.Int("summary_length", len(summary)))
 	return nil
 }
 

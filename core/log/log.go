@@ -51,13 +51,18 @@ func Info(msg string, fields ...Field)  { currentLogger().Info(msg, fields...) }
 func Warn(msg string, fields ...Field)  { currentLogger().Warn(msg, fields...) }
 func Error(msg string, fields ...Field) { currentLogger().Error(msg, fields...) }
 
-func String(key string, value string) Field       { return Field{Key: key, Value: value} }
-func Int(key string, value int) Field             { return Field{Key: key, Value: value} }
-func Int64(key string, value int64) Field         { return Field{Key: key, Value: value} }
-func Bool(key string, value bool) Field           { return Field{Key: key, Value: value} }
-func Duration(key string, value time.Duration) Field { return Field{Key: key, Value: value} }
-func Any(key string, value any) Field             { return Field{Key: key, Value: value} }
-func Err(err error) Field                         { return Field{Key: "error", Value: err} }
+func Debugf(format string, args ...any) { Debug(fmt.Sprintf(format, args...)) }
+func Infof(format string, args ...any)  { Info(fmt.Sprintf(format, args...)) }
+func Warnf(format string, args ...any)  { Warn(fmt.Sprintf(format, args...)) }
+func Errorf(format string, args ...any) { Error(fmt.Sprintf(format, args...)) }
+
+func String(key string, value string) Field            { return Field{Key: key, Value: value} }
+func Int(key string, value int) Field                  { return Field{Key: key, Value: value} }
+func Int64(key string, value int64) Field              { return Field{Key: key, Value: value} }
+func Bool(key string, value bool) Field                { return Field{Key: key, Value: value} }
+func Duration(key string, value time.Duration) Field   { return Field{Key: key, Value: value} }
+func Any(key string, value any) Field                  { return Field{Key: key, Value: value} }
+func Err(err error) Field                              { return Field{Key: "error", Value: err} }
 
 type fallbackLogger struct{}
 
@@ -67,13 +72,24 @@ func (l *fallbackLogger) Warn(msg string, fields ...Field)  { writeFallback("WAR
 func (l *fallbackLogger) Error(msg string, fields ...Field) { writeFallback("ERROR", msg, fields...) }
 
 func writeFallback(level string, msg string, fields ...Field) {
-	parts := make([]string, 0, len(fields)+3)
-	parts = append(parts, time.Now().UTC().Format(time.RFC3339), level, msg)
+	var builder strings.Builder
+	builder.WriteString("[")
+	builder.WriteString(time.Now().UTC().Format("2006-01-02 15:04:05.000"))
+	builder.WriteString("] ")
+	builder.WriteString(level)
+	builder.WriteString(" ")
+	builder.WriteString(msg)
+
+	fieldParts := make([]string, 0, len(fields))
 	for _, field := range fields {
 		if strings.TrimSpace(field.Key) == "" {
 			continue
 		}
-		parts = append(parts, fmt.Sprintf("%s=%v", field.Key, field.Value))
+		fieldParts = append(fieldParts, fmt.Sprintf("%s=%v", field.Key, field.Value))
 	}
-	_, _ = fmt.Fprintln(os.Stdout, strings.Join(parts, " "))
+	if len(fieldParts) > 0 {
+		builder.WriteString(" | ")
+		builder.WriteString(strings.Join(fieldParts, " "))
+	}
+	_, _ = fmt.Fprintln(os.Stdout, builder.String())
 }

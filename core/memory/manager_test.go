@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	corelog "github.com/EquentR/agent_runtime/core/log"
 	model "github.com/EquentR/agent_runtime/core/providers/types"
 	coretypes "github.com/EquentR/agent_runtime/core/types"
 )
@@ -637,6 +638,65 @@ func TestShortTermMessagesReturnsDeepCopy(t *testing.T) {
 	}
 }
 
+type memoryLogSpy struct {
+	entries []memoryLogEntry
+}
+
+type memoryLogEntry struct {
+	level  string
+	msg    string
+	fields map[string]any
+}
+
+func (s *memoryLogSpy) Debug(msg string, fields ...corelog.Field) { s.entries = append(s.entries, newMemoryLogEntry("debug", msg, fields...)) }
+func (s *memoryLogSpy) Info(msg string, fields ...corelog.Field)  { s.entries = append(s.entries, newMemoryLogEntry("info", msg, fields...)) }
+func (s *memoryLogSpy) Warn(msg string, fields ...corelog.Field)  { s.entries = append(s.entries, newMemoryLogEntry("warn", msg, fields...)) }
+func (s *memoryLogSpy) Error(msg string, fields ...corelog.Field) { s.entries = append(s.entries, newMemoryLogEntry("error", msg, fields...)) }
+
+func newMemoryLogEntry(level string, msg string, fields ...corelog.Field) memoryLogEntry {
+	mapped := make(map[string]any, len(fields))
+	for _, field := range fields {
+		mapped[field.Key] = field.Value
+	}
+	return memoryLogEntry{level: level, msg: msg, fields: mapped}
+}
+
+func assertMemoryLogContains(t *testing.T, entries []memoryLogEntry, level string, msg string) {
+	t.Helper()
+	for _, entry := range entries {
+		if entry.level == level && entry.msg == msg {
+			return
+		}
+	}
+	t.Fatalf("memory log entry not found: level=%s msg=%s entries=%#v", level, msg, entries)
+}
+
+func TestContextMessagesLogsCompressionTriggeredAndFailure(t *testing.T) {
+	spy := &memoryLogSpy{}
+	original := corelog.SetLogger(spy)
+	defer corelog.SetLogger(original)
+
+	mgr, err := NewManager(Options{
+		MaxContextTokens: 100,
+		Counter:          fakeTokenCounter{},
+		Compressor: func(_ context.Context, request CompressionRequest) (string, error) {
+			return "", context.DeadlineExceeded
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	mgr.AddMessages([]model.Message{
+		{Role: model.RoleUser, Content: strings.Repeat("a", 60)},
+		{Role: model.RoleAssistant, Content: strings.Repeat("b", 60)},
+	})
+	_, err = mgr.ContextMessages(context.Background())
+	if err == nil {
+		t.Fatal("ContextMessages() error = nil, want compressor failure")
+	}
+	assertMemoryLogContains(t, spy.entries, "info", "memory compression triggered")
+	assertMemoryLogContains(t, spy.entries, "error", "memory compression failed")
+}
 type fakeTokenCounter struct{}
 
 func (fakeTokenCounter) Count(text string) int {
