@@ -8,6 +8,7 @@ import (
 
 	"github.com/EquentR/agent_runtime/core/approvals"
 	"github.com/EquentR/agent_runtime/core/interactions"
+	corelog "github.com/EquentR/agent_runtime/core/log"
 	coretools "github.com/EquentR/agent_runtime/core/tools"
 	coretypes "github.com/EquentR/agent_runtime/core/types"
 )
@@ -149,6 +150,7 @@ func (r *Runtime) Emit(ctx context.Context, eventType string, level string, payl
 func (r *Runtime) Suspend(ctx context.Context, reason string) error {
 	task, events, err := r.manager.store.MarkWaiting(ctx, r.taskID, reason)
 	if err != nil {
+		corelog.Error("task suspend failed", corelog.String("component", "tasks"), corelog.String("module", "task_runtime"), corelog.String("task_id", r.taskID), corelog.String("suspend_reason", reason), corelog.Err(err))
 		return err
 	}
 	if task != nil && task.Status == StatusWaiting {
@@ -159,10 +161,12 @@ func (r *Runtime) Suspend(ctx context.Context, reason string) error {
 	if len(events) > 0 {
 		r.manager.recordTaskWaiting(task)
 	}
+	corelog.Warn("task suspended", corelog.String("component", "tasks"), corelog.String("module", "task_runtime"), corelog.String("task_id", r.taskID), corelog.String("suspend_reason", reason))
 	r.manager.publish(events...)
 	if isInteractionWaitReason(reason) {
 		if err := r.finalizeResolvedToolApprovalAfterSuspend(ctx, task); err != nil {
 			if recovered, recoveryErr := r.recoverResolvedToolApprovalAfterSuspend(ctx, task); recoveryErr == nil && recovered {
+				corelog.Warn("task suspend recovery applied", corelog.String("component", "tasks"), corelog.String("module", "task_runtime"), corelog.String("task_id", r.taskID), corelog.String("suspend_reason", reason))
 				return nil
 			}
 			return err

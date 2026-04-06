@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	corelog "github.com/EquentR/agent_runtime/core/log"
 	coretools "github.com/EquentR/agent_runtime/core/tools"
 	"github.com/EquentR/agent_runtime/core/types"
 )
@@ -59,6 +60,8 @@ func newExecCommandTool(env runtimeEnv) coretools.Tool {
 			if err != nil {
 				return "", err
 			}
+			startedAt := time.Now()
+			logToolStart(ctx, "exec_command", corelog.String("command", command), corelog.Int("args_count", len(args)), corelog.String("cwd", cwdValue), corelog.Int("timeout_seconds", timeout), corelog.Bool("use_shell", useShell))
 			commandCtx, cancel := context.WithTimeout(ctx, clampDuration(time.Duration(timeout)*time.Second, minCommandTimeout, maxCommandTimeout))
 			defer cancel()
 
@@ -104,6 +107,9 @@ func newExecCommandTool(env runtimeEnv) coretools.Tool {
 						result.Stderr = runErr.Error()
 					}
 				}
+				logToolFailure(ctx, "exec_command", runErr, corelog.String("command", command), corelog.Int("args_count", len(args)), corelog.Int("exit_code", result.ExitCode), corelog.Bool("timed_out", result.TimedOut), corelog.Duration("duration", time.Since(startedAt)))
+			} else {
+				logToolFinish(ctx, "exec_command", corelog.String("command", command), corelog.Int("args_count", len(args)), corelog.Int("exit_code", result.ExitCode), corelog.Bool("timed_out", result.TimedOut), corelog.Duration("duration", time.Since(startedAt)))
 			}
 
 			return jsonResult(result)

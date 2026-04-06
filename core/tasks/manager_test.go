@@ -11,9 +11,11 @@ import (
 
 	"github.com/EquentR/agent_runtime/core/approvals"
 	"github.com/EquentR/agent_runtime/core/interactions"
+	corelog "github.com/EquentR/agent_runtime/core/log"
 	coretypes "github.com/EquentR/agent_runtime/core/types"
 	"gorm.io/gorm"
 )
+
 
 func newApprovalAndInteractionStoresForTest(t *testing.T, store *Store) (*approvals.Store, *interactions.Store) {
 	t.Helper()
@@ -942,6 +944,116 @@ func TestManagerCreateApprovalRetriesAfterRequestedEventWriteFailure(t *testing.
 	if requestedCount != 1 {
 		t.Fatalf("approval.requested count = %d, want 1", requestedCount)
 	}
+}
+
+type taskLogSpy struct {
+	entries []taskLogEntry
+}
+
+type taskLogEntry struct {
+	level  string
+	msg    string
+	fields map[string]any
+}
+
+func (s *taskLogSpy) Debug(msg string, fields ...corelog.Field) { s.entries = append(s.entries, newTaskLogEntry("debug", msg, fields...)) }
+func (s *taskLogSpy) Info(msg string, fields ...corelog.Field)  { s.entries = append(s.entries, newTaskLogEntry("info", msg, fields...)) }
+func (s *taskLogSpy) Warn(msg string, fields ...corelog.Field)  { s.entries = append(s.entries, newTaskLogEntry("warn", msg, fields...)) }
+func (s *taskLogSpy) Error(msg string, fields ...corelog.Field) { s.entries = append(s.entries, newTaskLogEntry("error", msg, fields...)) }
+
+func newTaskLogEntry(level string, msg string, fields ...corelog.Field) taskLogEntry {
+	mapped := make(map[string]any, len(fields))
+	for _, field := range fields {
+		mapped[field.Key] = field.Value
+	}
+	return taskLogEntry{level: level, msg: msg, fields: mapped}
+}
+
+func TestManagerExecuteTaskLogsSuccessLifecycle(t *testing.T) {
+	store := newTestStore(t)
+	manager := NewManager(store, ManagerOptions{RunnerID: "runner-log"})
+	spy := &taskLogSpy{}
+	original := corelog.SetLogger(spy)
+	defer corelog.SetLogger(original)
+
+	if err := manager.RegisterExecutor("log.success", func(ctx context.Context, task *Task, runtime *Runtime) (any, error) {
+		return map[string]any{"ok": true}, nil
+	}); err != nil {
+		t.Fatalf("RegisterExecutor() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	manager.Start(ctx)
+
+	created, err := manager.CreateTask(ctx, CreateTaskInput{TaskType: "log.success", CreatedBy: "alice"})
+	if err != nil {
+		t.Fatalf("CreateTask() error = %v", err)
+	}
+	waitForTaskStatus(t, ctx, manager, created.ID, StatusSucceeded)
+
+	assertTaskLogContains(t, spy.entries, "info", "task created", "task_id", created.ID)
+	assertTaskLogContains(t, spy.entries, "info", "task claimed", "task_id", created.ID)
+	assertTaskLogContains(t, spy.entries, "info", "task finished", "task_id", created.ID)
+}
+
+func TestManagerExecuteTaskLogsExecutorFailure(t *testing.T) {
+	store := newTestStore(t)
+	manager := NewManager(store, ManagerOptions{RunnerID: "runner-log"})
+	spy := &taskLogSpy{}
+	original := corelog.SetLogger(spy)
+	defer corelog.SetLogger(original)
+
+	if err := manager.RegisterExecutor("log.fail", func(ctx context.Context, task *Task, runtime *Runtime) (any, error) {
+		return nil, errors.New("boom")
+	}); err != nil {
+		t.Fatalf("RegisterExecutor() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	manager.Start(ctx)
+
+	created, err := manager.CreateTask(ctx, CreateTaskInput{TaskType: "log.fail", CreatedBy: "alice"})
+	if err != nil {
+		t.Fatalf("CreateTask() error = %v", err)
+	}
+	waitForTaskStatus(t, ctx, manager, created.ID, StatusFailed)
+
+	assertTaskLogContains(t, spy.entries, "error", "task execution failed", "task_id", created.ID)
+}
+
+func TestRuntimeSuspendLogsWaitingState(t *testing.T) {
+	store := newTestStore(t)
+	manager := NewManager(store, ManagerOptions{})
+	spy := &taskLogSpy{}
+	original := corelog.SetLogger(spy)
+	defer corelog.SetLogger(original)
+
+	created, err := manager.CreateTask(context.Background(), CreateTaskInput{TaskType: "agent.run", CreatedBy: "alice"})
+	if err != nil {
+		t.Fatalf("CreateTask() error = %v", err)
+	}
+	if _, _, err := store.ClaimNextTask(context.Background(), "runner-1", time.Minute); err != nil {
+		t.Fatalf("ClaimNextTask() error = %v", err)
+	}
+	if err := newRuntime(manager, created.ID).Suspend(context.Background(), "waiting_for_interaction"); err != nil {
+		t.Fatalf("Suspend() error = %v", err)
+	}
+
+	assertTaskLogContains(t, spy.entries, "warn", "task suspended", "task_id", created.ID)
+}
+
+func assertTaskLogContains(t *testing.T, entries []taskLogEntry, level string, msg string, key string, want any) {
+	t.Helper()
+	for _, entry := range entries {
+		if entry.level == level && entry.msg == msg {
+			if got, ok := entry.fields[key]; ok && got == want {
+				return
+			}
+		}
+	}
+	t.Fatalf("log entry not found: level=%s msg=%s %s=%v entries=%#v", level, msg, key, want, entries)
 }
 
 func mustFindTaskEvent(t *testing.T, events []TaskEvent, want string) TaskEvent {

@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"time"
 
+	corelog "github.com/EquentR/agent_runtime/core/log"
 	coretools "github.com/EquentR/agent_runtime/core/tools"
 	"github.com/EquentR/agent_runtime/core/types"
 )
@@ -23,7 +25,7 @@ func newWriteFileTool(env runtimeEnv) coretools.Tool {
 			"end_line":    {Type: "integer", Description: "Inclusive end line for replace_lines"},
 			"create_dirs": {Type: "boolean", Description: "Create parent directories if needed"},
 		}),
-		Handler: func(_ context.Context, arguments map[string]any) (string, error) {
+		Handler: func(ctx context.Context, arguments map[string]any) (string, error) {
 			pathArg, err := requiredStringArg(arguments, "path")
 			if err != nil {
 				return "", err
@@ -56,29 +58,37 @@ func newWriteFileTool(env runtimeEnv) coretools.Tool {
 				return "", err
 			}
 
+			startedAt := time.Now()
+			logToolStart(ctx, "write_file", corelog.String("path", pathArg), corelog.String("mode", mode), corelog.Int("content_length", len(content)))
 			filePath, relPath, err := env.resolveWorkspaceFile(pathArg, false)
 			if err != nil {
+				logToolFailure(ctx, "write_file", err, corelog.String("path", pathArg), corelog.String("mode", mode))
 				return "", err
 			}
 			if err := ensureParentDir(filePath, createDirs); err != nil {
+				logToolFailure(ctx, "write_file", err, corelog.String("path", relPath), corelog.String("mode", mode))
 				return "", err
 			}
 
 			switch mode {
 			case "overwrite":
 				if err := os.WriteFile(filePath, []byte(content), 0o644); err != nil {
+					logToolFailure(ctx, "write_file", err, corelog.String("path", relPath), corelog.String("mode", mode))
 					return "", err
 				}
 			case "append":
 				f, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 				if err != nil {
+					logToolFailure(ctx, "write_file", err, corelog.String("path", relPath), corelog.String("mode", mode))
 					return "", err
 				}
 				if _, err := f.WriteString(content); err != nil {
 					_ = f.Close()
+					logToolFailure(ctx, "write_file", err, corelog.String("path", relPath), corelog.String("mode", mode))
 					return "", err
 				}
 				if err := f.Close(); err != nil {
+					logToolFailure(ctx, "write_file", err, corelog.String("path", relPath), corelog.String("mode", mode))
 					return "", err
 				}
 			case "insert":
@@ -87,6 +97,7 @@ func newWriteFileTool(env runtimeEnv) coretools.Tool {
 				}
 				existing, err := os.ReadFile(filePath)
 				if err != nil && !errors.Is(err, os.ErrNotExist) {
+					logToolFailure(ctx, "write_file", err, corelog.String("path", relPath), corelog.String("mode", mode))
 					return "", err
 				}
 				lines := splitLinesWithEndings(string(existing))
@@ -96,6 +107,7 @@ func newWriteFileTool(env runtimeEnv) coretools.Tool {
 				insertLines := splitLinesWithEndings(content)
 				updated := append(append(append([]string(nil), lines[:startLine-1]...), insertLines...), lines[startLine-1:]...)
 				if err := os.WriteFile(filePath, []byte(joinLines(updated)), 0o644); err != nil {
+					logToolFailure(ctx, "write_file", err, corelog.String("path", relPath), corelog.String("mode", mode))
 					return "", err
 				}
 			case "replace_lines":
@@ -104,6 +116,7 @@ func newWriteFileTool(env runtimeEnv) coretools.Tool {
 				}
 				existing, err := os.ReadFile(filePath)
 				if err != nil {
+					logToolFailure(ctx, "write_file", err, corelog.String("path", relPath), corelog.String("mode", mode))
 					return "", err
 				}
 				lines := splitLinesWithEndings(string(existing))
@@ -113,11 +126,13 @@ func newWriteFileTool(env runtimeEnv) coretools.Tool {
 				replacementLines := splitLinesWithEndings(content)
 				updated := append(append(append([]string(nil), lines[:startLine-1]...), replacementLines...), lines[endLine:]...)
 				if err := os.WriteFile(filePath, []byte(joinLines(updated)), 0o644); err != nil {
+					logToolFailure(ctx, "write_file", err, corelog.String("path", relPath), corelog.String("mode", mode))
 					return "", err
 				}
 			default:
 				return "", fmt.Errorf("unsupported write mode: %s", mode)
 			}
+			logToolFinish(ctx, "write_file", corelog.String("path", relPath), corelog.String("mode", mode), corelog.Int("content_length", len(content)), corelog.Duration("duration", time.Since(startedAt)))
 
 			return jsonResult(struct {
 				Path    string `json:"path"`

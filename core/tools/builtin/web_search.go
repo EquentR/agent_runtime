@@ -9,7 +9,9 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
+	corelog "github.com/EquentR/agent_runtime/core/log"
 	coretools "github.com/EquentR/agent_runtime/core/tools"
 	"github.com/EquentR/agent_runtime/core/types"
 )
@@ -47,15 +49,20 @@ func newWebSearchTool(env runtimeEnv) coretools.Tool {
 			if err != nil {
 				return "", err
 			}
+			startedAt := time.Now()
+			logToolStart(ctx, "web_search", corelog.String("provider", providerName), corelog.Int("query_length", len(query)), corelog.Int("max_results", maxResults))
 
 			resolvedName, provider, err := env.resolveWebSearchProvider(providerName)
 			if err != nil {
+				logToolFailure(ctx, "web_search", err, corelog.String("provider", providerName), corelog.Int("query_length", len(query)))
 				return "", err
 			}
 			results, err := provider.Search(ctx, query, maxResults)
 			if err != nil {
+				logToolFailure(ctx, "web_search", err, corelog.String("provider", resolvedName), corelog.Int("query_length", len(query)), corelog.Duration("duration", time.Since(startedAt)))
 				return "", err
 			}
+			logToolFinish(ctx, "web_search", corelog.String("provider", resolvedName), corelog.Int("query_length", len(query)), corelog.Int("result_count", len(results)), corelog.Duration("duration", time.Since(startedAt)))
 			return jsonResult(struct {
 				Provider string            `json:"provider"`
 				Results  []webSearchResult `json:"results"`

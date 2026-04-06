@@ -1,11 +1,15 @@
 package builtin
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
 	"time"
+
+	corelog "github.com/EquentR/agent_runtime/core/log"
+	coretools "github.com/EquentR/agent_runtime/core/tools"
 )
 
 const (
@@ -113,4 +117,40 @@ func (e runtimeEnv) httpClientWithTimeout(timeout time.Duration) *http.Client {
 	clone := *e.httpClient
 	clone.Timeout = timeout
 	return &clone
+}
+
+func toolLogFields(ctx context.Context, toolName string, extra ...corelog.Field) []corelog.Field {
+	fields := []corelog.Field{
+		corelog.String("component", "tool"),
+		corelog.String("tool_name", toolName),
+	}
+	if runtime, ok := coretools.RuntimeFromContext(ctx); ok && runtime != nil {
+		if runtime.TaskID != "" {
+			fields = append(fields, corelog.String("task_id", runtime.TaskID))
+		}
+		if runtime.StepID != "" {
+			fields = append(fields, corelog.String("step_id", runtime.StepID))
+		}
+		if runtime.Actor != "" {
+			fields = append(fields, corelog.String("actor", runtime.Actor))
+		}
+	}
+	fields = append(fields, extra...)
+	return fields
+}
+
+func logToolStart(ctx context.Context, toolName string, extra ...corelog.Field) {
+	corelog.Info("tool started", toolLogFields(ctx, toolName, extra...)...)
+}
+
+func logToolFinish(ctx context.Context, toolName string, extra ...corelog.Field) {
+	corelog.Info("tool finished", toolLogFields(ctx, toolName, extra...)...)
+}
+
+func logToolFailure(ctx context.Context, toolName string, err error, extra ...corelog.Field) {
+	fields := toolLogFields(ctx, toolName, extra...)
+	if err != nil {
+		fields = append(fields, corelog.Err(err))
+	}
+	corelog.Error("tool failed", fields...)
 }

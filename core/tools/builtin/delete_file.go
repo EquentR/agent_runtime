@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
+	corelog "github.com/EquentR/agent_runtime/core/log"
 	coretools "github.com/EquentR/agent_runtime/core/tools"
 	"github.com/EquentR/agent_runtime/core/types"
 )
@@ -26,19 +28,24 @@ func newDeleteFileTool(env runtimeEnv) coretools.Tool {
 				Reason:           "deletes a workspace file",
 			}
 		},
-		Handler: func(_ context.Context, arguments map[string]any) (string, error) {
+		Handler: func(ctx context.Context, arguments map[string]any) (string, error) {
 			pathArg, err := requiredStringArg(arguments, "path")
 			if err != nil {
 				return "", err
 			}
+			startedAt := time.Now()
+			logToolStart(ctx, "delete_file", corelog.String("path", pathArg))
 
 			filePath, relPath, err := env.resolveWorkspaceFile(pathArg, true)
 			if err != nil {
+				logToolFailure(ctx, "delete_file", err, corelog.String("path", pathArg))
 				return "", err
 			}
 			if err := os.Remove(filePath); err != nil {
+				logToolFailure(ctx, "delete_file", err, corelog.String("path", relPath))
 				return "", err
 			}
+			logToolFinish(ctx, "delete_file", corelog.String("path", relPath), corelog.Duration("duration", time.Since(startedAt)))
 			return jsonResult(struct {
 				Path    string `json:"path"`
 				Deleted bool   `json:"deleted"`

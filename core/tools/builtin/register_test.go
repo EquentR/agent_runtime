@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	corelog "github.com/EquentR/agent_runtime/core/log"
 	coretools "github.com/EquentR/agent_runtime/core/tools"
 	coretypes "github.com/EquentR/agent_runtime/core/types"
 )
@@ -838,6 +839,105 @@ func TestWebSearch(t *testing.T) {
 			t.Fatal("Execute(web_search non-2xx) error = nil, want non-nil")
 		}
 	})
+}
+
+type builtinLogSpy struct {
+	entries []builtinLogEntry
+}
+
+type builtinLogEntry struct {
+	level  string
+	msg    string
+	fields map[string]any
+}
+
+func (s *builtinLogSpy) Debug(msg string, fields ...corelog.Field) { s.entries = append(s.entries, newBuiltinLogEntry("debug", msg, fields...)) }
+func (s *builtinLogSpy) Info(msg string, fields ...corelog.Field)  { s.entries = append(s.entries, newBuiltinLogEntry("info", msg, fields...)) }
+func (s *builtinLogSpy) Warn(msg string, fields ...corelog.Field)  { s.entries = append(s.entries, newBuiltinLogEntry("warn", msg, fields...)) }
+func (s *builtinLogSpy) Error(msg string, fields ...corelog.Field) { s.entries = append(s.entries, newBuiltinLogEntry("error", msg, fields...)) }
+
+func newBuiltinLogEntry(level string, msg string, fields ...corelog.Field) builtinLogEntry {
+	mapped := make(map[string]any, len(fields))
+	for _, field := range fields {
+		mapped[field.Key] = field.Value
+	}
+	return builtinLogEntry{level: level, msg: msg, fields: mapped}
+}
+
+func TestExecCommandLogging(t *testing.T) {
+	workspace := t.TempDir()
+	registry := newBuiltinRegistry(t, Options{WorkspaceRoot: workspace, CommandTimeout: 5 * time.Second})
+	spy := &builtinLogSpy{}
+	original := corelog.SetLogger(spy)
+	defer corelog.SetLogger(original)
+
+	if _, err := registry.Execute(context.Background(), "exec_command", map[string]any{
+		"command": "go",
+		"args":    []any{"env", "GOOS"},
+	}); err != nil {
+		t.Fatalf("Execute(exec_command) error = %v", err)
+	}
+
+	assertBuiltinLogContains(t, spy.entries, "info", "tool started", "tool_name", "exec_command")
+	assertBuiltinLogContains(t, spy.entries, "info", "tool finished", "tool_name", "exec_command")
+}
+
+func TestHTTPRequestLoggingFailure(t *testing.T) {
+	registry := newBuiltinRegistry(t, Options{WorkspaceRoot: t.TempDir()})
+	spy := &builtinLogSpy{}
+	original := corelog.SetLogger(spy)
+	defer corelog.SetLogger(original)
+
+	_, err := registry.Execute(context.Background(), "http_request", map[string]any{
+		"url": "http://127.0.0.1:1",
+	})
+	if err == nil {
+		t.Fatal("Execute(http_request) error = nil, want non-nil")
+	}
+
+	assertBuiltinLogContains(t, spy.entries, "info", "tool started", "tool_name", "http_request")
+	assertBuiltinLogContains(t, spy.entries, "error", "tool failed", "tool_name", "http_request")
+}
+
+func TestReadWriteAndDeleteFileLogging(t *testing.T) {
+	workspace := t.TempDir()
+	registry := newBuiltinRegistry(t, Options{WorkspaceRoot: workspace})
+	spy := &builtinLogSpy{}
+	original := corelog.SetLogger(spy)
+	defer corelog.SetLogger(original)
+
+	if _, err := registry.Execute(context.Background(), "write_file", map[string]any{
+		"path":    "notes.txt",
+		"content": "hello",
+	}); err != nil {
+		t.Fatalf("Execute(write_file) error = %v", err)
+	}
+	if _, err := registry.Execute(context.Background(), "read_file", map[string]any{
+		"path": "notes.txt",
+	}); err != nil {
+		t.Fatalf("Execute(read_file) error = %v", err)
+	}
+	if _, err := registry.Execute(context.Background(), "delete_file", map[string]any{
+		"path": "notes.txt",
+	}); err != nil {
+		t.Fatalf("Execute(delete_file) error = %v", err)
+	}
+
+	assertBuiltinLogContains(t, spy.entries, "info", "tool finished", "tool_name", "write_file")
+	assertBuiltinLogContains(t, spy.entries, "info", "tool finished", "tool_name", "read_file")
+	assertBuiltinLogContains(t, spy.entries, "info", "tool finished", "tool_name", "delete_file")
+}
+
+func assertBuiltinLogContains(t *testing.T, entries []builtinLogEntry, level string, msg string, key string, want any) {
+	t.Helper()
+	for _, entry := range entries {
+		if entry.level == level && entry.msg == msg {
+			if got, ok := entry.fields[key]; ok && got == want {
+				return
+			}
+		}
+	}
+	t.Fatalf("log entry not found: level=%s msg=%s %s=%v entries=%#v", level, msg, key, want, entries)
 }
 
 func TestHelperProcess(t *testing.T) {

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	corelog "github.com/EquentR/agent_runtime/core/log"
 	coretools "github.com/EquentR/agent_runtime/core/tools"
 	"github.com/EquentR/agent_runtime/core/types"
 )
@@ -53,10 +54,13 @@ func newHTTPRequestTool(env runtimeEnv) coretools.Tool {
 				return "", err
 			}
 
+			startedAt := time.Now()
+			logToolStart(ctx, "http_request", corelog.String("method", strings.ToUpper(method)), corelog.String("url", urlValue), corelog.Int("headers_count", len(headers)), corelog.Int("timeout_seconds", timeoutSeconds), corelog.Int("body_length", len(body)))
 			requestCtx, cancel := context.WithTimeout(ctx, clampDuration(time.Duration(timeoutSeconds)*time.Second, minCommandTimeout, maxCommandTimeout))
 			defer cancel()
 			request, err := http.NewRequestWithContext(requestCtx, strings.ToUpper(method), urlValue, strings.NewReader(body))
 			if err != nil {
+				logToolFailure(ctx, "http_request", err, corelog.String("method", strings.ToUpper(method)), corelog.String("url", urlValue))
 				return "", err
 			}
 			for key, value := range headers {
@@ -65,14 +69,17 @@ func newHTTPRequestTool(env runtimeEnv) coretools.Tool {
 
 			response, err := env.httpClientWithTimeout(time.Duration(timeoutSeconds) * time.Second).Do(request)
 			if err != nil {
+				logToolFailure(ctx, "http_request", err, corelog.String("method", strings.ToUpper(method)), corelog.String("url", urlValue), corelog.Duration("duration", time.Since(startedAt)))
 				return "", err
 			}
 			defer response.Body.Close()
 
 			responseBody, err := io.ReadAll(response.Body)
 			if err != nil {
+				logToolFailure(ctx, "http_request", err, corelog.String("method", strings.ToUpper(method)), corelog.String("url", urlValue), corelog.Int("status_code", response.StatusCode), corelog.Duration("duration", time.Since(startedAt)))
 				return "", err
 			}
+			logToolFinish(ctx, "http_request", corelog.String("method", strings.ToUpper(method)), corelog.String("url", urlValue), corelog.Int("status_code", response.StatusCode), corelog.Int("response_length", len(responseBody)), corelog.Duration("duration", time.Since(startedAt)))
 
 			return jsonResult(struct {
 				StatusCode  int    `json:"status_code"`

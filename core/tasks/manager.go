@@ -11,6 +11,7 @@ import (
 
 	"github.com/EquentR/agent_runtime/core/approvals"
 	"github.com/EquentR/agent_runtime/core/interactions"
+	corelog "github.com/EquentR/agent_runtime/core/log"
 	"gorm.io/gorm"
 )
 
@@ -150,6 +151,7 @@ func (m *Manager) RegisterExecutor(taskType string, executor Executor) error {
 func (m *Manager) Start(ctx context.Context) {
 	m.startOnce.Do(func() {
 		for workerIndex := 0; workerIndex < m.workerCount; workerIndex++ {
+			corelog.Info("task worker started", corelog.String("component", "tasks"), corelog.String("module", "task_manager"), corelog.String("runner_id", m.runnerID), corelog.Int("worker_index", workerIndex))
 			go m.runWorker(ctx, workerIndex)
 		}
 	})
@@ -159,8 +161,10 @@ func (m *Manager) Start(ctx context.Context) {
 func (m *Manager) CreateTask(ctx context.Context, input CreateTaskInput) (*Task, error) {
 	task, events, err := m.store.CreateTask(ctx, input)
 	if err != nil {
+		corelog.Error("task create failed", corelog.String("component", "tasks"), corelog.String("module", "task_manager"), corelog.String("task_type", input.TaskType), corelog.Err(err))
 		return nil, err
 	}
+	corelog.Info("task created", corelog.String("component", "tasks"), corelog.String("module", "task_manager"), corelog.String("task_id", task.ID), corelog.String("task_type", task.TaskType), corelog.String("status", string(task.Status)))
 	m.recordTaskCreated(task)
 	m.publish(events...)
 	return task, nil
@@ -196,24 +200,29 @@ func (m *Manager) CreateApproval(ctx context.Context, input approvals.CreateAppr
 	}
 	approval, err := m.approvals.FindApprovalByToolCall(ctx, input.TaskID, input.ToolCallID)
 	if err != nil {
+		corelog.Error("approval lookup failed", corelog.String("component", "tasks"), corelog.String("module", "task_manager"), corelog.String("task_id", input.TaskID), corelog.String("tool_call_id", input.ToolCallID), corelog.Err(err))
 		return nil, err
 	}
 	if approval == nil {
 		approval, err = m.approvals.CreateApproval(ctx, input)
 		if err != nil {
+			corelog.Error("approval create failed", corelog.String("component", "tasks"), corelog.String("module", "task_manager"), corelog.String("task_id", input.TaskID), corelog.String("tool_name", input.ToolName), corelog.Err(err))
 			return nil, err
 		}
 	}
 	approval, events, err := m.finalizeCreatedApproval(ctx, approval)
 	if err != nil {
+		corelog.Error("approval finalize failed", corelog.String("component", "tasks"), corelog.String("module", "task_manager"), corelog.String("task_id", input.TaskID), corelog.Err(err))
 		return nil, err
 	}
 	if _, err := m.ensureApprovalInteraction(ctx, approval); err != nil {
+		corelog.Error("approval interaction ensure failed", corelog.String("component", "tasks"), corelog.String("module", "task_manager"), corelog.String("task_id", approval.TaskID), corelog.String("approval_id", approval.ID), corelog.Err(err))
 		return nil, err
 	}
 	if len(events) > 0 {
 		m.publish(events...)
 	}
+	corelog.Info("approval ready", corelog.String("component", "tasks"), corelog.String("module", "task_manager"), corelog.String("task_id", approval.TaskID), corelog.String("approval_id", approval.ID), corelog.String("tool_name", approval.ToolName), corelog.String("status", string(approval.Status)))
 	return approval, nil
 }
 
@@ -462,7 +471,6 @@ func (m *Manager) RetryTask(ctx context.Context, id string) (*Task, error) {
 
 // runWorker 持续轮询并执行单个 worker 领取到的任务。
 func (m *Manager) runWorker(ctx context.Context, workerIndex int) {
-	_ = workerIndex
 	for {
 		select {
 		case <-ctx.Done():
@@ -470,9 +478,9 @@ func (m *Manager) runWorker(ctx context.Context, workerIndex int) {
 		default:
 		}
 
-		// 1. 从持久层领取下一个待执行任务。
 		task, events, err := m.store.ClaimNextTask(ctx, m.runnerID, m.leaseDuration)
 		if err != nil {
+			corelog.Error("task claim failed", corelog.String("component", "tasks"), corelog.String("module", "task_manager"), corelog.String("runner_id", m.runnerID), corelog.Int("worker_index", workerIndex), corelog.Err(err))
 			time.Sleep(m.pollInterval)
 			continue
 		}
@@ -488,7 +496,7 @@ func (m *Manager) runWorker(ctx context.Context, workerIndex int) {
 			continue
 		}
 
-		// 2. 先发布 task.started，再执行实际任务逻辑。
+		corelog.Info("task claimed", corelog.String("component", "tasks"), corelog.String("module", "task_manager"), corelog.String("task_id", task.ID), corelog.String("task_type", task.TaskType), corelog.String("runner_id", m.runnerID), corelog.Int("worker_index", workerIndex))
 		m.recordTaskStarted(task)
 		m.publish(events...)
 		m.executeTask(ctx, task)
@@ -540,6 +548,7 @@ func (m *Manager) reconcileResolvedWaitingToolApprovalTasks(ctx context.Context)
 func (m *Manager) executeTask(ctx context.Context, task *Task) {
 	executor, ok := m.executor(task.TaskType)
 	if !ok {
+		corelog.Error("task executor missing", corelog.String("component", "tasks"), corelog.String("module", "task_manager"), corelog.String("task_id", task.ID), corelog.String("task_type", task.TaskType))
 		failed, events, err := m.store.MarkFailed(context.Background(), task.ID, map[string]any{"message": "executor not found"})
 		if err == nil {
 			if len(events) > 0 {
@@ -551,46 +560,45 @@ func (m *Manager) executeTask(ctx context.Context, task *Task) {
 		return
 	}
 
-	// 1. 为当前任务创建可取消上下文，并登记取消函数。
-	taskCtx, cancel := context.WithCancel(ctx)
-	m.setActiveCancel(task.ID, cancel)
-	defer func() {
-		cancel()
-		m.clearActiveCancel(task.ID)
-	}()
+		taskCtx, cancel := context.WithCancel(ctx)
+		m.setActiveCancel(task.ID, cancel)
+		defer func() {
+			cancel()
+			m.clearActiveCancel(task.ID)
+		}()
 
-	// 2. 后台刷新租约心跳，避免长任务被误判为失联。
-	go m.heartbeatLoop(taskCtx, task.ID)
+		startedAt := time.Now()
+		go m.heartbeatLoop(taskCtx, task.ID)
 
-	// 3. 调用注册执行器，并把任务运行时交给上层逻辑使用。
-	runtime := newRuntime(m, task.ID)
-	result, execErr := executor(taskCtx, task, runtime)
+		runtime := newRuntime(m, task.ID)
+		result, execErr := executor(taskCtx, task, runtime)
 
-	var finished *Task
-	var events []TaskEvent
-	var reason any
-	// 4. 根据执行结果写入最终状态。
-	switch {
-	case errors.Is(execErr, context.Canceled) || errors.Is(taskCtx.Err(), context.Canceled):
-		reason = map[string]any{"message": "task cancelled"}
-		finished, events, execErr = m.store.MarkCancelled(context.Background(), task.ID, reason)
-	case runtime.isSuspended() && m.taskStatusIs(context.Background(), task.ID, StatusWaiting):
-		return
-	case errors.Is(execErr, ErrTaskSuspended):
-		return
-	case execErr != nil:
-		reason = map[string]any{"message": execErr.Error()}
-		finished, events, execErr = m.store.MarkFailed(context.Background(), task.ID, reason)
-	default:
-		finished, events, execErr = m.store.MarkSucceeded(context.Background(), task.ID, result)
-	}
-	if execErr == nil {
-		if len(events) > 0 {
-			m.recordTaskFinished(finished, reason)
+		var finished *Task
+		var events []TaskEvent
+		var reason any
+		switch {
+		case errors.Is(execErr, context.Canceled) || errors.Is(taskCtx.Err(), context.Canceled):
+			reason = map[string]any{"message": "task cancelled"}
+			finished, events, execErr = m.store.MarkCancelled(context.Background(), task.ID, reason)
+		case runtime.isSuspended() && m.taskStatusIs(context.Background(), task.ID, StatusWaiting):
+			return
+		case errors.Is(execErr, ErrTaskSuspended):
+			return
+		case execErr != nil:
+			reason = map[string]any{"message": execErr.Error()}
+			corelog.Error("task execution failed", corelog.String("component", "tasks"), corelog.String("module", "task_manager"), corelog.String("task_id", task.ID), corelog.String("task_type", task.TaskType), corelog.Err(execErr))
+			finished, events, execErr = m.store.MarkFailed(context.Background(), task.ID, reason)
+		default:
+			finished, events, execErr = m.store.MarkSucceeded(context.Background(), task.ID, result)
 		}
-		m.publish(events...)
-		m.tryResumeParentAfterChild(finished)
-	}
+		if execErr == nil {
+			if len(events) > 0 {
+				m.recordTaskFinished(finished, reason)
+			}
+			corelog.Info("task finished", corelog.String("component", "tasks"), corelog.String("module", "task_manager"), corelog.String("task_id", task.ID), corelog.String("task_type", task.TaskType), corelog.String("status", string(finished.Status)), corelog.Duration("duration", time.Since(startedAt)))
+			m.publish(events...)
+			m.tryResumeParentAfterChild(finished)
+		}
 }
 
 func (m *Manager) taskStatusIs(ctx context.Context, taskID string, want Status) bool {

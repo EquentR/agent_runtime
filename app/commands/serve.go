@@ -9,12 +9,14 @@ import (
 	"time"
 
 	"github.com/EquentR/agent_runtime/app/config"
+	applogging "github.com/EquentR/agent_runtime/app/logging"
 	"github.com/EquentR/agent_runtime/app/logics"
 	"github.com/EquentR/agent_runtime/app/migration"
 	"github.com/EquentR/agent_runtime/app/router"
 	coreagent "github.com/EquentR/agent_runtime/core/agent"
 	"github.com/EquentR/agent_runtime/core/approvals"
 	coreaudit "github.com/EquentR/agent_runtime/core/audit"
+	corelog "github.com/EquentR/agent_runtime/core/log"
 	"github.com/EquentR/agent_runtime/core/interactions"
 	coreprompt "github.com/EquentR/agent_runtime/core/prompt"
 	googleclient "github.com/EquentR/agent_runtime/core/providers/client/google"
@@ -35,21 +37,16 @@ import (
 // Serve 负责装配应用依赖并启动 HTTP 服务。
 func Serve(c *config.Config, version, commit string) {
 	GracefulExit()
-	// 初始化日志
 	log.Init(&c.Log)
+	corelog.SetLogger(applogging.NewCoreAdapter(log.Log()))
 
-	// 打印版本信息
 	log.Infof("Application: Version: %s, Git Commit: %s", version, commit)
 
-	// 初始化数据库
 	db.Init(&c.Sqlite)
-	// 迁移表结构
 	migration.Bootstrap(version)
 
-	// 初始化web服务器
 	engine := rest.Init()
 
-	// 初始化任务持久层与后台管理器，为后续 agent executor 预留接入点。
 	taskStore := coretasks.NewStore(db.DB())
 	approvalStore := approvals.NewStore(db.DB())
 	interactionStore := interactions.NewStore(db.DB())
@@ -85,7 +82,6 @@ func Serve(c *config.Config, version, commit string) {
 	}
 	taskManager.Start(globalCtx)
 
-	// 将任务管理器作为依赖注入路由层。
 	router.Init(engine, c.Server.ApiBasePath, c.Server.StaticPaths, buildRouterDependencies(taskManager, approvalStore, conversationStore, auditRuntime.Store, resolver, promptRuntime.Store, promptRuntime.Resolver, skillLoader, authLogic, interactionStore))
 
 	addr := fmt.Sprintf("%s:%d", c.Server.Host, c.Server.Port)
@@ -93,7 +89,6 @@ func Serve(c *config.Config, version, commit string) {
 	if err != nil {
 		log.Panicf("Failed to listen on %s: %v", addr, err)
 	}
-	// 启动服务器
 	go func() {
 		if err := engine.RunListener(ln); err != nil {
 			log.Panicf("Failed to run server: %v", err)
@@ -101,7 +96,6 @@ func Serve(c *config.Config, version, commit string) {
 	}()
 	log.Infof("gin listening on %s", addr)
 
-	// 等待关闭信号
 	select {
 	case <-globalCtx.Done():
 		_ = ln.Close()
