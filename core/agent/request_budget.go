@@ -23,9 +23,10 @@ type requestBudgetDecision struct {
 	MessageCount         int    `json:"message_count"`
 }
 
-func (r *Runner) buildBudgetedRequest(ctx context.Context, afterToolTurn bool) (runtimeprompt.BuildResult, []model.Message, requestBudgetDecision, error) {
+func (r *Runner) buildBudgetedRequest(ctx context.Context, extraBody []model.Message, afterToolTurn bool) (runtimeprompt.BuildResult, []model.Message, requestBudgetDecision, error) {
 	runtimeContext := memory.RuntimeContext{}
 	if r.options.Memory == nil {
+		runtimeContext.Tail = append(runtimeContext.Tail, cloneMessages(extraBody)...)
 		return r.buildBudgetedRequestFromContext(ctx, runtimeContext, afterToolTurn)
 	}
 
@@ -33,12 +34,16 @@ func (r *Runner) buildBudgetedRequest(ctx context.Context, afterToolTurn bool) (
 	if err != nil {
 		return runtimeprompt.BuildResult{}, nil, requestBudgetDecision{}, err
 	}
+	state.Tail = append(state.Tail, cloneMessages(extraBody)...)
 	buildResult, requestMessages, decision, err := r.buildBudgetedRequestFromContext(ctx, state, afterToolTurn)
 	if err == nil {
 		decision.CompressionAttempted = trace.Attempted
 		decision.CompressionSucceeded = trace.Succeeded
 		if trace.Attempted && trace.Succeeded && decision.FinalPath == "direct" {
 			decision.FinalPath = "compressed"
+		}
+		if trace.Succeeded {
+			r.emitMemoryCompressed(ctx, 0, 0)
 		}
 		return buildResult, requestMessages, decision, nil
 	}
@@ -51,15 +56,18 @@ func (r *Runner) buildBudgetedRequest(ctx context.Context, afterToolTurn bool) (
 	if err != nil {
 		return runtimeprompt.BuildResult{}, nil, requestBudgetDecision{}, err
 	}
+	state.Tail = append(state.Tail, cloneMessages(extraBody)...)
 	buildResult, requestMessages, decision, err = r.buildBudgetedRequestFromContext(ctx, state, afterToolTurn)
 	decision.CompressionAttempted = true
 	decision.CompressionSucceeded = trace.Succeeded
 	if err == nil && trace.Succeeded && decision.FinalPath == "direct" {
 		decision.FinalPath = "compressed"
 	}
+	if trace.Succeeded && err == nil {
+		r.emitMemoryCompressed(ctx, 0, 0)
+	}
 	return buildResult, requestMessages, decision, err
 }
-
 
 func (r *Runner) buildBudgetedRequestFromContext(_ context.Context, runtimeContext memory.RuntimeContext, afterToolTurn bool) (runtimeprompt.BuildResult, []model.Message, requestBudgetDecision, error) {
 	buildResult, requestMessages, err := r.buildRequestMessages(runtimeContext, afterToolTurn)
@@ -90,7 +98,6 @@ func (r *Runner) buildBudgetedRequestFromContext(_ context.Context, runtimeConte
 	decision.FinalPath = "blocked"
 	return buildResult, requestMessages, decision, fmt.Errorf("%w: %d > %d", ErrContextBudgetExceeded, decision.TokenCount, maxTokens)
 }
-
 
 func requestMessageOverhead(counter memory.TokenCounter, runtimeContext memory.RuntimeContext, requestMessages []model.Message) int64 {
 	if counter == nil {
