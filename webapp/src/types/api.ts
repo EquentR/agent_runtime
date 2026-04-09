@@ -319,7 +319,7 @@ export interface ToolApprovalDecisionInput {
 
 export interface TranscriptEntry {
   id: string
-  kind: 'user' | 'reasoning' | 'tool' | 'reply' | 'error' | 'approval' | 'question'
+  kind: 'user' | 'reasoning' | 'tool' | 'reply' | 'error' | 'approval' | 'question' | 'memory'
   title: string
   content?: string
   provider_id?: string
@@ -356,7 +356,6 @@ export interface TranscriptEntryDetailBlock {
 
 export interface WorkspaceSkillListItem {
   name: string
-  title: string
   description?: string
   tags?: string[]
   tools?: string[]

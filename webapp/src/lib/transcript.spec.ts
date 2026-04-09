@@ -260,6 +260,45 @@ describe('buildTranscriptEntries', () => {
     expect(questionEntries).toHaveLength(1)
     expect(questionEntries[0].question_interaction?.response_json).toEqual({ custom_text: 'Alice' })
   })
+
+  it('skips using_skills tool calls and their ephemeral results so no orphan tool entries appear in replay', () => {
+    const entries = buildTranscriptEntries([
+      {
+        role: 'assistant',
+        content: 'Let me load your workspace skills.',
+        tool_calls: [
+          { id: 'call_skills_1', name: 'using_skills', arguments: '{}' },
+        ],
+      },
+      // The tool result would never be persisted because the tool is ephemeral,
+      // but even if a stale tool message somehow existed, we skip it in replay.
+    ] as any)
+
+    expect(entries.filter((e) => e.kind === 'tool')).toHaveLength(0)
+    expect(entries).toEqual([
+      expect.objectContaining({ kind: 'reply', content: 'Let me load your workspace skills.' }),
+    ])
+  })
+
+  it('skips using_skills tool calls when mixed with normal tool calls in the same assistant message', () => {
+    const entries = buildTranscriptEntries([
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          { id: 'call_skills_1', name: 'using_skills', arguments: '{}' },
+          { id: 'call_read_1', name: 'read_file', arguments: '{"path":"main.go"}' },
+        ],
+      },
+      { role: 'tool', content: 'package main', tool_call_id: 'call_read_1' },
+    ] as any)
+
+    expect(entries.map((e) => e.kind)).toEqual(['tool'])
+    expect(entries.filter((e) => e.kind === 'tool')).toHaveLength(1)
+    // only the normal tool call should produce an entry
+    expect(entries[0].details?.map((d) => d.label)).toEqual(['read_file'])
+    expect(entries[0].details?.map((d) => d.key)).toEqual(['call_read_1'])
+  })
 })
 
 describe('updateTranscriptFromStreamEvent', () => {
@@ -1240,5 +1279,30 @@ describe('updateTranscriptFromStreamEvent', () => {
 describe('summarizeToolResult', () => {
   it('condenses json output into a short summary', () => {
     expect(summarizeToolResult('{"forecast":"sunny","city":"Beijing","temp":26}')).toContain('forecast')
+  })
+})
+
+describe('memory.compressed event', () => {
+  it('appends a memory entry to the transcript when tokens_before is provided', () => {
+    const result = updateTranscriptFromStreamEvent([], {
+      type: 'memory.compressed',
+      payload: { tokens_before: 50000, tokens_after: 8000 },
+    })
+    expect(result).toHaveLength(1)
+    expect(result[0].kind).toBe('memory')
+    expect(result[0].title).toBe('记忆压缩')
+    expect(result[0].content).toContain('50')
+    expect(result[0].content).toContain('8')
+    expect(result[0].content).toContain('tokens')
+  })
+
+  it('appends a memory entry with no content when tokens_before is zero', () => {
+    const result = updateTranscriptFromStreamEvent([], {
+      type: 'memory.compressed',
+      payload: { tokens_before: 0, tokens_after: 0 },
+    })
+    expect(result).toHaveLength(1)
+    expect(result[0].kind).toBe('memory')
+    expect(result[0].content).toBeUndefined()
   })
 })

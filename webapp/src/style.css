@@ -1514,6 +1514,19 @@ p {
   background: currentColor;
 }
 
+.trace-kind-badge.memory {
+  background: rgba(120, 130, 160, 0.14);
+  color: #6b7899;
+}
+
+.trace-kind-badge.memory::before {
+  content: '';
+  position: absolute;
+  inset: 0.34rem;
+  border-radius: 999px;
+  background: currentColor;
+}
+
 .trace-tool-name {
   font-size: 0.77rem;
   font-weight: 600;

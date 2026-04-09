@@ -709,6 +709,12 @@ export function buildTranscriptEntries(messages: ConversationMessage[]): Transcr
   // question entries instead of plain tool entries for history.
   const askUserArgsByCallId = new Map<string, Record<string, unknown>>()
 
+  // Pre-scan: collect using_skills tool call IDs so we can skip them during
+  // replay — their assistant-side call is persisted, but the tool result is
+  // ephemeral and never stored, which would otherwise produce orphaned tool
+  // entries with no params and no result.
+  const usingSkillsCallIds = new Set<string>()
+
   for (const message of messages) {
     if (message.role === 'assistant') {
       for (const tc of message.tool_calls ?? []) {
@@ -721,14 +727,19 @@ export function buildTranscriptEntries(messages: ConversationMessage[]): Transcr
           }
           askUserArgsByCallId.set(tc.id, args)
         }
+        if (tc.name === 'using_skills') {
+          usingSkillsCallIds.add(tc.id)
+        }
       }
     }
   }
 
   for (const message of messages) {
     if (message.role === 'assistant') {
-      const nonAskUserToolCalls = (message.tool_calls ?? []).filter((tc) => !askUserArgsByCallId.has(tc.id))
-      if (nonAskUserToolCalls.length > 0) {
+      const nonSpecialToolCalls = (message.tool_calls ?? []).filter(
+        (tc) => !askUserArgsByCallId.has(tc.id) && !usingSkillsCallIds.has(tc.id),
+      )
+      if (nonSpecialToolCalls.length > 0) {
         assistantToolGroupIndex += 1
       }
     }
@@ -762,13 +773,24 @@ export function buildTranscriptEntries(messages: ConversationMessage[]): Transcr
       continue
     }
 
-    // Strip ask_user tool calls from assistant messages so they don't produce
-    // a tool entry – the corresponding question entry is added above instead.
+    // Skip tool result messages for using_skills calls — the result is ephemeral
+    // and never persisted, so there is nothing meaningful to replay.
+    if (message.role === 'tool' && message.tool_call_id && usingSkillsCallIds.has(message.tool_call_id)) {
+      continue
+    }
+
+    // Strip ask_user and using_skills tool calls from assistant messages so they
+    // don't produce tool entries in the replay transcript.
+    const shouldBeStripped =
+      (message.tool_calls ?? []).some((tc) => askUserArgsByCallId.has(tc.id)) ||
+      (message.tool_calls ?? []).some((tc) => usingSkillsCallIds.has(tc.id))
     const effectiveMessage: ConversationMessage =
-      message.role === 'assistant' && (message.tool_calls ?? []).some((tc) => askUserArgsByCallId.has(tc.id))
+      message.role === 'assistant' && shouldBeStripped
         ? {
             ...message,
-            tool_calls: (message.tool_calls ?? []).filter((tc) => !askUserArgsByCallId.has(tc.id)),
+            tool_calls: (message.tool_calls ?? []).filter(
+              (tc) => !askUserArgsByCallId.has(tc.id) && !usingSkillsCallIds.has(tc.id),
+            ),
           }
         : message
 
@@ -925,6 +947,23 @@ export function updateTranscriptFromStreamEvent(entries: TranscriptEntry[], even
       ]
     }
     return settledEntries
+  }
+
+  if (event.type === 'memory.compressed') {
+    const tokensBefore = typeof payload.tokens_before === 'number' ? payload.tokens_before : 0
+    const tokensAfter = typeof payload.tokens_after === 'number' ? payload.tokens_after : 0
+    const detail = tokensBefore > 0
+      ? `${tokensBefore.toLocaleString()} → ${tokensAfter.toLocaleString()} tokens`
+      : ''
+    return [
+      ...entries,
+      {
+        id: createEntryId('memory'),
+        kind: 'memory' as const,
+        title: '记忆压缩',
+        content: detail || undefined,
+      },
+    ]
   }
 
   return entries

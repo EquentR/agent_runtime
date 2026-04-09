@@ -693,6 +693,7 @@ export async function streamRunTask(
     stream.addEventListener('approval.resolved', handleEvent)
     stream.addEventListener('interaction.requested', handleEvent)
     stream.addEventListener('interaction.responded', handleEvent)
+    stream.addEventListener('memory.compressed', handleEvent)
     stream.addEventListener('task.finished', handleEvent)
   
     stream.onerror = () => {
