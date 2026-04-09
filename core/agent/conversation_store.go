@@ -32,6 +32,7 @@ type Conversation struct {
 	MessageCount  int        `json:"message_count" gorm:"not null;default:0"`
 	LastMessageAt *time.Time `json:"last_message_at,omitempty" gorm:"index"`
 	CreatedBy     string     `json:"created_by" gorm:"type:varchar(128)"`
+	MemorySummary string     `json:"memory_summary,omitempty" gorm:"type:text"`
 	AuditRunID    string     `json:"audit_run_id,omitempty" gorm:"-"`
 	AuditRunIDs   []string   `json:"audit_run_ids,omitempty" gorm:"-"`
 	CreatedAt     time.Time  `json:"created_at"`
@@ -475,4 +476,28 @@ func summarizeConversationText(text string, maxRunes int) string {
 	}
 	runes := []rune(text)
 	return strings.TrimSpace(string(runes[:maxRunes]))
+}
+
+// GetMemorySummary returns the persisted memory compression summary for a conversation.
+// Returns empty string (not an error) if no summary has been saved yet.
+func (s *ConversationStore) GetMemorySummary(ctx context.Context, conversationID string) (string, error) {
+	var conv Conversation
+	err := s.db.WithContext(ctx).
+		Select("memory_summary").
+		First(&conv, "id = ?", strings.TrimSpace(conversationID)).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return conv.MemorySummary, nil
+}
+
+// SetMemorySummary persists the latest memory compression summary for a conversation.
+func (s *ConversationStore) SetMemorySummary(ctx context.Context, conversationID string, summary string) error {
+	return s.db.WithContext(ctx).
+		Model(&Conversation{}).
+		Where("id = ?", strings.TrimSpace(conversationID)).
+		Update("memory_summary", strings.TrimSpace(summary)).Error
 }

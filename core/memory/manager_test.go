@@ -145,8 +145,8 @@ func TestContextMessagesCompressesShortTermWhenThresholdExceeded(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("len(ContextMessages()) = %d, want 1 summary message", len(got))
 	}
-	if got[0].Role != model.RoleSystem {
-		t.Fatalf("summary role = %q, want system", got[0].Role)
+	if got[0].Role != model.RoleAssistant {
+		t.Fatalf("summary role = %q, want assistant", got[0].Role)
 	}
 	if !strings.Contains(got[0].Content, "compressed memory") {
 		t.Fatalf("summary content = %q, want to include compressed memory", got[0].Content)
@@ -221,14 +221,14 @@ func TestRuntimeContextReturnsSummaryAndReplayableBodySeparately(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RuntimeContext() error = %v", err)
 	}
-	if got.Summary == nil {
-		t.Fatal("Summary = nil, want rendered compressed summary")
+	if got.Recap == nil {
+		t.Fatal("Recap = nil, want rendered compressed recap")
 	}
-	if got.Summary.Role != model.RoleSystem || !strings.Contains(got.Summary.Content, "compressed memory") {
-		t.Fatalf("Summary = %#v, want rendered compressed summary", got.Summary)
+	if got.Recap.Role != model.RoleAssistant || !strings.Contains(got.Recap.Content, "compressed memory") {
+		t.Fatalf("Recap = %#v, want rendered compressed recap", got.Recap)
 	}
-	if len(got.Body) != 0 {
-		t.Fatalf("len(Body) = %d, want 0 after compression", len(got.Body))
+	if len(got.Tail) != 0 {
+		t.Fatalf("len(Tail) = %d, want 0 after compression", len(got.Tail))
 	}
 }
 
@@ -263,20 +263,20 @@ func TestContextMessagesWrapsRuntimeContextIntoLegacySliceShape(t *testing.T) {
 		t.Fatalf("ContextMessages() error = %v", err)
 	}
 
-	if runtimeContext.Summary == nil {
-		t.Fatal("Summary = nil, want rendered summary")
+	if runtimeContext.Recap == nil {
+		t.Fatal("Recap = nil, want rendered recap")
 	}
-	if len(runtimeContext.Body) != 1 {
-		t.Fatalf("len(Body) = %d, want 1", len(runtimeContext.Body))
+	if len(runtimeContext.Tail) != 1 {
+		t.Fatalf("len(Tail) = %d, want 1", len(runtimeContext.Tail))
 	}
 	if len(got) != 2 {
 		t.Fatalf("len(ContextMessages()) = %d, want 2", len(got))
 	}
-	if got[0].Content != runtimeContext.Summary.Content {
-		t.Fatalf("ContextMessages()[0].Content = %q, want %q", got[0].Content, runtimeContext.Summary.Content)
+	if got[0].Content != runtimeContext.Recap.Content {
+		t.Fatalf("ContextMessages()[0].Content = %q, want %q", got[0].Content, runtimeContext.Recap.Content)
 	}
-	if got[1].Role != runtimeContext.Body[0].Role || got[1].Content != runtimeContext.Body[0].Content {
-		t.Fatalf("ContextMessages()[1] = %#v, want %#v", got[1], runtimeContext.Body[0])
+	if got[1].Role != runtimeContext.Tail[0].Role || got[1].Content != runtimeContext.Tail[0].Content {
+		t.Fatalf("ContextMessages()[1] = %#v, want %#v", got[1], runtimeContext.Tail[0])
 	}
 }
 
@@ -345,8 +345,78 @@ func TestRuntimeContextWithReserveTriggersCompressionWhenPromptOverheadPushesReq
 	if !trace.Attempted || !trace.Succeeded {
 		t.Fatalf("trace = %#v, want attempted and succeeded", trace)
 	}
-	if state.Summary == nil || !strings.Contains(state.Summary.Content, "compressed memory") {
-		t.Fatalf("summary = %#v, want rendered compressed summary", state.Summary)
+	if state.Recap == nil || !strings.Contains(state.Recap.Content, "compressed memory") {
+		t.Fatalf("recap = %#v, want rendered compressed recap", state.Recap)
+	}
+}
+
+func TestContextMessagesPreservesLatestRealUserMessage(t *testing.T) {
+	var seen CompressionRequest
+	mgr, err := NewManager(Options{
+		MaxContextTokens: 100,
+		Counter:          fakeTokenCounter{},
+		Compressor: func(_ context.Context, request CompressionRequest) (string, error) {
+			seen = request
+			return "compressed history", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	mgr.AddMessages([]model.Message{
+		{Role: model.RoleUser, Content: strings.Repeat("a", 40)},
+		{Role: model.RoleAssistant, Content: strings.Repeat("b", 40)},
+		{Role: model.RoleUser, Content: "latest question"},
+	})
+
+	state, err := mgr.RuntimeContext(context.Background())
+	if err != nil {
+		t.Fatalf("RuntimeContext() error = %v", err)
+	}
+	if len(seen.Messages) != 2 {
+		t.Fatalf("len(CompressionRequest.Messages) = %d, want 2 old messages only", len(seen.Messages))
+	}
+	if state.Recap == nil || state.Recap.Role != model.RoleAssistant || !strings.Contains(state.Recap.Content, "compressed history") {
+		t.Fatalf("state.Recap = %#v, want assistant recap", state.Recap)
+	}
+	if len(state.Tail) != 1 || state.Tail[0].Role != model.RoleUser || state.Tail[0].Content != "latest question" {
+		t.Fatalf("state.Tail = %#v, want preserved latest user message", state.Tail)
+	}
+}
+
+func TestContextMessagesCompressesOversizedLatestUserAsStandaloneReplay(t *testing.T) {
+	compressCalls := 0
+	mgr, err := NewManager(Options{
+		MaxContextTokens: 100,
+		Counter:          fakeTokenCounter{},
+		Compressor: func(_ context.Context, request CompressionRequest) (string, error) {
+			compressCalls++
+			if compressCalls == 1 {
+				return "compressed history", nil
+			}
+			if len(request.Messages) != 1 || request.Messages[0].Role != model.RoleUser {
+				t.Fatalf("latest-user replay request = %#v, want single latest user message", request.Messages)
+			}
+			return "compressed latest user", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	mgr.AddMessages([]model.Message{
+		{Role: model.RoleAssistant, Content: strings.Repeat("a", 20)},
+		{Role: model.RoleUser, Content: strings.Repeat("x", 90)},
+	})
+
+	state, err := mgr.RuntimeContext(context.Background())
+	if err != nil {
+		t.Fatalf("RuntimeContext() error = %v", err)
+	}
+	if state.Recap == nil || !strings.Contains(state.Recap.Content, "compressed history") {
+		t.Fatalf("state.Recap = %#v, want compressed history recap", state.Recap)
+	}
+	if len(state.Tail) != 1 || state.Tail[0].Role != model.RoleUser || state.Tail[0].Content != "compressed latest user" {
+		t.Fatalf("state.Tail = %#v, want standalone compressed latest user replay", state.Tail)
 	}
 }
 
@@ -456,7 +526,7 @@ func TestContextMessagesPrependsSummaryBeforeNewShortTermMessages(t *testing.T) 
 	if len(got) != 2 {
 		t.Fatalf("len(ContextMessages()) = %d, want 2", len(got))
 	}
-	if got[0].Role != model.RoleSystem || !strings.Contains(got[0].Content, "compressed memory") {
+	if got[0].Role != model.RoleAssistant || !strings.Contains(got[0].Content, "compressed memory") {
 		t.Fatalf("summary message = %#v, want prepended compressed summary", got[0])
 	}
 	if got[1].Role != model.RoleUser || got[1].Content != "follow up" {
@@ -499,30 +569,21 @@ func TestContextMessagesCompressionPreservesReplayableTail(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ContextMessages() error = %v", err)
 	}
-	if len(seen.Messages) != 2 {
-		t.Fatalf("len(CompressionRequest.Messages) = %d, want 2 compressible prefix messages", len(seen.Messages))
+	if len(seen.Messages) != 4 {
+		t.Fatalf("len(CompressionRequest.Messages) = %d, want 4 old messages before latest user", len(seen.Messages))
 	}
-	if len(got) != 4 {
-		t.Fatalf("len(ContextMessages()) = %d, want 4", len(got))
+	if len(got) != 2 {
+		t.Fatalf("len(ContextMessages()) = %d, want 2", len(got))
 	}
-	if got[0].Role != model.RoleSystem || !strings.Contains(got[0].Content, "compressed history") {
+	if got[0].Role != model.RoleAssistant || !strings.Contains(got[0].Content, "compressed history") {
 		t.Fatalf("summary message = %#v, want compressed summary", got[0])
 	}
-	if got[1].ProviderState == nil {
-		t.Fatal("got[1].ProviderState = nil, want replayable assistant tail preserved")
-	}
-	if got[1].Role != model.RoleAssistant || got[2].Role != model.RoleTool || got[3].Role != model.RoleUser {
-		t.Fatalf("preserved tail roles = %#v, want assistant/tool/user suffix", []string{got[1].Role, got[2].Role, got[3].Role})
+	if got[1].Role != model.RoleUser || got[1].Content != "follow up" {
+		t.Fatalf("preserved tail = %#v, want latest user only", got[1])
 	}
 	short := mgr.ShortTermMessages()
-	if len(short) != 3 {
-		t.Fatalf("len(ShortTermMessages()) = %d, want 3 preserved tail messages", len(short))
-	}
-	if short[0].ProviderState == nil {
-		t.Fatal("ShortTermMessages()[0].ProviderState = nil, want preserved provider state")
-	}
-	if string(short[0].ProviderState.Payload) != `{"role":"assistant","content":"provider text"}` {
-		t.Fatalf("preserved provider state payload = %q, want original payload", string(short[0].ProviderState.Payload))
+	if len(short) != 1 || short[0].Role != model.RoleUser || short[0].Content != "follow up" {
+		t.Fatalf("ShortTermMessages() = %#v, want latest user only", short)
 	}
 }
 
@@ -560,8 +621,8 @@ func TestContextMessagesAdaptsSplitWhenReplayableTailAloneExceedsBudget(t *testi
 	}
 	// After adaptive split: ProviderState stripped, all messages compressed,
 	// result is summary only (tail is empty).
-	if len(got) != 1 || got[0].Role != model.RoleSystem {
-		t.Fatalf("ContextMessages() = %#v, want single summary system message", got)
+	if len(got) != 1 || got[0].Role != model.RoleAssistant {
+		t.Fatalf("ContextMessages() = %#v, want single assistant recap message", got)
 	}
 	if mgr.Summary() != "sum" {
 		t.Fatalf("Summary() = %q, want %q", mgr.Summary(), "sum")
@@ -608,8 +669,8 @@ func TestContextMessagesAdaptsSplitWhenCompressedResultExceedsBudget(t *testing.
 	}
 	// After adaptive split: ProviderState stripped from assistant, all messages
 	// become compressible, result is summary only.
-	if len(got) != 1 || got[0].Role != model.RoleSystem {
-		t.Fatalf("ContextMessages() = %#v, want single summary system message", got)
+	if len(got) != 1 || got[0].Role != model.RoleAssistant {
+		t.Fatalf("ContextMessages() = %#v, want single assistant recap message", got)
 	}
 	if mgr.Summary() != "sum" {
 		t.Fatalf("Summary() = %q, want %q", mgr.Summary(), "sum")
@@ -674,18 +735,11 @@ func TestContextMessagesAdaptsSplitStripsOldestBoundaryFirstWithMultipleBoundari
 	if len(got) < 2 {
 		t.Fatalf("len(ContextMessages()) = %d, want >= 2 (summary + preserved tail)", len(got))
 	}
-	if got[0].Role != model.RoleSystem || !strings.Contains(got[0].Content, "compressed") {
+	if got[0].Role != model.RoleAssistant || !strings.Contains(got[0].Content, "compressed") {
 		t.Fatalf("got[0] = %#v, want compressed summary", got[0])
 	}
-	// The newer assistant message should still have ProviderState.
-	foundReplayable := false
-	for _, m := range got[1:] {
-		if m.Role == model.RoleAssistant && m.ProviderState != nil {
-			foundReplayable = true
-		}
-	}
-	if !foundReplayable {
-		t.Fatal("preserved tail has no replayable assistant message, want newest boundary preserved")
+	if len(got) != 2 || got[1].Role != model.RoleUser || got[1].Content != "final question" {
+		t.Fatalf("preserved tail = %#v, want latest user question only", got)
 	}
 }
 
@@ -840,4 +894,37 @@ func (fakeTokenCounter) CountMessages(messages []string) int {
 		total += len([]rune(message))
 	}
 	return total
+}
+
+func TestManagerLoadSummaryRestoresSummaryBeforeCompression(t *testing.T) {
+	mgr, err := NewManager(Options{
+		MaxContextTokens: 100,
+		Counter:          fakeTokenCounter{},
+		Compressor: func(_ context.Context, request CompressionRequest) (string, error) {
+			return "new compressed summary", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+
+	mgr.LoadSummary("existing summary")
+
+	if got := mgr.Summary(); got != "existing summary" {
+		t.Fatalf("Summary() = %q, want %q", got, "existing summary")
+	}
+
+	// Add a few messages that won't exceed budget — summary should still be returned in Recap.
+	mgr.AddMessage(model.Message{Role: model.RoleUser, Content: "hello"})
+
+	state, _, err := mgr.RuntimeContextWithReserve(context.Background(), 0)
+	if err != nil {
+		t.Fatalf("RuntimeContextWithReserve() error = %v", err)
+	}
+	if state.Recap == nil {
+		t.Fatal("RuntimeContext.Recap = nil, want loaded summary to appear as Recap message")
+	}
+	if !strings.Contains(state.Recap.Content, "existing summary") {
+		t.Fatalf("Recap.Content = %q, want to include loaded summary %q", state.Recap.Content, "existing summary")
+	}
 }

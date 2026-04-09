@@ -153,6 +153,11 @@ var to011 = migrate.NewMigration("0.1.1", func(tx *gorm.DB) error {
 	return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&backfilled).Error
 })
 
+// to012 为 conversations 表补齐 memory_summary 列，支持跨 task 记忆摘要持久化。
+var to012 = migrate.NewMigration("0.1.2", func(tx *gorm.DB) error {
+	return tx.AutoMigrate(&agent.Conversation{})
+})
+
 type approvalInteractionRequest struct {
 	ToolName         string     `json:"tool_name"`
 	ArgumentsSummary string     `json:"arguments_summary"`

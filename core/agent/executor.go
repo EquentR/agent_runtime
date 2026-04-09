@@ -10,9 +10,9 @@ import (
 
 	"github.com/EquentR/agent_runtime/core/approvals"
 	coreaudit "github.com/EquentR/agent_runtime/core/audit"
-	corelog "github.com/EquentR/agent_runtime/core/log"
 	"github.com/EquentR/agent_runtime/core/forcedprompt"
 	"github.com/EquentR/agent_runtime/core/interactions"
+	corelog "github.com/EquentR/agent_runtime/core/log"
 	"github.com/EquentR/agent_runtime/core/memory"
 	coreprompt "github.com/EquentR/agent_runtime/core/prompt"
 	model "github.com/EquentR/agent_runtime/core/providers/types"
@@ -65,7 +65,6 @@ type RunTaskInput struct {
 }
 
 const defaultRunTaskScene = "agent.run.default"
-const promptSourceKindWorkspaceSkill = "workspace_skill"
 
 type RunTaskResult struct {
 	ConversationID   string                   `json:"conversation_id"`
@@ -176,23 +175,6 @@ func (r *ModelResolver) findProvider(providerID string) *coretypes.LLMProvider {
 	return nil
 }
 
-func appendResolvedSkillsToPrompt(resolvedPrompt *coreprompt.ResolvedPrompt, resolvedSkills []coreskills.ResolvedSkill) {
-	if resolvedPrompt == nil {
-		return
-	}
-	segments := make([]coreprompt.ResolvedPromptSegment, 0, len(resolvedSkills))
-	for _, skill := range resolvedSkills {
-		segments = append(segments, coreprompt.ResolvedPromptSegment{
-			Phase:       "session",
-			Content:     skill.Content,
-			SourceKind:  promptSourceKindWorkspaceSkill,
-			SourceRef:   skill.SourceRef,
-			RuntimeOnly: skill.RuntimeOnly,
-		})
-	}
-	resolvedPrompt.InsertSessionSegmentsBeforeLaterPhases(segments)
-}
-
 func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 	return func(ctx context.Context, task *coretasks.Task, runtime *coretasks.Runtime) (output any, execErr error) {
 		startedAt := time.Now()
@@ -269,6 +251,7 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 		if err != nil {
 			return nil, err
 		}
+		var conversationPrelude []model.Message
 		if len(input.Skills) > 0 {
 			if deps.SkillsResolver == nil {
 				return nil, fmt.Errorf("skills resolver is required when skills are selected")
@@ -277,7 +260,9 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 			if err != nil {
 				return nil, err
 			}
-			appendResolvedSkillsToPrompt(resolvedPrompt, resolvedSkills)
+			if summary := coreskills.BuildSelectedSkillSummaryMessage(resolvedSkills); summary != nil {
+				conversationPrelude = append(conversationPrelude, *summary)
+			}
 		}
 		conversation, err := deps.ConversationStore.EnsureConversation(ctx, EnsureConversationInput{
 			ID:         input.ConversationID,
@@ -304,6 +289,14 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 		if err != nil {
 			return nil, err
 		}
+		// Restore cross-task memory summary if one was persisted.
+		if memoryManager != nil && deps.ConversationStore != nil {
+			if savedSummary, loadErr := deps.ConversationStore.GetMemorySummary(ctx, conversationID); loadErr != nil {
+				corelog.Warn("failed to restore memory summary", corelog.String("component", "agent"), corelog.String("module", "executor"), corelog.String("conversation_id", conversationID), corelog.Err(loadErr))
+			} else if savedSummary != "" {
+				memoryManager.LoadSummary(savedSummary)
+			}
+		}
 		var sink EventSink
 		if deps.NewEventSink != nil {
 			sink = deps.NewEventSink(runtime)
@@ -315,6 +308,7 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 			LLMModel:             llmModel,
 			Memory:               memoryManager,
 			ResolvedPrompt:       resolvedPrompt,
+			ConversationPrelude:  conversationPrelude,
 			RuntimePromptBuilder: runtimeprompt.NewBuilder(forcedprompt.NewProvider()),
 			EventSink:            sink,
 			TaskID:               task.ID,
@@ -383,6 +377,11 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 				return nil, appendErr
 			}
 			auditor.recordMessagesPersisted(ctx, []model.Message{failureMessage})
+			if memoryManager != nil && deps.ConversationStore != nil {
+				if latestSummary := memoryManager.Summary(); latestSummary != "" {
+					_ = deps.ConversationStore.SetMemorySummary(ctx, conversation.ID, latestSummary)
+				}
+			}
 			return nil, err
 		}
 		result = attachUsageToPersistedAssistantReply(result, input.ProviderID, input.ModelID)
@@ -391,6 +390,12 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 			return nil, err
 		}
 		auditor.recordMessagesPersisted(ctx, result.Messages)
+		// Persist the memory summary for the next task turn.
+		if memoryManager != nil && deps.ConversationStore != nil {
+			if latestSummary := memoryManager.Summary(); latestSummary != "" {
+				_ = deps.ConversationStore.SetMemorySummary(ctx, conversation.ID, latestSummary)
+			}
+		}
 		return RunTaskResult{
 			ConversationID:   conversation.ID,
 			ProviderID:       conversation.ProviderID,

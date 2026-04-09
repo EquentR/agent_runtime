@@ -142,6 +142,14 @@ func (m *Manager) Summary() string {
 	return m.summary
 }
 
+// LoadSummary restores a previously persisted compression summary into this manager.
+// It should be called before the first AddMessage to seed cross-task continuity.
+func (m *Manager) LoadSummary(summary string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.summary = strings.TrimSpace(summary)
+}
+
 func (m *Manager) MaxContextTokens() int64 {
 	return m.maxContextTokens
 }
@@ -173,8 +181,8 @@ type CompressionTrace struct {
 }
 
 type RuntimeContext struct {
-	Summary *model.Message
-	Body    []model.Message
+	Recap *model.Message
+	Tail  []model.Message
 }
 
 func (m *Manager) RuntimeContext(ctx context.Context) (RuntimeContext, error) {
@@ -209,11 +217,11 @@ func (m *Manager) ContextMessages(ctx context.Context) ([]model.Message, error) 
 		return nil, err
 	}
 
-	out := make([]model.Message, 0, len(state.Body)+1)
-	if state.Summary != nil {
-		out = append(out, cloneMessage(*state.Summary))
+	out := make([]model.Message, 0, len(state.Tail)+1)
+	if state.Recap != nil {
+		out = append(out, cloneMessage(*state.Recap))
 	}
-	out = append(out, cloneMessages(state.Body)...)
+	out = append(out, cloneMessages(state.Tail)...)
 	return out, nil
 }
 
@@ -276,23 +284,31 @@ func (m *Manager) compressLocked(ctx context.Context) error {
 		return nil
 	}
 
-	request := CompressionRequest{
-		PreviousSummary:     m.summary,
-		Messages:            cloneMessages(compressible),
-		Instruction:         m.compressionInstruction,
-		TargetSummaryTokens: m.targetSummaryTokens,
-		MaxSummaryTokens:    m.maxSummaryTokens,
-	}
-	summary, err := m.compressor(ctx, request)
-	if err != nil {
-		return err
-	}
-	summary = strings.TrimSpace(summary)
-	if m.maxSummaryTokens > 0 && summary != "" && int64(m.counter.Count(summary)) > m.maxSummaryTokens {
-		summary = limitTextByTokens(summary, m.maxSummaryTokens, m.counter)
+	summary := strings.TrimSpace(m.summary)
+	if len(compressible) > 0 {
+		request := CompressionRequest{
+			PreviousSummary:     m.summary,
+			Messages:            cloneMessages(compressible),
+			Instruction:         m.compressionInstruction,
+			TargetSummaryTokens: m.targetSummaryTokens,
+			MaxSummaryTokens:    m.maxSummaryTokens,
+		}
+		var err error
+		summary, err = m.compressor(ctx, request)
+		if err != nil {
+			return err
+		}
+		summary = strings.TrimSpace(summary)
+		if m.maxSummaryTokens > 0 && summary != "" && int64(m.counter.Count(summary)) > m.maxSummaryTokens {
+			summary = limitTextByTokens(summary, m.maxSummaryTokens, m.counter)
+		}
 	}
 	if err := validateShortTermBudget(m.counter, preservedTail, m.shortTermLimitTokens); err != nil {
-		return err
+		compressedLatestUser, compressErr := m.compressOversizedLatestUserLocked(ctx, preservedTail)
+		if compressErr != nil {
+			return err
+		}
+		preservedTail = compressedLatestUser
 	}
 
 	m.summary = summary
@@ -337,24 +353,24 @@ func validateShortTermBudget(counter TokenCounter, messages []model.Message, bud
 }
 
 func (m *Manager) runtimeContextLocked() RuntimeContext {
-	state := RuntimeContext{Body: cloneMessages(m.shortTerm)}
+	state := RuntimeContext{Tail: cloneMessages(m.shortTerm)}
 	if m.summary != "" {
-		summary := model.Message{
-			Role:    model.RoleSystem,
+		recap := model.Message{
+			Role:    model.RoleAssistant,
 			Content: renderSummaryWithinBudget(m.summaryTemplate, m.summary, m.summaryLimitTokens, m.counter),
 		}
-		state.Summary = &summary
+		state.Recap = &recap
 	}
 	return state
 }
 
 func (m *Manager) contextMessagesLocked() []model.Message {
 	state := m.runtimeContextLocked()
-	out := make([]model.Message, 0, len(state.Body)+1)
-	if state.Summary != nil {
-		out = append(out, cloneMessage(*state.Summary))
+	out := make([]model.Message, 0, len(state.Tail)+1)
+	if state.Recap != nil {
+		out = append(out, cloneMessage(*state.Recap))
 	}
-	out = append(out, cloneMessages(state.Body)...)
+	out = append(out, cloneMessages(state.Tail)...)
 	return out
 }
 
@@ -559,6 +575,13 @@ func splitMessagesForCompression(messages []model.Message) ([]model.Message, []m
 	if len(messages) == 0 {
 		return nil, nil
 	}
+	if messages[len(messages)-1].Role == model.RoleUser {
+		lastUserIndex := len(messages) - 1
+		if lastUserIndex == 0 {
+			return nil, cloneMessages(messages)
+		}
+		return cloneMessages(messages[:lastUserIndex]), cloneMessages(messages[lastUserIndex:])
+	}
 	for i := len(messages) - 1; i >= 0; i-- {
 		if messages[i].Role == model.RoleAssistant && messages[i].ProviderState != nil {
 			if i == 0 {
@@ -568,6 +591,31 @@ func splitMessagesForCompression(messages []model.Message) ([]model.Message, []m
 		}
 	}
 	return cloneMessages(messages), nil
+}
+
+func (m *Manager) compressOversizedLatestUserLocked(ctx context.Context, preservedTail []model.Message) ([]model.Message, error) {
+	if len(preservedTail) != 1 || preservedTail[0].Role != model.RoleUser {
+		return nil, fmt.Errorf("preserved replayable tail exceeds short-term budget")
+	}
+	request := CompressionRequest{
+		Messages:            []model.Message{cloneMessage(preservedTail[0])},
+		Instruction:         m.compressionInstruction,
+		TargetSummaryTokens: m.targetSummaryTokens,
+		MaxSummaryTokens:    m.maxSummaryTokens,
+	}
+	replay, err := m.compressor(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	replay = strings.TrimSpace(replay)
+	if replay == "" {
+		return nil, fmt.Errorf("compressed latest user replay is empty")
+	}
+	message := model.Message{Role: model.RoleUser, Content: replay}
+	if err := validateShortTermBudget(m.counter, []model.Message{message}, m.shortTermLimitTokens); err != nil {
+		return nil, err
+	}
+	return []model.Message{message}, nil
 }
 
 // adaptSplitForBudget adjusts the compression split point so that the

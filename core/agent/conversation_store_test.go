@@ -365,3 +365,39 @@ func newConversationStoreForTest(t *testing.T) *ConversationStore {
 	}
 	return store
 }
+
+func TestConversationStoreGetAndSetMemorySummary(t *testing.T) {
+	store := newConversationStoreForTest(t)
+	_, err := store.CreateConversation(context.Background(), CreateConversationInput{
+		ID:         "conv_1",
+		ProviderID: "openai",
+		ModelID:    "gpt-5.4",
+	})
+	if err != nil {
+		t.Fatalf("CreateConversation() error = %v", err)
+	}
+
+	// Before any summary is persisted, GetMemorySummary should return "", nil.
+	got, err := store.GetMemorySummary(context.Background(), "conv_1")
+	if err != nil {
+		t.Fatalf("GetMemorySummary() error = %v, want nil", err)
+	}
+	if got != "" {
+		t.Fatalf("GetMemorySummary() = %q, want empty string before any summary is saved", got)
+	}
+
+	// Persist a summary.
+	wantSummary := "task goal: summarize repo; progress: done"
+	if err := store.SetMemorySummary(context.Background(), "conv_1", wantSummary); err != nil {
+		t.Fatalf("SetMemorySummary() error = %v", err)
+	}
+
+	// Now GetMemorySummary should return the persisted value.
+	got, err = store.GetMemorySummary(context.Background(), "conv_1")
+	if err != nil {
+		t.Fatalf("GetMemorySummary() after set error = %v", err)
+	}
+	if got != wantSummary {
+		t.Fatalf("GetMemorySummary() = %q, want %q", got, wantSummary)
+	}
+}
