@@ -104,11 +104,8 @@ func TestLoaderGetLoadsWorkspaceSkillDocument(t *testing.T) {
 	if skill.Name != "debugging" {
 		t.Fatalf("skill.Name = %q, want %q", skill.Name, "debugging")
 	}
-	if skill.Title != "Debugging" {
-		t.Fatalf("skill.Title = %q, want %q", skill.Title, "Debugging")
-	}
-	if skill.Description != "Debug carefully." {
-		t.Fatalf("skill.Description = %q, want %q", skill.Description, "Debug carefully.")
+	if skill.Description != "" {
+		t.Fatalf("skill.Description = %q, want empty", skill.Description)
 	}
 	if skill.SourceRef != "skills/debugging/SKILL.md" {
 		t.Fatalf("skill.SourceRef = %q, want %q", skill.SourceRef, "skills/debugging/SKILL.md")

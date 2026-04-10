@@ -47,7 +47,34 @@ func TestRegistryExecutePreservesRuntimeOnHandlerContext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	if result != "ok" {
-		t.Fatalf("result = %q, want %q", result, "ok")
+	if result.Content != "ok" {
+		t.Fatalf("result.Content = %q, want %q", result.Content, "ok")
+	}
+	if result.Ephemeral {
+		t.Fatal("result.Ephemeral = true, want false")
+	}
+}
+
+func TestRegistryExecuteReturnsStructuredEphemeralResult(t *testing.T) {
+	registry := NewRegistry()
+
+	if err := registry.Register(Tool{
+		Name: "ephemeral_tool",
+		ResultHandler: func(_ context.Context, _ map[string]interface{}) (Result, error) {
+			return Result{Content: "secret", Ephemeral: true}, nil
+		},
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	result, err := registry.Execute(context.Background(), "ephemeral_tool", nil)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if result.Content != "secret" {
+		t.Fatalf("result.Content = %q, want %q", result.Content, "secret")
+	}
+	if !result.Ephemeral {
+		t.Fatal("result.Ephemeral = false, want true")
 	}
 }

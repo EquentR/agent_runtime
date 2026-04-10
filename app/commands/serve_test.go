@@ -266,8 +266,8 @@ func TestNewDefaultToolRegistryUsesConfiguredWebSearchOptions(t *testing.T) {
 			Title string `json:"title"`
 		} `json:"results"`
 	}
-	if err := json.Unmarshal([]byte(raw), &result); err != nil {
-		t.Fatalf("json.Unmarshal(%q) error = %v", raw, err)
+	if err := json.Unmarshal([]byte(raw.Content), &result); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error = %v", raw.Content, err)
 	}
 	if result.Provider != "tavily" {
 		t.Fatalf("result.Provider = %q, want %q", result.Provider, "tavily")

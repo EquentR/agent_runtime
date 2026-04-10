@@ -76,6 +76,8 @@ const (
 	EventLogMessage = "log.message"
 	// EventChildTaskSpawned 预留给未来父子任务模型。
 	EventChildTaskSpawned = "child_task.spawned"
+	// EventMemoryCompressed 表示 agent 记忆压缩已成功完成。
+	EventMemoryCompressed = "memory.compressed"
 )
 
 // CreateTaskInput 描述创建任务时允许写入的初始输入与关联元数据。

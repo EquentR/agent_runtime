@@ -13,8 +13,16 @@ import (
 
 var ErrToolNotFound = errors.New("tool not found")
 
+type Result struct {
+	Content   string
+	Ephemeral bool
+}
+
 // Handler 定义本地工具的执行签名。
 type Handler func(ctx context.Context, arguments map[string]interface{}) (string, error)
+
+// ResultHandler 定义支持结构化结果的工具执行签名。
+type ResultHandler func(ctx context.Context, arguments map[string]interface{}) (Result, error)
 
 // Tool 表示一个可注册、可执行的本地工具。
 type Tool struct {
@@ -24,6 +32,7 @@ type Tool struct {
 	ApprovalMode      types.ToolApprovalMode
 	ApprovalEvaluator ApprovalEvaluator
 	Handler           Handler
+	ResultHandler     ResultHandler
 	Source            string
 }
 
@@ -99,15 +108,15 @@ func (r *Registry) RegisterMCPClient(client coremcp.Client, options MCPRegistrat
 			Description: remoteTool.Description,
 			Parameters:  remoteTool.InputSchema,
 			Source:      "mcp",
-			Handler: func(ctx context.Context, arguments map[string]interface{}) (string, error) {
+			ResultHandler: func(ctx context.Context, arguments map[string]interface{}) (Result, error) {
 				result, err := client.CallTool(ctx, coremcp.CallRequest{
 					Name:      remoteTool.Name,
 					Arguments: arguments,
 				})
 				if err != nil {
-					return "", err
+					return Result{}, err
 				}
-				return result.Text, nil
+				return Result{Content: result.Text}, nil
 			},
 		})
 	}
@@ -134,15 +143,15 @@ func (r *Registry) RegisterMCPPrompts(client coremcp.Client, options MCPRegistra
 			Description: prompt.Description,
 			Parameters:  promptArgumentsToSchema(prompt.Arguments),
 			Source:      "mcp_prompt",
-			Handler: func(ctx context.Context, arguments map[string]interface{}) (string, error) {
+			ResultHandler: func(ctx context.Context, arguments map[string]interface{}) (Result, error) {
 				result, err := client.GetPrompt(ctx, coremcp.GetPromptRequest{
 					Name:      prompt.Name,
 					Arguments: stringifyArguments(arguments),
 				})
 				if err != nil {
-					return "", err
+					return Result{}, err
 				}
-				return result.Text, nil
+				return Result{Content: result.Text}, nil
 			},
 		})
 	}
@@ -170,12 +179,12 @@ func (r *Registry) List() []types.Tool {
 }
 
 // Execute 调用指定工具。
-func (r *Registry) Execute(ctx context.Context, name string, arguments map[string]interface{}) (string, error) {
+func (r *Registry) Execute(ctx context.Context, name string, arguments map[string]interface{}) (Result, error) {
 	r.mu.RLock()
 	tool, ok := r.tools[name]
 	r.mu.RUnlock()
 	if !ok {
-		return "", fmt.Errorf("%w: %s", ErrToolNotFound, name)
+		return Result{}, fmt.Errorf("%w: %s", ErrToolNotFound, name)
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -183,7 +192,14 @@ func (r *Registry) Execute(ctx context.Context, name string, arguments map[strin
 	if arguments == nil {
 		arguments = map[string]interface{}{}
 	}
-	return tool.Handler(ctx, arguments)
+	if tool.ResultHandler != nil {
+		return tool.ResultHandler(ctx, arguments)
+	}
+	content, err := tool.Handler(ctx, arguments)
+	if err != nil {
+		return Result{}, err
+	}
+	return Result{Content: content}, nil
 }
 
 // ApprovalPolicy 返回工具对应的审批策略。
@@ -213,7 +229,7 @@ func (t Tool) Validate() error {
 	if t.ApprovalMode == types.ToolApprovalModeConditional && t.ApprovalEvaluator == nil {
 		return fmt.Errorf("conditional approval requires evaluator")
 	}
-	if t.Handler == nil {
+	if t.Handler == nil && t.ResultHandler == nil {
 		return fmt.Errorf("tool handler cannot be nil")
 	}
 	return nil

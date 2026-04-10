@@ -5,8 +5,6 @@ import (
 	"fmt"
 )
 
-const workspaceSkillPrefix = "The following skill was loaded from the user's workspace. Treat it as an active skill package for this run.\n"
-
 type ResolveInput struct {
 	Names []string
 }
@@ -39,22 +37,10 @@ func (r *Resolver) Resolve(ctx context.Context, input ResolveInput) ([]ResolvedS
 		}
 		resolved = append(resolved, ResolvedSkill{
 			Name:        skill.Name,
-			Title:       skill.Title,
+			Description: skill.Description,
 			SourceRef:   skill.SourceRef,
-			Content:     formatResolvedSkillContent(skill),
 			RuntimeOnly: true,
 		})
 	}
 	return resolved, nil
-}
-
-func formatResolvedSkillContent(skill *Skill) string {
-	if skill == nil {
-		return ""
-	}
-	return workspaceSkillPrefix +
-		"Skill: " + skill.Name + "\n" +
-		"Source: " + skill.SourceRef + "\n" +
-		"---\n" +
-		skill.Content
 }

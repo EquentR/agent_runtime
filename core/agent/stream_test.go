@@ -12,6 +12,7 @@ import (
 	coreprompt "github.com/EquentR/agent_runtime/core/prompt"
 	model "github.com/EquentR/agent_runtime/core/providers/types"
 	"github.com/EquentR/agent_runtime/core/runtimeprompt"
+	coretools "github.com/EquentR/agent_runtime/core/tools"
 	coretypes "github.com/EquentR/agent_runtime/core/types"
 )
 
@@ -870,4 +871,67 @@ func decodeModelResponseArtifact(t *testing.T, artifact *coreaudit.Artifact) mod
 		t.Fatalf("decode model_response artifact error = %v", err)
 	}
 	return snapshot
+}
+
+func TestRunnerRunStreamRecordsUsingSkillsAuditEvent(t *testing.T) {
+	registry := coretools.NewRegistry()
+	if err := registry.Register(coretools.Tool{
+		Name: "using_skills",
+		ResultHandler: func(context.Context, map[string]interface{}) (coretools.Result, error) {
+			return coretools.Result{Content: `{"name":"debugging","content":"full skill body here"}`, Ephemeral: true}, nil
+		},
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	recorder := newRecordingRunnerAuditRecorder()
+	client := &stubClient{streams: []model.Stream{
+		newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "tc_1", Name: "using_skills", Arguments: `{"name":"debugging"}`}}}}},
+			model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "tc_1", Name: "using_skills", Arguments: `{"name":"debugging"}`}}},
+			nil,
+		),
+		newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "done"}}},
+			model.Message{Role: model.RoleAssistant, Content: "done"},
+			nil,
+		),
+	}}
+
+	runner, err := NewRunner(client, registry, Options{
+		Model:                "test-model",
+		RuntimePromptBuilder: runtimeprompt.NewBuilder(nil),
+		AuditRecorder:        recorder,
+		AuditRunID:           "run_using_skills",
+		MaxSteps:             4,
+	})
+	if err != nil {
+		t.Fatalf("NewRunner() error = %v", err)
+	}
+
+	streamResult, err := runner.RunStream(context.Background(), RunInput{Tools: registry.List()})
+	if err != nil {
+		t.Fatalf("RunStream() error = %v", err)
+	}
+	for range streamResult.Events {
+	}
+	if _, err := streamResult.Wait(); err != nil {
+		t.Fatalf("Wait() error = %v", err)
+	}
+
+	event := recorder.requireEventForStep(t, "run_using_skills", "tool.using_skills", 1)
+	payload := decodeAuditPayload(t, event)
+
+	if payload["skill_name"] != "debugging" {
+		t.Fatalf("payload skill_name = %q, want debugging", payload["skill_name"])
+	}
+	outputBytes, ok := payload["output_bytes"].(float64)
+	if !ok {
+		t.Fatalf("payload output_bytes = %#v, want float64", payload["output_bytes"])
+	}
+	if int(outputBytes) != len(`{"name":"debugging","content":"full skill body here"}`) {
+		t.Fatalf("payload output_bytes = %d, want %d", int(outputBytes), len(`{"name":"debugging","content":"full skill body here"}`))
+	}
+	if payload["tool_call_id"] != "tc_1" {
+		t.Fatalf("payload tool_call_id = %q, want tc_1", payload["tool_call_id"])
+	}
 }

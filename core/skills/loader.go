@@ -59,7 +59,6 @@ func (l *Loader) List(ctx context.Context) ([]SkillListItem, error) {
 		}
 		items = append(items, SkillListItem{
 			Name:        skill.Name,
-			Title:       skill.Title,
 			Description: skill.Description,
 			Tags:        skill.Tags,
 			Tools:       skill.Tools,

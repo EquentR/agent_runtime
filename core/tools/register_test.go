@@ -99,8 +99,11 @@ func TestRegistry_RegisterMCPClient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	if result != "matched docs" {
-		t.Fatalf("result = %q, want %q", result, "matched docs")
+	if result.Content != "matched docs" {
+		t.Fatalf("result.Content = %q, want %q", result.Content, "matched docs")
+	}
+	if result.Ephemeral {
+		t.Fatal("result.Ephemeral = true, want false")
 	}
 	if fakeClient.callName != "search_docs" {
 		t.Fatalf("call name = %q, want %q", fakeClient.callName, "search_docs")
@@ -154,8 +157,8 @@ func TestRegistry_RegisterMCPPrompts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	if result != fakeClient.promptResult.Text {
-		t.Fatalf("result = %q, want %q", result, fakeClient.promptResult.Text)
+	if result.Content != fakeClient.promptResult.Text {
+		t.Fatalf("result.Content = %q, want %q", result.Content, fakeClient.promptResult.Text)
 	}
 	if fakeClient.promptName != "compose_release" {
 		t.Fatalf("prompt name = %q, want %q", fakeClient.promptName, "compose_release")

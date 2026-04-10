@@ -41,15 +41,10 @@ func parseSkillDocument(directoryName string, sourceRef string, content string) 
 		}
 	}
 
-	title := extractSkillTitle(directoryName, body)
 	description := strings.TrimSpace(meta.Description)
-	if description == "" {
-		description = extractFirstParagraph(body)
-	}
 
 	return &Skill{
 		Name:         directoryName,
-		Title:        title,
 		Description:  description,
 		Tags:         normalizeSkillStringList(meta.Tags),
 		Tools:        normalizeSkillStringList(meta.Tools),
@@ -81,39 +76,6 @@ func splitSkillFrontmatter(content string) (frontmatter string, body string, err
 	}
 	return frontmatter, body, nil
 }
-
-func extractSkillTitle(directoryName string, body string) string {
-	for _, line := range strings.Split(body, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "# ") {
-			title := strings.TrimSpace(strings.TrimPrefix(trimmed, "# "))
-			if title != "" {
-				return title
-			}
-			break
-		}
-	}
-	return directoryName
-}
-
-func extractFirstParagraph(body string) string {
-	paragraph := make([]string, 0)
-	for _, line := range strings.Split(body, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			if len(paragraph) > 0 {
-				break
-			}
-			continue
-		}
-		if strings.HasPrefix(trimmed, "# ") && len(paragraph) == 0 {
-			continue
-		}
-		paragraph = append(paragraph, trimmed)
-	}
-	return strings.Join(paragraph, " ")
-}
-
 func normalizeSkillStringList(values []string) []string {
 	if len(values) == 0 {
 		return []string{}

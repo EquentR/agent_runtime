@@ -146,7 +146,7 @@ func TestRunnerInjectsStepPreModelOnEveryTurnAndToolResultOnlyAfterToolContinuat
 	}}
 
 	runner, err := NewRunner(client, registry, Options{
-		Model: "test-model",
+		Model:                "test-model",
 		RuntimePromptBuilder: runtimeprompt.NewBuilder(nil),
 		ResolvedPrompt: &coreprompt.ResolvedPrompt{
 			Segments: []coreprompt.ResolvedPromptSegment{
@@ -235,7 +235,7 @@ func TestRunnerInjectsToolResultPromptBetweenAssistantAndMultipleToolMessagesOnc
 	}}
 
 	runner, err := NewRunner(client, registry, Options{
-		Model: "test-model",
+		Model:                "test-model",
 		RuntimePromptBuilder: runtimeprompt.NewBuilder(nil),
 		ResolvedPrompt: &coreprompt.ResolvedPrompt{
 			Segments: []coreprompt.ResolvedPromptSegment{
@@ -306,9 +306,9 @@ func TestRunnerBuildsRequestWithForcedBlocksBeforeMemoryAndResolvedPrompts(t *te
 	)}}
 
 	runner, err := NewRunner(client, nil, Options{
-		Model:          "test-model",
-		Memory:         mgr,
-		ResolvedPrompt: &coreprompt.ResolvedPrompt{Segments: []coreprompt.ResolvedPromptSegment{{Order: 1, Phase: "session", Content: "Session prompt", SourceKind: "db_default_binding", SourceRef: "binding:1"}}},
+		Model:                "test-model",
+		Memory:               mgr,
+		ResolvedPrompt:       &coreprompt.ResolvedPrompt{Segments: []coreprompt.ResolvedPromptSegment{{Order: 1, Phase: "session", Content: "Session prompt", SourceKind: "db_default_binding", SourceRef: "binding:1"}}},
 		RuntimePromptBuilder: runtimeprompt.NewBuilder(forcedprompt.NewProvider()),
 		Now:                  func() time.Time { return time.Date(2026, time.April, 4, 9, 0, 0, 0, time.UTC) },
 	})
@@ -497,8 +497,8 @@ func TestRunnerUsesMemoryManagedContextOnLaterSteps(t *testing.T) {
 	if secondReq[0].Role != model.RoleSystem || !strings.Contains(secondReq[0].Content, "Today's date is") {
 		t.Fatalf("second request first message = %#v, want current_date forced block", secondReq[0])
 	}
-	if secondReq[3].Role != model.RoleSystem || !strings.Contains(secondReq[3].Content, "compressed memory") {
-		t.Fatalf("second request messages = %#v, want compressed summary from memory manager after forced blocks", secondReq)
+	if secondReq[3].Role != model.RoleAssistant || !strings.Contains(secondReq[3].Content, "compressed memory") {
+		t.Fatalf("second request messages = %#v, want compressed recap from memory manager after forced blocks", secondReq)
 	}
 	assertMessagesDoNotContainContent(t, secondReq, "weather?")
 	assertMessagesDoNotContainContent(t, secondReq, strings.Repeat("sunny", 12))
@@ -575,6 +575,73 @@ func TestRunnerDoesNotReAddProducedMessagesToMemoryWhenInitialInputEmpty(t *test
 	}
 }
 
+func TestRunnerKeepsEphemeralToolOutputInCurrentTurnButNotProducedOrMemory(t *testing.T) {
+	mgr, err := memory.NewManager(memory.Options{Counter: fakeTokenCounter{}})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+
+	registry := coretools.NewRegistry()
+	if err := registry.Register(coretools.Tool{
+		Name: "using_skills",
+		ResultHandler: func(context.Context, map[string]interface{}) (coretools.Result, error) {
+			return coretools.Result{Content: "full skill body", Ephemeral: true}, nil
+		},
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	client := &stubClient{streams: []model.Stream{
+		newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "using_skills", Arguments: `{"name":"debugging"}`}}}}},
+			model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "using_skills", Arguments: `{"name":"debugging"}`}}},
+			nil,
+		),
+		newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "done"}}},
+			model.Message{Role: model.RoleAssistant, Content: "done"},
+			nil,
+		),
+	}}
+
+	runner, err := NewRunner(client, registry, Options{Model: "test-model", Memory: mgr, RuntimePromptBuilder: runtimeprompt.NewBuilder(nil), MaxSteps: 4})
+	if err != nil {
+		t.Fatalf("NewRunner() error = %v", err)
+	}
+
+	result, err := runner.Run(context.Background(), RunInput{Tools: registry.List()})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(client.streamRequests) != 2 {
+		t.Fatalf("request count = %d, want 2", len(client.streamRequests))
+	}
+	secondReq := client.streamRequests[1].Messages
+	if len(secondReq) != 2 {
+		t.Fatalf("len(second request messages) = %d, want 2", len(secondReq))
+	}
+	if secondReq[1].Role != model.RoleTool || secondReq[1].Content != "full skill body" {
+		t.Fatalf("second request tool replay = %#v, want ephemeral tool result in current turn", secondReq[1])
+	}
+	if len(result.Messages) != 2 {
+		t.Fatalf("len(result.Messages) = %d, want assistant tool call and final assistant only", len(result.Messages))
+	}
+	for _, message := range result.Messages {
+		if message.Role == model.RoleTool {
+			t.Fatalf("result.Messages leaked ephemeral tool output: %#v", result.Messages)
+		}
+	}
+	got := mgr.ShortTermMessages()
+	if len(got) != 2 {
+		t.Fatalf("len(ShortTermMessages()) = %d, want 2 without ephemeral tool output", len(got))
+	}
+	for _, message := range got {
+		if message.Role == model.RoleTool {
+			t.Fatalf("memory leaked ephemeral tool output: %#v", got)
+		}
+	}
+}
+
 func TestRunnerInjectsToolResultPromptAfterToolTurnEvenWhenMemoryCompressesSuffixAway(t *testing.T) {
 	mgr, err := memory.NewManager(memory.Options{
 		MaxContextTokens: 60,
@@ -641,11 +708,11 @@ func TestRunnerInjectsToolResultPromptAfterToolTurnEvenWhenMemoryCompressesSuffi
 	if secondReq[0].Role != model.RoleSystem || !strings.Contains(secondReq[0].Content, "Today's date is") {
 		t.Fatalf("second request first message = %#v, want current_date forced block", secondReq[0])
 	}
-	if secondReq[3].Role != model.RoleSystem || !strings.Contains(secondReq[3].Content, "compressed memory") {
-		t.Fatalf("second request fourth message = %#v, want compressed memory context after forced blocks", secondReq[3])
+	if secondReq[3].Role != model.RoleSystem || secondReq[3].Content != "Step prompt" {
+		t.Fatalf("second request fourth message = %#v, want step prompt after forced blocks", secondReq[3])
 	}
-	if secondReq[4].Role != model.RoleSystem || secondReq[4].Content != "Step prompt" {
-		t.Fatalf("second request fifth message = %#v, want step prompt after compressed memory", secondReq[4])
+	if secondReq[4].Role != model.RoleAssistant || !strings.Contains(secondReq[4].Content, "compressed memory") {
+		t.Fatalf("second request fifth message = %#v, want compressed memory recap in conversation body", secondReq[4])
 	}
 	if secondReq[5].Role != model.RoleSystem || secondReq[5].Content != "Tool-result prompt" {
 		t.Fatalf("second request sixth message = %#v, want tool-result prompt appended when assistant/tool boundary was compressed", secondReq[5])
@@ -860,7 +927,6 @@ func TestRunnerReturnsErrorWhenToolExecutionFails(t *testing.T) {
 	}
 }
 
-
 func assertMessagesContainContentOnce(t *testing.T, messages []model.Message, want string) {
 	t.Helper()
 
@@ -905,7 +971,6 @@ func assertMessageOrder(t *testing.T, messages []model.Message, orderedSubstring
 		}
 	}
 }
-
 
 func TestRunnerReturnsErrorWhenMaxStepsExceeded(t *testing.T) {
 	registry := coretools.NewRegistry()

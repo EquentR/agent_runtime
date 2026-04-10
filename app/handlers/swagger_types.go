@@ -292,7 +292,6 @@ type SkillListSwaggerResponse struct {
 // SkillListItemDoc 描述技能列表项的文档结构。
 type SkillListItemDoc struct {
 	Name        string   `json:"name"`
-	Title       string   `json:"title"`
 	Description string   `json:"description,omitempty"`
 	Tags        []string `json:"tags,omitempty"`
 	Tools       []string `json:"tools,omitempty"`
@@ -304,7 +303,6 @@ type SkillListItemDoc struct {
 // SkillSwaggerDoc 描述 workspace skill 详情的文档结构。
 type SkillSwaggerDoc struct {
 	Name         string   `json:"name"`
-	Title        string   `json:"title"`
 	Description  string   `json:"description,omitempty"`
 	Tags         []string `json:"tags,omitempty"`
 	Tools        []string `json:"tools,omitempty"`

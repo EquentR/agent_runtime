@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -22,7 +23,7 @@ func TestRunnerBuildRequestMessagesUsesForcedProviderWhenRuntimePromptBuilderMis
 		},
 	}}
 
-	_, got, err := runner.buildRequestMessages(memory.RuntimeContext{Body: []model.Message{{Role: model.RoleUser, Content: "hello"}}}, false)
+	_, got, err := runner.buildRequestMessages(memory.RuntimeContext{Tail: []model.Message{{Role: model.RoleUser, Content: "hello"}}}, false)
 	if err != nil {
 		t.Fatalf("buildRequestMessages() error = %v", err)
 	}
@@ -69,6 +70,48 @@ func TestRunnerUsesMemoryContextMessages(t *testing.T) {
 	}
 	if got[4].Content != "new request" {
 		t.Fatalf("body replay second message = %q, want new request", got[4].Content)
+	}
+}
+
+func TestRunnerBuildRequestMessagesInsertsSyntheticConversationBeforeTail(t *testing.T) {
+	runner := &Runner{options: Options{
+		Now: func() time.Time { return time.Date(2026, time.April, 4, 9, 0, 0, 0, time.UTC) },
+		ResolvedPrompt: &coreprompt.ResolvedPrompt{
+			Segments: []coreprompt.ResolvedPromptSegment{
+				{Order: 1, Phase: runtimeprompt.PhaseSession, Content: "Session prompt", SourceKind: "db_default_binding", SourceRef: "binding:1"},
+			},
+		},
+		ConversationPrelude: []model.Message{{Role: model.RoleUser, Content: "Selected skills summary"}},
+	}}
+
+	buildResult, got, err := runner.buildRequestMessages(memory.RuntimeContext{
+		Recap: &model.Message{Role: model.RoleAssistant, Content: "Memory recap"},
+		Tail:  []model.Message{{Role: model.RoleUser, Content: "real user request"}},
+	}, false)
+	if err != nil {
+		t.Fatalf("buildRequestMessages() error = %v", err)
+	}
+
+	if len(buildResult.Envelope.Segments) == 0 {
+		t.Fatal("Envelope.Segments = nil, want enforced system segments")
+	}
+	for _, segment := range buildResult.Envelope.Segments {
+		if segment.Content == "Memory recap" || segment.Content == "Selected skills summary" {
+			t.Fatalf("Envelope.Segments = %#v, want synthetic conversation excluded from system envelope", buildResult.Envelope.Segments)
+		}
+	}
+
+	if len(got) < 3 {
+		t.Fatalf("len(buildRequestMessages()) = %d, want at least 3", len(got))
+	}
+	tail := got[len(got)-3:]
+	wantTail := []model.Message{
+		{Role: model.RoleAssistant, Content: "Memory recap"},
+		{Role: model.RoleUser, Content: "Selected skills summary"},
+		{Role: model.RoleUser, Content: "real user request"},
+	}
+	if !reflect.DeepEqual(tail, wantTail) {
+		t.Fatalf("request tail = %#v, want %#v", tail, wantTail)
 	}
 }
 
@@ -263,14 +306,14 @@ func TestPrepareConversationContextReturnsMemorySummaryAndReplayableBodySeparate
 	if err != nil {
 		t.Fatalf("prepareConversationContextWithPersistedCount() error = %v", err)
 	}
-	if got.Memory.Summary == nil {
-		t.Fatal("Memory.Summary = nil, want rendered compressed summary")
+	if got.Memory.Recap == nil {
+		t.Fatal("Memory.Recap = nil, want rendered compressed recap")
 	}
-	if got.Memory.Summary.Role != model.RoleSystem || !strings.Contains(got.Memory.Summary.Content, "compressed memory") {
-		t.Fatalf("Memory.Summary = %#v, want rendered compressed summary", got.Memory.Summary)
+	if got.Memory.Recap.Role != model.RoleAssistant || !strings.Contains(got.Memory.Recap.Content, "compressed memory") {
+		t.Fatalf("Memory.Recap = %#v, want rendered compressed recap", got.Memory.Recap)
 	}
-	if len(got.Memory.Body) != 0 {
-		t.Fatalf("len(Memory.Body) = %d, want 0 after compression", len(got.Memory.Body))
+	if len(got.Memory.Tail) != 0 {
+		t.Fatalf("len(Memory.Tail) = %d, want 0 after compression", len(got.Memory.Tail))
 	}
 	if len(got.ConversationBody) != 2 {
 		t.Fatalf("len(ConversationBody) = %d, want 2 original conversation messages", len(got.ConversationBody))
@@ -302,12 +345,12 @@ func TestPrepareConversationContextAddsUnpersistedTailWhenConversationPartiallyP
 	if err != nil {
 		t.Fatalf("prepareConversationContextWithPersistedCount() error = %v", err)
 	}
-	if len(got.Memory.Body) != len(input) {
-		t.Fatalf("len(Memory.Body) = %d, want %d", len(got.Memory.Body), len(input))
+	if len(got.Memory.Tail) != len(input) {
+		t.Fatalf("len(Memory.Tail) = %d, want %d", len(got.Memory.Tail), len(input))
 	}
 	for i, want := range input {
-		if got.Memory.Body[i].Role != want.Role || got.Memory.Body[i].Content != want.Content {
-			t.Fatalf("Memory.Body[%d] = %#v, want %#v", i, got.Memory.Body[i], want)
+		if got.Memory.Tail[i].Role != want.Role || got.Memory.Tail[i].Content != want.Content {
+			t.Fatalf("Memory.Tail[%d] = %#v, want %#v", i, got.Memory.Tail[i], want)
 		}
 	}
 	if len(mgr.ShortTermMessages()) != len(input) {
@@ -337,11 +380,11 @@ func TestPrepareConversationContextDoesNotWriteInjectedPromptContentIntoMemory(t
 	if err != nil {
 		t.Fatalf("prepareConversationContextWithPersistedCount() error = %v", err)
 	}
-	if len(got.Memory.Body) != 1 {
-		t.Fatalf("len(Memory.Body) = %d, want 1", len(got.Memory.Body))
+	if len(got.Memory.Tail) != 1 {
+		t.Fatalf("len(Memory.Tail) = %d, want 1", len(got.Memory.Tail))
 	}
-	if got.Memory.Body[0].Content != "hello" {
-		t.Fatalf("Memory.Body[0].Content = %q, want hello", got.Memory.Body[0].Content)
+	if got.Memory.Tail[0].Content != "hello" {
+		t.Fatalf("Memory.Tail[0].Content = %q, want hello", got.Memory.Tail[0].Content)
 	}
 	if mgr.ShortTermMessages()[0].Content != "hello" {
 		t.Fatalf("ShortTermMessages()[0].Content = %q, want hello", mgr.ShortTermMessages()[0].Content)
@@ -350,6 +393,37 @@ func TestPrepareConversationContextDoesNotWriteInjectedPromptContentIntoMemory(t
 		if message.Content == "Session prompt" || message.Content == "legacy prompt should stay out of memory" {
 			t.Fatalf("memory contains injected prompt content = %#v", message)
 		}
+	}
+}
+
+func TestPrepareConversationContextPreservesLatestRealUserMessage(t *testing.T) {
+	mgr, err := memory.NewManager(memory.Options{
+		MaxContextTokens: 100,
+		Counter:          fakeTokenCounter{},
+		Compressor: func(context.Context, memory.CompressionRequest) (string, error) {
+			return "compressed memory", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	runner, err := NewRunner(&stubClient{}, nil, Options{Model: "test-model", Memory: mgr})
+	if err != nil {
+		t.Fatalf("NewRunner() error = %v", err)
+	}
+	got, err := runner.prepareConversationContextWithPersistedCount(context.Background(), []model.Message{
+		{Role: model.RoleUser, Content: strings.Repeat("a", 40)},
+		{Role: model.RoleAssistant, Content: strings.Repeat("b", 40)},
+		{Role: model.RoleUser, Content: "latest question"},
+	}, 0)
+	if err != nil {
+		t.Fatalf("prepareConversationContextWithPersistedCount() error = %v", err)
+	}
+	if got.Memory.Recap == nil || got.Memory.Recap.Role != model.RoleAssistant {
+		t.Fatalf("Memory.Recap = %#v, want assistant recap", got.Memory.Recap)
+	}
+	if len(got.Memory.Tail) != 1 || got.Memory.Tail[0].Content != "latest question" {
+		t.Fatalf("Memory.Tail = %#v, want preserved latest user message", got.Memory.Tail)
 	}
 }
 
@@ -401,7 +475,6 @@ func TestBuildMemoryManagerUsesLLMShortTermCompressorByDefault(t *testing.T) {
 		t.Fatal("buildMemoryManager() = nil, want manager")
 	}
 }
-
 
 func TestNewRunnerUsesLLMModelIDWhenModelStringEmpty(t *testing.T) {
 	runner, err := NewRunner(&stubClient{}, nil, Options{

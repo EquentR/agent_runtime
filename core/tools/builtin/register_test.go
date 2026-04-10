@@ -51,12 +51,21 @@ func TestRegisterRegistersPlannedTools(t *testing.T) {
 		"move_file",
 		"read_file",
 		"search_file",
+		"using_skills",
 		"web_search",
 		"write_file",
 	}
 
 	if !slices.Equal(got, want) {
 		t.Fatalf("tool names = %#v, want %#v", got, want)
+	}
+}
+
+func TestRegisterIncludesUsingSkillsTool(t *testing.T) {
+	registry := newBuiltinRegistry(t, Options{WorkspaceRoot: t.TempDir()})
+	tool := toolDefinitionByName(t, registry, "using_skills")
+	if tool.Parameters.Properties["name"].Type != "string" {
+		t.Fatalf("using_skills.name type = %q, want string", tool.Parameters.Properties["name"].Type)
 	}
 }
 
@@ -262,7 +271,6 @@ func TestReadFileDefaultsToFirst300LinesWhenLineCountOmitted(t *testing.T) {
 		t.Fatalf("limit_reason = %q, want %q", result.LimitReason, "line_limit")
 	}
 }
-
 
 func TestSearchFileAndGrepFile(t *testing.T) {
 	workspace := t.TempDir()
@@ -542,7 +550,7 @@ func TestExecCommandTruncatesLargeStdout(t *testing.T) {
 	workspace := t.TempDir()
 	registry := newBuiltinRegistry(t, Options{
 		WorkspaceRoot: workspace,
-		OutputBudget: OutputBudgetOptions{CommandStdoutBytes: 32},
+		OutputBudget:  OutputBudgetOptions{CommandStdoutBytes: 32},
 	})
 
 	raw, err := registry.Execute(context.Background(), "exec_command", map[string]any{
@@ -610,7 +618,7 @@ func TestSearchFileLimitsMatchesAndReportsTotals(t *testing.T) {
 
 	registry := newBuiltinRegistry(t, Options{
 		WorkspaceRoot: workspace,
-		OutputBudget: OutputBudgetOptions{SearchMaxMatches: 5, MatchTextMaxBytes: 8},
+		OutputBudget:  OutputBudgetOptions{SearchMaxMatches: 5, MatchTextMaxBytes: 8},
 	})
 
 	raw, err := registry.Execute(context.Background(), "search_file", map[string]any{"path": ".", "pattern": "needle"})
@@ -619,10 +627,12 @@ func TestSearchFileLimitsMatchesAndReportsTotals(t *testing.T) {
 	}
 
 	var result struct {
-		Matches         []struct{ Text string `json:"text"` } `json:"matches"`
-		TotalMatches    int                                `json:"total_matches"`
-		ReturnedMatches int                                `json:"returned_matches"`
-		Truncated       bool                               `json:"truncated"`
+		Matches []struct {
+			Text string `json:"text"`
+		} `json:"matches"`
+		TotalMatches    int  `json:"total_matches"`
+		ReturnedMatches int  `json:"returned_matches"`
+		Truncated       bool `json:"truncated"`
 	}
 	decodeJSON(t, raw, &result)
 
@@ -639,7 +649,7 @@ func TestListFilesLimitsEntriesAndReportsRemainingCount(t *testing.T) {
 
 	registry := newBuiltinRegistry(t, Options{
 		WorkspaceRoot: workspace,
-		OutputBudget: OutputBudgetOptions{ListMaxEntries: 3},
+		OutputBudget:  OutputBudgetOptions{ListMaxEntries: 3},
 	})
 
 	raw, err := registry.Execute(context.Background(), "list_files", map[string]any{"path": ".", "recursive": false})
@@ -648,10 +658,12 @@ func TestListFilesLimitsEntriesAndReportsRemainingCount(t *testing.T) {
 	}
 
 	var result struct {
-		Entries         []struct{ Path string `json:"path"` } `json:"entries"`
-		ReturnedEntries int                               `json:"returned_entries"`
-		RemainingCount  int                               `json:"remaining_count"`
-		Truncated       bool                              `json:"truncated"`
+		Entries []struct {
+			Path string `json:"path"`
+		} `json:"entries"`
+		ReturnedEntries int  `json:"returned_entries"`
+		RemainingCount  int  `json:"remaining_count"`
+		Truncated       bool `json:"truncated"`
 	}
 	decodeJSON(t, raw, &result)
 
@@ -1148,9 +1160,9 @@ func mustReadText(t *testing.T, path string) string {
 	return string(data)
 }
 
-func decodeJSON(t *testing.T, raw string, target any) {
+func decodeJSON(t *testing.T, raw coretools.Result, target any) {
 	t.Helper()
-	if err := json.Unmarshal([]byte(raw), target); err != nil {
-		t.Fatalf("json.Unmarshal(%q) error = %v", raw, err)
+	if err := json.Unmarshal([]byte(raw.Content), target); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error = %v", raw.Content, err)
 	}
 }

@@ -6,7 +6,6 @@ const (
 	PhaseToolResult   = "tool_result"
 
 	SourceTypeForcedBlock    = "forced_block"
-	SourceTypeMemorySummary  = "memory_summary"
 	SourceTypeResolvedPrompt = "resolved_prompt"
 
 	RoleSystem = "system"

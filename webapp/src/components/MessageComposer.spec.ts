@@ -3,6 +3,7 @@ import { resolve } from 'node:path'
 
 import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
+import { defineComponent, h } from 'vue'
 
 import MessageComposer from './MessageComposer.vue'
 
@@ -12,6 +13,27 @@ const routerLinkStub = {
   props: ['to'],
   template: '<a class="composer-approval-entry" :href="to"><slot /></a>',
 }
+
+const ElOptionStub = defineComponent({
+  name: 'ElOption',
+  props: {
+    label: { type: String, required: true },
+    value: { type: String, required: true },
+  },
+  setup(props) {
+    return () => h('div', { class: 'el-option-stub', 'data-value': props.value }, props.label)
+  },
+})
+
+const ElSelectStub = defineComponent({
+  name: 'ElSelect',
+  props: {
+    modelValue: { type: Array, default: () => [] },
+  },
+  setup(_, { slots }) {
+    return () => h('div', { class: 'el-select-stub' }, slots.default?.())
+  },
+})
 
 describe('MessageComposer', () => {
   it('renders an icon send button inside the composer', () => {
@@ -163,18 +185,20 @@ describe('MessageComposer', () => {
   it('renders skills selector when skills are provided', () => {
     const wrapper = mount(MessageComposer, {
       global: {
-        stubs: { ElSelect: true, ElOption: true },
+        stubs: { ElSelect: ElSelectStub, ElOption: ElOptionStub },
       },
       props: {
         disabled: false,
         skills: [
-          { name: 'test-skill', title: 'Test Skill', source_ref: 'test' },
+          { name: 'debugging', source_ref: 'test' },
         ],
         selectedSkillNames: [],
       },
     })
 
     expect(wrapper.find('.composer-skill-select').exists()).toBe(true)
+    expect(wrapper.text()).toContain('debugging')
+    expect(wrapper.text()).not.toContain('Debugging')
   })
 
   it('does not render skills selector when no skills are available', () => {

@@ -15,8 +15,8 @@ import (
 
 	"github.com/EquentR/agent_runtime/core/approvals"
 	coreaudit "github.com/EquentR/agent_runtime/core/audit"
-	corelog "github.com/EquentR/agent_runtime/core/log"
 	"github.com/EquentR/agent_runtime/core/interactions"
+	corelog "github.com/EquentR/agent_runtime/core/log"
 	"github.com/EquentR/agent_runtime/core/memory"
 	coreprompt "github.com/EquentR/agent_runtime/core/prompt"
 	model "github.com/EquentR/agent_runtime/core/providers/types"
@@ -396,8 +396,8 @@ func TestAgentExecutorAppendsSelectedSkillsAfterWorkspacePrompt(t *testing.T) {
 	store := newConversationStoreForTest(t)
 	workspaceRoot := t.TempDir()
 	writeExecutorWorkspacePrompt(t, workspaceRoot, "Workspace prompt")
-	writeExecutorSkillPrompt(t, workspaceRoot, "debugging", "# Debugging\n\nDebug carefully.\n")
-	writeExecutorSkillPrompt(t, workspaceRoot, "review", "# Review\n\nReview carefully.\n")
+	writeExecutorSkillPrompt(t, workspaceRoot, "debugging", "---\ndescription: Debug skill\n---\n\n# Debugging\n\nDebug carefully.\n")
+	writeExecutorSkillPrompt(t, workspaceRoot, "review", "---\ndescription: Review skill\n---\n\n# Review\n\nReview carefully.\n")
 	promptResolver := newExecutorPromptResolverForTest(t, func(store *coreprompt.Store) {
 		mustCreateExecutorPromptDocument(t, store, coreprompt.CreateDocumentInput{ID: "doc-default", Name: "Default", Content: "DB prompt", Scope: "admin", Status: "active"})
 		mustCreateExecutorPromptDocument(t, store, coreprompt.CreateDocumentInput{ID: "doc-step", Name: "Step", Content: "Step prompt", Scope: "admin", Status: "active"})
@@ -434,9 +434,8 @@ func TestAgentExecutorAppendsSelectedSkillsAfterWorkspacePrompt(t *testing.T) {
 	assertExecutorRequestMessagesIgnoringForced(t, client, []model.Message{
 		{Role: model.RoleSystem, Content: "DB prompt"},
 		{Role: model.RoleSystem, Content: "The following AGENTS.md file was injected from the user's working directory. Treat it as guidance and operating rules for the current workspace.\n---\nWorkspace prompt"},
-		{Role: model.RoleSystem, Content: "The following skill was loaded from the user's workspace. Treat it as an active skill package for this run.\nSkill: debugging\nSource: skills/debugging/SKILL.md\n---\n# Debugging\n\nDebug carefully.\n"},
-		{Role: model.RoleSystem, Content: "The following skill was loaded from the user's workspace. Treat it as an active skill package for this run.\nSkill: review\nSource: skills/review/SKILL.md\n---\n# Review\n\nReview carefully.\n"},
 		{Role: model.RoleSystem, Content: "Step prompt"},
+		{Role: model.RoleUser, Content: "Selected workspace skills are available as optional guides for this request.\nUse using_skills(name) only when a selected skill is actually relevant.\n\n- debugging: Debug skill\n- review: Review skill"},
 		{Role: model.RoleUser, Content: "hi"},
 	})
 
@@ -453,9 +452,12 @@ func TestAgentExecutorAppendsSelectedSkillsAfterWorkspacePrompt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("skills Resolve() error = %v", err)
 	}
-	appendResolvedSkillsToPrompt(resolvedPrompt, resolvedSkills)
-	if len(resolvedPrompt.Segments) != 5 {
-		t.Fatalf("len(resolvedPrompt.Segments) = %d, want 5", len(resolvedPrompt.Segments))
+	summary := coreskills.BuildSelectedSkillSummaryMessage(resolvedSkills)
+	if summary == nil {
+		t.Fatal("BuildSelectedSkillSummaryMessage() = nil, want synthetic user summary")
+	}
+	if len(resolvedPrompt.Segments) != 3 {
+		t.Fatalf("len(resolvedPrompt.Segments) = %d, want 3", len(resolvedPrompt.Segments))
 	}
 	if resolvedPrompt.Segments[0].SourceKind != "db_default_binding" {
 		t.Fatalf("segments[0].SourceKind = %q, want db_default_binding", resolvedPrompt.Segments[0].SourceKind)
@@ -463,23 +465,14 @@ func TestAgentExecutorAppendsSelectedSkillsAfterWorkspacePrompt(t *testing.T) {
 	if resolvedPrompt.Segments[1].SourceKind != "workspace_file" {
 		t.Fatalf("segments[1].SourceKind = %q, want workspace_file", resolvedPrompt.Segments[1].SourceKind)
 	}
-	if resolvedPrompt.Segments[2].SourceKind != promptSourceKindWorkspaceSkill || resolvedPrompt.Segments[2].Phase != "session" || !resolvedPrompt.Segments[2].RuntimeOnly {
-		t.Fatalf("segments[2] = %#v, want first runtime-only workspace skill session segment", resolvedPrompt.Segments[2])
+	if resolvedPrompt.Segments[2].Phase != "step_pre_model" {
+		t.Fatalf("segments[2].Phase = %q, want step_pre_model", resolvedPrompt.Segments[2].Phase)
 	}
-	if resolvedPrompt.Segments[3].SourceKind != promptSourceKindWorkspaceSkill || resolvedPrompt.Segments[3].Phase != "session" || !resolvedPrompt.Segments[3].RuntimeOnly {
-		t.Fatalf("segments[3] = %#v, want second runtime-only workspace skill session segment", resolvedPrompt.Segments[3])
+	if summary.Role != model.RoleUser {
+		t.Fatalf("summary.Role = %q, want %q", summary.Role, model.RoleUser)
 	}
-	if resolvedPrompt.Segments[4].Phase != "step_pre_model" {
-		t.Fatalf("segments[4].Phase = %q, want step_pre_model", resolvedPrompt.Segments[4].Phase)
-	}
-	if resolvedPrompt.Segments[2].SourceRef != "skills/debugging/SKILL.md" {
-		t.Fatalf("debugging skill source ref = %q, want %q", resolvedPrompt.Segments[2].SourceRef, "skills/debugging/SKILL.md")
-	}
-	if resolvedPrompt.Segments[3].SourceRef != "skills/review/SKILL.md" {
-		t.Fatalf("review skill source ref = %q, want %q", resolvedPrompt.Segments[3].SourceRef, "skills/review/SKILL.md")
-	}
-	if resolvedPrompt.Segments[3].Order >= resolvedPrompt.Segments[4].Order {
-		t.Fatalf("last skill segment order = %d, step segment order = %d, want skills before step", resolvedPrompt.Segments[3].Order, resolvedPrompt.Segments[4].Order)
+	if strings.Contains(summary.Content, "# Debugging") || strings.Contains(summary.Content, "# Review") {
+		t.Fatalf("summary content leaked full skill body: %q", summary.Content)
 	}
 	messages, err := store.ListMessages(context.Background(), runResult.ConversationID)
 	if err != nil {
@@ -2582,10 +2575,18 @@ type agentLogEntry struct {
 	fields map[string]any
 }
 
-func (s *agentLogSpy) Debug(msg string, fields ...corelog.Field) { s.entries = append(s.entries, newAgentLogEntry("debug", msg, fields...)) }
-func (s *agentLogSpy) Info(msg string, fields ...corelog.Field)  { s.entries = append(s.entries, newAgentLogEntry("info", msg, fields...)) }
-func (s *agentLogSpy) Warn(msg string, fields ...corelog.Field)  { s.entries = append(s.entries, newAgentLogEntry("warn", msg, fields...)) }
-func (s *agentLogSpy) Error(msg string, fields ...corelog.Field) { s.entries = append(s.entries, newAgentLogEntry("error", msg, fields...)) }
+func (s *agentLogSpy) Debug(msg string, fields ...corelog.Field) {
+	s.entries = append(s.entries, newAgentLogEntry("debug", msg, fields...))
+}
+func (s *agentLogSpy) Info(msg string, fields ...corelog.Field) {
+	s.entries = append(s.entries, newAgentLogEntry("info", msg, fields...))
+}
+func (s *agentLogSpy) Warn(msg string, fields ...corelog.Field) {
+	s.entries = append(s.entries, newAgentLogEntry("warn", msg, fields...))
+}
+func (s *agentLogSpy) Error(msg string, fields ...corelog.Field) {
+	s.entries = append(s.entries, newAgentLogEntry("error", msg, fields...))
+}
 
 func newAgentLogEntry(level string, msg string, fields ...corelog.Field) agentLogEntry {
 	mapped := make(map[string]any, len(fields))

@@ -9,7 +9,7 @@ import (
 	model "github.com/EquentR/agent_runtime/core/providers/types"
 )
 
-func TestBuilderBuildCollectsForcedMemoryAndResolvedSegmentsInEnvelopeOrder(t *testing.T) {
+func TestBuilderBuildCollectsForcedAndResolvedSegmentsInEnvelopeOrder(t *testing.T) {
 	builder := NewBuilder(fakeSessionSegmentProvider{segments: []Segment{
 		{
 			SourceType:   SourceTypeForcedBlock,
@@ -45,7 +45,6 @@ func TestBuilderBuildCollectsForcedMemoryAndResolvedSegmentsInEnvelopeOrder(t *t
 	got, err := builder.Build(BuildInput{
 		Time:             time.Date(2026, time.April, 4, 9, 30, 0, 0, time.UTC),
 		ConversationBody: conversation,
-		MemorySummary:    "Compressed memory summary",
 		ResolvedPrompt:   resolved,
 	})
 	if err != nil {
@@ -58,14 +57,13 @@ func TestBuilderBuildCollectsForcedMemoryAndResolvedSegmentsInEnvelopeOrder(t *t
 	if !reflect.DeepEqual(got.Body, conversation) {
 		t.Fatalf("Body = %#v, want %#v", got.Body, conversation)
 	}
-	if len(got.Envelope.Segments) != 6 {
-		t.Fatalf("len(Envelope.Segments) = %d, want 6", len(got.Envelope.Segments))
+	if len(got.Envelope.Segments) != 5 {
+		t.Fatalf("len(Envelope.Segments) = %d, want 5", len(got.Envelope.Segments))
 	}
 
 	wantContents := []string{
 		"Forced prompt 1",
 		"Forced prompt 2",
-		"Compressed memory summary",
 		"Resolved session",
 		"Resolved step",
 		"Resolved tool",
@@ -74,21 +72,7 @@ func TestBuilderBuildCollectsForcedMemoryAndResolvedSegmentsInEnvelopeOrder(t *t
 		t.Fatalf("segment contents = %#v, want %#v", gotContents, wantContents)
 	}
 
-	memory := got.Envelope.Segments[2]
-	if memory.SourceType != SourceTypeMemorySummary {
-		t.Fatalf("memory.SourceType = %q, want %q", memory.SourceType, SourceTypeMemorySummary)
-	}
-	if memory.SourceKey != "memory_summary" {
-		t.Fatalf("memory.SourceKey = %q, want %q", memory.SourceKey, "memory_summary")
-	}
-	if memory.Phase != PhaseSession {
-		t.Fatalf("memory.Phase = %q, want %q", memory.Phase, PhaseSession)
-	}
-	if memory.Role != RoleSystem {
-		t.Fatalf("memory.Role = %q, want %q", memory.Role, RoleSystem)
-	}
-
-	resolvedSession := got.Envelope.Segments[3]
+	resolvedSession := got.Envelope.Segments[2]
 	if resolvedSession.SourceType != SourceTypeResolvedPrompt {
 		t.Fatalf("resolved session SourceType = %q, want %q", resolvedSession.SourceType, SourceTypeResolvedPrompt)
 	}
@@ -99,7 +83,7 @@ func TestBuilderBuildCollectsForcedMemoryAndResolvedSegmentsInEnvelopeOrder(t *t
 		t.Fatal("resolved session RuntimeOnly = false, want true")
 	}
 
-	resolvedStep := got.Envelope.Segments[4]
+	resolvedStep := got.Envelope.Segments[3]
 	if resolvedStep.Phase != PhaseStepPreModel {
 		t.Fatalf("resolved step Phase = %q, want %q", resolvedStep.Phase, PhaseStepPreModel)
 	}
@@ -201,12 +185,13 @@ func TestRendererRenderPlacesSessionBeforeBodyAndToolResultBeforeTrailingToolMes
 	got := renderer.Render(BuildResult{
 		Envelope: Envelope{Segments: []Segment{
 			{Order: 1, Phase: PhaseSession, Role: RoleSystem, Content: "Forced prompt"},
-			{Order: 2, Phase: PhaseSession, Role: RoleSystem, Content: "Memory summary"},
-			{Order: 3, Phase: PhaseSession, Role: RoleSystem, Content: "Resolved session"},
-			{Order: 4, Phase: PhaseStepPreModel, Role: RoleSystem, Content: "Resolved step"},
-			{Order: 5, Phase: PhaseToolResult, Role: RoleSystem, Content: "Resolved tool-result"},
+			{Order: 2, Phase: PhaseSession, Role: RoleSystem, Content: "Resolved session"},
+			{Order: 3, Phase: PhaseStepPreModel, Role: RoleSystem, Content: "Resolved step"},
+			{Order: 4, Phase: PhaseToolResult, Role: RoleSystem, Content: "Resolved tool-result"},
 		}},
 		Body: []model.Message{
+			{Role: model.RoleAssistant, Content: "Memory recap"},
+			{Role: model.RoleUser, Content: "Selected skills summary"},
 			{Role: model.RoleUser, Content: "weather?"},
 			{Role: model.RoleAssistant, Content: ""},
 			{Role: model.RoleTool, ToolCallId: "call_1", Content: "sunny"},
@@ -217,9 +202,10 @@ func TestRendererRenderPlacesSessionBeforeBodyAndToolResultBeforeTrailingToolMes
 
 	want := []model.Message{
 		{Role: model.RoleSystem, Content: "Forced prompt"},
-		{Role: model.RoleSystem, Content: "Memory summary"},
 		{Role: model.RoleSystem, Content: "Resolved session"},
 		{Role: model.RoleSystem, Content: "Resolved step"},
+		{Role: model.RoleAssistant, Content: "Memory recap"},
+		{Role: model.RoleUser, Content: "Selected skills summary"},
 		{Role: model.RoleUser, Content: "weather?"},
 		{Role: model.RoleAssistant, Content: ""},
 		{Role: model.RoleSystem, Content: "Resolved tool-result"},

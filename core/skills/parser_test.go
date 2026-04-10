@@ -29,9 +29,6 @@ Follow a structured debugging workflow.
 	if skill.Name != "debugging" {
 		t.Fatalf("skill.Name = %q, want %q", skill.Name, "debugging")
 	}
-	if skill.Title != "Debugging" {
-		t.Fatalf("skill.Title = %q, want %q", skill.Title, "Debugging")
-	}
 	if skill.Description != "Systematic debugging skill" {
 		t.Fatalf("skill.Description = %q, want %q", skill.Description, "Systematic debugging skill")
 	}
@@ -58,7 +55,7 @@ Follow a structured debugging workflow.
 	}
 }
 
-func TestParseSkillDocumentInfersMetadataWithoutFrontmatter(t *testing.T) {
+func TestParseSkillDocumentLeavesDescriptionEmptyWithoutFrontmatterDescription(t *testing.T) {
 	skill, err := parseSkillDocument("debugging", "skills/debugging/SKILL.md", `# Debugging
 
 Follow a structured debugging workflow.
@@ -71,11 +68,8 @@ Use real data first.
 	if skill.Name != "debugging" {
 		t.Fatalf("skill.Name = %q, want %q", skill.Name, "debugging")
 	}
-	if skill.Title != "Debugging" {
-		t.Fatalf("skill.Title = %q, want %q", skill.Title, "Debugging")
-	}
-	if skill.Description != "Follow a structured debugging workflow." {
-		t.Fatalf("skill.Description = %q, want first paragraph", skill.Description)
+	if skill.Description != "" {
+		t.Fatalf("skill.Description = %q, want empty", skill.Description)
 	}
 	if skill.Hidden {
 		t.Fatal("skill.Hidden = true, want false")
@@ -88,19 +82,24 @@ Use real data first.
 	}
 }
 
-func TestParseSkillDocumentFallsBackTitleToDirectoryName(t *testing.T) {
-	skill, err := parseSkillDocument("debugging", "skills/debugging/SKILL.md", `Follow a structured debugging workflow.
+func TestParseSkillDocumentIgnoresBodyTitleAndParagraphForSummary(t *testing.T) {
+	skill, err := parseSkillDocument("debugging", "skills/debugging/SKILL.md", `---
+name: debugging
+description: debug guide
+---
 
-Use real data first.
+# Debugging
+
+body text
 `)
 	if err != nil {
 		t.Fatalf("parseSkillDocument() error = %v", err)
 	}
-	if skill.Title != "debugging" {
-		t.Fatalf("skill.Title = %q, want %q", skill.Title, "debugging")
+	if skill.Name != "debugging" {
+		t.Fatalf("skill.Name = %q, want %q", skill.Name, "debugging")
 	}
-	if skill.Description != "Follow a structured debugging workflow." {
-		t.Fatalf("skill.Description = %q, want first paragraph", skill.Description)
+	if skill.Description != "debug guide" {
+		t.Fatalf("skill.Description = %q, want %q", skill.Description, "debug guide")
 	}
 }
 

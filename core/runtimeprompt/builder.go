@@ -19,7 +19,6 @@ type Builder struct {
 type BuildInput struct {
 	Time               time.Time
 	ConversationBody   []model.Message
-	MemorySummary      string
 	ResolvedPrompt     *prompt.ResolvedPrompt
 	AfterToolTurn      bool
 	LegacySystemPrompt string
@@ -60,18 +59,6 @@ func (b *Builder) Build(input BuildInput) (BuildResult, error) {
 			}
 			segments = append(segments, segment)
 		}
-	}
-
-	if memorySummary := strings.TrimSpace(input.MemorySummary); memorySummary != "" {
-		order++
-		segments = append(segments, Segment{
-			SourceType: SourceTypeMemorySummary,
-			SourceKey:  "memory_summary",
-			Phase:      PhaseSession,
-			Order:      order,
-			Role:       RoleSystem,
-			Content:    memorySummary,
-		})
 	}
 
 	if input.ResolvedPrompt != nil {

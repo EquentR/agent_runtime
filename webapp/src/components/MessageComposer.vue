@@ -36,7 +36,7 @@ const canStop = computed(() => isBusy.value && !props.stopDisabled)
 const showExpandButton = ref(false)
 
 const skillOptions = computed(() =>
-  (props.skills ?? []).map((s) => ({ label: s.title, value: s.name })),
+  (props.skills ?? []).map((s) => ({ label: s.name, value: s.name })),
 )
 const localSelectedSkills = computed({
   get: () => props.selectedSkillNames ?? [],

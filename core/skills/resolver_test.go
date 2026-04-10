@@ -81,7 +81,7 @@ func TestResolverResolveAllowsExplicitHiddenSkill(t *testing.T) {
 	}
 }
 
-func TestResolvedSkillContentUsesWorkspacePrefix(t *testing.T) {
+func TestResolvedSkillCarriesSummaryMetadataOnly(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	writeSkillDocument(t, workspaceRoot, "debugging", "---\ndescription: Debug skill\n---\n\n# Debugging\n\nDebug carefully.\n")
 
@@ -93,11 +93,13 @@ func TestResolvedSkillContentUsesWorkspacePrefix(t *testing.T) {
 	if len(resolved) != 1 {
 		t.Fatalf("len(resolved) = %d, want 1", len(resolved))
 	}
-	want := "The following skill was loaded from the user's workspace. Treat it as an active skill package for this run.\nSkill: debugging\nSource: skills/debugging/SKILL.md\n---\n# Debugging\n\nDebug carefully.\n"
-	if resolved[0].Content != want {
-		t.Fatalf("resolved[0].Content = %q, want %q", resolved[0].Content, want)
+	if resolved[0].Description != "Debug skill" {
+		t.Fatalf("resolved[0].Description = %q, want %q", resolved[0].Description, "Debug skill")
 	}
 	if !resolved[0].RuntimeOnly {
 		t.Fatal("resolved[0].RuntimeOnly = false, want true")
+	}
+	if resolved[0].Content != "" {
+		t.Fatalf("resolved[0].Content = %q, want empty", resolved[0].Content)
 	}
 }

@@ -254,7 +254,6 @@ describe('workspace skills API helpers', () => {
           data: [
             {
               name: 'debugging',
-              title: 'Debugging',
               description: 'Debug skill',
               tags: ['debugging'],
               tools: ['grep'],
@@ -274,7 +273,6 @@ describe('workspace skills API helpers', () => {
           message: 'OK',
           data: {
             name: 'debugging',
-            title: 'Debugging',
             description: 'Debug skill',
             tags: ['debugging'],
             tools: ['grep'],
@@ -304,10 +302,12 @@ describe('workspace skills API helpers', () => {
     expect(skills).toEqual([
       expect.objectContaining({ name: 'debugging', source_ref: 'skills/debugging/SKILL.md' }),
     ])
+    expect(skills[0]).not.toHaveProperty('title')
     expect(skill).toMatchObject({
       name: 'debugging',
       content: '# Debugging\n\nDebug carefully.\n',
     })
+    expect(skill).not.toHaveProperty('title')
   })
 })
 

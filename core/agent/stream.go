@@ -94,6 +94,7 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 		produced := make([]model.Message, 0, r.options.MaxSteps*2)
 		toolCalls := 0
 		afterToolTurn := false
+		ephemeralConversationTail := make([]model.Message, 0, 4)
 		var usage model.TokenUsage
 		var totalUsage model.TokenUsage
 		var totalCost coretypes.CostBreakdown
@@ -122,7 +123,7 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 					memoryInsertedCount += len(checkpointMessages)
 				}
 				title := fmt.Sprintf("Agent step %d", resume.Checkpoint.Step)
-				suspended, execErr := r.executeAssistantToolCalls(ctx, resume.Checkpoint.Step, title, resume.Checkpoint.AssistantMessage, resume.Checkpoint.ToolCallIndex, resume, &baseConversation, &produced, &memoryInsertedCount, &toolCalls)
+				suspended, execErr := r.executeAssistantToolCalls(ctx, resume.Checkpoint.Step, title, resume.Checkpoint.AssistantMessage, resume.Checkpoint.ToolCallIndex, resume, &baseConversation, &ephemeralConversationTail, &produced, &memoryInsertedCount, &toolCalls)
 				if execErr != nil {
 					r.emitStepFinish(ctx, resume.Checkpoint.Step, title, map[string]any{"error": execErr.Error()})
 					snapshotResult(resume.Checkpoint.Step)
@@ -159,10 +160,12 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 				err             error
 			)
 			if r.options.Memory != nil {
-				buildResult, requestMessages, budgetDecision, err = r.buildBudgetedRequest(ctx, afterToolTurn)
+				buildResult, requestMessages, budgetDecision, err = r.buildBudgetedRequest(ctx, ephemeralConversationTail, afterToolTurn)
 			} else {
-				buildResult, requestMessages, budgetDecision, err = r.buildBudgetedRequestFromContext(ctx, memory.RuntimeContext{Body: cloneMessages(baseConversation)}, afterToolTurn)
+				body := append(cloneMessages(baseConversation), cloneMessages(ephemeralConversationTail)...)
+				buildResult, requestMessages, budgetDecision, err = r.buildBudgetedRequestFromContext(ctx, memory.RuntimeContext{Tail: body}, afterToolTurn)
 			}
+			ephemeralConversationTail = nil
 			usage = model.TokenUsage{}
 			title := fmt.Sprintf("Agent step %d", step)
 			r.emitStepStart(ctx, step, title)
@@ -299,7 +302,7 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 				return
 			}
 
-			suspended, execErr := r.executeAssistantToolCalls(ctx, step, title, assistant, 0, nil, &baseConversation, &produced, &memoryInsertedCount, &toolCalls)
+			suspended, execErr := r.executeAssistantToolCalls(ctx, step, title, assistant, 0, nil, &baseConversation, &ephemeralConversationTail, &produced, &memoryInsertedCount, &toolCalls)
 			if execErr != nil {
 				r.emitStepFinish(ctx, step, title, map[string]any{"error": execErr.Error()})
 				snapshotResult(step)
@@ -348,7 +351,7 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 	}, nil
 }
 
-func (r *Runner) executeAssistantToolCalls(ctx context.Context, step int, title string, assistant model.Message, startIndex int, resume *interactionResume, baseConversation *[]model.Message, produced *[]model.Message, memoryInsertedCount *int, toolCalls *int) (bool, error) {
+func (r *Runner) executeAssistantToolCalls(ctx context.Context, step int, title string, assistant model.Message, startIndex int, resume *interactionResume, baseConversation *[]model.Message, ephemeralTail *[]model.Message, produced *[]model.Message, memoryInsertedCount *int, toolCalls *int) (bool, error) {
 	if startIndex < 0 || startIndex > len(assistant.ToolCalls) {
 		return false, fmt.Errorf("resume tool call index %d out of range", startIndex)
 	}
@@ -428,14 +431,21 @@ func (r *Runner) executeAssistantToolCalls(ctx context.Context, step int, title 
 			}
 			continue
 		}
-		toolMessage := model.Message{Role: model.RoleTool, ToolCallId: call.ID, Content: output}
-		*baseConversation = append(*baseConversation, toolMessage)
-		*produced = append(*produced, toolMessage)
-		if r.options.Memory != nil {
-			r.options.Memory.AddMessage(toolMessage)
-			*memoryInsertedCount = *memoryInsertedCount + 1
+		toolMessage := model.Message{Role: model.RoleTool, ToolCallId: call.ID, Content: output.Content}
+		if output.Ephemeral {
+			*ephemeralTail = append(*ephemeralTail, toolMessage)
+		} else {
+			*baseConversation = append(*baseConversation, toolMessage)
+			*produced = append(*produced, toolMessage)
+			if r.options.Memory != nil {
+				r.options.Memory.AddMessage(toolMessage)
+				*memoryInsertedCount = *memoryInsertedCount + 1
+			}
 		}
-		r.emitToolFinish(ctx, step, call, output, nil)
+		r.emitToolFinish(ctx, step, call, output.Content, nil)
+		if call.Name == "using_skills" {
+			r.emitUsingSkillsAudit(ctx, step, call, arguments, output.Content)
+		}
 	}
 	return false, nil
 }

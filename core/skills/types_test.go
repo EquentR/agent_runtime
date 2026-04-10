@@ -11,7 +11,6 @@ import (
 func TestSkillJSONShapeIsStable(t *testing.T) {
 	skill := Skill{
 		Name:         "debugging",
-		Title:        "Debugging",
 		Description:  "Systematic debugging skill",
 		Tags:         []string{"debugging", "analysis"},
 		Tools:        []string{"grep", "read"},
@@ -31,7 +30,6 @@ func TestSkillJSONShapeIsStable(t *testing.T) {
 	got := string(payload)
 	for _, want := range []string{
 		`"name":"debugging"`,
-		`"title":"Debugging"`,
 		`"description":"Systematic debugging skill"`,
 		`"tags":["debugging","analysis"]`,
 		`"tools":["grep","read"]`,
@@ -53,7 +51,6 @@ func TestSkillJSONShapeIsStable(t *testing.T) {
 func TestSkillListItemJSONShapeIsStable(t *testing.T) {
 	skill := SkillListItem{
 		Name:        "debugging",
-		Title:       "Debugging",
 		Description: "Systematic debugging skill",
 		Tags:        []string{"debugging", "analysis"},
 		Tools:       []string{"grep", "read"},
@@ -70,7 +67,6 @@ func TestSkillListItemJSONShapeIsStable(t *testing.T) {
 	got := string(payload)
 	for _, want := range []string{
 		`"name":"debugging"`,
-		`"title":"Debugging"`,
 		`"description":"Systematic debugging skill"`,
 		`"tags":["debugging","analysis"]`,
 		`"tools":["grep","read"]`,
@@ -84,6 +80,9 @@ func TestSkillListItemJSONShapeIsStable(t *testing.T) {
 	}
 	if strings.Contains(got, `"content"`) {
 		t.Fatalf("marshaled json = %s, want no content field", got)
+	}
+	if strings.Contains(got, `"title"`) {
+		t.Fatalf("marshaled json = %s, want no title field", got)
 	}
 }
 

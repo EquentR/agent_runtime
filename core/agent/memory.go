@@ -21,7 +21,7 @@ func (r *Runner) prepareConversationContextWithPersistedCount(ctx context.Contex
 	conversation := cloneMessages(input)
 	prepared := preparedConversationContext{ConversationBody: conversation}
 	if r.options.Memory == nil {
-		prepared.Memory = memory.RuntimeContext{Body: cloneMessages(conversation)}
+		prepared.Memory = memory.RuntimeContext{Tail: cloneMessages(conversation)}
 		return prepared, nil
 	}
 
@@ -46,14 +46,15 @@ func (r *Runner) buildRequestMessages(runtimeContext memory.RuntimeContext, afte
 	if r.options.Now != nil {
 		now = r.options.Now
 	}
-	memorySummary := ""
-	if runtimeContext.Summary != nil {
-		memorySummary = runtimeContext.Summary.Content
+	conversationBody := make([]model.Message, 0, len(r.options.ConversationPrelude)+len(runtimeContext.Tail)+1)
+	if runtimeContext.Recap != nil {
+		conversationBody = append(conversationBody, cloneMessage(*runtimeContext.Recap))
 	}
+	conversationBody = append(conversationBody, cloneMessages(r.options.ConversationPrelude)...)
+	conversationBody = append(conversationBody, cloneMessages(runtimeContext.Tail)...)
 	buildResult, err := builder.Build(runtimeprompt.BuildInput{
 		Time:               now(),
-		ConversationBody:   cloneMessages(runtimeContext.Body),
-		MemorySummary:      memorySummary,
+		ConversationBody:   conversationBody,
 		ResolvedPrompt:     r.options.ResolvedPrompt,
 		AfterToolTurn:      afterToolTurn,
 		LegacySystemPrompt: r.options.SystemPrompt,

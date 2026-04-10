@@ -58,8 +58,8 @@ llmProviders:
       name: GLM-5
       type: openai_completions
       context:
-        max: 202000
-        input: 193808
+        max: 20200
+        input: 12008
         output: 8192
       cost:
         input: 0.438

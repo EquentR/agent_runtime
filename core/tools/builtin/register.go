@@ -26,6 +26,7 @@ func Register(registry *coretools.Registry, options Options) error {
 		newMoveFileTool(env),
 		newCopyFileTool(env),
 		newAskUserTool(env),
+		newUsingSkillsTool(env),
 		newExecCommandTool(env),
 		newCheckCommandTool(env),
 		newListProcessesTool(env),

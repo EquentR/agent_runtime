@@ -42,6 +42,9 @@ func TestSkillHandlerListReturnsVisibleWorkspaceSkills(t *testing.T) {
 	if items[0]["name"] != "debugging" || items[1]["name"] != "review" {
 		t.Fatalf("items = %#v, want sorted [debugging review]", items)
 	}
+	if _, ok := items[0]["title"]; ok {
+		t.Fatalf("list item contains title: %#v", items[0])
+	}
 	if _, ok := items[0]["content"]; ok {
 		t.Fatalf("list item contains content: %#v", items[0])
 	}
@@ -63,6 +66,9 @@ func TestSkillHandlerGetReturnsWorkspaceSkillDetail(t *testing.T) {
 	}
 	if item["name"] != "debugging" {
 		t.Fatalf("item.name = %#v, want debugging", item["name"])
+	}
+	if _, ok := item["title"]; ok {
+		t.Fatalf("detail contains title: %#v", item)
 	}
 	if item["content"] != "# Debugging\n\nDebug carefully.\n" {
 		t.Fatalf("item.content = %#v, want markdown body", item["content"])

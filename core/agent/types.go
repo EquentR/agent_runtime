@@ -26,6 +26,7 @@ type Runner struct {
 type Options struct {
 	SystemPrompt         string
 	ResolvedPrompt       *coreprompt.ResolvedPrompt
+	ConversationPrelude  []model.Message
 	RuntimePromptBuilder *runtimeprompt.Builder
 	Model                string
 	LLMModel             *coretypes.LLMModel

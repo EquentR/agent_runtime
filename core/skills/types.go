@@ -3,7 +3,6 @@ package skills
 // Skill describes a workspace skill document and its resolved metadata.
 type Skill struct {
 	Name         string   `json:"name"`
-	Title        string   `json:"title"`
 	Description  string   `json:"description,omitempty"`
 	Tags         []string `json:"tags,omitempty"`
 	Tools        []string `json:"tools,omitempty"`
@@ -18,7 +17,6 @@ type Skill struct {
 // SkillListItem describes the readonly list payload for a workspace skill.
 type SkillListItem struct {
 	Name        string   `json:"name"`
-	Title       string   `json:"title"`
 	Description string   `json:"description,omitempty"`
 	Tags        []string `json:"tags,omitempty"`
 	Tools       []string `json:"tools,omitempty"`
@@ -30,7 +28,7 @@ type SkillListItem struct {
 // ResolvedSkill is the runtime-only representation injected into the prompt.
 type ResolvedSkill struct {
 	Name        string
-	Title       string
+	Description string
 	SourceRef   string
 	Content     string
 	RuntimeOnly bool

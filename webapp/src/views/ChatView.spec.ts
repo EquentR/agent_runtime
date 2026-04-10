@@ -129,8 +129,8 @@ describe('ChatView', () => {
       ],
     })
     api.fetchSkills.mockResolvedValue([
-      { name: 'debugging', title: 'Debugging', source_ref: 'skills/debugging/SKILL.md' },
-      { name: 'review', title: 'Review', source_ref: 'skills/review/SKILL.md' },
+      { name: 'debugging', source_ref: 'skills/debugging/SKILL.md' },
+      { name: 'review', source_ref: 'skills/review/SKILL.md' },
     ])
   })
 
@@ -146,7 +146,7 @@ describe('ChatView', () => {
       default_model_id: string
       providers: Array<{ id: string; name: string; models: Array<{ id: string; name: string; type: string }> }>
     }>()
-    const skillsDeferred = createDeferred<Array<{ name: string; title: string; source_ref: string }>>()
+    const skillsDeferred = createDeferred<Array<{ name: string; source_ref: string }>>()
     const conversationsDeferred = createDeferred<any[]>()
 
     api.fetchModelCatalog.mockImplementation(() => catalogDeferred.promise)
@@ -178,7 +178,7 @@ describe('ChatView', () => {
         },
       ],
     })
-    skillsDeferred.resolve([{ name: 'debugging', title: 'Debugging', source_ref: 'skills/debugging/SKILL.md' }])
+    skillsDeferred.resolve([{ name: 'debugging', source_ref: 'skills/debugging/SKILL.md' }])
     conversationsDeferred.resolve([])
 
     await flushPromises()

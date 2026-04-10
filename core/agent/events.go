@@ -261,6 +261,24 @@ func (r *Runner) emitStreamEvent(ctx context.Context, event RunStreamEvent) {
 	_ = sink.OnStreamEvent(ctx, event)
 }
 
+func (r *Runner) emitMemoryCompressed(ctx context.Context, tokensBefore, tokensAfter int64) {
+	if r == nil || r.options.EventSink == nil {
+		return
+	}
+	sink, ok := r.options.EventSink.(taskRuntimeBridge)
+	if !ok {
+		return
+	}
+	runtime := sink.TaskRuntime()
+	if runtime == nil {
+		return
+	}
+	_ = runtime.Emit(ctx, "memory.compressed", "info", map[string]any{
+		"tokens_before": tokensBefore,
+		"tokens_after":  tokensAfter,
+	})
+}
+
 func (r *Runner) toolContext(ctx context.Context, step int) context.Context {
 	if ctx == nil {
 		ctx = context.Background()
@@ -326,6 +344,18 @@ func mergeAuditPayload(base map[string]any, extra any) map[string]any {
 		payload["value"] = typed
 	}
 	return payload
+}
+
+func (r *Runner) emitUsingSkillsAudit(ctx context.Context, step int, call coretypes.ToolCall, arguments map[string]interface{}, output string) {
+	skillName := ""
+	if name, ok := arguments["name"].(string); ok {
+		skillName = strings.TrimSpace(name)
+	}
+	r.appendAuditEvent(ctx, step, coreaudit.PhaseTool, "tool.using_skills", map[string]any{
+		"tool_call_id": call.ID,
+		"skill_name":   skillName,
+		"output_bytes": len(output),
+	}, "")
 }
 
 func cloneAnyMap(input map[string]any) map[string]any {

@@ -29,10 +29,10 @@ func CountMessageTokens(counter TokenCounter, messages []model.Message) int64 {
 }
 
 func CountRuntimeContextTokens(counter TokenCounter, state RuntimeContext) int64 {
-	messages := make([]model.Message, 0, len(state.Body)+1)
-	if state.Summary != nil {
-		messages = append(messages, cloneMessage(*state.Summary))
+	messages := make([]model.Message, 0, len(state.Tail)+1)
+	if state.Recap != nil {
+		messages = append(messages, cloneMessage(*state.Recap))
 	}
-	messages = append(messages, cloneMessages(state.Body)...)
+	messages = append(messages, cloneMessages(state.Tail)...)
 	return CountMessageTokens(counter, messages)
 }
