@@ -2,16 +2,44 @@ package handlers
 
 // ConversationSwaggerDoc 描述会话元数据的文档结构。
 type ConversationSwaggerDoc struct {
-	ID            string `json:"id"`
-	ProviderID    string `json:"provider_id"`
-	ModelID       string `json:"model_id"`
-	Title         string `json:"title"`
-	LastMessage   string `json:"last_message"`
-	MessageCount  int    `json:"message_count"`
-	CreatedBy     string `json:"created_by"`
-	CreatedAt     string `json:"created_at"`
-	UpdatedAt     string `json:"updated_at"`
-	LastMessageAt string `json:"last_message_at"`
+	ID                string                       `json:"id"`
+	ProviderID        string                       `json:"provider_id"`
+	ModelID           string                       `json:"model_id"`
+	Title             string                       `json:"title"`
+	LastMessage       string                       `json:"last_message"`
+	MessageCount      int                          `json:"message_count"`
+	CreatedBy         string                       `json:"created_by"`
+	CreatedAt         string                       `json:"created_at"`
+	UpdatedAt         string                       `json:"updated_at"`
+	LastMessageAt     string                       `json:"last_message_at"`
+	MemoryContext     *MemoryContextSwaggerDoc     `json:"memory_context,omitempty"`
+	MemoryCompression *MemoryCompressionSwaggerDoc `json:"memory_compression,omitempty"`
+}
+
+// MemoryContextSwaggerDoc 描述权威记忆上下文快照。
+type MemoryContextSwaggerDoc struct {
+	ShortTermTokens       int64 `json:"short_term_tokens"`
+	SummaryTokens         int64 `json:"summary_tokens"`
+	RenderedSummaryTokens int64 `json:"rendered_summary_tokens"`
+	TotalTokens           int64 `json:"total_tokens"`
+	ShortTermLimit        int64 `json:"short_term_limit"`
+	SummaryLimit          int64 `json:"summary_limit"`
+	MaxContextTokens      int64 `json:"max_context_tokens"`
+	HasSummary            bool  `json:"has_summary"`
+}
+
+// MemoryCompressionSwaggerDoc 描述最近一次记忆压缩快照。
+type MemoryCompressionSwaggerDoc struct {
+	TokensBefore                int64 `json:"tokens_before"`
+	TokensAfter                 int64 `json:"tokens_after"`
+	ShortTermTokensBefore       int64 `json:"short_term_tokens_before"`
+	ShortTermTokensAfter        int64 `json:"short_term_tokens_after"`
+	SummaryTokensBefore         int64 `json:"summary_tokens_before"`
+	SummaryTokensAfter          int64 `json:"summary_tokens_after"`
+	RenderedSummaryTokensBefore int64 `json:"rendered_summary_tokens_before"`
+	RenderedSummaryTokensAfter  int64 `json:"rendered_summary_tokens_after"`
+	TotalTokensBefore           int64 `json:"total_tokens_before"`
+	TotalTokensAfter            int64 `json:"total_tokens_after"`
 }
 
 // ConversationDetailSwaggerResponse 描述会话详情接口的返回结构。
@@ -90,9 +118,31 @@ type ModelProviderSwaggerDoc struct {
 
 // ModelEntrySwaggerDoc 描述一个模型选项。
 type ModelEntrySwaggerDoc struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	Type string `json:"type"`
+	ID      string                  `json:"id"`
+	Name    string                  `json:"name"`
+	Type    string                  `json:"type"`
+	Context *ModelContextSwaggerDoc `json:"context,omitempty"`
+	Cost    *ModelPricingSwaggerDoc `json:"cost,omitempty"`
+}
+
+// ModelContextSwaggerDoc 描述模型的上下文窗口信息。
+type ModelContextSwaggerDoc struct {
+	Max    int64 `json:"max"`
+	Input  int64 `json:"input"`
+	Output int64 `json:"output"`
+}
+
+// ModelPricingSwaggerDoc 描述模型定价信息。
+type ModelPricingSwaggerDoc struct {
+	Input       TokenPriceSwaggerDoc  `json:"input"`
+	Output      TokenPriceSwaggerDoc  `json:"output"`
+	CachedInput *TokenPriceSwaggerDoc `json:"cached_input,omitempty"`
+}
+
+// TokenPriceSwaggerDoc 描述单种 token 价格。
+type TokenPriceSwaggerDoc struct {
+	AmountUSD float64 `json:"amount_usd"`
+	PerTokens int64   `json:"per_tokens"`
 }
 
 // ErrorSwaggerResponse 描述通用失败响应结构。
@@ -324,15 +374,27 @@ type TaskSwaggerResponse struct {
 
 // TaskSwaggerDoc 描述任务快照的文档结构。
 type TaskSwaggerDoc struct {
-	ID               string `json:"id"`
-	TaskType         string `json:"task_type"`
-	Status           string `json:"status" enums:"queued,running,waiting,cancel_requested,cancelled,succeeded,failed"`
-	CurrentStepKey   string `json:"current_step_key"`
-	CurrentStepTitle string `json:"current_step_title"`
-	CreatedBy        string `json:"created_by"`
-	RetryOfTaskID    string `json:"retry_of_task_id"`
-	CreatedAt        string `json:"created_at"`
-	UpdatedAt        string `json:"updated_at"`
+	ID               string                   `json:"id"`
+	TaskType         string                   `json:"task_type"`
+	Status           string                   `json:"status" enums:"queued,running,waiting,cancel_requested,cancelled,succeeded,failed"`
+	CurrentStepKey   string                   `json:"current_step_key"`
+	CurrentStepTitle string                   `json:"current_step_title"`
+	CreatedBy        string                   `json:"created_by"`
+	RetryOfTaskID    string                   `json:"retry_of_task_id"`
+	CreatedAt        string                   `json:"created_at"`
+	UpdatedAt        string                   `json:"updated_at"`
+	Result           *RunTaskResultSwaggerDoc `json:"result,omitempty"`
+}
+
+// RunTaskResultSwaggerDoc 描述 agent.run 成功结果中的结构化记忆快照。
+type RunTaskResultSwaggerDoc struct {
+	ConversationID    string                       `json:"conversation_id"`
+	ProviderID        string                       `json:"provider_id"`
+	ModelID           string                       `json:"model_id"`
+	FinalMessage      ConversationMessageDoc       `json:"final_message"`
+	MessagesAppended  int                          `json:"messages_appended"`
+	MemoryContext     *MemoryContextSwaggerDoc     `json:"memory_context,omitempty"`
+	MemoryCompression *MemoryCompressionSwaggerDoc `json:"memory_compression,omitempty"`
 }
 
 // ApprovalSwaggerDoc 描述工具审批记录的文档结构。
@@ -408,6 +470,24 @@ type AuditRunSwaggerDoc struct {
 
 // AuditEventsSwaggerResponse 描述审计事件列表接口的成功响应结构。
 type AuditEventsSwaggerResponse struct {
+	Code    int                    `json:"code"`
+	Message string                 `json:"message"`
+	Data    []AuditEventSwaggerDoc `json:"data"`
+	OK      bool                   `json:"ok"`
+	Time    string                 `json:"time"`
+}
+
+// AuditRunListSwaggerResponse 描述按会话查询审计运行列表接口的成功响应结构。
+type AuditRunListSwaggerResponse struct {
+	Code    int                  `json:"code"`
+	Message string               `json:"message"`
+	Data    []AuditRunSwaggerDoc `json:"data"`
+	OK      bool                 `json:"ok"`
+	Time    string               `json:"time"`
+}
+
+// AuditEventListSwaggerResponse 描述按会话查询审计事件列表接口的成功响应结构。
+type AuditEventListSwaggerResponse struct {
 	Code    int                    `json:"code"`
 	Message string                 `json:"message"`
 	Data    []AuditEventSwaggerDoc `json:"data"`

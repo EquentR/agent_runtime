@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -58,6 +59,76 @@ func TestConversationHandlerGetConversation(t *testing.T) {
 	}
 	if got.AuditRunID != "run_1" {
 		t.Fatalf("conversation.AuditRunID = %q, want run_1", got.AuditRunID)
+	}
+}
+
+func TestConversationHandlerGetConversationIncludesLatestMemorySnapshot(t *testing.T) {
+	store, _, server := newConversationHandlerTestServer(t)
+	ctx := context.Background()
+	_, err := store.CreateConversation(ctx, coreagent.CreateConversationInput{
+		ID:         "conv_1",
+		ProviderID: "openai",
+		ModelID:    "gpt-5.4",
+	})
+	if err != nil {
+		t.Fatalf("CreateConversation() error = %v", err)
+	}
+
+	wantContext := &coreagent.MemoryContextSnapshot{
+		ShortTermTokens:       13,
+		SummaryTokens:         5,
+		RenderedSummaryTokens: 8,
+		TotalTokens:           21,
+		ShortTermLimit:        70,
+		SummaryLimit:          30,
+		MaxContextTokens:      100,
+		HasSummary:            true,
+	}
+	wantCompression := &coreagent.MemoryCompressionSnapshot{
+		TokensBefore:                33,
+		TokensAfter:                 12,
+		ShortTermTokensBefore:       33,
+		ShortTermTokensAfter:        4,
+		SummaryTokensBefore:         0,
+		SummaryTokensAfter:          5,
+		RenderedSummaryTokensBefore: 0,
+		RenderedSummaryTokensAfter:  8,
+		TotalTokensBefore:           33,
+		TotalTokensAfter:            12,
+	}
+	if err := store.SetMemorySnapshots(ctx, "conv_1", wantContext, wantCompression); err != nil {
+		t.Fatalf("SetMemorySnapshots() error = %v", err)
+	}
+
+	resp, err := http.Get(server.URL + "/api/v1/conversations/conv_1")
+	if err != nil {
+		t.Fatalf("http.Get(detail) error = %v", err)
+	}
+	defer resp.Body.Close()
+
+	got := decodeConversationResponse(t, resp.Body)
+	if !reflect.DeepEqual(got.MemoryContext, wantContext) {
+		t.Fatalf("conversation.MemoryContext = %#v, want %#v", got.MemoryContext, wantContext)
+	}
+	if !reflect.DeepEqual(got.MemoryCompression, wantCompression) {
+		t.Fatalf("conversation.MemoryCompression = %#v, want %#v", got.MemoryCompression, wantCompression)
+	}
+
+	listResp, err := http.Get(server.URL + "/api/v1/conversations")
+	if err != nil {
+		t.Fatalf("http.Get(list) error = %v", err)
+	}
+	defer listResp.Body.Close()
+
+	listed := decodeConversationListResponse(t, listResp.Body)
+	if len(listed) != 1 {
+		t.Fatalf("len(conversations) = %d, want 1", len(listed))
+	}
+	if !reflect.DeepEqual(listed[0].MemoryContext, wantContext) {
+		t.Fatalf("list[0].MemoryContext = %#v, want %#v", listed[0].MemoryContext, wantContext)
+	}
+	if !reflect.DeepEqual(listed[0].MemoryCompression, wantCompression) {
+		t.Fatalf("list[0].MemoryCompression = %#v, want %#v", listed[0].MemoryCompression, wantCompression)
 	}
 }
 

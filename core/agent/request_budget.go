@@ -43,18 +43,27 @@ func (r *Runner) buildBudgetedRequest(ctx context.Context, extraBody []model.Mes
 			decision.FinalPath = "compressed"
 		}
 		if trace.Succeeded {
-			r.emitMemoryCompressed(ctx, 0, 0)
+			r.emitMemoryCompressed(ctx, trace)
 		}
+		r.emitMemoryContextStateFromManager(ctx)
 		return buildResult, requestMessages, decision, nil
 	}
 	if !errors.Is(err, ErrContextBudgetExceeded) {
 		return buildResult, requestMessages, decision, err
+	}
+	if trace.Succeeded {
+		r.emitMemoryCompressed(ctx, trace)
+		r.emitMemoryContextStateFromManager(ctx)
 	}
 
 	reserve := requestMessageOverhead(r.requestTokenCounter(), state, requestMessages)
 	state, trace, err = r.options.Memory.RuntimeContextWithReserve(ctx, reserve)
 	if err != nil {
 		return runtimeprompt.BuildResult{}, nil, requestBudgetDecision{}, err
+	}
+	if trace.Succeeded {
+		r.emitMemoryCompressed(ctx, trace)
+		r.emitMemoryContextStateFromManager(ctx)
 	}
 	state.Tail = append(state.Tail, cloneMessages(extraBody)...)
 	buildResult, requestMessages, decision, err = r.buildBudgetedRequestFromContext(ctx, state, afterToolTurn)
@@ -63,8 +72,8 @@ func (r *Runner) buildBudgetedRequest(ctx context.Context, extraBody []model.Mes
 	if err == nil && trace.Succeeded && decision.FinalPath == "direct" {
 		decision.FinalPath = "compressed"
 	}
-	if trace.Succeeded && err == nil {
-		r.emitMemoryCompressed(ctx, 0, 0)
+	if err == nil && !trace.Succeeded {
+		r.emitMemoryContextStateFromManager(ctx)
 	}
 	return buildResult, requestMessages, decision, err
 }

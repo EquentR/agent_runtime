@@ -99,6 +99,8 @@ export interface Conversation {
   auditRunId?: string
   run_id?: string
   runId?: string
+  memory_context?: MemoryContextState
+  memory_compression?: MemoryCompression
 }
 
 export interface AuditRun {
@@ -202,6 +204,12 @@ export interface ModelCatalogEntry {
   id: string
   name: string
   type: string
+  context_window?: {
+    max?: number
+    input?: number
+    output?: number
+    short_term_limit?: number
+  }
 }
 
 export type TaskStatus =
@@ -251,6 +259,8 @@ export interface RunTaskResult {
   final_message: ConversationMessage
   usage?: TranscriptTokenUsage
   messages_appended: number
+  memory_context?: MemoryContextState
+  memory_compression?: MemoryCompression
 }
 
 export interface TaskStreamEvent {
@@ -317,6 +327,30 @@ export interface ToolApprovalDecisionInput {
   reason: string
 }
 
+export interface MemoryContextState {
+  short_term_tokens: number
+  summary_tokens: number
+  rendered_summary_tokens: number
+  total_tokens: number
+  short_term_limit: number
+  summary_limit: number
+  max_context_tokens: number
+  has_summary: boolean
+}
+
+export interface MemoryCompression {
+  tokens_before: number
+  tokens_after: number
+  short_term_tokens_before: number
+  short_term_tokens_after: number
+  summary_tokens_before: number
+  summary_tokens_after: number
+  rendered_summary_tokens_before: number
+  rendered_summary_tokens_after: number
+  total_tokens_before: number
+  total_tokens_after: number
+}
+
 export interface TranscriptEntry {
   id: string
   kind: 'user' | 'reasoning' | 'tool' | 'reply' | 'error' | 'approval' | 'question' | 'memory'
@@ -330,6 +364,8 @@ export interface TranscriptEntry {
   token_usage?: TranscriptTokenUsage
   approval?: ToolApproval
   question_interaction?: InteractionRecord
+  memory_context_state?: MemoryContextState
+  memory_compression?: MemoryCompression
 }
 
 export interface TranscriptTokenUsage {

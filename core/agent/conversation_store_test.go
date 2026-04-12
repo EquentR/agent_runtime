@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
@@ -399,5 +400,92 @@ func TestConversationStoreGetAndSetMemorySummary(t *testing.T) {
 	}
 	if got != wantSummary {
 		t.Fatalf("GetMemorySummary() = %q, want %q", got, wantSummary)
+	}
+
+	if err := store.SetMemorySummary(context.Background(), "conv_1", ""); err != nil {
+		t.Fatalf("SetMemorySummary(clear) error = %v", err)
+	}
+	got, err = store.GetMemorySummary(context.Background(), "conv_1")
+	if err != nil {
+		t.Fatalf("GetMemorySummary() after clear error = %v", err)
+	}
+	if got != "" {
+		t.Fatalf("GetMemorySummary() after clear = %q, want empty string", got)
+	}
+}
+
+func TestConversationStorePersistsMemorySnapshotFields(t *testing.T) {
+	store := newConversationStoreForTest(t)
+	_, err := store.CreateConversation(context.Background(), CreateConversationInput{
+		ID:         "conv_1",
+		ProviderID: "openai",
+		ModelID:    "gpt-5.4",
+	})
+	if err != nil {
+		t.Fatalf("CreateConversation() error = %v", err)
+	}
+
+	wantContext := &MemoryContextSnapshot{
+		ShortTermTokens:       18,
+		SummaryTokens:         7,
+		RenderedSummaryTokens: 11,
+		TotalTokens:           29,
+		ShortTermLimit:        70,
+		SummaryLimit:          30,
+		MaxContextTokens:      100,
+		HasSummary:            true,
+	}
+	wantCompression := &MemoryCompressionSnapshot{
+		TokensBefore:                44,
+		TokensAfter:                 19,
+		ShortTermTokensBefore:       44,
+		ShortTermTokensAfter:        8,
+		SummaryTokensBefore:         0,
+		SummaryTokensAfter:          7,
+		RenderedSummaryTokensBefore: 0,
+		RenderedSummaryTokensAfter:  11,
+		TotalTokensBefore:           44,
+		TotalTokensAfter:            19,
+	}
+	if err := store.SetMemorySnapshots(context.Background(), "conv_1", wantContext, wantCompression); err != nil {
+		t.Fatalf("SetMemorySnapshots() error = %v", err)
+	}
+
+	wantSummary := "task goal: summarize repo; progress: done"
+	if err := store.SetMemorySummary(context.Background(), "conv_1", wantSummary); err != nil {
+		t.Fatalf("SetMemorySummary() error = %v", err)
+	}
+
+	conversation, err := store.GetConversation(context.Background(), "conv_1")
+	if err != nil {
+		t.Fatalf("GetConversation() error = %v", err)
+	}
+	if !reflect.DeepEqual(conversation.MemoryContext, wantContext) {
+		t.Fatalf("conversation.MemoryContext = %#v, want %#v", conversation.MemoryContext, wantContext)
+	}
+	if !reflect.DeepEqual(conversation.MemoryCompression, wantCompression) {
+		t.Fatalf("conversation.MemoryCompression = %#v, want %#v", conversation.MemoryCompression, wantCompression)
+	}
+
+	gotSummary, err := store.GetMemorySummary(context.Background(), "conv_1")
+	if err != nil {
+		t.Fatalf("GetMemorySummary() error = %v", err)
+	}
+	if gotSummary != wantSummary {
+		t.Fatalf("GetMemorySummary() = %q, want %q", gotSummary, wantSummary)
+	}
+
+	conversations, err := store.ListConversations(context.Background())
+	if err != nil {
+		t.Fatalf("ListConversations() error = %v", err)
+	}
+	if len(conversations) != 1 {
+		t.Fatalf("len(conversations) = %d, want 1", len(conversations))
+	}
+	if !reflect.DeepEqual(conversations[0].MemoryContext, wantContext) {
+		t.Fatalf("conversations[0].MemoryContext = %#v, want %#v", conversations[0].MemoryContext, wantContext)
+	}
+	if !reflect.DeepEqual(conversations[0].MemoryCompression, wantCompression) {
+		t.Fatalf("conversations[0].MemoryCompression = %#v, want %#v", conversations[0].MemoryCompression, wantCompression)
 	}
 }

@@ -105,9 +105,9 @@ func TestSwaggerUIRoutesExposeAuditStatusEnumInGeneratedDocs(t *testing.T) {
 	if !ok {
 		t.Fatalf("definitions = %#v, want object", document["definitions"])
 	}
-	auditRun, ok := definitions["app_handlers.AuditRunSwaggerDoc"].(map[string]any)
+	auditRun, ok := definitions["handlers.AuditRunSwaggerDoc"].(map[string]any)
 	if !ok {
-		t.Fatalf("app_handlers.AuditRunSwaggerDoc = %#v, want object", definitions["app_handlers.AuditRunSwaggerDoc"])
+		t.Fatalf("handlers.AuditRunSwaggerDoc = %#v, want object", definitions["handlers.AuditRunSwaggerDoc"])
 	}
 	properties, ok := auditRun["properties"].(map[string]any)
 	if !ok {
@@ -154,8 +154,8 @@ func TestSwaggerJSONIncludesWaitingTaskStatus(t *testing.T) {
 		t.Fatalf("definitions = %#v, want object", document["definitions"])
 	}
 
-	assertSwaggerStatusEnumContainsWaiting(t, definitions, "app_handlers.AuditRunSwaggerDoc")
-	assertSwaggerStatusEnumContainsWaiting(t, definitions, "app_handlers.TaskSwaggerDoc")
+	assertSwaggerStatusEnumContainsWaiting(t, definitions, "handlers.AuditRunSwaggerDoc")
+	assertSwaggerStatusEnumContainsWaiting(t, definitions, "handlers.TaskSwaggerDoc")
 }
 
 func TestSwaggerJSONIncludesApprovalPathsAndDefinitions(t *testing.T) {
@@ -187,7 +187,7 @@ func TestSwaggerJSONIncludesApprovalPathsAndDefinitions(t *testing.T) {
 	if !ok {
 		t.Fatalf("definitions = %#v, want object", document["definitions"])
 	}
-	for _, definition := range []string{"app_handlers.ApprovalSwaggerDoc", "app_handlers.ApprovalDecisionSwaggerRequest", "app_handlers.ApprovalListSwaggerResponse", "app_handlers.ApprovalSwaggerResponse"} {
+	for _, definition := range []string{"handlers.ApprovalSwaggerDoc", "handlers.ApprovalDecisionSwaggerRequest", "handlers.ApprovalListSwaggerResponse", "handlers.ApprovalSwaggerResponse"} {
 		if _, ok := definitions[definition]; !ok {
 			t.Fatalf("swagger definitions missing %q", definition)
 		}
@@ -216,6 +216,42 @@ func TestSwaggerJSONIncludesApprovalFailureCodes(t *testing.T) {
 	}
 	assertSwaggerPathHasResponses(t, paths, "/tasks/{id}/approvals", "get", "200", "401", "404")
 	assertSwaggerPathHasResponses(t, paths, "/tasks/{id}/approvals/{approvalID}/decision", "post", "200", "400", "401", "404")
+}
+
+func TestSwaggerJSONIncludesAuditConversationListDefinitions(t *testing.T) {
+	engine := rest.Init()
+	NewSwaggerHandler().Register(engine.Group("/api/v1"))
+	server := httptest.NewServer(engine)
+	t.Cleanup(server.Close)
+
+	response, err := http.Get(server.URL + "/api/v1/swagger/swagger.json")
+	if err != nil {
+		t.Fatalf("GET /swagger/swagger.json error = %v", err)
+	}
+	defer response.Body.Close()
+
+	var document map[string]any
+	if err := json.NewDecoder(response.Body).Decode(&document); err != nil {
+		t.Fatalf("Decode(swagger.json) error = %v", err)
+	}
+	definitions, ok := document["definitions"].(map[string]any)
+	if !ok {
+		t.Fatalf("definitions = %#v, want object", document["definitions"])
+	}
+	for _, definition := range []string{"handlers.AuditRunListSwaggerResponse", "handlers.AuditEventListSwaggerResponse"} {
+		if _, ok := definitions[definition]; !ok {
+			t.Fatalf("swagger definitions missing %q", definition)
+		}
+	}
+	paths, ok := document["paths"].(map[string]any)
+	if !ok {
+		t.Fatalf("paths = %#v, want object", document["paths"])
+	}
+	for _, path := range []string{"/audit/conversations/{conversation_id}/runs", "/audit/conversations/{conversation_id}/events"} {
+		if _, ok := paths[path]; !ok {
+			t.Fatalf("swagger paths missing %q", path)
+		}
+	}
 }
 
 func assertSwaggerStatusEnumContainsWaiting(t *testing.T, definitions map[string]any, name string) {

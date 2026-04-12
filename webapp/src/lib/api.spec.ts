@@ -1007,6 +1007,115 @@ describe('normalizeRunTaskResult', () => {
       },
     })
   })
+
+  it('preserves authoritative memory snapshots on task results', () => {
+    expect(
+      normalizeRunTaskResult({
+        conversation_id: 'conv_1',
+        provider_id: 'openai',
+        model_id: 'gpt-5.4',
+        messages_appended: 2,
+        final_message: {
+          Role: 'assistant',
+          Content: 'done',
+        },
+        memory_context: {
+          short_term_tokens: 320,
+          summary_tokens: 90,
+          rendered_summary_tokens: 120,
+          total_tokens: 440,
+          short_term_limit: 8000,
+          summary_limit: 2000,
+          max_context_tokens: 128000,
+          has_summary: true,
+        },
+        memory_compression: {
+          tokens_before: 1200,
+          tokens_after: 900,
+          short_term_tokens_before: 1000,
+          short_term_tokens_after: 400,
+          summary_tokens_before: 120,
+          summary_tokens_after: 160,
+          rendered_summary_tokens_before: 150,
+          rendered_summary_tokens_after: 220,
+          total_tokens_before: 1150,
+          total_tokens_after: 620,
+        },
+      } as any),
+    ).toMatchObject({
+      memory_context: {
+        rendered_summary_tokens: 120,
+        total_tokens: 440,
+        max_context_tokens: 128000,
+      },
+      memory_compression: {
+        rendered_summary_tokens_after: 220,
+        total_tokens_after: 620,
+      },
+    })
+  })
+
+  it('normalizes authoritative memory snapshots from backend payloads', async () => {
+    const api = (await import('./api')) as Record<string, unknown>
+
+    expect(typeof api.normalizeMemoryContextSnapshot).toBe('function')
+    expect(typeof api.normalizeMemoryCompressionSnapshot).toBe('function')
+
+    if (
+      typeof api.normalizeMemoryContextSnapshot !== 'function' ||
+      typeof api.normalizeMemoryCompressionSnapshot !== 'function'
+    ) {
+      return
+    }
+
+    expect(
+      api.normalizeMemoryContextSnapshot({
+        short_term_tokens: 320,
+        summary_tokens: 90,
+        rendered_summary_tokens: 120,
+        total_tokens: 440,
+        short_term_limit: 8000,
+        summary_limit: 2000,
+        max_context_tokens: 128000,
+        has_summary: true,
+      }),
+    ).toEqual({
+      short_term_tokens: 320,
+      summary_tokens: 90,
+      rendered_summary_tokens: 120,
+      total_tokens: 440,
+      short_term_limit: 8000,
+      summary_limit: 2000,
+      max_context_tokens: 128000,
+      has_summary: true,
+    })
+
+    expect(
+      api.normalizeMemoryCompressionSnapshot({
+        tokens_before: 1200,
+        tokens_after: 900,
+        short_term_tokens_before: 1000,
+        short_term_tokens_after: 400,
+        summary_tokens_before: 120,
+        summary_tokens_after: 160,
+        rendered_summary_tokens_before: 150,
+        rendered_summary_tokens_after: 220,
+        total_tokens_before: 1150,
+        total_tokens_after: 620,
+      }),
+    ).toEqual({
+      tokens_before: 1200,
+      tokens_after: 900,
+      short_term_tokens_before: 1000,
+      short_term_tokens_after: 400,
+      summary_tokens_before: 120,
+      summary_tokens_after: 160,
+      rendered_summary_tokens_before: 150,
+      rendered_summary_tokens_after: 220,
+      total_tokens_before: 1150,
+      total_tokens_after: 620,
+    })
+  })
 })
 
 describe('extractStreamText', () => {
@@ -1121,6 +1230,69 @@ describe('streamRunTask', () => {
     await expect(promise).resolves.toMatchObject({ conversation_id: 'conv_new' })
   })
 
+  it('normalizes authoritative memory snapshots on fetched conversations', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        code: 200,
+        message: 'OK',
+        data: {
+          id: 'conv_1',
+          title: 'Memory chat',
+          last_message: 'done',
+          message_count: 3,
+          provider_id: 'openai',
+          model_id: 'gpt-5.4',
+          created_by: 'alice',
+          created_at: '2026-04-12T10:00:00Z',
+          updated_at: '2026-04-12T10:01:00Z',
+          memory_context: {
+            short_term_tokens: 320,
+            summary_tokens: 90,
+            rendered_summary_tokens: 120,
+            total_tokens: 440,
+            short_term_limit: 8000,
+            summary_limit: 2000,
+            max_context_tokens: 128000,
+            has_summary: true,
+          },
+          memory_compression: {
+            tokens_before: 1200,
+            tokens_after: 900,
+            short_term_tokens_before: 1000,
+            short_term_tokens_after: 400,
+            summary_tokens_before: 120,
+            summary_tokens_after: 160,
+            rendered_summary_tokens_before: 150,
+            rendered_summary_tokens_after: 220,
+            total_tokens_before: 1150,
+            total_tokens_after: 620,
+          },
+        },
+      }),
+    } as Response))
+
+    const api = (await import('./api')) as Record<string, unknown>
+    expect(typeof api.fetchConversation).toBe('function')
+
+    if (typeof api.fetchConversation !== 'function') {
+      return
+    }
+
+    const conversation = await api.fetchConversation('conv_1')
+    expect(conversation).toMatchObject({
+      memory_context: {
+        rendered_summary_tokens: 120,
+        total_tokens: 440,
+      },
+      memory_compression: {
+        rendered_summary_tokens_after: 220,
+        total_tokens_after: 620,
+      },
+    })
+  })
+
   it('forwards approval stream events to the shared event handler', async () => {
     class MockEventSource {
       static instances: MockEventSource[] = []
@@ -1200,5 +1372,91 @@ describe('streamRunTask', () => {
     await expect(promise).resolves.toMatchObject({ conversation_id: 'conv_new' })
     expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({ type: 'approval.requested' }))
     expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({ type: 'approval.resolved' }))
+  })
+
+  it('subscribes to memory.context_state stream events', async () => {
+    class MockEventSource {
+      static instances: MockEventSource[] = []
+
+      url: string
+      withCredentials: boolean
+      onerror: (() => void) | null = null
+      private readonly listeners = new Map<string, Array<(event: MessageEvent<string>) => void>>()
+
+      constructor(url: string, options?: { withCredentials?: boolean }) {
+        this.url = url
+        this.withCredentials = options?.withCredentials ?? false
+        MockEventSource.instances.push(this)
+      }
+
+      addEventListener(type: string, handler: (event: MessageEvent<string>) => void) {
+        this.listeners.set(type, [...(this.listeners.get(type) ?? []), handler])
+      }
+
+      close() {
+        void 0
+      }
+
+      emit(type: string, data: unknown) {
+        for (const handler of this.listeners.get(type) ?? []) {
+          handler({ data: JSON.stringify(data) } as MessageEvent<string>)
+        }
+      }
+    }
+
+    const onEvent = vi.fn()
+
+    vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource)
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        code: 200,
+        message: 'OK',
+        data: {
+          id: 'task_1',
+          task_type: 'agent.run',
+          status: 'succeeded',
+          input: { conversation_id: 'conv_new' },
+          result: {
+            conversation_id: 'conv_new',
+            provider_id: 'openai',
+            model_id: 'gpt-5.4',
+            messages_appended: 1,
+            final_message: { Role: 'assistant', Content: 'done' },
+          },
+        },
+      }),
+    } as Response))
+
+    const promise = streamRunTask('task_1', () => void 0, onEvent)
+
+    MockEventSource.instances[0]?.emit('memory.context_state', {
+      task_id: 'task_1',
+      seq: 1,
+      type: 'memory.context_state',
+      payload: {
+        short_term_tokens: 320,
+        summary_tokens: 90,
+        rendered_summary_tokens: 120,
+        total_tokens: 440,
+        short_term_limit: 8000,
+        summary_limit: 2000,
+        max_context_tokens: 128000,
+        has_summary: true,
+      },
+    })
+    MockEventSource.instances[0]?.emit('task.finished', {
+      task_id: 'task_1',
+      seq: 2,
+      type: 'task.finished',
+      payload: { status: 'succeeded' },
+    })
+
+    await expect(promise).resolves.toMatchObject({ conversation_id: 'conv_new' })
+    expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'memory.context_state',
+      payload: expect.objectContaining({ total_tokens: 440 }),
+    }))
   })
 })

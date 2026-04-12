@@ -24,19 +24,21 @@ const (
 )
 
 type Conversation struct {
-	ID            string     `json:"id" gorm:"type:varchar(64);primaryKey"`
-	ProviderID    string     `json:"provider_id" gorm:"type:varchar(128);not null;index"`
-	ModelID       string     `json:"model_id" gorm:"type:varchar(128);not null"`
-	Title         string     `json:"title" gorm:"type:varchar(255)"`
-	LastMessage   string     `json:"last_message" gorm:"type:text"`
-	MessageCount  int        `json:"message_count" gorm:"not null;default:0"`
-	LastMessageAt *time.Time `json:"last_message_at,omitempty" gorm:"index"`
-	CreatedBy     string     `json:"created_by" gorm:"type:varchar(128)"`
-	MemorySummary string     `json:"memory_summary,omitempty" gorm:"type:text"`
-	AuditRunID    string     `json:"audit_run_id,omitempty" gorm:"-"`
-	AuditRunIDs   []string   `json:"audit_run_ids,omitempty" gorm:"-"`
-	CreatedAt     time.Time  `json:"created_at"`
-	UpdatedAt     time.Time  `json:"updated_at"`
+	ID                string                     `json:"id" gorm:"type:varchar(64);primaryKey"`
+	ProviderID        string                     `json:"provider_id" gorm:"type:varchar(128);not null;index"`
+	ModelID           string                     `json:"model_id" gorm:"type:varchar(128);not null"`
+	Title             string                     `json:"title" gorm:"type:varchar(255)"`
+	LastMessage       string                     `json:"last_message" gorm:"type:text"`
+	MessageCount      int                        `json:"message_count" gorm:"not null;default:0"`
+	LastMessageAt     *time.Time                 `json:"last_message_at,omitempty" gorm:"index"`
+	CreatedBy         string                     `json:"created_by" gorm:"type:varchar(128)"`
+	MemorySummary     string                     `json:"memory_summary,omitempty" gorm:"type:text"`
+	MemoryContext     *MemoryContextSnapshot     `json:"memory_context,omitempty" gorm:"type:blob;serializer:json"`
+	MemoryCompression *MemoryCompressionSnapshot `json:"memory_compression,omitempty" gorm:"type:blob;serializer:json"`
+	AuditRunID        string                     `json:"audit_run_id,omitempty" gorm:"-"`
+	AuditRunIDs       []string                   `json:"audit_run_ids,omitempty" gorm:"-"`
+	CreatedAt         time.Time                  `json:"created_at"`
+	UpdatedAt         time.Time                  `json:"updated_at"`
 }
 
 func (Conversation) TableName() string {
@@ -500,4 +502,28 @@ func (s *ConversationStore) SetMemorySummary(ctx context.Context, conversationID
 		Model(&Conversation{}).
 		Where("id = ?", strings.TrimSpace(conversationID)).
 		Update("memory_summary", strings.TrimSpace(summary)).Error
+}
+
+// SetMemorySnapshots persists the latest typed memory context/compression snapshots for a conversation.
+func (s *ConversationStore) SetMemorySnapshots(ctx context.Context, conversationID string, memoryContext *MemoryContextSnapshot, memoryCompression *MemoryCompressionSnapshot) error {
+	conversationID = strings.TrimSpace(conversationID)
+	if conversationID == "" {
+		return ErrConversationNotFound
+	}
+	updates := &Conversation{
+		MemoryContext:     cloneMemoryContextSnapshot(memoryContext),
+		MemoryCompression: cloneMemoryCompressionSnapshot(memoryCompression),
+	}
+	result := s.db.WithContext(ctx).
+		Model(&Conversation{}).
+		Where("id = ?", conversationID).
+		Select("MemoryContext", "MemoryCompression").
+		Updates(updates)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return ErrConversationNotFound
+	}
+	return nil
 }

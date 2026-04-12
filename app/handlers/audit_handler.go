@@ -125,7 +125,7 @@ func (h *AuditHandler) handleGetRunReplay() (method, relativePath string, wrappe
 // @Tags audit
 // @Produce json
 // @Param conversation_id path string true "会话 ID"
-// @Success 200 {array} coreaudit.Run
+// @Success 200 {object} AuditRunListSwaggerResponse
 // @Failure 401 {object} ErrorSwaggerResponse
 // @Router /audit/conversations/{conversation_id}/runs [get]
 func (h *AuditHandler) handleListConversationRuns() (method, relativePath string, wrapper resp.JsonOptionsResultWrapper, opts []resp.WrapperOption) {
@@ -154,7 +154,7 @@ func (h *AuditHandler) handleListConversationRuns() (method, relativePath string
 // @Tags audit
 // @Produce json
 // @Param conversation_id path string true "会话 ID"
-// @Success 200 {array} coreaudit.Event
+// @Success 200 {object} AuditEventListSwaggerResponse
 // @Failure 401 {object} ErrorSwaggerResponse
 // @Router /audit/conversations/{conversation_id}/events [get]
 func (h *AuditHandler) handleListConversationEvents() (method, relativePath string, wrapper resp.JsonOptionsResultWrapper, opts []resp.WrapperOption) {

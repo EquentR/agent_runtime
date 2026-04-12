@@ -1755,6 +1755,270 @@ func TestAgentExecutorPersistsFinalAssistantUsageInConversationHistory(t *testin
 	}
 }
 
+func TestAgentExecutorPersistsLatestMemoryContextAndCompressionIntoConversationAndResult(t *testing.T) {
+	ctx := context.Background()
+	store := newConversationStoreForTest(t)
+	_, err := store.CreateConversation(ctx, CreateConversationInput{ID: "conv_1", ProviderID: "openai", ModelID: "gpt-5.4"})
+	if err != nil {
+		t.Fatalf("CreateConversation() error = %v", err)
+	}
+	if err := store.AppendMessages(ctx, "conv_1", "task_0", []model.Message{
+		{Role: model.RoleUser, Content: strings.Repeat("a", 40)},
+		{Role: model.RoleAssistant, Content: strings.Repeat("b", 40)},
+	}); err != nil {
+		t.Fatalf("AppendMessages() error = %v", err)
+	}
+	if err := store.SetMemorySummary(ctx, "conv_1", "prior summary"); err != nil {
+		t.Fatalf("SetMemorySummary() error = %v", err)
+	}
+
+	client := &stubClient{streams: []model.Stream{newStubStream(
+		[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: strings.Repeat("d", 10)}}},
+		model.Message{Role: model.RoleAssistant, Content: strings.Repeat("d", 10)},
+		nil,
+	)}}
+	executor := newTaskExecutorForTest(t, ExecutorDependencies{
+		Resolver:          newExecutorResolverForTest(),
+		ConversationStore: store,
+		ClientFactory:     func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return client, nil },
+		MemoryFactory: func(*coretypes.LLMModel) (*memory.Manager, error) {
+			return memory.NewManager(memory.Options{
+				MaxContextTokens: 100,
+				Counter:          fakeTokenCounter{},
+				SummaryTemplate:  "%s",
+				Compressor: func(context.Context, memory.CompressionRequest) (string, error) {
+					return "compressed carryover", nil
+				},
+			})
+		},
+	})
+
+	payload := marshalExecutorTaskInput(t, map[string]any{
+		"conversation_id": "conv_1",
+		"provider_id":     "openai",
+		"model_id":        "gpt-5.4",
+		"message":         strings.Repeat("c", 40),
+	})
+	task := &coretasks.Task{ID: "task_memory_snapshots", TaskType: "agent.run", InputJSON: payload}
+
+	output, err := executor(ctx, task, nil)
+	if err != nil {
+		t.Fatalf("executor() error = %v", err)
+	}
+	runResult := output.(RunTaskResult)
+	if runResult.MemoryContext == nil {
+		t.Fatal("RunTaskResult.MemoryContext = nil, want latest authoritative memory snapshot")
+	}
+	if runResult.MemoryCompression == nil {
+		t.Fatal("RunTaskResult.MemoryCompression = nil, want latest compression snapshot")
+	}
+	if !runResult.MemoryContext.HasSummary {
+		t.Fatalf("RunTaskResult.MemoryContext = %#v, want has_summary=true", runResult.MemoryContext)
+	}
+	if runResult.MemoryCompression.SummaryTokensBefore <= 0 {
+		t.Fatalf("RunTaskResult.MemoryCompression = %#v, want restored summary reflected before compression", runResult.MemoryCompression)
+	}
+
+	persisted, err := store.GetConversation(ctx, "conv_1")
+	if err != nil {
+		t.Fatalf("GetConversation() error = %v", err)
+	}
+	if !reflect.DeepEqual(persisted.MemoryContext, runResult.MemoryContext) {
+		t.Fatalf("persisted MemoryContext = %#v, want %#v", persisted.MemoryContext, runResult.MemoryContext)
+	}
+	if !reflect.DeepEqual(persisted.MemoryCompression, runResult.MemoryCompression) {
+		t.Fatalf("persisted MemoryCompression = %#v, want %#v", persisted.MemoryCompression, runResult.MemoryCompression)
+	}
+
+	savedSummary, err := store.GetMemorySummary(ctx, "conv_1")
+	if err != nil {
+		t.Fatalf("GetMemorySummary() error = %v", err)
+	}
+	if savedSummary != "compressed carryover" {
+		t.Fatalf("GetMemorySummary() = %q, want compressed carryover", savedSummary)
+	}
+}
+
+func TestAgentExecutorClearsPersistedMemorySummaryWhenLatestManagerSummaryIsEmpty(t *testing.T) {
+	ctx := context.Background()
+	store := newConversationStoreForTest(t)
+	_, err := store.CreateConversation(ctx, CreateConversationInput{ID: "conv_clear_summary", ProviderID: "openai", ModelID: "gpt-5.4"})
+	if err != nil {
+		t.Fatalf("CreateConversation() error = %v", err)
+	}
+	if err := store.AppendMessages(ctx, "conv_clear_summary", "task_0", []model.Message{
+		{Role: model.RoleUser, Content: strings.Repeat("a", 40)},
+		{Role: model.RoleAssistant, Content: strings.Repeat("b", 40)},
+	}); err != nil {
+		t.Fatalf("AppendMessages() error = %v", err)
+	}
+	if err := store.SetMemorySummary(ctx, "conv_clear_summary", "stale summary"); err != nil {
+		t.Fatalf("SetMemorySummary() error = %v", err)
+	}
+
+	executor := newTaskExecutorForTest(t, ExecutorDependencies{
+		Resolver:          newExecutorResolverForTest(),
+		ConversationStore: store,
+		ClientFactory: func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) {
+			return &stubClient{streams: []model.Stream{newStubStream(
+				[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "hello"}}},
+				model.Message{Role: model.RoleAssistant, Content: "hello"},
+				nil,
+			)}}, nil
+		},
+		MemoryFactory: func(*coretypes.LLMModel) (*memory.Manager, error) {
+			return memory.NewManager(memory.Options{
+				MaxContextTokens: 100,
+				Counter:          fakeTokenCounter{},
+				SummaryTemplate:  "%s",
+				Compressor: func(context.Context, memory.CompressionRequest) (string, error) {
+					return "", nil
+				},
+			})
+		},
+	})
+	payload := marshalExecutorTaskInput(t, map[string]any{
+		"conversation_id": "conv_clear_summary",
+		"provider_id":     "openai",
+		"model_id":        "gpt-5.4",
+		"message":         strings.Repeat("c", 40),
+	})
+
+	_, err = executor(ctx, &coretasks.Task{ID: "task_clear_summary", TaskType: "agent.run", InputJSON: payload}, nil)
+	if err != nil {
+		t.Fatalf("executor() error = %v", err)
+	}
+
+	gotSummary, err := store.GetMemorySummary(ctx, "conv_clear_summary")
+	if err != nil {
+		t.Fatalf("GetMemorySummary() error = %v", err)
+	}
+	if gotSummary != "" {
+		t.Fatalf("GetMemorySummary() = %q, want cleared empty summary", gotSummary)
+	}
+}
+
+func TestAgentExecutorContinuesWhenRestoringSummaryFails(t *testing.T) {
+	store := newConversationStoreForTest(t)
+	loadErr := errors.New("load memory summary failed")
+	callbackName := "test:executor:memory_summary_select_failure"
+	if err := store.db.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement == nil || tx.Statement.Table != "conversations" {
+			return
+		}
+		if len(tx.Statement.Selects) != 1 || tx.Statement.Selects[0] != "memory_summary" {
+			return
+		}
+		tx.AddError(loadErr)
+	}); err != nil {
+		t.Fatalf("register callback error = %v", err)
+	}
+	defer func() {
+		if err := store.db.Callback().Query().Remove(callbackName); err != nil {
+			t.Fatalf("remove callback error = %v", err)
+		}
+	}()
+
+	executor := newTaskExecutorForTest(t, ExecutorDependencies{
+		Resolver:          newExecutorResolverForTest(),
+		ConversationStore: store,
+		ClientFactory: func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) {
+			return &stubClient{streams: []model.Stream{newStubStream(
+				[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "hello"}}},
+				model.Message{Role: model.RoleAssistant, Content: "hello"},
+				nil,
+			)}}, nil
+		},
+		MemoryFactory: func(*coretypes.LLMModel) (*memory.Manager, error) {
+			return memory.NewManager(memory.Options{Counter: fakeTokenCounter{}, SummaryTemplate: "%s"})
+		},
+	})
+	payload := marshalExecutorTaskInput(t, map[string]any{
+		"conversation_id": "conv_restore_failure",
+		"provider_id":     "openai",
+		"model_id":        "gpt-5.4",
+		"message":         "hi",
+	})
+
+	output, err := executor(context.Background(), &coretasks.Task{ID: "task_restore_failure", TaskType: "agent.run", InputJSON: payload}, nil)
+	if err != nil {
+		t.Fatalf("executor() error = %v, want restore failure treated as best-effort", err)
+	}
+	runResult, ok := output.(RunTaskResult)
+	if !ok {
+		t.Fatalf("output type = %T, want RunTaskResult", output)
+	}
+	if runResult.FinalMessage.Content != "hello" {
+		t.Fatalf("FinalMessage.Content = %q, want hello", runResult.FinalMessage.Content)
+	}
+}
+
+func TestAgentExecutorReturnsMemoryPersistenceFailureWhenPersistingFinalSnapshots(t *testing.T) {
+	ctx := context.Background()
+	store := newConversationStoreForTest(t)
+	persistErr := errors.New("persist memory snapshots failed")
+	callbackName := "test:executor:memory_snapshot_update_failure"
+	if err := store.db.Callback().Update().Before("gorm:update").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement == nil || tx.Statement.Schema == nil || tx.Statement.Schema.Table != "conversations" {
+			return
+		}
+		if tx.Statement.Selects == nil {
+			return
+		}
+		for _, field := range tx.Statement.Selects {
+			if field == "MemoryContext" || field == "MemoryCompression" {
+				tx.AddError(persistErr)
+				return
+			}
+		}
+	}); err != nil {
+		t.Fatalf("register callback error = %v", err)
+	}
+	defer func() {
+		if err := store.db.Callback().Update().Remove(callbackName); err != nil {
+			t.Fatalf("remove callback error = %v", err)
+		}
+	}()
+
+	_, err := store.CreateConversation(ctx, CreateConversationInput{ID: "conv_persist_failure", ProviderID: "openai", ModelID: "gpt-5.4"})
+	if err != nil {
+		t.Fatalf("CreateConversation() error = %v", err)
+	}
+
+	executor := newTaskExecutorForTest(t, ExecutorDependencies{
+		Resolver:          newExecutorResolverForTest(),
+		ConversationStore: store,
+		ClientFactory: func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) {
+			return &stubClient{streams: []model.Stream{newStubStream(
+				[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "hello"}}},
+				model.Message{Role: model.RoleAssistant, Content: "hello"},
+				nil,
+			)}}, nil
+		},
+		MemoryFactory: func(*coretypes.LLMModel) (*memory.Manager, error) {
+			mgr, err := memory.NewManager(memory.Options{MaxContextTokens: 100, Counter: fakeTokenCounter{}, SummaryTemplate: "%s", Compressor: func(context.Context, memory.CompressionRequest) (string, error) {
+				return "summary", nil
+			}})
+			if err != nil {
+				return nil, err
+			}
+			mgr.LoadSummary("prior")
+			return mgr, nil
+		},
+	})
+	payload := marshalExecutorTaskInput(t, map[string]any{
+		"conversation_id": "conv_persist_failure",
+		"provider_id":     "openai",
+		"model_id":        "gpt-5.4",
+		"message":         strings.Repeat("x", 40),
+	})
+
+	_, err = executor(ctx, &coretasks.Task{ID: "task_persist_failure", TaskType: "agent.run", InputJSON: payload}, nil)
+	if err == nil || !strings.Contains(err.Error(), persistErr.Error()) {
+		t.Fatalf("executor() error = %v, want persist memory snapshot failure", err)
+	}
+}
+
 func TestAgentExecutorAllowsConversationModelSwitchAndUsesSelectedModelMemory(t *testing.T) {
 	store := newConversationStoreForTest(t)
 	_, err := store.CreateConversation(context.Background(), CreateConversationInput{ID: "conv_1", ProviderID: "openai", ModelID: "gpt-5.4"})

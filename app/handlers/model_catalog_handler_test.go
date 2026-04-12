@@ -72,3 +72,84 @@ func TestModelCatalogHandlerReturnsConfiguredProvidersAndDefaultSelection(t *tes
 		t.Fatalf("providers[1] = %#v, want google/gemini-2.5-flash", payload.Providers[1])
 	}
 }
+
+func TestModelCatalogHandlerDoesNotExposeTaskTwoMemoryContextWindowOverreach(t *testing.T) {
+	engine := rest.Init()
+	inputCost := 0.5
+	outputCost := 1.5
+	cachedInputCost := 0.25
+	resolver := &coreagent.ModelResolver{Providers: []coretypes.LLMProvider{{
+		BaseProvider: coretypes.BaseProvider{Name: "openai"},
+		Models: []coretypes.LLMModel{{
+			BaseModel: coretypes.BaseModel{ID: "gpt-5.4", Name: "GPT 5.4"},
+			Type:      coretypes.LLMTypeOpenAIResponses,
+			Context:   coretypes.LLMContextConfig{Max: 128000, Input: 96000, Output: 4000},
+			Cost:      coretypes.LLMCostConfig{Input: &inputCost, Output: &outputCost, CachedInput: &cachedInputCost},
+		}},
+	}}}
+	NewModelCatalogHandler(resolver).Register(engine.Group("/api/v1"))
+	server := httptest.NewServer(engine)
+	defer server.Close()
+
+	resp, err := http.Get(server.URL + "/api/v1/models")
+	if err != nil {
+		t.Fatalf("http.Get() error = %v", err)
+	}
+	defer resp.Body.Close()
+
+	var envelope taskTestResponse
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		t.Fatalf("Decode() envelope error = %v", err)
+	}
+	if !envelope.OK {
+		t.Fatalf("response ok = false, raw data = %s", string(envelope.Data))
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(envelope.Data, &payload); err != nil {
+		t.Fatalf("Unmarshal() payload error = %v", err)
+	}
+	providers, ok := payload["providers"].([]any)
+	if !ok || len(providers) != 1 {
+		t.Fatalf("providers = %#v, want one provider", payload["providers"])
+	}
+	provider, ok := providers[0].(map[string]any)
+	if !ok {
+		t.Fatalf("provider = %#v, want object", providers[0])
+	}
+	models, ok := provider["models"].([]any)
+	if !ok || len(models) != 1 {
+		t.Fatalf("models = %#v, want one model", provider["models"])
+	}
+	modelEntry, ok := models[0].(map[string]any)
+	if !ok {
+		t.Fatalf("model = %#v, want object", models[0])
+	}
+	if _, exists := modelEntry["context_window"]; exists {
+		t.Fatalf("model catalog entry = %#v, want no context_window overreach in Task 2", modelEntry)
+	}
+	context, ok := modelEntry["context"].(map[string]any)
+	if !ok {
+		t.Fatalf("model context = %#v, want object", modelEntry["context"])
+	}
+	if got := int64(context["max"].(float64)); got != 128000 {
+		t.Fatalf("context.max = %d, want 128000", got)
+	}
+	if got := int64(context["input"].(float64)); got != 96000 {
+		t.Fatalf("context.input = %d, want 96000", got)
+	}
+	if got := int64(context["output"].(float64)); got != 4000 {
+		t.Fatalf("context.output = %d, want 4000", got)
+	}
+	cost, ok := modelEntry["cost"].(map[string]any)
+	if !ok {
+		t.Fatalf("model cost = %#v, want object", modelEntry["cost"])
+	}
+	input, ok := cost["input"].(map[string]any)
+	if !ok {
+		t.Fatalf("cost.input = %#v, want object", cost["input"])
+	}
+	if got := input["amount_usd"].(float64); got != inputCost {
+		t.Fatalf("cost.input.amount_usd = %v, want %v", got, inputCost)
+	}
+}

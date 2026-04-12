@@ -12,6 +12,7 @@ import (
 	coreprompt "github.com/EquentR/agent_runtime/core/prompt"
 	model "github.com/EquentR/agent_runtime/core/providers/types"
 	"github.com/EquentR/agent_runtime/core/runtimeprompt"
+	coretasks "github.com/EquentR/agent_runtime/core/tasks"
 	coretypes "github.com/EquentR/agent_runtime/core/types"
 )
 
@@ -355,6 +356,77 @@ func TestPrepareConversationContextAddsUnpersistedTailWhenConversationPartiallyP
 	}
 	if len(mgr.ShortTermMessages()) != len(input) {
 		t.Fatalf("len(ShortTermMessages()) = %d, want %d", len(mgr.ShortTermMessages()), len(input))
+	}
+}
+
+func TestPrepareConversationContextEmitsMemorySnapshotWhenInitialCompressionOccurs(t *testing.T) {
+	original := []model.Message{
+		{Role: model.RoleUser, Content: strings.Repeat("a", 60)},
+		{Role: model.RoleAssistant, Content: strings.Repeat("b", 60)},
+	}
+	mgr, err := memory.NewManager(memory.Options{
+		MaxContextTokens: 100,
+		Counter:          fakeTokenCounter{},
+		Compressor: func(context.Context, memory.CompressionRequest) (string, error) {
+			return "compressed memory", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+
+	runtime := &recordingTaskRuntime{}
+	runner, err := NewRunner(&stubClient{}, nil, Options{
+		Model:     "test-model",
+		Memory:    mgr,
+		EventSink: &taskRuntimeSink{runtime: runtime},
+	})
+	if err != nil {
+		t.Fatalf("NewRunner() error = %v", err)
+	}
+
+	got, err := runner.prepareConversationContextWithPersistedCount(context.Background(), original, 0)
+	if err != nil {
+		t.Fatalf("prepareConversationContextWithPersistedCount() error = %v", err)
+	}
+	if got.Memory.Recap == nil {
+		t.Fatal("Memory.Recap = nil, want compressed recap")
+	}
+
+	runtimeContext, err := mgr.RuntimeContext(context.Background())
+	if err != nil {
+		t.Fatalf("RuntimeContext() error = %v", err)
+	}
+	contextState := mgr.ContextState()
+	wantAfterShort := memory.CountMessageTokens(fakeTokenCounter{}, runtimeContext.Tail)
+	wantAfterRenderedSummary := contextState.RenderedSummaryTokens
+	wantAfterTotal := contextState.TotalTokens
+	wantAfterSummary := int64(fakeTokenCounter{}.Count(mgr.Summary()))
+	wantBeforeShort := memory.CountMessageTokens(fakeTokenCounter{}, original)
+
+	compressedPayload := requireRecordedEmitPayloadMap(t, runtime.emits, coretasks.EventMemoryCompressed)
+	if got := requireRecordedEmitInt64(t, compressedPayload, "total_tokens_before"); got != wantBeforeShort {
+		t.Fatalf("memory.compressed total_tokens_before = %d, want %d", got, wantBeforeShort)
+	}
+	if got := requireRecordedEmitInt64(t, compressedPayload, "total_tokens_after"); got != wantAfterTotal {
+		t.Fatalf("memory.compressed total_tokens_after = %d, want %d", got, wantAfterTotal)
+	}
+	if got := requireRecordedEmitInt64(t, compressedPayload, "rendered_summary_tokens_after"); got != wantAfterRenderedSummary {
+		t.Fatalf("memory.compressed rendered_summary_tokens_after = %d, want %d", got, wantAfterRenderedSummary)
+	}
+
+	statePayload := requireRecordedEmitPayloadMap(t, runtime.emits, coretasks.EventMemoryContextState)
+	if got := requireRecordedEmitInt64(t, statePayload, "summary_tokens"); got != wantAfterSummary {
+		t.Fatalf("memory.context_state summary_tokens = %d, want %d", got, wantAfterSummary)
+	}
+	if got := requireRecordedEmitInt64(t, statePayload, "rendered_summary_tokens"); got != wantAfterRenderedSummary {
+		t.Fatalf("memory.context_state rendered_summary_tokens = %d, want %d", got, wantAfterRenderedSummary)
+	}
+	if got := requireRecordedEmitInt64(t, statePayload, "short_term_tokens"); got != wantAfterShort {
+		t.Fatalf("memory.context_state short_term_tokens = %d, want %d", got, wantAfterShort)
+	}
+	if got := requireRecordedEmitInt64(t, statePayload, "total_tokens"); got != wantAfterTotal {
+		t.Fatalf("memory.context_state total_tokens = %d, want %d", got, wantAfterTotal)
 	}
 }
 

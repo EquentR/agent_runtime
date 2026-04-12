@@ -10,7 +10,14 @@ import type {
   TranscriptTokenUsage,
 } from '../types/api'
 
-import { normalizeConversationMessage, normalizeInteractionRecord, normalizeToolApproval, normalizeTranscriptTokenUsage } from './api'
+import {
+  normalizeConversationMessage,
+  normalizeInteractionRecord,
+  normalizeMemoryCompressionSnapshot,
+  normalizeMemoryContextSnapshot,
+  normalizeToolApproval,
+  normalizeTranscriptTokenUsage,
+} from './api'
 
 function createEntryId(prefix: string) {
   return `${prefix}-${Math.random().toString(36).slice(2, 10)}`
@@ -949,9 +956,34 @@ export function updateTranscriptFromStreamEvent(entries: TranscriptEntry[], even
     return settledEntries
   }
 
+  if (event.type === 'memory.context_state') {
+    const state = normalizeMemoryContextSnapshot(payload)
+    if (!state) {
+      return entries
+    }
+    const next = [...entries]
+    const existingIndex = next.findIndex((e) => e.kind === 'memory' && e.memory_context_state != null)
+    const entry: TranscriptEntry = {
+      id: existingIndex >= 0 ? next[existingIndex].id : createEntryId('memory-ctx'),
+      kind: 'memory' as const,
+      title: '',
+      memory_context_state: state,
+    }
+    if (existingIndex >= 0) {
+      next[existingIndex] = entry
+    } else {
+      next.push(entry)
+    }
+    return next
+  }
+
   if (event.type === 'memory.compressed') {
-    const tokensBefore = typeof payload.tokens_before === 'number' ? payload.tokens_before : 0
-    const tokensAfter = typeof payload.tokens_after === 'number' ? payload.tokens_after : 0
+    const compression = normalizeMemoryCompressionSnapshot(payload)
+    if (!compression) {
+      return entries
+    }
+    const tokensBefore = compression.tokens_before
+    const tokensAfter = compression.tokens_after
     const detail = tokensBefore > 0
       ? `${tokensBefore.toLocaleString()} → ${tokensAfter.toLocaleString()} tokens`
       : ''
@@ -961,6 +993,7 @@ export function updateTranscriptFromStreamEvent(entries: TranscriptEntry[], even
         id: createEntryId('memory'),
         kind: 'memory' as const,
         title: '记忆压缩',
+        memory_compression: compression,
         content: detail || undefined,
       },
     ]

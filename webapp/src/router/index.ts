@@ -21,7 +21,7 @@ const routes = [
     },
   },
   {
-    path: '/chat',
+    path: '/chat/:conversationId?',
     name: 'chat',
     component: ChatView,
     meta: {

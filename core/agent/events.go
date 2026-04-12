@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	coreaudit "github.com/EquentR/agent_runtime/core/audit"
+	"github.com/EquentR/agent_runtime/core/memory"
+	coretasks "github.com/EquentR/agent_runtime/core/tasks"
 	coretools "github.com/EquentR/agent_runtime/core/tools"
 	coretypes "github.com/EquentR/agent_runtime/core/types"
 )
@@ -261,7 +263,9 @@ func (r *Runner) emitStreamEvent(ctx context.Context, event RunStreamEvent) {
 	_ = sink.OnStreamEvent(ctx, event)
 }
 
-func (r *Runner) emitMemoryCompressed(ctx context.Context, tokensBefore, tokensAfter int64) {
+func (r *Runner) emitMemoryCompressed(ctx context.Context, trace memory.CompressionTrace) {
+	snapshot := newMemoryCompressionSnapshot(trace)
+	r.rememberMemoryCompressionSnapshot(snapshot)
 	if r == nil || r.options.EventSink == nil {
 		return
 	}
@@ -273,10 +277,29 @@ func (r *Runner) emitMemoryCompressed(ctx context.Context, tokensBefore, tokensA
 	if runtime == nil {
 		return
 	}
-	_ = runtime.Emit(ctx, "memory.compressed", "info", map[string]any{
-		"tokens_before": tokensBefore,
-		"tokens_after":  tokensAfter,
-	})
+	_ = runtime.Emit(ctx, coretasks.EventMemoryCompressed, "info", memoryCompressionPayload(snapshot))
+}
+
+func (r *Runner) emitMemoryContextState(ctx context.Context, state *MemoryContextSnapshot) {
+	if r == nil || r.options.EventSink == nil {
+		return
+	}
+	sink, ok := r.options.EventSink.(taskRuntimeBridge)
+	if !ok {
+		return
+	}
+	runtime := sink.TaskRuntime()
+	if runtime == nil {
+		return
+	}
+	_ = runtime.Emit(ctx, coretasks.EventMemoryContextState, "info", memoryContextPayload(state))
+}
+
+func (r *Runner) emitMemoryContextStateFromManager(ctx context.Context) {
+	if r.options.Memory == nil {
+		return
+	}
+	r.emitMemoryContextState(ctx, newMemoryContextSnapshot(r.options.Memory.ContextState()))
 }
 
 func (r *Runner) toolContext(ctx context.Context, step int) context.Context {

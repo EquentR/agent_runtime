@@ -158,6 +158,11 @@ var to012 = migrate.NewMigration("0.1.2", func(tx *gorm.DB) error {
 	return tx.AutoMigrate(&agent.Conversation{})
 })
 
+// to013 为 conversations 表补齐结构化 memory snapshot 列，支持 reload 使用后端权威值。
+var to013 = migrate.NewMigration("0.1.3", func(tx *gorm.DB) error {
+	return tx.AutoMigrate(&agent.Conversation{})
+})
+
 type approvalInteractionRequest struct {
 	ToolName         string     `json:"tool_name"`
 	ArgumentsSummary string     `json:"arguments_summary"`

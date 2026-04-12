@@ -78,6 +78,8 @@ const (
 	EventChildTaskSpawned = "child_task.spawned"
 	// EventMemoryCompressed 表示 agent 记忆压缩已成功完成。
 	EventMemoryCompressed = "memory.compressed"
+	// EventMemoryContextState 表示 agent 当前记忆上下文快照。
+	EventMemoryContextState = "memory.context_state"
 )
 
 // CreateTaskInput 描述创建任务时允许写入的初始输入与关联元数据。

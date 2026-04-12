@@ -173,11 +173,51 @@ func (m *Manager) ClearShortTerm() {
 	m.shortTerm = nil
 }
 
+// ContextState holds a snapshot of the memory manager's current budget and usage.
+type ContextState struct {
+	ShortTermTokens       int64
+	SummaryTokens         int64
+	RenderedSummaryTokens int64
+	TotalTokens           int64
+	ShortTermLimit        int64
+	SummaryLimit          int64
+	MaxContextTokens      int64
+	HasSummary            bool
+}
+
+// ContextState returns a point-in-time snapshot of the memory manager's budget
+// allocation and current token usage.
+func (m *Manager) ContextState() ContextState {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	summaryTokens, renderedSummaryTokens, totalTokens := m.contextStateUsageLocked()
+
+	return ContextState{
+		ShortTermTokens:       m.estimateShortTermTokensLocked(),
+		SummaryTokens:         summaryTokens,
+		RenderedSummaryTokens: renderedSummaryTokens,
+		TotalTokens:           totalTokens,
+		ShortTermLimit:        m.shortTermLimitTokens,
+		SummaryLimit:          m.summaryLimitTokens,
+		MaxContextTokens:      m.maxContextTokens,
+		HasSummary:            m.summary != "",
+	}
+}
+
 type CompressionTrace struct {
-	Attempted    bool
-	Succeeded    bool
-	TokensBefore int64
-	TokensAfter  int64
+	Attempted             bool
+	Succeeded             bool
+	TokensBefore          int64
+	TokensAfter           int64
+	ShortTermTokensBefore int64
+	ShortTermTokensAfter  int64
+	SummaryTokensBefore   int64
+	SummaryTokensAfter    int64
+	RenderedSummaryBefore int64
+	RenderedSummaryAfter  int64
+	TotalTokensBefore     int64
+	TotalTokensAfter      int64
 }
 
 type RuntimeContext struct {
@@ -194,7 +234,8 @@ func (m *Manager) RuntimeContextWithReserve(ctx context.Context, reserveTokens i
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	trace := CompressionTrace{TokensBefore: m.estimateShortTermTokensLocked()}
+	trace := CompressionTrace{}
+	m.populateCompressionTraceLocked(&trace, true)
 	if m.requiresCompressionLocked(reserveTokens) {
 		trace.Attempted = true
 		corelog.Info("memory compression triggered", corelog.String("component", "memory"), corelog.String("module", "manager"), corelog.Int("short_term_messages", len(m.shortTerm)), corelog.Int64("short_term_limit_tokens", m.shortTermLimitTokens), corelog.Int64("reserve_tokens", reserveTokens))
@@ -207,7 +248,7 @@ func (m *Manager) RuntimeContextWithReserve(ctx context.Context, reserveTokens i
 	if err := m.validateContextBudgetLocked(reserveTokens); err != nil {
 		return RuntimeContext{}, trace, err
 	}
-	trace.TokensAfter = m.estimateShortTermTokensLocked()
+	m.populateCompressionTraceLocked(&trace, false)
 	return m.runtimeContextLocked(), trace, nil
 }
 
@@ -324,7 +365,7 @@ func (m *Manager) validateContextBudgetLocked(reserveTokens int64) error {
 	if reserveTokens > 0 && m.estimateShortTermTokensLocked()+reserveTokens > m.maxContextTokens {
 		return fmt.Errorf("runtime context exceeds request budget: %d > %d", m.estimateShortTermTokensLocked()+reserveTokens, m.maxContextTokens)
 	}
-	if m.summary != "" && m.summaryLimitTokens > 0 && int64(m.counter.Count(renderSummaryWithinBudget(m.summaryTemplate, m.summary, m.summaryLimitTokens, m.counter))) > m.summaryLimitTokens {
+	if m.summary != "" && m.summaryLimitTokens > 0 && m.estimateRenderedSummaryTokensLocked() > m.summaryLimitTokens {
 		return errors.New("memory summary exceeds summary budget after rendering")
 	}
 	return nil
@@ -362,6 +403,47 @@ func (m *Manager) runtimeContextLocked() RuntimeContext {
 		state.Recap = &recap
 	}
 	return state
+}
+
+func (m *Manager) contextStateUsageLocked() (summaryTokens int64, renderedSummaryTokens int64, totalTokens int64) {
+	if m.summary != "" && m.counter != nil {
+		summaryTokens = int64(m.counter.Count(m.summary))
+		renderedSummaryTokens = m.estimateRenderedSummaryTokensLocked()
+	}
+	totalTokens = renderedSummaryTokens + m.estimateShortTermTokensLocked()
+	return summaryTokens, renderedSummaryTokens, totalTokens
+}
+
+func (m *Manager) estimateRenderedSummaryTokensLocked() int64 {
+	if m.summary == "" || m.counter == nil {
+		return 0
+	}
+	rendered := renderSummaryWithinBudget(m.summaryTemplate, m.summary, m.summaryLimitTokens, m.counter)
+	if rendered == "" {
+		return 0
+	}
+	return int64(m.counter.Count(rendered))
+}
+
+func (m *Manager) populateCompressionTraceLocked(trace *CompressionTrace, before bool) {
+	if trace == nil {
+		return
+	}
+	summaryTokens, renderedSummaryTokens, totalTokens := m.contextStateUsageLocked()
+	shortTermTokens := m.estimateShortTermTokensLocked()
+	if before {
+		trace.TokensBefore = shortTermTokens
+		trace.ShortTermTokensBefore = shortTermTokens
+		trace.SummaryTokensBefore = summaryTokens
+		trace.RenderedSummaryBefore = renderedSummaryTokens
+		trace.TotalTokensBefore = totalTokens
+		return
+	}
+	trace.TokensAfter = shortTermTokens
+	trace.ShortTermTokensAfter = shortTermTokens
+	trace.SummaryTokensAfter = summaryTokens
+	trace.RenderedSummaryAfter = renderedSummaryTokens
+	trace.TotalTokensAfter = totalTokens
 }
 
 func (m *Manager) contextMessagesLocked() []model.Message {

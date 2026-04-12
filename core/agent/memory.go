@@ -29,9 +29,13 @@ func (r *Runner) prepareConversationContextWithPersistedCount(ctx context.Contex
 	if len(newMessages) > 0 {
 		r.options.Memory.AddMessages(newMessages)
 	}
-	memoryContext, err := r.options.Memory.RuntimeContext(ctx)
+	memoryContext, trace, err := r.options.Memory.RuntimeContextWithReserve(ctx, 0)
 	if err != nil {
 		return preparedConversationContext{}, err
+	}
+	if trace.Succeeded {
+		r.emitMemoryCompressed(ctx, trace)
+		r.emitMemoryContextStateFromManager(ctx)
 	}
 	prepared.Memory = memoryContext
 	return prepared, nil

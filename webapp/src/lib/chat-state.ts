@@ -7,6 +7,8 @@ interface ChatState {
   activeConversationId: string
   activeTaskId: string
   activeTaskEventSeq: number
+  activeTaskIdByConversation: Record<string, string>
+  activeTaskEventSeqByConversation: Record<string, number>
   entries: TranscriptEntry[]
   draftEntriesByConversation: Record<string, TranscriptEntry[]>
   selectedSkillsByConversation: Record<string, string[]>
@@ -16,6 +18,8 @@ const EMPTY_STATE: ChatState = {
   activeConversationId: '',
   activeTaskId: '',
   activeTaskEventSeq: 0,
+  activeTaskIdByConversation: {},
+  activeTaskEventSeqByConversation: {},
   entries: [],
   draftEntriesByConversation: {},
   selectedSkillsByConversation: {},
@@ -48,6 +52,23 @@ export function loadChatState(): ChatState {
       activeConversationId: typeof parsed.activeConversationId === 'string' ? parsed.activeConversationId : '',
       activeTaskId: typeof parsed.activeTaskId === 'string' ? parsed.activeTaskId : '',
       activeTaskEventSeq: typeof parsed.activeTaskEventSeq === 'number' && Number.isFinite(parsed.activeTaskEventSeq) ? parsed.activeTaskEventSeq : 0,
+      activeTaskIdByConversation:
+        parsed.activeTaskIdByConversation && typeof parsed.activeTaskIdByConversation === 'object'
+          ? Object.fromEntries(
+              Object.entries(parsed.activeTaskIdByConversation).filter(
+                ([conversationId, taskId]) => typeof conversationId === 'string' && typeof taskId === 'string',
+              ),
+            )
+          : {},
+      activeTaskEventSeqByConversation:
+        parsed.activeTaskEventSeqByConversation && typeof parsed.activeTaskEventSeqByConversation === 'object'
+          ? Object.fromEntries(
+              Object.entries(parsed.activeTaskEventSeqByConversation).filter(
+                ([conversationId, seq]) =>
+                  typeof conversationId === 'string' && typeof seq === 'number' && Number.isFinite(seq),
+              ),
+            )
+          : {},
       entries: Array.isArray(parsed.entries) ? parsed.entries : [],
       draftEntriesByConversation:
         parsed.draftEntriesByConversation && typeof parsed.draftEntriesByConversation === 'object'

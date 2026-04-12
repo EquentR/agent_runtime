@@ -9,6 +9,8 @@ import type {
   ConversationMessage,
   ModelCatalog,
   CreatePromptDocumentInput,
+  MemoryCompression,
+  MemoryContextState,
   PromptBinding,
   PromptBindingInput,
   PromptDeleteResult,
@@ -305,11 +307,72 @@ export function normalizeRunTaskResult(
     ...result,
     final_message: normalizeConversationMessage(result.final_message),
     usage: normalizeTranscriptTokenUsage(result.usage),
+    memory_context: normalizeMemoryContextSnapshot((result as Record<string, unknown>).memory_context),
+    memory_compression: normalizeMemoryCompressionSnapshot((result as Record<string, unknown>).memory_compression),
   }
 }
 
 function normalizeTokenValue(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+export function normalizeMemoryContextSnapshot(value: unknown): MemoryContextState | undefined {
+  if (!value || typeof value !== 'object') {
+    return undefined
+  }
+
+  const raw = value as Record<string, unknown>
+  const snapshot: MemoryContextState = {
+    short_term_tokens: normalizeTokenValue(raw.short_term_tokens ?? raw.shortTermTokens ?? raw.ShortTermTokens) ?? 0,
+    summary_tokens: normalizeTokenValue(raw.summary_tokens ?? raw.summaryTokens ?? raw.SummaryTokens) ?? 0,
+    rendered_summary_tokens:
+      normalizeTokenValue(raw.rendered_summary_tokens ?? raw.renderedSummaryTokens ?? raw.RenderedSummaryTokens) ?? 0,
+    total_tokens: normalizeTokenValue(raw.total_tokens ?? raw.totalTokens ?? raw.TotalTokens) ?? 0,
+    short_term_limit: normalizeTokenValue(raw.short_term_limit ?? raw.shortTermLimit ?? raw.ShortTermLimit) ?? 0,
+    summary_limit: normalizeTokenValue(raw.summary_limit ?? raw.summaryLimit ?? raw.SummaryLimit) ?? 0,
+    max_context_tokens: normalizeTokenValue(raw.max_context_tokens ?? raw.maxContextTokens ?? raw.MaxContextTokens) ?? 0,
+    has_summary: raw.has_summary === true || raw.hasSummary === true || raw.HasSummary === true,
+  }
+
+  if (Object.values(snapshot).every((field) => field === 0 || field === false)) {
+    return undefined
+  }
+
+  return snapshot
+}
+
+export function normalizeMemoryCompressionSnapshot(value: unknown): MemoryCompression | undefined {
+  if (!value || typeof value !== 'object') {
+    return undefined
+  }
+
+  const raw = value as Record<string, unknown>
+  const snapshot: MemoryCompression = {
+    tokens_before: normalizeTokenValue(raw.tokens_before ?? raw.tokensBefore ?? raw.TokensBefore) ?? 0,
+    tokens_after: normalizeTokenValue(raw.tokens_after ?? raw.tokensAfter ?? raw.TokensAfter) ?? 0,
+    short_term_tokens_before:
+      normalizeTokenValue(raw.short_term_tokens_before ?? raw.shortTermTokensBefore ?? raw.ShortTermTokensBefore) ?? 0,
+    short_term_tokens_after:
+      normalizeTokenValue(raw.short_term_tokens_after ?? raw.shortTermTokensAfter ?? raw.ShortTermTokensAfter) ?? 0,
+    summary_tokens_before:
+      normalizeTokenValue(raw.summary_tokens_before ?? raw.summaryTokensBefore ?? raw.SummaryTokensBefore) ?? 0,
+    summary_tokens_after:
+      normalizeTokenValue(raw.summary_tokens_after ?? raw.summaryTokensAfter ?? raw.SummaryTokensAfter) ?? 0,
+    rendered_summary_tokens_before:
+      normalizeTokenValue(raw.rendered_summary_tokens_before ?? raw.renderedSummaryTokensBefore ?? raw.RenderedSummaryTokensBefore) ?? 0,
+    rendered_summary_tokens_after:
+      normalizeTokenValue(raw.rendered_summary_tokens_after ?? raw.renderedSummaryTokensAfter ?? raw.RenderedSummaryTokensAfter) ?? 0,
+    total_tokens_before:
+      normalizeTokenValue(raw.total_tokens_before ?? raw.totalTokensBefore ?? raw.TotalTokensBefore) ?? 0,
+    total_tokens_after:
+      normalizeTokenValue(raw.total_tokens_after ?? raw.totalTokensAfter ?? raw.TotalTokensAfter) ?? 0,
+  }
+
+  if (Object.values(snapshot).every((field) => field === 0)) {
+    return undefined
+  }
+
+  return snapshot
 }
 
 export function normalizeTranscriptTokenUsage(value: unknown): TranscriptTokenUsage | undefined {
@@ -338,6 +401,32 @@ export function normalizeTaskDetails(task: TaskDetails): TaskDetails {
     input: task.input,
     result: task.result ? normalizeRunTaskResult(task.result) : undefined,
     result_json: task.result_json ? normalizeRunTaskResult(task.result_json) : undefined,
+  }
+}
+
+export function normalizeConversation(
+  conversation: Partial<Conversation> & Record<string, unknown>,
+): Conversation {
+  return {
+    id: String(conversation.id ?? ''),
+    title: String(conversation.title ?? ''),
+    last_message: String(conversation.last_message ?? ''),
+    message_count: normalizeIntegerValue(conversation.message_count) ?? 0,
+    provider_id: String(conversation.provider_id ?? ''),
+    model_id: String(conversation.model_id ?? ''),
+    created_by: String(conversation.created_by ?? ''),
+    created_at: String(conversation.created_at ?? ''),
+    updated_at: String(conversation.updated_at ?? ''),
+    last_message_at: normalizeStringValue(conversation.last_message_at),
+    audit_run_id: normalizeStringValue(conversation.audit_run_id),
+    audit_run_ids: Array.isArray(conversation.audit_run_ids)
+      ? conversation.audit_run_ids.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+      : undefined,
+    auditRunId: normalizeStringValue(conversation.auditRunId),
+    run_id: normalizeStringValue(conversation.run_id),
+    runId: normalizeStringValue(conversation.runId),
+    memory_context: normalizeMemoryContextSnapshot(conversation.memory_context),
+    memory_compression: normalizeMemoryCompressionSnapshot(conversation.memory_compression),
   }
 }
 
@@ -394,11 +483,13 @@ async function request<T>(path: string, init?: RequestInit) {
 }
 
 export async function fetchConversations() {
-  return request<Conversation[]>('/conversations')
+  const conversations = await request<Array<Partial<Conversation> & Record<string, unknown>>>('/conversations')
+  return conversations.map((conversation) => normalizeConversation(conversation))
 }
 
 export async function fetchConversation(conversationId: string) {
-  return request<Conversation>(`/conversations/${conversationId}`)
+  const conversation = await request<Partial<Conversation> & Record<string, unknown>>(`/conversations/${conversationId}`)
+  return normalizeConversation(conversation)
 }
 
 export async function fetchModelCatalog() {
@@ -693,6 +784,7 @@ export async function streamRunTask(
     stream.addEventListener('approval.resolved', handleEvent)
     stream.addEventListener('interaction.requested', handleEvent)
     stream.addEventListener('interaction.responded', handleEvent)
+    stream.addEventListener('memory.context_state', handleEvent)
     stream.addEventListener('memory.compressed', handleEvent)
     stream.addEventListener('task.finished', handleEvent)
   

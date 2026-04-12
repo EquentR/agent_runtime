@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { Close, Menu } from '@element-plus/icons-vue'
 
 import ConversationSidebar from '../components/ConversationSidebar.vue'
@@ -10,7 +10,6 @@ import {
   cancelTask,
   createRunTask,
   decideTaskApproval,
-  fetchTaskInteractions,
   deleteConversation,
   fetchConversationMessages,
   fetchConversations,
@@ -18,8 +17,9 @@ import {
   fetchSkills,
   fetchTaskApprovals,
   fetchTaskDetails,
+  fetchTaskInteractions,
   findRunningTaskByConversation,
-	respondTaskInteraction,
+  respondTaskInteraction,
   streamRunTask,
   TASK_STREAM_ABORTED_MESSAGE,
 } from '../lib/api'
@@ -42,19 +42,22 @@ import {
 } from '../lib/transcript'
 import type {
   Conversation,
+  MemoryContextState,
   ModelCatalog,
   ModelCatalogEntry,
-	QuestionInteractionSubmitInput,
+  QuestionInteractionSubmitInput,
   TaskDetails,
   TranscriptEntry,
   TranscriptTokenUsage,
   WorkspaceSkillListItem,
 } from '../types/api'
 
+const NEW_CONVERSATION_SENDING_KEY = '__new__'
+
 const router = useRouter()
+const route = useRoute()
 
 const messagesLoading = ref(false)
-const sending = ref(false)
 const sidebarLoading = ref(false)
 const sidebarCollapsed = ref(false)
 const sidebarMobile = ref(false)
@@ -63,6 +66,9 @@ const username = ref(getSessionName())
 const activeConversationId = ref('')
 const activeTaskId = ref('')
 const activeTaskEventSeq = ref(0)
+const activeTaskIdByConversation = ref<Record<string, string>>({})
+const activeTaskEventSeqByConversation = ref<Record<string, number>>({})
+const sendingConversationKey = ref('')
 const conversations = ref<Conversation[]>([])
 const entries = ref<TranscriptEntry[]>([])
 const draftEntriesByConversation = ref<Record<string, TranscriptEntry[]>>({})
@@ -78,11 +84,16 @@ const selectedProviderId = ref('')
 const selectedModelId = ref('')
 const modelMenuOpen = ref(false)
 const modelMenuRef = ref<HTMLElement | null>(null)
+const contextStatsOpen = ref(false)
+const contextStatsRef = ref<HTMLElement | null>(null)
 const composerRef = ref<InstanceType<typeof MessageComposer> | null>(null)
 const showThinkingAndTools = ref(true)
+const initialized = ref(false)
 let activeStreamAbortController: AbortController | null = null
 let activeStreamingTaskId = ''
+
 const isAdmin = computed(() => getSessionRole() === 'admin')
+const routeConversationId = computed(() => (typeof route.params.conversationId === 'string' ? route.params.conversationId : ''))
 const sidebarConversations = computed(() => {
   const merged = [...conversations.value]
   for (const pendingConversation of Object.values(pendingConversationById.value)) {
@@ -92,18 +103,10 @@ const sidebarConversations = computed(() => {
   }
   return merged
 })
-
 const chatShellClass = computed(() => ({
   'sidebar-hidden': !sidebarMobile.value && sidebarCollapsed.value,
   'sidebar-mobile': sidebarMobile.value,
   'sidebar-open': sidebarMobile.value && sidebarDrawerOpen.value,
-}))
-
-const topbarStatusLabel = computed(() => (messagesLoading.value || sending.value ? '同步中' : '就绪'))
-const topbarStatusClass = computed(() => ({
-  'status-pill': true,
-  idle: !messagesLoading.value && !sending.value,
-  loading: messagesLoading.value || sending.value,
 }))
 const sidebarDesktopHidden = computed(() => !sidebarMobile.value && sidebarCollapsed.value)
 const availableProviders = computed(() => modelCatalog.value?.providers ?? [])
@@ -116,12 +119,36 @@ const selectedModel = computed<ModelCatalogEntry | null>(
 )
 const selectedModelLabel = computed(() => selectedModel.value?.name || selectedModelId.value || '选择模型')
 const selectedSkillNames = computed(() => selectedSkillsByConversation.value[activeConversationId.value] ?? [])
-const modelMenuDisabled = computed(() => sending.value || catalogLoading.value || availableProviders.value.length === 0)
+const activeConversationTaskId = computed(() => (activeConversationId.value ? activeTaskIdByConversation.value[activeConversationId.value] ?? '' : ''))
+const currentConversationBusy = computed(() => {
+  if (activeConversationTaskId.value) {
+    return true
+  }
+  if (!activeConversationId.value && activeTaskId.value) {
+    return true
+  }
+  const currentKey = activeConversationId.value || NEW_CONVERSATION_SENDING_KEY
+  return sendingConversationKey.value === currentKey
+})
+const modelMenuDisabled = computed(() => currentConversationBusy.value || catalogLoading.value || availableProviders.value.length === 0)
 const composerDisabled = computed(() => catalogLoading.value || !selectedProviderId.value || !selectedModelId.value)
 const stoppingTask = ref(false)
+const currentConversationEntries = computed(() => {
+  const conversationId = activeConversationId.value || routeConversationId.value
+  if (conversationId) {
+    return draftEntriesByConversation.value[conversationId] ?? entries.value
+  }
+  return entries.value
+})
+const topbarStatusLabel = computed(() => (messagesLoading.value || currentConversationBusy.value ? '同步中' : '就绪'))
+const topbarStatusClass = computed(() => ({
+  'status-pill': true,
+  idle: !messagesLoading.value && !currentConversationBusy.value,
+  loading: messagesLoading.value || currentConversationBusy.value,
+}))
 
 function activeConversationTitle() {
-  const current = conversations.value.find((conversation) => conversation.id === activeConversationId.value)
+  const current = sidebarConversations.value.find((conversation) => conversation.id === activeConversationId.value)
   if (activeConversationId.value) {
     return formatConversationTitle(current?.title ?? '', '未命名对话')
   }
@@ -134,26 +161,12 @@ function syncDocumentTitle() {
 
 watch([activeConversationId, conversations], syncDocumentTitle, { deep: true, immediate: true })
 
-function currentChatState() {
-  return {
-    activeConversationId: activeConversationId.value,
-    activeTaskId: activeTaskId.value,
-    activeTaskEventSeq: activeTaskEventSeq.value,
-    entries: entries.value,
-    draftEntriesByConversation: draftEntriesByConversation.value,
-    selectedSkillsByConversation: selectedSkillsByConversation.value,
+function currentConversationContextEntries(conversationId: string) {
+  if (!conversationId) {
+    return entries.value
   }
+  return draftEntriesByConversation.value[conversationId] ?? (conversationId === activeConversationId.value ? entries.value : [])
 }
-
-function syncChatState() {
-  scheduleChatStateSave(currentChatState())
-}
-
-function flushChatState() {
-  saveChatState(currentChatState())
-}
-
-watch([activeConversationId, activeTaskId, activeTaskEventSeq, entries, draftEntriesByConversation, selectedSkillsByConversation], syncChatState, { deep: true })
 
 function setDraftEntries(conversationId: string, nextEntries: TranscriptEntry[]) {
   if (!conversationId) {
@@ -165,24 +178,85 @@ function setDraftEntries(conversationId: string, nextEntries: TranscriptEntry[])
   }
 }
 
-function dropDraftEntries(conversationId: string) {
-  if (!conversationId || !(conversationId in draftEntriesByConversation.value)) {
+function setTaskStateForConversation(conversationId: string, taskId: string, eventSeq?: number) {
+  if (!conversationId) {
+    activeTaskId.value = taskId
+    if (typeof eventSeq === 'number') {
+      activeTaskEventSeq.value = eventSeq
+    }
     return
   }
-  const nextDrafts = { ...draftEntriesByConversation.value }
-  delete nextDrafts[conversationId]
-  draftEntriesByConversation.value = nextDrafts
+
+  activeTaskIdByConversation.value = {
+    ...activeTaskIdByConversation.value,
+    [conversationId]: taskId,
+  }
+
+  if (typeof eventSeq === 'number') {
+    activeTaskEventSeqByConversation.value = {
+      ...activeTaskEventSeqByConversation.value,
+      [conversationId]: eventSeq,
+    }
+  }
+
+  if (conversationId === activeConversationId.value) {
+    activeTaskId.value = taskId
+    activeTaskEventSeq.value = typeof eventSeq === 'number' ? eventSeq : activeTaskEventSeqByConversation.value[conversationId] ?? 0
+  }
 }
 
-function applyEntriesForConversation(conversationId: string, nextEntries: TranscriptEntry[]) {
+function clearTaskStateForConversation(conversationId: string) {
   if (conversationId) {
-    setDraftEntries(conversationId, nextEntries)
+    const nextTaskIds = { ...activeTaskIdByConversation.value }
+    delete nextTaskIds[conversationId]
+    activeTaskIdByConversation.value = nextTaskIds
+
+    const nextTaskEventSeqs = { ...activeTaskEventSeqByConversation.value }
+    delete nextTaskEventSeqs[conversationId]
+    activeTaskEventSeqByConversation.value = nextTaskEventSeqs
   }
-  if (conversationId && activeConversationId.value && conversationId !== activeConversationId.value) {
+
+  if (!conversationId || conversationId === activeConversationId.value) {
+    activeTaskId.value = ''
+    activeTaskEventSeq.value = 0
+  }
+}
+
+function syncActiveTaskStateFromConversation(conversationId: string) {
+  activeConversationId.value = conversationId
+  activeTaskId.value = conversationId ? activeTaskIdByConversation.value[conversationId] ?? '' : ''
+  activeTaskEventSeq.value = conversationId ? activeTaskEventSeqByConversation.value[conversationId] ?? 0 : 0
+}
+
+function currentChatState() {
+  return {
+    activeConversationId: activeConversationId.value,
+    activeTaskId: activeTaskId.value,
+    activeTaskEventSeq: activeTaskEventSeq.value,
+    activeTaskIdByConversation: activeTaskIdByConversation.value,
+    activeTaskEventSeqByConversation: activeTaskEventSeqByConversation.value,
+    entries: entries.value,
+    draftEntriesByConversation: draftEntriesByConversation.value,
+    selectedSkillsByConversation: selectedSkillsByConversation.value,
+  }
+}
+
+function syncChatState() {
+  if (!initialized.value) {
     return
   }
-  entries.value = nextEntries
+  scheduleChatStateSave(currentChatState())
 }
+
+function flushChatState() {
+  saveChatState(currentChatState())
+}
+
+watch(
+  [activeConversationId, activeTaskId, activeTaskEventSeq, activeTaskIdByConversation, activeTaskEventSeqByConversation, entries, draftEntriesByConversation, selectedSkillsByConversation],
+  syncChatState,
+  { deep: true },
+)
 
 function upsertPendingConversation(conversation: Conversation) {
   pendingConversationById.value = {
@@ -213,75 +287,54 @@ function prunePendingConversations(loadedConversations: Conversation[]) {
   }
 }
 
-async function loadConversations(preferredConversationId = '') {
-  sidebarLoading.value = true
-
-  try {
-    const loadedConversations = await fetchConversations()
-    conversations.value = Array.isArray(loadedConversations) ? loadedConversations : []
-    prunePendingConversations(conversations.value)
-
-    if (preferredConversationId) {
-      activeConversationId.value = preferredConversationId
-      const exists = conversations.value.some((conversation) => conversation.id === preferredConversationId)
-      if (exists) {
-        syncSelectionFromConversation(preferredConversationId)
-        return
-      }
-    }
-
-    if (activeConversationId.value) {
-      const exists = conversations.value.some((conversation) => conversation.id === activeConversationId.value)
-      if (exists) {
-        if (entries.value.length > 0) {
-          syncSelectionFromConversation(activeConversationId.value)
-          return
-        }
-        await selectConversation(activeConversationId.value)
-        return
-      }
-    }
-  } finally {
-    sidebarLoading.value = false
+async function navigateToConversation(conversationId = '') {
+  const target = conversationId ? `/chat/${encodeURIComponent(conversationId)}` : '/chat'
+  if (route.fullPath === target) {
+    return
   }
+  await router.push(target)
 }
 
-async function selectConversation(conversationId: string) {
-  activeConversationId.value = conversationId
-  syncSelectionFromConversation(conversationId)
-  sidebarDrawerOpen.value = false
-  messagesLoading.value = true
-  errorMessage.value = ''
-
-  const draftEntries = draftEntriesByConversation.value[conversationId]
-  if (draftEntries) {
-    entries.value = draftEntries
-  }
-
-  try {
-    if (!draftEntries) {
-      const messages = await fetchConversationMessages(conversationId)
-      entries.value = buildTranscriptEntries(messages)
-    }
-  } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '加载消息失败'
-  } finally {
-    messagesLoading.value = false
-  }
-
-  await resumeStreamForConversation(conversationId)
+function applySelection(providerId: string, modelId: string) {
+  const nextSelection = resolveModelSelection(modelCatalog.value, providerId, modelId)
+  selectedProviderId.value = nextSelection.providerId
+  selectedModelId.value = nextSelection.modelId
 }
 
-function startNewConversation() {
-  activeConversationId.value = ''
-  entries.value = []
-  errorMessage.value = ''
-  sidebarDrawerOpen.value = false
+function applyDefaultSelection() {
+  if (!modelCatalog.value) {
+    return
+  }
+  applySelection(modelCatalog.value.default_provider_id, modelCatalog.value.default_model_id)
+}
+
+function syncSelectionFromConversation(conversationId: string) {
+  const conversation = sidebarConversations.value.find((item) => item.id === conversationId)
+  if (!conversation) {
+    return false
+  }
+  applySelection(conversation.provider_id, conversation.model_id)
+  return true
+}
+
+function closeModelMenu() {
   modelMenuOpen.value = false
-  applyDefaultSelection()
-  void nextTick(() => {
-    composerRef.value?.focus()
-  })
+}
+
+function toggleModelMenu() {
+  if (modelMenuDisabled.value) {
+    return
+  }
+  modelMenuOpen.value = !modelMenuOpen.value
+}
+
+function closeContextStats() {
+  contextStatsOpen.value = false
+}
+
+function chooseModel(providerId: string, modelId: string) {
+  applySelection(providerId, modelId)
+  closeModelMenu()
 }
 
 function toggleSidebarCollapsed() {
@@ -289,7 +342,6 @@ function toggleSidebarCollapsed() {
     sidebarDrawerOpen.value = !sidebarDrawerOpen.value
     return
   }
-
   sidebarCollapsed.value = !sidebarCollapsed.value
 }
 
@@ -306,18 +358,364 @@ function syncSidebarViewport() {
   }
 }
 
-async function handleDeleteConversation(conversationId: string) {
-  errorMessage.value = ''
+async function loadCatalog() {
+  catalogLoading.value = true
+  try {
+    modelCatalog.value = await fetchModelCatalog()
+    if (!selectedProviderId.value || !selectedModelId.value) {
+      applyDefaultSelection()
+    }
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '加载模型目录失败'
+  } finally {
+    catalogLoading.value = false
+  }
+}
+
+async function loadAvailableSkills() {
+  try {
+    availableSkills.value = await fetchSkills()
+  } catch {
+    availableSkills.value = []
+  }
+}
+
+async function loadConversations(preferredConversationId = routeConversationId.value) {
+  sidebarLoading.value = true
 
   try {
-    await deleteConversation(conversationId)
-    if (activeConversationId.value === conversationId) {
-      startNewConversation()
+    const loadedConversations = await fetchConversations()
+    conversations.value = Array.isArray(loadedConversations) ? loadedConversations : []
+    prunePendingConversations(conversations.value)
+
+    if (preferredConversationId) {
+      const exists = sidebarConversations.value.some((conversation) => conversation.id === preferredConversationId)
+      if (exists) {
+        syncSelectionFromConversation(preferredConversationId)
+      } else if (routeConversationId.value === preferredConversationId && !(preferredConversationId in pendingConversationById.value)) {
+        await navigateToConversation('')
+      }
     }
-    await loadConversations()
-  } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '删除对话失败'
+  } finally {
+    sidebarLoading.value = false
   }
+}
+
+function formatCount(value: number | undefined) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return '--'
+  }
+  return value.toLocaleString('en-US')
+}
+
+function formatPercent(value: number | undefined) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return '--'
+  }
+  if (value === 0) {
+    return '0%'
+  }
+  return `${(value * 100).toFixed(value >= 0.1 ? 1 : 2)}%`
+}
+
+const currentContextUsage = computed(() => {
+  const activeConversation = sidebarConversations.value.find((conversation) => conversation.id === activeConversationId.value)
+  const preferTranscriptMemory = Boolean(activeConversationTaskId.value)
+  let latestReply: TranscriptEntry | null = null
+  let latestContextState: MemoryContextState | null = null
+  let latestCompression = null
+
+  for (const entry of currentConversationEntries.value) {
+    if (entry.kind === 'reply' && (entry.token_usage || entry.provider_id || entry.model_id)) {
+      latestReply = entry
+    }
+    if (entry.kind === 'memory' && entry.memory_context_state) {
+      latestContextState = entry.memory_context_state
+    }
+    if (entry.kind === 'memory' && entry.memory_compression) {
+      latestCompression = entry.memory_compression
+    }
+  }
+
+  const memoryState = preferTranscriptMemory
+    ? latestContextState ?? activeConversation?.memory_context ?? null
+    : activeConversation?.memory_context ?? null
+  const compression = preferTranscriptMemory
+    ? latestCompression ?? activeConversation?.memory_compression ?? null
+    : activeConversation?.memory_compression ?? null
+
+  const modelId = latestReply?.model_id || selectedModelId.value
+  const providerId = latestReply?.provider_id || selectedProviderId.value
+
+  const maxContextTokens = memoryState?.max_context_tokens
+  const shortTermLimit = memoryState?.short_term_limit
+
+  const usedTokens = memoryState?.total_tokens
+
+  const ratio = typeof maxContextTokens === 'number' && maxContextTokens > 0
+    ? typeof usedTokens === 'number'
+      ? Math.min(usedTokens / maxContextTokens, 1)
+      : undefined
+    : undefined
+
+  return {
+    modelLabel: [providerId, modelId].filter(Boolean).join(' / '),
+    usedTokens,
+    maxContextTokens,
+    shortTermLimit,
+    ratio,
+    compression: compression
+      ? {
+        before: compression.total_tokens_before,
+        after: compression.total_tokens_after,
+        saved: Math.max(compression.total_tokens_before - compression.total_tokens_after, 0),
+        ratio: compression.total_tokens_before > 0 ? compression.total_tokens_after / compression.total_tokens_before : undefined,
+      }
+      : null,
+    memoryState,
+  }
+})
+
+const contextStatsSummary = computed(() => {
+  const cu = currentContextUsage.value
+  return {
+    used: formatCount(cu.usedTokens),
+    max: formatCount(cu.maxContextTokens),
+    shortTermLimit: formatCount(cu.shortTermLimit),
+    ratio: formatPercent(cu.ratio),
+    compressionBefore: formatCount(cu.compression?.before),
+    compressionAfter: formatCount(cu.compression?.after),
+    compressionSaved: formatCount(cu.compression?.saved),
+    compressionRatio: formatPercent(cu.compression?.ratio),
+    // New: backend memory state breakdown
+    shortTermTokens: formatCount(cu.memoryState?.short_term_tokens),
+    summaryTokens: formatCount(cu.memoryState?.summary_tokens),
+  }
+})
+
+const contextRingProgress = computed(() => {
+  const ratio = currentContextUsage.value.ratio
+  return typeof ratio === 'number' && Number.isFinite(ratio) ? Math.max(0, Math.min(ratio, 1)) : 0
+})
+
+const contextRingPercent = computed(() => Math.round(contextRingProgress.value * 100))
+
+const contextRingColor = computed(() => {
+  const p = contextRingPercent.value
+  if (p >= 90) return '#c0392b'
+  if (p >= 75) return '#e67e22'
+  return '#56726a'
+})
+
+async function resumeStreamForConversation(conversationId: string) {
+  if (!conversationId) {
+    return
+  }
+
+  const savedTaskId = activeTaskIdByConversation.value[conversationId] ?? ''
+  if (savedTaskId) {
+    try {
+      const task = await fetchTaskDetails(savedTaskId)
+      const taskConversationId = resolveTaskConversationId(task)
+      if (!taskConversationId || taskConversationId === conversationId) {
+        await resumeTask(task, conversationId)
+        if (activeTaskIdByConversation.value[conversationId]) {
+          return
+        }
+      }
+    } catch {
+      clearTaskStateForConversation(conversationId)
+    }
+  }
+
+  const task = await findRunningTaskByConversation(conversationId)
+  await resumeTask(task, conversationId)
+}
+
+async function loadConversationForRoute(conversationId: string) {
+  contextStatsOpen.value = false
+  syncActiveTaskStateFromConversation(conversationId)
+  sidebarDrawerOpen.value = false
+  errorMessage.value = ''
+
+  if (!conversationId) {
+    if (!selectedProviderId.value || !selectedModelId.value) {
+      applyDefaultSelection()
+    }
+    return
+  }
+
+  syncSelectionFromConversation(conversationId)
+  const draft = draftEntriesByConversation.value[conversationId]
+  if (draft) {
+    entries.value = draft
+  } else {
+    messagesLoading.value = true
+    try {
+      const messages = await fetchConversationMessages(conversationId)
+      const nextEntries = buildTranscriptEntries(messages)
+      setDraftEntries(conversationId, nextEntries)
+      if (conversationId === routeConversationId.value) {
+        entries.value = nextEntries
+      }
+    } catch (error) {
+      errorMessage.value = error instanceof Error ? error.message : '加载消息失败'
+    } finally {
+      messagesLoading.value = false
+    }
+  }
+
+  await resumeStreamForConversation(conversationId)
+}
+
+function applyEntriesForConversation(conversationId: string, nextEntries: TranscriptEntry[]) {
+  if (conversationId) {
+    setDraftEntries(conversationId, nextEntries)
+  }
+  if (conversationId === activeConversationId.value) {
+    entries.value = nextEntries
+  }
+}
+
+function stopActiveStream() {
+  activeStreamAbortController?.abort()
+  activeStreamAbortController = null
+  activeStreamingTaskId = ''
+}
+
+async function completeTaskConversation(conversationId: string, usage?: TranscriptTokenUsage, providerId = '', modelId = '') {
+  const sourceEntries = currentConversationContextEntries(conversationId).length > 0 ? currentConversationContextEntries(conversationId) : entries.value
+  const nextEntries = attachReplyMetaToLatestReply(sourceEntries, {
+    provider_id: providerId || selectedProviderId.value,
+    model_id: modelId || selectedModelId.value,
+    token_usage: usage,
+  })
+  setDraftEntries(conversationId, nextEntries)
+  if (conversationId === activeConversationId.value || routeConversationId.value === conversationId || !routeConversationId.value) {
+    entries.value = nextEntries
+  }
+  dropPendingConversation(conversationId)
+  clearTaskStateForConversation(conversationId)
+  await loadConversations(routeConversationId.value || conversationId)
+}
+
+async function attachTaskStream(taskId: string, conversationId = '') {
+  if (!taskId || activeStreamingTaskId === taskId) {
+    return
+  }
+
+  stopActiveStream()
+  const abortController = new AbortController()
+  activeStreamAbortController = abortController
+  activeStreamingTaskId = taskId
+  const initialConversationId = conversationId || activeConversationId.value
+  setTaskStateForConversation(initialConversationId, taskId, activeTaskEventSeqByConversation.value[initialConversationId] ?? 0)
+
+  let streamConversationId = initialConversationId
+  let firstVisibleChunkSeen = false
+
+  try {
+    const result = await streamRunTask(
+      taskId,
+      () => {
+        void 0
+      },
+      (event) => {
+        const eventConversationId =
+          (typeof event.payload?.conversation_id === 'string' ? event.payload.conversation_id : '') || streamConversationId || initialConversationId
+        if (eventConversationId && !streamConversationId) {
+          streamConversationId = eventConversationId
+        }
+
+        const nextSeq = Math.max(activeTaskEventSeqByConversation.value[eventConversationId] ?? 0, event.seq ?? 0)
+        setTaskStateForConversation(eventConversationId, taskId, nextSeq)
+        const currentEntries = currentConversationContextEntries(eventConversationId)
+        const nextEntries = updateTranscriptFromStreamEvent(currentEntries, event)
+        applyEntriesForConversation(eventConversationId, nextEntries)
+
+        const isVisibleTextChunk =
+          !firstVisibleChunkSeen &&
+          !!eventConversationId &&
+          event.type === 'log.message' &&
+          typeof event.payload?.Kind === 'string' &&
+          event.payload.Kind === 'text_delta' &&
+          typeof event.payload?.Text === 'string' &&
+          event.payload.Text.length > 0
+        if (isVisibleTextChunk) {
+          firstVisibleChunkSeen = true
+          void loadConversations(eventConversationId)
+        }
+      },
+      { signal: abortController.signal, afterSeq: activeTaskEventSeqByConversation.value[initialConversationId] ?? 0 },
+    )
+
+    streamConversationId = result.conversation_id || streamConversationId
+    await completeTaskConversation(streamConversationId, result.usage, result.provider_id, result.model_id)
+  } catch (error) {
+    if (error instanceof Error && error.message === TASK_STREAM_ABORTED_MESSAGE) {
+      return
+    }
+
+    const taskError = error instanceof Error ? error.message : '发送消息失败'
+    try {
+      const task = await fetchTaskDetails(taskId)
+      if (!isTaskActive(task)) {
+        const taskConversationId = resolveTaskConversationId(task) || streamConversationId || initialConversationId
+        if (task.status === 'cancelled') {
+          clearTaskStateForConversation(taskConversationId)
+          return
+        }
+        if (taskConversationId === activeConversationId.value) {
+          errorMessage.value = taskError
+        }
+        const currentEntries = currentConversationContextEntries(taskConversationId)
+        const nextEntries = updateTranscriptFromStreamEvent(currentEntries, {
+          type: 'task.failed',
+          payload: { error: taskError },
+        })
+        applyEntriesForConversation(taskConversationId, nextEntries)
+        clearTaskStateForConversation(taskConversationId)
+      }
+    } catch {
+      if (taskError !== 'Task event stream disconnected') {
+        if (streamConversationId === activeConversationId.value) {
+          errorMessage.value = taskError
+        }
+        const currentEntries = currentConversationContextEntries(streamConversationId)
+        const nextEntries = updateTranscriptFromStreamEvent(currentEntries, {
+          type: 'task.failed',
+          payload: { error: taskError },
+        })
+        applyEntriesForConversation(streamConversationId, nextEntries)
+      }
+    }
+  } finally {
+    if (activeStreamAbortController === abortController) {
+      activeStreamAbortController = null
+    }
+    if (activeStreamingTaskId === taskId) {
+      activeStreamingTaskId = ''
+    }
+  }
+}
+
+async function resumeTask(task: TaskDetails | null | undefined, conversationId = '') {
+  if (!task || !isTaskActive(task)) {
+    if (task) {
+      clearTaskStateForConversation(resolveTaskConversationId(task) || conversationId)
+    }
+    return
+  }
+
+  const taskConversationId = resolveTaskConversationId(task)
+  if (conversationId && taskConversationId && taskConversationId !== conversationId) {
+    return
+  }
+
+  const targetConversationId = taskConversationId || conversationId
+  setTaskStateForConversation(targetConversationId, task.id, activeTaskEventSeqByConversation.value[targetConversationId] ?? 0)
+  await hydratePendingApprovals(task, targetConversationId)
+  await attachTaskStream(task.id, targetConversationId)
 }
 
 async function hydratePendingApprovals(task: TaskDetails | null | undefined, conversationId = '') {
@@ -330,7 +728,7 @@ async function hydratePendingApprovals(task: TaskDetails | null | undefined, con
     return
   }
 
-  let nextEntries = draftEntriesByConversation.value[taskConversationId] ?? (taskConversationId === activeConversationId.value ? entries.value : [])
+  let nextEntries = currentConversationContextEntries(taskConversationId)
   if (task.suspend_reason === TASK_WAITING_FOR_INTERACTION_REASON) {
     try {
       const interactions = await fetchTaskInteractions(task.id)
@@ -346,6 +744,7 @@ async function hydratePendingApprovals(task: TaskDetails | null | undefined, con
       return
     }
   }
+
   let approvals
   try {
     approvals = await fetchTaskApprovals(task.id)
@@ -359,61 +758,6 @@ async function hydratePendingApprovals(task: TaskDetails | null | undefined, con
   applyEntriesForConversation(taskConversationId, buildApprovalEntriesFromList(pendingApprovals, nextEntries))
 }
 
-function stopActiveStream() {
-  activeStreamAbortController?.abort()
-  activeStreamAbortController = null
-  activeStreamingTaskId = ''
-}
-
-function closeModelMenu() {
-  modelMenuOpen.value = false
-}
-
-function toggleModelMenu() {
-  if (modelMenuDisabled.value) {
-    return
-  }
-  modelMenuOpen.value = !modelMenuOpen.value
-}
-
-function clearActiveTask() {
-  activeTaskId.value = ''
-  activeStreamingTaskId = ''
-  activeTaskEventSeq.value = 0
-}
-
-async function completeTaskConversation(conversationId: string, usage?: TranscriptTokenUsage, providerId = '', modelId = '') {
-  activeConversationId.value = conversationId
-  const nextEntries = attachReplyMetaToLatestReply(draftEntriesByConversation.value[conversationId] ?? entries.value, {
-    provider_id: providerId || selectedProviderId.value,
-    model_id: modelId || selectedModelId.value,
-    token_usage: usage,
-  })
-  dropDraftEntries(conversationId)
-  dropPendingConversation(conversationId)
-  entries.value = nextEntries
-  await loadConversations(conversationId)
-  syncSelectionFromConversation(conversationId)
-}
-
-function applySelection(providerId: string, modelId: string) {
-  const nextSelection = resolveModelSelection(modelCatalog.value, providerId, modelId)
-  selectedProviderId.value = nextSelection.providerId
-  selectedModelId.value = nextSelection.modelId
-}
-
-function applyDefaultSelection() {
-  if (!modelCatalog.value) {
-    return
-  }
-  applySelection(modelCatalog.value.default_provider_id, modelCatalog.value.default_model_id)
-}
-
-function chooseModel(providerId: string, modelId: string) {
-  applySelection(providerId, modelId)
-  closeModelMenu()
-}
-
 async function handleApprovalDecision(input: {
   taskId: string
   approvalId: string
@@ -421,11 +765,7 @@ async function handleApprovalDecision(input: {
   reason: string
 }) {
   const taskId = input.taskId || activeTaskId.value
-  if (!taskId || !input.approvalId) {
-    return
-  }
-
-   if (approvalDecisionStateById.value[input.approvalId]?.pending) {
+  if (!taskId || !input.approvalId || approvalDecisionStateById.value[input.approvalId]?.pending) {
     return
   }
 
@@ -439,15 +779,13 @@ async function handleApprovalDecision(input: {
       decision: input.decision,
       reason: input.reason,
     })
-    const currentEntries = activeConversationId.value
-      ? draftEntriesByConversation.value[activeConversationId.value] ?? entries.value
-      : entries.value
+    const conversationId = approval.conversation_id || activeConversationId.value
     const nextEntries = updateTranscriptFromStreamEvent(
-      currentEntries,
+      currentConversationContextEntries(conversationId),
       buildApprovalStreamEvent(approval, { type: 'approval.resolved', decision: input.decision }),
     )
-    applyEntriesForConversation(activeConversationId.value, nextEntries)
-    void attachTaskStream(taskId, approval.conversation_id || activeConversationId.value)
+    applyEntriesForConversation(conversationId, nextEntries)
+    void attachTaskStream(taskId, conversationId)
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '审批提交失败'
   } finally {
@@ -459,11 +797,7 @@ async function handleApprovalDecision(input: {
 
 async function handleInteractionRespond(input: QuestionInteractionSubmitInput) {
   const taskId = input.taskId || activeTaskId.value
-  if (!taskId || !input.interactionId) {
-    return
-  }
-
-  if (questionResponseStateById.value[input.interactionId]?.pending) {
+  if (!taskId || !input.interactionId || questionResponseStateById.value[input.interactionId]?.pending) {
     return
   }
 
@@ -478,15 +812,13 @@ async function handleInteractionRespond(input: QuestionInteractionSubmitInput) {
       selected_option_ids: input.selectedOptionIds,
       custom_text: input.customText,
     })
-    const currentEntries = activeConversationId.value
-      ? draftEntriesByConversation.value[activeConversationId.value] ?? entries.value
-      : entries.value
-    const nextEntries = updateTranscriptFromStreamEvent(currentEntries, {
+    const conversationId = interaction.conversation_id || activeConversationId.value
+    const nextEntries = updateTranscriptFromStreamEvent(currentConversationContextEntries(conversationId), {
       type: 'interaction.responded',
       payload: interaction as unknown as Record<string, unknown>,
     })
-    applyEntriesForConversation(activeConversationId.value, nextEntries)
-    void attachTaskStream(taskId, interaction.conversation_id || activeConversationId.value)
+    applyEntriesForConversation(conversationId, nextEntries)
+    void attachTaskStream(taskId, conversationId)
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '提交回答失败'
   } finally {
@@ -512,15 +844,12 @@ async function handleStopTask() {
     if (!isTaskActive(task)) {
       stopActiveStream()
       const conversationId = resolveTaskConversationId(task) || activeConversationId.value
-      const currentEntries = conversationId
-        ? draftEntriesByConversation.value[conversationId] ?? (conversationId === activeConversationId.value ? entries.value : [])
-        : entries.value
-      const nextEntries = updateTranscriptFromStreamEvent(currentEntries, {
+      const nextEntries = updateTranscriptFromStreamEvent(currentConversationContextEntries(conversationId), {
         type: 'task.finished',
         payload: { status: task.status, error: task.error },
       })
       applyEntriesForConversation(conversationId, nextEntries)
-      clearActiveTask()
+      clearTaskStateForConversation(conversationId)
     }
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '停止任务失败'
@@ -537,208 +866,17 @@ function handleSkillSelectionChange(names: string[]) {
   }
 }
 
-function syncSelectionFromConversation(conversationId: string) {
-  const conversation = conversations.value.find((item) => item.id === conversationId)
-  if (!conversation) {
-    return false
-  }
-  applySelection(conversation.provider_id, conversation.model_id)
-  return true
-}
-
-async function loadCatalog() {
-  catalogLoading.value = true
-  try {
-    modelCatalog.value = await fetchModelCatalog()
-    if (!selectedProviderId.value || !selectedModelId.value) {
-      applyDefaultSelection()
-    }
-  } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '加载模型目录失败'
-  } finally {
-    catalogLoading.value = false
-  }
-}
-
-async function loadAvailableSkills() {
-  try {
-    availableSkills.value = await fetchSkills()
-  } catch {
-    availableSkills.value = []
-  }
-}
-
-function handleGlobalPointerDown(event: PointerEvent) {
-  if (!modelMenuOpen.value) {
-    return
-  }
-  const target = event.target
-  if (target instanceof Node && modelMenuRef.value?.contains(target)) {
-    return
-  }
-  closeModelMenu()
-}
-
-function handleGlobalKeydown(event: KeyboardEvent) {
-  if (event.key === 'Escape') {
-    closeModelMenu()
-  }
-}
-
-async function attachTaskStream(taskId: string, conversationId = '') {
-  if (!taskId || activeStreamingTaskId === taskId) {
-    return
-  }
-
-  stopActiveStream()
-  const abortController = new AbortController()
-  activeStreamAbortController = abortController
-  activeStreamingTaskId = taskId
-  activeTaskId.value = taskId
-  sending.value = true
-
-  let streamConversationId = conversationId || activeConversationId.value
-  let firstVisibleChunkSeen = false
-
-  try {
-    const result = await streamRunTask(
-      taskId,
-      () => {
-        void 0
-      },
-      (event) => {
-        activeTaskEventSeq.value = Math.max(activeTaskEventSeq.value, event.seq ?? 0)
-        const currentEntries = streamConversationId
-          ? draftEntriesByConversation.value[streamConversationId] ?? (streamConversationId === activeConversationId.value ? entries.value : [])
-          : entries.value
-        const nextEntries = updateTranscriptFromStreamEvent(currentEntries, event)
-        applyEntriesForConversation(streamConversationId, nextEntries)
-
-        const isVisibleTextChunk =
-          !firstVisibleChunkSeen &&
-          !!streamConversationId &&
-          event.type === 'log.message' &&
-          typeof event.payload?.Kind === 'string' &&
-          event.payload.Kind === 'text_delta' &&
-          typeof event.payload?.Text === 'string' &&
-          event.payload.Text.length > 0
-        if (isVisibleTextChunk) {
-          firstVisibleChunkSeen = true
-          void loadConversations(streamConversationId)
-        }
-      },
-      { signal: abortController.signal, afterSeq: activeTaskEventSeq.value },
-    )
-
-    streamConversationId = result.conversation_id || streamConversationId
-    clearActiveTask()
-    await completeTaskConversation(result.conversation_id, result.usage, result.provider_id, result.model_id)
-  } catch (error) {
-    if (error instanceof Error && error.message === TASK_STREAM_ABORTED_MESSAGE) {
-      return
-    }
-
-    const taskError = error instanceof Error ? error.message : '发送消息失败'
-    try {
-      const task = await fetchTaskDetails(taskId)
-      if (!isTaskActive(task)) {
-        if (task.status === 'cancelled') {
-          clearActiveTask()
-          return
-        }
-        errorMessage.value = taskError
-        const currentEntries = streamConversationId ? draftEntriesByConversation.value[streamConversationId] ?? [] : entries.value
-        const nextEntries = updateTranscriptFromStreamEvent(currentEntries, {
-          type: 'task.failed',
-          payload: { error: taskError },
-        })
-        applyEntriesForConversation(streamConversationId, nextEntries)
-        clearActiveTask()
-      }
-    } catch {
-      if (taskError !== 'Task event stream disconnected') {
-        errorMessage.value = taskError
-        const currentEntries = streamConversationId ? draftEntriesByConversation.value[streamConversationId] ?? [] : entries.value
-        const nextEntries = updateTranscriptFromStreamEvent(currentEntries, {
-          type: 'task.failed',
-          payload: { error: taskError },
-        })
-        applyEntriesForConversation(streamConversationId, nextEntries)
-      }
-    }
-  } finally {
-    if (activeStreamAbortController === abortController) {
-      activeStreamAbortController = null
-    }
-    if (activeStreamingTaskId === taskId) {
-      activeStreamingTaskId = ''
-    }
-    sending.value = false
-  }
-}
-
-async function resumeTask(task: TaskDetails | null | undefined, conversationId = '') {
-  if (!task || !isTaskActive(task)) {
-    if (task && activeTaskId.value === task.id) {
-      clearActiveTask()
-    }
-    return
-  }
-
-  const taskConversationId = resolveTaskConversationId(task)
-  if (conversationId && taskConversationId && taskConversationId !== conversationId) {
-    return
-  }
-
-  await hydratePendingApprovals(task, taskConversationId || conversationId)
-  await attachTaskStream(task.id, taskConversationId || conversationId)
-}
-
-async function resumeSavedTask() {
-  if (!activeTaskId.value) {
-    return
-  }
-
-  try {
-    const task = await fetchTaskDetails(activeTaskId.value)
-    await resumeTask(task, activeConversationId.value)
-  } catch {
-    clearActiveTask()
-  }
-}
-
-async function resumeStreamForConversation(conversationId: string) {
-  if (!conversationId) {
-    return
-  }
-
-  if (activeTaskId.value) {
-    try {
-      const task = await fetchTaskDetails(activeTaskId.value)
-      const taskConversationId = resolveTaskConversationId(task)
-      if (!taskConversationId || taskConversationId === conversationId) {
-        await resumeTask(task, conversationId)
-        if (activeTaskId.value) {
-          return
-        }
-      }
-    } catch {
-      clearActiveTask()
-    }
-  }
-
-  const task = await findRunningTaskByConversation(conversationId)
-  await resumeTask(task, conversationId)
-}
-
 async function handleSend(message: string) {
-  sending.value = true
   errorMessage.value = ''
   const previousConversationId = activeConversationId.value
+  const startedFromRouteConversationId = routeConversationId.value
+  const sendingKey = previousConversationId || NEW_CONVERSATION_SENDING_KEY
+  sendingConversationKey.value = sendingKey
 
-  entries.value = [...entries.value, { id: `user-${Date.now()}`, kind: 'user', title: 'You', content: message }]
+  const nextEntries = [...currentConversationEntries.value, { id: `user-${Date.now()}`, kind: 'user' as const, title: 'You', content: message }]
+  entries.value = nextEntries
   if (previousConversationId) {
-    setDraftEntries(previousConversationId, entries.value)
+    setDraftEntries(previousConversationId, nextEntries)
   }
 
   try {
@@ -751,8 +889,13 @@ async function handleSend(message: string) {
       ...(selectedSkillNames.value.length > 0 ? { skills: selectedSkillNames.value } : {}),
     })
     const createdConversationId = task.input?.conversation_id ?? ''
+
+    if (createdConversationId) {
+      setDraftEntries(createdConversationId, nextEntries)
+      setTaskStateForConversation(createdConversationId, task.id, 0)
+    }
+
     if (createdConversationId && !previousConversationId) {
-      setDraftEntries(createdConversationId, entries.value)
       upsertPendingConversation({
         id: createdConversationId,
         title: '',
@@ -764,10 +907,13 @@ async function handleSend(message: string) {
         created_at: '',
         updated_at: '',
       })
-      activeConversationId.value = createdConversationId
+      if (routeConversationId.value === startedFromRouteConversationId) {
+        await navigateToConversation(createdConversationId)
+      }
       await loadConversations(createdConversationId)
     }
-    activeTaskId.value = task.id
+
+    sendingConversationKey.value = ''
     await attachTaskStream(task.id, createdConversationId || previousConversationId)
   } catch (error) {
     if (!(error instanceof Error) || error.message !== TASK_STREAM_ABORTED_MESSAGE) {
@@ -778,11 +924,46 @@ async function handleSend(message: string) {
         payload: { error: taskError },
       })
     }
-  } finally {
-    if (!activeTaskId.value) {
-      sending.value = false
-    }
+    sendingConversationKey.value = ''
   }
+}
+
+async function handleDeleteConversation(conversationId: string) {
+  errorMessage.value = ''
+
+  try {
+    await deleteConversation(conversationId)
+    clearTaskStateForConversation(conversationId)
+    if (activeConversationId.value === conversationId) {
+      await navigateToConversation('')
+      entries.value = []
+    }
+    await loadConversations(routeConversationId.value)
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '删除对话失败'
+  }
+}
+
+async function selectConversation(conversationId: string) {
+  if (conversationId === routeConversationId.value) {
+    await loadConversationForRoute(conversationId)
+    return
+  }
+  await navigateToConversation(conversationId)
+}
+
+function startNewConversation() {
+  errorMessage.value = ''
+  contextStatsOpen.value = false
+  modelMenuOpen.value = false
+  sidebarDrawerOpen.value = false
+  entries.value = []
+  syncActiveTaskStateFromConversation('')
+  applyDefaultSelection()
+  void navigateToConversation('')
+  void nextTick(() => {
+    composerRef.value?.focus()
+  })
 }
 
 async function handleLogout() {
@@ -790,6 +971,30 @@ async function handleLogout() {
   clearChatState()
   await router.push('/login')
 }
+
+function handleGlobalPointerDown(event: PointerEvent) {
+  const target = event.target
+  if (modelMenuOpen.value && !(target instanceof Node && modelMenuRef.value?.contains(target))) {
+    closeModelMenu()
+  }
+  if (contextStatsOpen.value && !(target instanceof Node && contextStatsRef.value?.contains(target))) {
+    closeContextStats()
+  }
+}
+
+function handleGlobalKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape') {
+    closeModelMenu()
+    closeContextStats()
+  }
+}
+
+watch(routeConversationId, (conversationId) => {
+  if (!initialized.value) {
+    return
+  }
+  void loadConversationForRoute(conversationId)
+})
 
 onMounted(async () => {
   syncSidebarViewport()
@@ -801,18 +1006,40 @@ onMounted(async () => {
   activeConversationId.value = saved.activeConversationId
   activeTaskId.value = saved.activeTaskId
   activeTaskEventSeq.value = saved.activeTaskEventSeq
+  activeTaskIdByConversation.value = { ...saved.activeTaskIdByConversation }
+  activeTaskEventSeqByConversation.value = { ...saved.activeTaskEventSeqByConversation }
+  if (saved.activeConversationId && saved.activeTaskId && !activeTaskIdByConversation.value[saved.activeConversationId]) {
+    activeTaskIdByConversation.value[saved.activeConversationId] = saved.activeTaskId
+  }
+  if (saved.activeConversationId && !activeTaskEventSeqByConversation.value[saved.activeConversationId]) {
+    activeTaskEventSeqByConversation.value[saved.activeConversationId] = saved.activeTaskEventSeq
+  }
   entries.value = saved.entries
   draftEntriesByConversation.value = saved.draftEntriesByConversation
   selectedSkillsByConversation.value = saved.selectedSkillsByConversation
 
-  await Promise.all([loadCatalog(), loadAvailableSkills(), loadConversations()])
-  if (!activeConversationId.value || !syncSelectionFromConversation(activeConversationId.value)) {
-    applyDefaultSelection()
-  }
-  await resumeSavedTask()
+  await Promise.all([loadCatalog(), loadAvailableSkills(), loadConversations(routeConversationId.value || saved.activeConversationId)])
+  initialized.value = true
 
-  if (!activeConversationId.value && entries.value.length > 0) {
-    return
+  if (routeConversationId.value) {
+    await loadConversationForRoute(routeConversationId.value)
+  } else {
+    syncActiveTaskStateFromConversation('')
+    if (!selectedProviderId.value || !selectedModelId.value) {
+      applyDefaultSelection()
+    }
+  }
+
+  if (routeConversationId.value) {
+    const savedTaskId = activeTaskIdByConversation.value[routeConversationId.value] ?? ''
+    if (savedTaskId) {
+      try {
+        const task = await fetchTaskDetails(savedTaskId)
+        await resumeTask(task, routeConversationId.value)
+      } catch {
+        clearTaskStateForConversation(routeConversationId.value)
+      }
+    }
   }
 })
 
@@ -904,6 +1131,97 @@ onBeforeUnmount(() => {
           </strong>
         </div>
         <div class="topbar-right">
+          <el-popover
+              v-model:visible="contextStatsOpen"
+              placement="bottom-end"
+              trigger="click"
+              popper-class="context-stats-popper"
+              :width="300"
+            >
+              <template #reference>
+                <button
+                  class="context-stats-trigger"
+                  type="button"
+                  data-context-stats-trigger
+                  :title="`上下文用量 ${contextStatsSummary.used} / ${contextStatsSummary.max}`"
+                  :aria-expanded="contextStatsOpen ? 'true' : 'false'"
+                  :aria-label="`上下文占用 ${contextStatsSummary.ratio}`"
+                >
+                  <el-progress
+                    type="dashboard"
+                    :percentage="contextRingPercent"
+                    :width="28"
+                    :stroke-width="3"
+                    :show-text="false"
+                    :color="contextRingColor"
+                    class="context-stats-ring-el"
+                  />
+                  <span class="context-stats-ring-pct">{{ contextStatsSummary.ratio }}</span>
+                </button>
+              </template>
+              <div class="context-stats-panel" data-context-stats-panel>
+                <div class="context-stats-panel-header">
+                  <span class="context-stats-panel-title">上下文用量</span>
+                  <span class="context-stats-panel-model">{{ currentContextUsage.modelLabel || '当前模型未知' }}</span>
+                </div>
+                <div class="context-stats-overview">
+                  <el-progress
+                    type="dashboard"
+                    :percentage="contextRingPercent"
+                    :width="80"
+                    :stroke-width="6"
+                    :color="contextRingColor"
+                    class="context-stats-dashboard"
+                  >
+                    <template #default>
+                      <div class="context-stats-dashboard-inner">
+                        <span class="context-stats-dashboard-pct">{{ contextStatsSummary.ratio }}</span>
+                        <span class="context-stats-dashboard-label">已用</span>
+                      </div>
+                    </template>
+                  </el-progress>
+                  <div class="context-stats-overview-nums">
+                    <div class="context-stats-num-row">
+                      <span class="context-stats-num-label">已用 Token</span>
+                      <span class="context-stats-num-val">{{ contextStatsSummary.used }}</span>
+                    </div>
+                    <div v-if="currentContextUsage.memoryState" class="context-stats-num-row">
+                      <span class="context-stats-num-label">短期记忆</span>
+                      <span class="context-stats-num-val">{{ contextStatsSummary.shortTermTokens }}</span>
+                    </div>
+                    <div v-if="currentContextUsage.memoryState?.has_summary" class="context-stats-num-row">
+                      <span class="context-stats-num-label">压缩摘要</span>
+                      <span class="context-stats-num-val">{{ contextStatsSummary.summaryTokens }}</span>
+                    </div>
+                    <div class="context-stats-num-row">
+                      <span class="context-stats-num-label">上下文上限</span>
+                      <span class="context-stats-num-val">{{ contextStatsSummary.max }}</span>
+                    </div>
+                    <div v-if="currentContextUsage.shortTermLimit" class="context-stats-num-row">
+                      <span class="context-stats-num-label context-stats-num-label--compress">压缩触发</span>
+                      <span class="context-stats-num-val context-stats-num-val--compress">{{ contextStatsSummary.shortTermLimit }}</span>
+                    </div>
+                  </div>
+                </div>
+                <div v-if="currentContextUsage.compression" class="context-stats-compression">
+                  <div class="context-stats-compression-header">
+                    <span class="context-stats-compression-title">最近压缩</span>
+                    <span class="context-stats-compression-badge">-{{ contextStatsSummary.compressionSaved }}</span>
+                  </div>
+                  <el-progress
+                    :percentage="Math.round((currentContextUsage.compression.ratio ?? 1) * 100)"
+                    :stroke-width="5"
+                    :show-text="false"
+                    color="#8fb8ae"
+                    class="context-stats-bar"
+                  />
+                  <div class="context-stats-compression-meta">
+                    {{ contextStatsSummary.compressionBefore }} → {{ contextStatsSummary.compressionAfter }}
+                    <span class="context-stats-compression-keep">保留 {{ contextStatsSummary.compressionRatio }}</span>
+                  </div>
+                </div>
+              </div>
+            </el-popover>
           <button
             class="thinking-toggle"
             :class="{ active: showThinkingAndTools }"
@@ -925,8 +1243,8 @@ onBeforeUnmount(() => {
 
       <div class="chat-main">
         <MessageList
-          :loading="messagesLoading || sending"
-          :entries="entries"
+          :loading="messagesLoading || currentConversationBusy"
+          :entries="entries.filter(e => !e.memory_context_state)"
           :show-thinking-and-tools="showThinkingAndTools"
           :approval-decision-state-by-id="approvalDecisionStateById"
           :question-response-state-by-id="questionResponseStateById"
@@ -939,7 +1257,7 @@ onBeforeUnmount(() => {
         <MessageComposer
           ref="composerRef"
           :disabled="composerDisabled"
-          :busy="sending"
+          :busy="currentConversationBusy"
           :stop-disabled="stoppingTask"
           :skills="availableSkills"
           :selected-skill-names="selectedSkillNames"

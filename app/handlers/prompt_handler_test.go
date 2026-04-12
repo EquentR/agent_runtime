@@ -618,7 +618,7 @@ func TestSwaggerJSONIncludesPromptPathsAndDefinitions(t *testing.T) {
 	if !ok {
 		t.Fatalf("definitions = %#v, want object", document["definitions"])
 	}
-	for _, definition := range []string{"app_handlers.PromptDocumentSwaggerDoc", "app_handlers.PromptBindingSwaggerDoc"} {
+	for _, definition := range []string{"handlers.PromptDocumentSwaggerDoc", "handlers.PromptBindingSwaggerDoc"} {
 		if _, ok := definitions[definition]; !ok {
 			t.Fatalf("swagger definitions missing %q", definition)
 		}

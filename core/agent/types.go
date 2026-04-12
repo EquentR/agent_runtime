@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"strings"
+	"sync"
 	"time"
 
 	coreaudit "github.com/EquentR/agent_runtime/core/audit"
@@ -21,6 +22,9 @@ type Runner struct {
 	client   model.LlmClient
 	registry *tools.Registry
 	options  Options
+
+	snapshotMu            sync.RWMutex
+	lastMemoryCompression *MemoryCompressionSnapshot
 }
 
 type Options struct {
@@ -72,13 +76,14 @@ type toolApprovalCheckpoint struct {
 }
 
 type RunResult struct {
-	Messages      []model.Message
-	FinalMessage  model.Message
-	StepsExecuted int
-	ToolCalls     int
-	StopReason    string
-	Usage         model.TokenUsage
-	Cost          *coretypes.CostBreakdown
+	Messages          []model.Message
+	FinalMessage      model.Message
+	StepsExecuted     int
+	ToolCalls         int
+	StopReason        string
+	Usage             model.TokenUsage
+	Cost              *coretypes.CostBreakdown
+	MemoryCompression *MemoryCompressionSnapshot
 }
 
 func NewRunner(client model.LlmClient, registry *tools.Registry, options Options) (*Runner, error) {

@@ -44,12 +44,19 @@ type ModelProviderOption struct {
 	Models []ModelOptionEntry `json:"models"`
 }
 
+// ModelContext captures the pre-existing model catalog context shape.
+type ModelContext struct {
+	Max    int64 `json:"max"`
+	Input  int64 `json:"input"`
+	Output int64 `json:"output"`
+}
+
 type ModelOptionEntry struct {
-	ID      string                     `json:"id"`
-	Name    string                     `json:"name"`
-	Type    string                     `json:"type"`
-	Context coretypes.LLMContextConfig `json:"context"`
-	Cost    *coretypes.ModelPricing    `json:"cost,omitempty"`
+	ID      string                  `json:"id"`
+	Name    string                  `json:"name"`
+	Type    string                  `json:"type"`
+	Context ModelContext            `json:"context"`
+	Cost    *coretypes.ModelPricing `json:"cost,omitempty"`
 }
 
 type RunTaskInput struct {
@@ -67,13 +74,15 @@ type RunTaskInput struct {
 const defaultRunTaskScene = "agent.run.default"
 
 type RunTaskResult struct {
-	ConversationID   string                   `json:"conversation_id"`
-	ProviderID       string                   `json:"provider_id"`
-	ModelID          string                   `json:"model_id"`
-	FinalMessage     model.Message            `json:"final_message"`
-	Usage            model.TokenUsage         `json:"usage"`
-	Cost             *coretypes.CostBreakdown `json:"cost,omitempty"`
-	MessagesAppended int                      `json:"messages_appended"`
+	ConversationID    string                     `json:"conversation_id"`
+	ProviderID        string                     `json:"provider_id"`
+	ModelID           string                     `json:"model_id"`
+	FinalMessage      model.Message              `json:"final_message"`
+	Usage             model.TokenUsage           `json:"usage"`
+	Cost              *coretypes.CostBreakdown   `json:"cost,omitempty"`
+	MessagesAppended  int                        `json:"messages_appended"`
+	MemoryContext     *MemoryContextSnapshot     `json:"memory_context,omitempty"`
+	MemoryCompression *MemoryCompressionSnapshot `json:"memory_compression,omitempty"`
 }
 
 type ClientFactory func(provider *coretypes.LLMProvider, llmModel *coretypes.LLMModel) (model.LlmClient, error)
@@ -125,12 +134,17 @@ func (r *ModelResolver) Catalog() ModelCatalog {
 		models := make([]ModelOptionEntry, 0, len(provider.Models))
 		for j := range provider.Models {
 			llmModel := &provider.Models[j]
+			ctx := llmModel.ContextWindow()
 			models = append(models, ModelOptionEntry{
-				ID:      llmModel.ModelID(),
-				Name:    firstNonEmpty(llmModel.ModelName(), llmModel.ModelID()),
-				Type:    llmModel.ModelType(),
-				Context: llmModel.ContextWindow(),
-				Cost:    llmModel.Pricing(),
+				ID:   llmModel.ModelID(),
+				Name: firstNonEmpty(llmModel.ModelName(), llmModel.ModelID()),
+				Type: llmModel.ModelType(),
+				Context: ModelContext{
+					Max:    ctx.Max,
+					Input:  ctx.Input,
+					Output: ctx.Output,
+				},
+				Cost: llmModel.Pricing(),
 			})
 		}
 		providers = append(providers, ModelProviderOption{
@@ -357,6 +371,10 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 			runInput.InteractionResume = resume
 		}
 		result, err := runner.Run(ctx, runInput)
+		latestCompression := cloneMemoryCompressionSnapshot(conversation.MemoryCompression)
+		if result.MemoryCompression != nil {
+			latestCompression = cloneMemoryCompressionSnapshot(result.MemoryCompression)
+		}
 		if err != nil {
 			if errors.Is(err, ErrInteractionPending) {
 				return nil, coretasks.ErrTaskSuspended
@@ -377,10 +395,8 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 				return nil, appendErr
 			}
 			auditor.recordMessagesPersisted(ctx, []model.Message{failureMessage})
-			if memoryManager != nil && deps.ConversationStore != nil {
-				if latestSummary := memoryManager.Summary(); latestSummary != "" {
-					_ = deps.ConversationStore.SetMemorySummary(ctx, conversation.ID, latestSummary)
-				}
+			if _, persistErr := persistConversationMemoryState(ctx, deps.ConversationStore, conversation.ID, memoryManager, latestCompression); persistErr != nil {
+				return nil, persistErr
 			}
 			return nil, err
 		}
@@ -390,20 +406,20 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 			return nil, err
 		}
 		auditor.recordMessagesPersisted(ctx, result.Messages)
-		// Persist the memory summary for the next task turn.
-		if memoryManager != nil && deps.ConversationStore != nil {
-			if latestSummary := memoryManager.Summary(); latestSummary != "" {
-				_ = deps.ConversationStore.SetMemorySummary(ctx, conversation.ID, latestSummary)
-			}
+		memoryContext, err := persistConversationMemoryState(ctx, deps.ConversationStore, conversation.ID, memoryManager, latestCompression)
+		if err != nil {
+			return nil, err
 		}
 		return RunTaskResult{
-			ConversationID:   conversation.ID,
-			ProviderID:       conversation.ProviderID,
-			ModelID:          conversation.ModelID,
-			FinalMessage:     result.FinalMessage,
-			Usage:            result.Usage,
-			Cost:             result.Cost,
-			MessagesAppended: len(result.Messages) + boolToInt(checkpoint == nil),
+			ConversationID:    conversation.ID,
+			ProviderID:        conversation.ProviderID,
+			ModelID:           conversation.ModelID,
+			FinalMessage:      result.FinalMessage,
+			Usage:             result.Usage,
+			Cost:              result.Cost,
+			MessagesAppended:  len(result.Messages) + boolToInt(checkpoint == nil),
+			MemoryContext:     memoryContext,
+			MemoryCompression: latestCompression,
 		}, nil
 	}
 }
@@ -561,6 +577,20 @@ func boolToInt(value bool) int {
 		return 1
 	}
 	return 0
+}
+
+func persistConversationMemoryState(ctx context.Context, store *ConversationStore, conversationID string, manager *memory.Manager, compression *MemoryCompressionSnapshot) (*MemoryContextSnapshot, error) {
+	if manager == nil || store == nil {
+		return nil, nil
+	}
+	if err := store.SetMemorySummary(ctx, conversationID, manager.Summary()); err != nil {
+		corelog.Warn("failed to persist memory summary", corelog.String("component", "agent"), corelog.String("module", "executor"), corelog.String("conversation_id", conversationID), corelog.Err(err))
+	}
+	memoryContext := newMemoryContextSnapshot(manager.ContextState())
+	if err := store.SetMemorySnapshots(ctx, conversationID, memoryContext, compression); err != nil {
+		return nil, err
+	}
+	return memoryContext, nil
 }
 
 func buildMemoryManager(factory MemoryFactory, client model.LlmClient, llmModel *coretypes.LLMModel) (*memory.Manager, error) {

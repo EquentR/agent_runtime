@@ -65,6 +65,7 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 	if len(input.Tools) > 0 && r.registry == nil {
 		return nil, fmt.Errorf("tool registry is required when tools are provided")
 	}
+	r.rememberMemoryCompressionSnapshot(nil)
 
 	memoryInsertedCount := len(input.Messages)
 	baseConversation := cloneMessages(input.Messages)
@@ -101,10 +102,11 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 		pricing := pricingFromOptions(r.options)
 		snapshotResult := func(stepsExecuted int) {
 			result = RunResult{
-				Messages:      append([]model.Message(nil), produced...),
-				StepsExecuted: stepsExecuted,
-				ToolCalls:     toolCalls,
-				Usage:         totalUsage,
+				Messages:          append([]model.Message(nil), produced...),
+				StepsExecuted:     stepsExecuted,
+				ToolCalls:         toolCalls,
+				Usage:             totalUsage,
+				MemoryCompression: r.lastMemoryCompressionSnapshot(),
 			}
 			if pricing != nil {
 				cost := totalCost
@@ -281,12 +283,13 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 				afterToolTurn = false
 				r.emitStepFinish(ctx, step, title, map[string]any{"stop_reason": "assistant_message"})
 				result = RunResult{
-					Messages:      produced,
-					FinalMessage:  assistant,
-					StepsExecuted: step,
-					ToolCalls:     toolCalls,
-					StopReason:    "assistant_message",
-					Usage:         totalUsage,
+					Messages:          produced,
+					FinalMessage:      assistant,
+					StepsExecuted:     step,
+					ToolCalls:         toolCalls,
+					StopReason:        "assistant_message",
+					Usage:             totalUsage,
+					MemoryCompression: r.lastMemoryCompressionSnapshot(),
 				}
 				if pricing != nil {
 					cost := totalCost
@@ -321,11 +324,12 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 		}
 
 		result = RunResult{
-			Messages:      produced,
-			StepsExecuted: r.options.MaxSteps,
-			ToolCalls:     toolCalls,
-			StopReason:    "max_steps_exceeded",
-			Usage:         totalUsage,
+			Messages:          produced,
+			StepsExecuted:     r.options.MaxSteps,
+			ToolCalls:         toolCalls,
+			StopReason:        "max_steps_exceeded",
+			Usage:             totalUsage,
+			MemoryCompression: r.lastMemoryCompressionSnapshot(),
 		}
 		if pricing != nil {
 			cost := totalCost

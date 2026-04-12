@@ -364,6 +364,53 @@ func TestTaskMigrationCreatesInteractionsTableAndBackfillsApprovals(t *testing.T
 	}
 }
 
+func TestTaskMigrationAddsConversationMemorySnapshotColumns(t *testing.T) {
+	log.Init(&log.Config{Level: "error"})
+
+	databaseDir := t.TempDir()
+	db.Init(&db.Database{
+		Name:     "conversation_memory_snapshot_migration_test",
+		DbDir:    databaseDir,
+		InMemory: true,
+		LogLevel: "silent",
+	})
+
+	rawDB := db.DB()
+	if err := rawDB.Migrator().DropTable(&agent.Conversation{}, &agent.ConversationMessage{}, &migrate.DataVersion{}); err != nil {
+		t.Fatalf("reset conversation migration tables error = %v", err)
+	}
+	if err := rawDB.AutoMigrate(&migrate.DataVersion{}); err != nil {
+		t.Fatalf("AutoMigrate(data_versions) error = %v", err)
+	}
+	if err := rawDB.Exec(`CREATE TABLE conversations (
+		id varchar(64) primary key,
+		provider_id varchar(128) not null,
+		model_id varchar(128) not null,
+		title varchar(255),
+		last_message text,
+		message_count integer not null default 0,
+		last_message_at datetime,
+		created_by varchar(128),
+		memory_summary text,
+		created_at datetime,
+		updated_at datetime
+	)`).Error; err != nil {
+		t.Fatalf("create legacy conversations table error = %v", err)
+	}
+	if err := rawDB.Create(&migrate.DataVersion{ID: 1, Version: "0.1.2"}).Error; err != nil {
+		t.Fatalf("seed data version error = %v", err)
+	}
+
+	Bootstrap("0.1.3")
+
+	if !rawDB.Migrator().HasColumn("conversations", "memory_context") {
+		t.Fatal("conversations.memory_context column was not created")
+	}
+	if !rawDB.Migrator().HasColumn("conversations", "memory_compression") {
+		t.Fatal("conversations.memory_compression column was not created")
+	}
+}
+
 func TestTaskMigrationBackfillsPendingApprovalWithoutResponsePayload(t *testing.T) {
 	log.Init(&log.Config{Level: "error"})
 

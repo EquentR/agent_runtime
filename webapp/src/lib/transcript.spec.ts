@@ -1283,26 +1283,177 @@ describe('summarizeToolResult', () => {
 })
 
 describe('memory.compressed event', () => {
-  it('appends a memory entry to the transcript when tokens_before is provided', () => {
+  it('stores backend memory.context_state payloads on memory entries', () => {
     const result = updateTranscriptFromStreamEvent([], {
-      type: 'memory.compressed',
-      payload: { tokens_before: 50000, tokens_after: 8000 },
+      type: 'memory.context_state',
+      payload: {
+        short_term_tokens: 320,
+        summary_tokens: 90,
+        rendered_summary_tokens: 120,
+        total_tokens: 440,
+        short_term_limit: 8000,
+        summary_limit: 2000,
+        max_context_tokens: 128000,
+        has_summary: true,
+      },
     })
+
     expect(result).toHaveLength(1)
-    expect(result[0].kind).toBe('memory')
-    expect(result[0].title).toBe('记忆压缩')
-    expect(result[0].content).toContain('50')
-    expect(result[0].content).toContain('8')
-    expect(result[0].content).toContain('tokens')
+    expect(result[0]).toMatchObject({
+      kind: 'memory',
+      memory_context_state: {
+        short_term_tokens: 320,
+        summary_tokens: 90,
+        rendered_summary_tokens: 120,
+        total_tokens: 440,
+        short_term_limit: 8000,
+        summary_limit: 2000,
+        max_context_tokens: 128000,
+        has_summary: true,
+      },
+    })
   })
 
-  it('appends a memory entry with no content when tokens_before is zero', () => {
+  it('stores structured memory.compressed payloads without relying on content parsing', () => {
     const result = updateTranscriptFromStreamEvent([], {
       type: 'memory.compressed',
-      payload: { tokens_before: 0, tokens_after: 0 },
+      payload: {
+        tokens_before: 50000,
+        tokens_after: 8000,
+        short_term_tokens_before: 48000,
+        short_term_tokens_after: 4000,
+        summary_tokens_before: 1200,
+        summary_tokens_after: 1700,
+        rendered_summary_tokens_before: 1400,
+        rendered_summary_tokens_after: 2200,
+        total_tokens_before: 49400,
+        total_tokens_after: 6200,
+      },
     })
+
     expect(result).toHaveLength(1)
-    expect(result[0].kind).toBe('memory')
-    expect(result[0].content).toBeUndefined()
+    expect(result[0]).toMatchObject({
+      kind: 'memory',
+      title: '记忆压缩',
+      memory_compression: {
+        tokens_before: 50000,
+        tokens_after: 8000,
+        short_term_tokens_before: 48000,
+        short_term_tokens_after: 4000,
+        summary_tokens_before: 1200,
+        summary_tokens_after: 1700,
+        rendered_summary_tokens_before: 1400,
+        rendered_summary_tokens_after: 2200,
+        total_tokens_before: 49400,
+        total_tokens_after: 6200,
+      },
+    })
+  })
+
+  it('accepts camelCase and PascalCase memory event payload fields', () => {
+    const contextResult = updateTranscriptFromStreamEvent([], {
+      type: 'memory.context_state',
+      payload: {
+        ShortTermTokens: 320,
+        summaryTokens: 90,
+        RenderedSummaryTokens: 120,
+        totalTokens: 440,
+        ShortTermLimit: 8000,
+        summaryLimit: 2000,
+        MaxContextTokens: 128000,
+        HasSummary: true,
+      },
+    })
+
+    const compressionResult = updateTranscriptFromStreamEvent([], {
+      type: 'memory.compressed',
+      payload: {
+        TokensBefore: 50000,
+        tokensAfter: 8000,
+        ShortTermTokensBefore: 48000,
+        shortTermTokensAfter: 4000,
+        SummaryTokensBefore: 1200,
+        summaryTokensAfter: 1700,
+        RenderedSummaryTokensBefore: 1400,
+        renderedSummaryTokensAfter: 2200,
+        TotalTokensBefore: 49400,
+        totalTokensAfter: 6200,
+      },
+    })
+
+    expect(contextResult[0].memory_context_state).toMatchObject({
+      short_term_tokens: 320,
+      summary_tokens: 90,
+      rendered_summary_tokens: 120,
+      total_tokens: 440,
+      short_term_limit: 8000,
+      summary_limit: 2000,
+      max_context_tokens: 128000,
+      has_summary: true,
+    })
+    expect(compressionResult[0].memory_compression).toMatchObject({
+      tokens_before: 50000,
+      tokens_after: 8000,
+      short_term_tokens_before: 48000,
+      short_term_tokens_after: 4000,
+      summary_tokens_before: 1200,
+      summary_tokens_after: 1700,
+      rendered_summary_tokens_before: 1400,
+      rendered_summary_tokens_after: 2200,
+      total_tokens_before: 49400,
+      total_tokens_after: 6200,
+    })
+  })
+
+  it('ignores invalid memory.context_state payloads instead of overwriting existing state', () => {
+    const existing = updateTranscriptFromStreamEvent([], {
+      type: 'memory.context_state',
+      payload: {
+        short_term_tokens: 320,
+        summary_tokens: 90,
+        rendered_summary_tokens: 120,
+        total_tokens: 440,
+        short_term_limit: 8000,
+        summary_limit: 2000,
+        max_context_tokens: 128000,
+        has_summary: true,
+      },
+    })
+
+    const result = updateTranscriptFromStreamEvent(existing, {
+      type: 'memory.context_state',
+      payload: { note: 'missing numeric fields' },
+    })
+
+    expect(result).toEqual(existing)
+  })
+
+  it('ignores invalid memory.compressed payloads instead of appending zero-filled entries', () => {
+    const result = updateTranscriptFromStreamEvent([], {
+      type: 'memory.compressed',
+      payload: { note: 'missing numeric fields' },
+    })
+
+    expect(result).toEqual([])
+  })
+
+  it('ignores zero-filled structured compression payloads', () => {
+    const result = updateTranscriptFromStreamEvent([], {
+      type: 'memory.compressed',
+      payload: {
+        tokens_before: 0,
+        tokens_after: 0,
+        short_term_tokens_before: 0,
+        short_term_tokens_after: 0,
+        summary_tokens_before: 0,
+        summary_tokens_after: 0,
+        rendered_summary_tokens_before: 0,
+        rendered_summary_tokens_after: 0,
+        total_tokens_before: 0,
+        total_tokens_after: 0,
+      },
+    })
+
+    expect(result).toEqual([])
   })
 })

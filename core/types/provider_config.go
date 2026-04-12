@@ -81,9 +81,9 @@ type LLMCostConfig struct {
 }
 
 type LLMContextConfig struct {
-	Max    int64 `yaml:"max"`
-	Input  int64 `yaml:"input"`
-	Output int64 `yaml:"output"`
+	Max    int64 `yaml:"max"    json:"max"`
+	Input  int64 `yaml:"input"  json:"input"`
+	Output int64 `yaml:"output" json:"output"`
 }
 
 func (m BaseModel) ModelID() string {
