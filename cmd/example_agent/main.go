@@ -16,7 +16,7 @@ import (
 )
 
 var (
-	Version   = "0.1.1-dev"
+	Version   = "0.1.3-dev"
 	GitCommit = "none"
 )
 
