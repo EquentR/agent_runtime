@@ -60,6 +60,7 @@ const NEW_CONVERSATION_SENDING_KEY = '__new__'
 interface DraftAttachmentItem extends Omit<AttachmentRef, 'id'> {
   local_id: string
   id?: string
+  preview_url?: string
   upload_state: 'uploading' | 'uploaded' | 'failed'
   error_message?: string
 }
@@ -284,6 +285,12 @@ function setDraftAttachments(key: string, attachments: DraftAttachmentItem[]) {
 function clearDraftAttachments(key: string) {
   if (!key || !(key in draftAttachmentsByConversation.value)) {
     return
+  }
+  const removing = draftAttachmentsByConversation.value[key] ?? []
+  for (const item of removing) {
+    if (item.preview_url) {
+      URL.revokeObjectURL(item.preview_url)
+    }
   }
   const next = { ...draftAttachmentsByConversation.value }
   delete next[key]
@@ -908,7 +915,17 @@ async function handleSend(message: string) {
     .map((attachment) => attachment.id as string)
   sendingConversationKey.value = sendingKey
 
-  const nextEntries = [...currentConversationEntries.value, { id: `user-${Date.now()}`, kind: 'user' as const, title: 'You', content: message }]
+  const sentAttachments: AttachmentRef[] = currentDraftAttachments.value
+    .filter((a) => a.upload_state === 'uploaded' && a.id)
+    .map((a) => ({ id: a.id as string, file_name: a.file_name, mime_type: a.mime_type, size_bytes: a.size_bytes }))
+
+  const nextEntries = [...currentConversationEntries.value, {
+    id: `user-${Date.now()}`,
+    kind: 'user' as const,
+    title: 'You',
+    content: message,
+    ...(sentAttachments.length > 0 ? { attachments: sentAttachments } : {}),
+  }]
   entries.value = nextEntries
   if (previousConversationId) {
     setDraftEntries(previousConversationId, nextEntries)
@@ -976,6 +993,7 @@ async function handleAddAttachments(files: File[]) {
     file_name: file.name,
     mime_type: file.type,
     size_bytes: file.size,
+    preview_url: file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined,
     upload_state: 'uploading',
   }))
   setDraftAttachments(draftKey, [...existing, ...created])
@@ -1012,6 +1030,9 @@ async function handleRemoveAttachment(localId: string) {
   const target = current.find((attachment) => attachment.local_id === localId)
   if (!target) {
     return
+  }
+  if (target.preview_url) {
+    URL.revokeObjectURL(target.preview_url)
   }
   if (target.id) {
     try {

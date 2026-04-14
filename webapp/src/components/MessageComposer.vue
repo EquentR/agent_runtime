@@ -8,6 +8,8 @@ interface DraftAttachmentItem {
   local_id: string
   id?: string
   file_name: string
+  mime_type?: string
+  preview_url?: string
   upload_state: 'uploading' | 'uploaded' | 'failed'
   error_message?: string
 }
@@ -40,6 +42,8 @@ const textareaRef = ref<HTMLTextAreaElement | null>(null)
 const fullscreenTextareaRef = ref<HTMLTextAreaElement | null>(null)
 const fullscreenOpen = ref(false)
 const fileInputRef = ref<HTMLInputElement | null>(null)
+const isDraggingOver = ref(false)
+let dragEnterCount = 0
 
 /* One line height ~24px (font-size 0.92rem * line-height 1.5 ≈ 22px + minor padding). */
 const singleLineHeight = 24
@@ -176,7 +180,28 @@ function handleFileInputChange(event: Event) {
   }
 }
 
+function handleDragEnter(event: DragEvent) {
+  if (!props.attachmentsEnabled) {
+    return
+  }
+  event.preventDefault()
+  dragEnterCount++
+  if (dragEnterCount === 1) {
+    isDraggingOver.value = true
+  }
+}
+
+function handleDragLeave() {
+  dragEnterCount--
+  if (dragEnterCount <= 0) {
+    dragEnterCount = 0
+    isDraggingOver.value = false
+  }
+}
+
 function handleDrop(event: DragEvent) {
+  dragEnterCount = 0
+  isDraggingOver.value = false
   if (!props.attachmentsEnabled) {
     return
   }
@@ -209,7 +234,14 @@ defineExpose({ focus })
 
 <template>
   <form class="composer-panel" @submit.prevent="submit">
-    <div class="composer-card">
+    <div
+      class="composer-card"
+      :class="{ 'composer-drag-active': isDraggingOver }"
+      @dragenter="handleDragEnter"
+      @dragover.prevent
+      @dragleave="handleDragLeave"
+      @drop.prevent="handleDrop"
+    >
       <input
         v-if="attachmentsEnabled"
         ref="fileInputRef"
@@ -222,10 +254,9 @@ defineExpose({ focus })
       <div
         v-if="attachmentsEnabled"
         class="composer-upload-dropzone"
-        @dragover.prevent
-        @drop.prevent="handleDrop"
+        :class="{ visible: isDraggingOver }"
       >
-        <span class="composer-upload-dropzone-label">拖拽文件到这里，或点击“附件”上传</span>
+        <span class="composer-upload-dropzone-label">释放文件以上传</span>
       </div>
 
       <div v-if="attachments.length > 0" class="composer-attachment-list">
@@ -235,16 +266,24 @@ defineExpose({ focus })
           class="composer-attachment-chip"
           :data-upload-state="attachment.upload_state"
         >
-          <span class="composer-attachment-name">{{ attachment.file_name }}</span>
-          <span class="composer-attachment-state">
-            {{
-              attachment.upload_state === 'uploading'
-                ? '上传中'
-                : attachment.upload_state === 'failed'
-                  ? attachment.error_message || '上传失败'
-                  : '已上传'
-            }}
-          </span>
+          <img
+            v-if="attachment.preview_url"
+            class="composer-attachment-thumb"
+            :src="attachment.preview_url"
+            :alt="attachment.file_name"
+          />
+          <div class="composer-attachment-info">
+            <span class="composer-attachment-name">{{ attachment.file_name }}</span>
+            <span class="composer-attachment-state">
+              {{
+                attachment.upload_state === 'uploading'
+                  ? '上传中...'
+                  : attachment.upload_state === 'failed'
+                    ? attachment.error_message || '上传失败'
+                    : '已上传'
+              }}
+            </span>
+          </div>
           <button
             type="button"
             class="composer-attachment-remove"

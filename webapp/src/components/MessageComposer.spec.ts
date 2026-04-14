@@ -216,7 +216,7 @@ describe('MessageComposer', () => {
     expect(wrapper.find('.composer-skill-select').exists()).toBe(false)
   })
 
-  it('shows drag upload area when model supports attachments', () => {
+  it('shows drag upload area when model supports attachments', async () => {
     const wrapper = mount(MessageComposer, {
       global: {
         stubs: { ElSelect: true, ElOption: true },
@@ -227,7 +227,11 @@ describe('MessageComposer', () => {
       },
     })
 
-    expect(wrapper.find('.composer-upload-dropzone').exists()).toBe(true)
+    const dropzone = wrapper.find('.composer-upload-dropzone')
+    expect(dropzone.exists()).toBe(true)
+    expect(dropzone.classes()).not.toContain('visible')
+    await wrapper.find('.composer-card').trigger('dragenter')
+    expect(dropzone.classes()).toContain('visible')
   })
 
   it('disables send while attachments are uploading', async () => {
@@ -312,7 +316,7 @@ describe('MessageComposer', () => {
     })
 
     const file = new File(['hello'], 'drop.txt', { type: 'text/plain' })
-    await wrapper.find('.composer-upload-dropzone').trigger('drop', {
+    await wrapper.find('.composer-card').trigger('drop', {
       dataTransfer: {
         files: [file],
       },

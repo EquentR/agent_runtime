@@ -1317,6 +1317,81 @@ p {
   margin-left: auto;
 }
 
+/* Message attachment list (shown in user and reply message bubbles) */
+.message-attachment-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.42rem;
+}
+
+.message-attachment-card {
+  border-radius: 8px;
+  border: 1px solid rgba(25, 50, 59, 0.08);
+  background: rgba(255, 255, 255, 0.72);
+  overflow: hidden;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.message-attachment-card:hover {
+  border-color: rgba(25, 50, 59, 0.16);
+  box-shadow: 0 2px 8px rgba(25, 50, 59, 0.06);
+}
+
+.message-attachment-card[data-attachment-status="expired"],
+.message-attachment-card[data-attachment-status="deleted"] {
+  opacity: 0.55;
+}
+
+.message-attachment-link {
+  display: block;
+  text-decoration: none;
+  color: inherit;
+}
+
+.message-attachment-thumbnail {
+  display: block;
+  max-width: 240px;
+  max-height: 180px;
+  width: auto;
+  height: auto;
+  border-radius: 6px 6px 0 0;
+  object-fit: contain;
+  background: rgba(25, 50, 59, 0.03);
+}
+
+.message-attachment-meta {
+  padding: 0.36rem 0.56rem;
+}
+
+.message-attachment-meta.unavailable {
+  padding: 0.42rem 0.56rem;
+}
+
+.message-attachment-name {
+  margin: 0;
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: #2c4a52;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+  line-height: 1.3;
+}
+
+.message-attachment-status {
+  margin: 0;
+  font-size: 0.68rem;
+  color: #7c8e94;
+  line-height: 1.3;
+}
+
+.message-attachment-card[data-attachment-status="expired"] .message-attachment-status,
+.message-attachment-card[data-attachment-status="deleted"] .message-attachment-status {
+  color: #c4583f;
+}
+
 .trace-reply-footer {
   display: flex;
   align-items: center;
@@ -1840,6 +1915,7 @@ p {
 .composer-card {
   display: flex;
   flex-direction: column;
+  position: relative;
   border-radius: 12px;
   border: 1px solid rgba(25, 50, 59, 0.12);
   background: rgba(255, 255, 255, 0.8);
@@ -1946,6 +2022,142 @@ p {
 .composer-attach-btn svg {
   width: 0.9rem;
   height: 0.9rem;
+}
+
+/* Hidden file input */
+.composer-file-input {
+  display: none;
+}
+
+/* Drag-active highlight on composer card */
+.composer-card.composer-drag-active {
+  border-color: rgba(196, 88, 63, 0.45);
+  box-shadow: 0 0 0 4px rgba(224, 109, 79, 0.12);
+}
+
+/* Drag overlay inside composer card */
+.composer-upload-dropzone {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  place-items: center;
+  background: rgba(255, 250, 245, 0.92);
+  border-radius: 12px;
+  border: 2px dashed rgba(196, 88, 63, 0.38);
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.15s, visibility 0.15s;
+}
+
+.composer-upload-dropzone.visible {
+  opacity: 1;
+  visibility: visible;
+}
+
+.composer-upload-dropzone-label {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: #c4583f;
+}
+
+/* Draft attachment chip list */
+.composer-attachment-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.56rem 0.72rem 0;
+}
+
+.composer-attachment-chip {
+  display: flex;
+  align-items: center;
+  gap: 0.42rem;
+  padding: 0.32rem 0.5rem;
+  border-radius: 8px;
+  border: 1px solid rgba(25, 50, 59, 0.1);
+  background: rgba(248, 250, 250, 0.92);
+  max-width: 220px;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.composer-attachment-chip[data-upload-state="uploading"] {
+  border-color: rgba(196, 88, 63, 0.22);
+  background: rgba(255, 248, 244, 0.92);
+}
+
+.composer-attachment-chip[data-upload-state="failed"] {
+  border-color: rgba(220, 60, 40, 0.28);
+  background: rgba(255, 240, 236, 0.92);
+}
+
+.composer-attachment-chip[data-upload-state="uploaded"] {
+  border-color: rgba(56, 142, 60, 0.22);
+  background: rgba(243, 255, 243, 0.8);
+}
+
+.composer-attachment-thumb {
+  width: 2rem;
+  height: 2rem;
+  border-radius: 4px;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.composer-attachment-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.composer-attachment-name {
+  font-size: 0.78rem;
+  color: #2c4a52;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.3;
+}
+
+.composer-attachment-state {
+  font-size: 0.68rem;
+  color: #7c8e94;
+  line-height: 1.3;
+}
+
+.composer-attachment-chip[data-upload-state="failed"] .composer-attachment-state {
+  color: #c4583f;
+}
+
+.composer-attachment-chip[data-upload-state="uploaded"] .composer-attachment-state {
+  color: #388e3c;
+}
+
+.composer-attachment-remove {
+  flex-shrink: 0;
+  display: inline-grid;
+  place-items: center;
+  width: 1.2rem;
+  height: 1.2rem;
+  border: none;
+  background: rgba(25, 50, 59, 0.06);
+  border-radius: 4px;
+  color: rgba(25, 50, 59, 0.45);
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.15s, color 0.15s;
+}
+
+.composer-attachment-remove:hover {
+  background: rgba(220, 60, 40, 0.12);
+  color: #c4583f;
+}
+
+.composer-attachment-remove svg {
+  width: 0.7rem;
+  height: 0.7rem;
 }
 
 /* el-select style overrides for skill picker */

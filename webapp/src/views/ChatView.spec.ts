@@ -17,6 +17,7 @@ const api = vi.hoisted(() => ({
   decideTaskApproval: vi.fn(),
   deleteAttachment: vi.fn(),
   deleteConversation: vi.fn(),
+  getAttachmentContentURL: vi.fn(() => ''),
   fetchModelCatalog: vi.fn(),
   fetchConversationMessages: vi.fn(),
   fetchConversations: vi.fn(),
