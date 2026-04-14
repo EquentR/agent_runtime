@@ -1,6 +1,7 @@
 package openai_responses
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -9,6 +10,104 @@ import (
 	"github.com/EquentR/agent_runtime/core/types"
 	"github.com/openai/openai-go/v3/responses"
 )
+
+func TestBuildResponseInputEncodesImageAttachmentForUserMessage(t *testing.T) {
+	input, _, err := buildResponseInput([]model.Message{{
+		Role:    model.RoleUser,
+		Content: "look at this",
+		Attachments: []model.Attachment{{
+			FileName: "image.png",
+			MimeType: "image/png",
+			Data:     []byte{0x89, 0x50, 0x4e, 0x47},
+		}},
+	}}, "system")
+	if err != nil {
+		t.Fatalf("buildResponseInput() error = %v", err)
+	}
+
+	raw, err := json.Marshal(input)
+	if err != nil {
+		t.Fatalf("json.Marshal(input) error = %v", err)
+	}
+	var payload []map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("json.Unmarshal(payload) error = %v", err)
+	}
+	if len(payload) != 1 {
+		t.Fatalf("len(payload) = %d, want 1", len(payload))
+	}
+	content, ok := payload[0]["content"].([]any)
+	if !ok || len(content) != 2 {
+		t.Fatalf("content = %#v, want two content items", payload[0]["content"])
+	}
+	imageItem, ok := content[1].(map[string]any)
+	if !ok {
+		t.Fatalf("image item = %#v, want object", content[1])
+	}
+	if imageItem["type"] != "input_image" {
+		t.Fatalf("image item type = %#v, want input_image", imageItem["type"])
+	}
+	wantURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString([]byte{0x89, 0x50, 0x4e, 0x47})
+	if imageItem["image_url"] != wantURL {
+		t.Fatalf("image_url = %#v, want %q", imageItem["image_url"], wantURL)
+	}
+}
+
+func TestBuildResponseInputEncodesTextAttachmentForUserMessage(t *testing.T) {
+	input, _, err := buildResponseInput([]model.Message{{
+		Role:    model.RoleUser,
+		Content: "summarize this",
+		Attachments: []model.Attachment{{
+			FileName: "note.txt",
+			MimeType: "text/plain",
+			Data:     []byte("hello"),
+		}},
+	}}, "system")
+	if err != nil {
+		t.Fatalf("buildResponseInput() error = %v", err)
+	}
+
+	raw, err := json.Marshal(input)
+	if err != nil {
+		t.Fatalf("json.Marshal(input) error = %v", err)
+	}
+	var payload []map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("json.Unmarshal(payload) error = %v", err)
+	}
+	content, ok := payload[0]["content"].([]any)
+	if !ok || len(content) != 2 {
+		t.Fatalf("content = %#v, want two content items", payload[0]["content"])
+	}
+	fileItem, ok := content[1].(map[string]any)
+	if !ok {
+		t.Fatalf("file item = %#v, want object", content[1])
+	}
+	if fileItem["type"] != "input_file" {
+		t.Fatalf("file item type = %#v, want input_file", fileItem["type"])
+	}
+	if fileItem["filename"] != "note.txt" {
+		t.Fatalf("filename = %#v, want note.txt", fileItem["filename"])
+	}
+	wantData := base64.StdEncoding.EncodeToString([]byte("hello"))
+	if fileItem["file_data"] != wantData {
+		t.Fatalf("file_data = %#v, want %q", fileItem["file_data"], wantData)
+	}
+}
+
+func TestBuildResponseInputRejectsUnsupportedAttachmentType(t *testing.T) {
+	_, _, err := buildResponseInput([]model.Message{{
+		Role: model.RoleUser,
+		Attachments: []model.Attachment{{
+			FileName: "archive.zip",
+			MimeType: "application/zip",
+			Data:     []byte{0x50, 0x4b, 0x03, 0x04},
+		}},
+	}}, "system")
+	if err == nil || !strings.Contains(err.Error(), "unsupported attachment type") {
+		t.Fatalf("buildResponseInput() error = %v, want unsupported attachment type", err)
+	}
+}
 
 func TestBuildResponseRequestParams_MessageAndToolMapping(t *testing.T) {
 	temp := float32(0.4)

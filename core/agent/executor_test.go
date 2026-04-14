@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/EquentR/agent_runtime/core/approvals"
+	"github.com/EquentR/agent_runtime/core/attachments"
 	coreaudit "github.com/EquentR/agent_runtime/core/audit"
 	"github.com/EquentR/agent_runtime/core/interactions"
 	corelog "github.com/EquentR/agent_runtime/core/log"
@@ -1670,6 +1671,360 @@ func TestAgentExecutorPromptRequiresPromptResolver(t *testing.T) {
 	}
 	if clientFactoryCalls != 0 {
 		t.Fatalf("clientFactoryCalls = %d, want 0", clientFactoryCalls)
+	}
+}
+
+func TestAgentExecutorPromotesDraftAttachmentsAndHydratesProviderAttachments(t *testing.T) {
+	store := newConversationStoreForTest(t)
+	attachmentStorage, err := attachments.NewFilesystemStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFilesystemStore() error = %v", err)
+	}
+	attachmentDB := mustOpenExecutorTaskDB(t)
+	attachmentStore := attachments.NewStore(attachmentDB, attachmentStorage)
+	if err := attachmentStore.AutoMigrate(); err != nil {
+		t.Fatalf("attachmentStore.AutoMigrate() error = %v", err)
+	}
+	storedObject, err := attachmentStorage.PutDraft(context.Background(), attachments.PutDraftInput{
+		FileName: "notes.txt",
+		MimeType: "text/plain",
+		Data:     []byte("hello"),
+	})
+	if err != nil {
+		t.Fatalf("PutDraft() error = %v", err)
+	}
+	expiresAt := time.Now().UTC().Add(time.Hour)
+	attachment, err := attachmentStore.CreateDraft(context.Background(), attachments.CreateDraftInput{
+		ID:             "att_1",
+		CreatedBy:      "tester",
+		StorageBackend: storedObject.StorageBackend,
+		StorageKey:     storedObject.StorageKey,
+		FileName:       storedObject.FileName,
+		MimeType:       storedObject.MimeType,
+		SizeBytes:      storedObject.SizeBytes,
+		Kind:           storedObject.Kind,
+		PreviewText:    "hello",
+		ContextText:    "hello",
+		ExpiresAt:      &expiresAt,
+	})
+	if err != nil {
+		t.Fatalf("CreateDraft() error = %v", err)
+	}
+
+	client := &stubClient{streams: []model.Stream{newStubStream(
+		[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "done"}}},
+		model.Message{Role: model.RoleAssistant, Content: "done"},
+		nil,
+	)}}
+	executor := newTaskExecutorForTest(t, ExecutorDependencies{
+		Resolver:          newExecutorResolverForTest(),
+		ConversationStore: store,
+		AttachmentStore:   attachmentStore,
+		AttachmentStorage: attachmentStorage,
+		ClientFactory:     func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return client, nil },
+	})
+
+	_, err = executor(context.Background(), &coretasks.Task{
+		ID:        "task_1",
+		TaskType:  "agent.run",
+		CreatedBy: "tester",
+		InputJSON: marshalExecutorTaskInput(t, map[string]any{
+			"conversation_id": "conv_1",
+			"provider_id":     "openai",
+			"model_id":        "gpt-5.4",
+			"message":         "hello",
+			"created_by":      "tester",
+			"attachment_ids":  []string{"att_1"},
+		}),
+	}, nil)
+	if err != nil {
+		t.Fatalf("executor() error = %v", err)
+	}
+
+	loadedAttachment, err := attachmentStore.GetAttachment(context.Background(), attachment.ID)
+	if err != nil {
+		t.Fatalf("GetAttachment() error = %v", err)
+	}
+	if loadedAttachment.Status != attachments.StatusSent {
+		t.Fatalf("attachment status = %q, want %q", loadedAttachment.Status, attachments.StatusSent)
+	}
+	if loadedAttachment.ConversationID != "conv_1" {
+		t.Fatalf("attachment conversation_id = %q, want %q", loadedAttachment.ConversationID, "conv_1")
+	}
+	if len(client.streamRequests) != 1 {
+		t.Fatalf("stream request count = %d, want 1", len(client.streamRequests))
+	}
+	requestMessages := client.streamRequests[0].Messages
+	lastMessage := requestMessages[len(requestMessages)-1]
+	if len(lastMessage.Attachments) != 1 {
+		t.Fatalf("last message attachments = %#v, want one attachment", lastMessage.Attachments)
+	}
+	if string(lastMessage.Attachments[0].Data) != "hello" {
+		t.Fatalf("hydrated attachment data = %q, want %q", string(lastMessage.Attachments[0].Data), "hello")
+	}
+	if lastMessage.Attachments[0].ID != "att_1" {
+		t.Fatalf("hydrated attachment id = %q, want %q", lastMessage.Attachments[0].ID, "att_1")
+	}
+}
+
+func TestAgentExecutorRejectsExpiredAttachmentBeforeModelCall(t *testing.T) {
+	store := newConversationStoreForTest(t)
+	attachmentStorage, err := attachments.NewFilesystemStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFilesystemStore() error = %v", err)
+	}
+	attachmentDB := mustOpenExecutorTaskDB(t)
+	attachmentStore := attachments.NewStore(attachmentDB, attachmentStorage)
+	if err := attachmentStore.AutoMigrate(); err != nil {
+		t.Fatalf("attachmentStore.AutoMigrate() error = %v", err)
+	}
+	storedObject, err := attachmentStorage.PutDraft(context.Background(), attachments.PutDraftInput{
+		FileName: "notes.txt",
+		MimeType: "text/plain",
+		Data:     []byte("hello"),
+	})
+	if err != nil {
+		t.Fatalf("PutDraft() error = %v", err)
+	}
+	expiredAt := time.Now().UTC().Add(-time.Minute)
+	if _, err := attachmentStore.CreateDraft(context.Background(), attachments.CreateDraftInput{
+		ID:             "att_expired",
+		CreatedBy:      "tester",
+		StorageBackend: storedObject.StorageBackend,
+		StorageKey:     storedObject.StorageKey,
+		FileName:       storedObject.FileName,
+		MimeType:       storedObject.MimeType,
+		SizeBytes:      storedObject.SizeBytes,
+		Kind:           storedObject.Kind,
+		PreviewText:    "hello",
+		ContextText:    "hello",
+		ExpiresAt:      &expiredAt,
+	}); err != nil {
+		t.Fatalf("CreateDraft() error = %v", err)
+	}
+
+	client := &stubClient{streams: []model.Stream{newStubStream(nil, model.Message{}, nil)}}
+	executor := newTaskExecutorForTest(t, ExecutorDependencies{
+		Resolver:          newExecutorResolverForTest(),
+		ConversationStore: store,
+		AttachmentStore:   attachmentStore,
+		AttachmentStorage: attachmentStorage,
+		ClientFactory:     func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return client, nil },
+	})
+
+	_, err = executor(context.Background(), &coretasks.Task{
+		ID:        "task_expired",
+		TaskType:  "agent.run",
+		CreatedBy: "tester",
+		InputJSON: marshalExecutorTaskInput(t, map[string]any{
+			"conversation_id": "conv_1",
+			"provider_id":     "openai",
+			"model_id":        "gpt-5.4",
+			"message":         "hello",
+			"created_by":      "tester",
+			"attachment_ids":  []string{"att_expired"},
+		}),
+	}, nil)
+	if err == nil || !strings.Contains(err.Error(), "expired") {
+		t.Fatalf("executor() error = %v, want expired attachment error", err)
+	}
+	if len(client.streamRequests) != 0 {
+		t.Fatalf("stream request count = %d, want 0", len(client.streamRequests))
+	}
+}
+
+func TestAgentExecutorAllowsContinuationWhenExpiredAttachmentIsOutsideReplayTail(t *testing.T) {
+	store := newConversationStoreForTest(t)
+	attachmentStorage, err := attachments.NewFilesystemStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFilesystemStore() error = %v", err)
+	}
+	attachmentDB := mustOpenExecutorTaskDB(t)
+	attachmentStore := attachments.NewStore(attachmentDB, attachmentStorage)
+	if err := attachmentStore.AutoMigrate(); err != nil {
+		t.Fatalf("attachmentStore.AutoMigrate() error = %v", err)
+	}
+	storedObject, err := attachmentStorage.PutDraft(context.Background(), attachments.PutDraftInput{
+		FileName: "old.txt",
+		MimeType: "text/plain",
+		Data:     []byte("old"),
+	})
+	if err != nil {
+		t.Fatalf("PutDraft() error = %v", err)
+	}
+	expiredAt := time.Now().UTC().Add(-time.Minute)
+	attachment, err := attachmentStore.CreateDraft(context.Background(), attachments.CreateDraftInput{
+		ID:             "att_old",
+		CreatedBy:      "tester",
+		StorageBackend: storedObject.StorageBackend,
+		StorageKey:     storedObject.StorageKey,
+		FileName:       storedObject.FileName,
+		MimeType:       storedObject.MimeType,
+		SizeBytes:      storedObject.SizeBytes,
+		Kind:           storedObject.Kind,
+		ExpiresAt:      &expiredAt,
+	})
+	if err != nil {
+		t.Fatalf("CreateDraft() error = %v", err)
+	}
+	if _, err := attachmentStore.PromoteDraftToSent(context.Background(), attachment.ID, attachments.PromoteInput{
+		ConversationID: "conv_1",
+		RetainUntil:    &expiredAt,
+	}); err != nil {
+		t.Fatalf("PromoteDraftToSent() error = %v", err)
+	}
+	if processed, err := attachmentStore.GCExpired(context.Background(), time.Now().UTC(), 10); err != nil {
+		t.Fatalf("GCExpired() error = %v", err)
+	} else if processed != 1 {
+		t.Fatalf("GCExpired() processed = %d, want 1", processed)
+	}
+
+	if _, err := store.CreateConversation(context.Background(), CreateConversationInput{ID: "conv_1", ProviderID: "openai", ModelID: "gpt-5.4", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("CreateConversation() error = %v", err)
+	}
+	if err := store.AppendMessages(context.Background(), "conv_1", "task_prev", []model.Message{
+		{
+			Role:    model.RoleUser,
+			Content: "old file",
+			Attachments: []model.Attachment{{
+				ID:       "att_old",
+				FileName: "old.txt",
+				MimeType: "text/plain",
+				Status:   string(attachments.StatusExpired),
+			}},
+		},
+		{Role: model.RoleAssistant, Content: "noted"},
+	}); err != nil {
+		t.Fatalf("AppendMessages() error = %v", err)
+	}
+	if err := store.SetMemorySummary(context.Background(), "conv_1", "older file context summarized"); err != nil {
+		t.Fatalf("SetMemorySummary() error = %v", err)
+	}
+
+	client := &stubClient{streams: []model.Stream{newStubStream(
+		[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "continued"}}},
+		model.Message{Role: model.RoleAssistant, Content: "continued"},
+		nil,
+	)}}
+	executor := newTaskExecutorForTest(t, ExecutorDependencies{
+		Resolver:          newExecutorResolverForTest(),
+		ConversationStore: store,
+		AttachmentStore:   attachmentStore,
+		AttachmentStorage: attachmentStorage,
+		ClientFactory:     func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return client, nil },
+	})
+
+	_, err = executor(context.Background(), &coretasks.Task{
+		ID:        "task_continue",
+		TaskType:  "agent.run",
+		CreatedBy: "tester",
+		InputJSON: marshalExecutorTaskInput(t, map[string]any{
+			"conversation_id": "conv_1",
+			"provider_id":     "openai",
+			"model_id":        "gpt-5.4",
+			"message":         "continue",
+			"created_by":      "tester",
+		}),
+	}, nil)
+	if err != nil {
+		t.Fatalf("executor() error = %v", err)
+	}
+	if len(client.streamRequests) != 1 {
+		t.Fatalf("stream request count = %d, want 1", len(client.streamRequests))
+	}
+	if len(client.streamRequests[0].Messages[0].Attachments) != 0 {
+		t.Fatalf("expired replay attachment = %#v, want omitted outside replay tail", client.streamRequests[0].Messages[0].Attachments)
+	}
+}
+
+func TestAgentExecutorFailsPreciseReplayWhenRequiredAttachmentExpired(t *testing.T) {
+	store := newConversationStoreForTest(t)
+	attachmentStorage, err := attachments.NewFilesystemStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFilesystemStore() error = %v", err)
+	}
+	attachmentDB := mustOpenExecutorTaskDB(t)
+	attachmentStore := attachments.NewStore(attachmentDB, attachmentStorage)
+	if err := attachmentStore.AutoMigrate(); err != nil {
+		t.Fatalf("attachmentStore.AutoMigrate() error = %v", err)
+	}
+	storedObject, err := attachmentStorage.PutDraft(context.Background(), attachments.PutDraftInput{
+		FileName: "latest.txt",
+		MimeType: "text/plain",
+		Data:     []byte("latest"),
+	})
+	if err != nil {
+		t.Fatalf("PutDraft() error = %v", err)
+	}
+	expiredAt := time.Now().UTC().Add(-time.Minute)
+	attachment, err := attachmentStore.CreateDraft(context.Background(), attachments.CreateDraftInput{
+		ID:             "att_latest",
+		CreatedBy:      "tester",
+		StorageBackend: storedObject.StorageBackend,
+		StorageKey:     storedObject.StorageKey,
+		FileName:       storedObject.FileName,
+		MimeType:       storedObject.MimeType,
+		SizeBytes:      storedObject.SizeBytes,
+		Kind:           storedObject.Kind,
+		ExpiresAt:      &expiredAt,
+	})
+	if err != nil {
+		t.Fatalf("CreateDraft() error = %v", err)
+	}
+	if _, err := attachmentStore.PromoteDraftToSent(context.Background(), attachment.ID, attachments.PromoteInput{
+		ConversationID: "conv_1",
+		RetainUntil:    &expiredAt,
+	}); err != nil {
+		t.Fatalf("PromoteDraftToSent() error = %v", err)
+	}
+	if processed, err := attachmentStore.GCExpired(context.Background(), time.Now().UTC(), 10); err != nil {
+		t.Fatalf("GCExpired() error = %v", err)
+	} else if processed != 1 {
+		t.Fatalf("GCExpired() processed = %d, want 1", processed)
+	}
+
+	if _, err := store.CreateConversation(context.Background(), CreateConversationInput{ID: "conv_1", ProviderID: "openai", ModelID: "gpt-5.4", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("CreateConversation() error = %v", err)
+	}
+	if err := store.AppendMessages(context.Background(), "conv_1", "task_prev", []model.Message{{
+		Role:    model.RoleUser,
+		Content: "latest file",
+		Attachments: []model.Attachment{{
+			ID:       "att_latest",
+			FileName: "latest.txt",
+			MimeType: "text/plain",
+			Status:   string(attachments.StatusExpired),
+		}},
+	}}); err != nil {
+		t.Fatalf("AppendMessages() error = %v", err)
+	}
+
+	client := &stubClient{streams: []model.Stream{newStubStream(nil, model.Message{}, nil)}}
+	executor := newTaskExecutorForTest(t, ExecutorDependencies{
+		Resolver:          newExecutorResolverForTest(),
+		ConversationStore: store,
+		AttachmentStore:   attachmentStore,
+		AttachmentStorage: attachmentStorage,
+		ClientFactory:     func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return client, nil },
+	})
+
+	_, err = executor(context.Background(), &coretasks.Task{
+		ID:        "task_precise_replay",
+		TaskType:  "agent.run",
+		CreatedBy: "tester",
+		InputJSON: marshalExecutorTaskInput(t, map[string]any{
+			"conversation_id": "conv_1",
+			"provider_id":     "openai",
+			"model_id":        "gpt-5.4",
+			"message":         "continue",
+			"created_by":      "tester",
+		}),
+	}, nil)
+	if err == nil || !strings.Contains(err.Error(), "expired") {
+		t.Fatalf("executor() error = %v, want expired replay error", err)
+	}
+	if len(client.streamRequests) != 0 {
+		t.Fatalf("stream request count = %d, want 0", len(client.streamRequests))
 	}
 }
 

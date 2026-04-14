@@ -61,6 +61,123 @@ func TestConversationStoreAppendAndListMessages(t *testing.T) {
 	}
 }
 
+func TestConversationStorePersistsAttachmentReferencesWithoutRawData(t *testing.T) {
+	store := newConversationStoreForTest(t)
+	_, err := store.CreateConversation(context.Background(), CreateConversationInput{
+		ID:         "conv_1",
+		ProviderID: "openai",
+		ModelID:    "gpt-5.4",
+	})
+	if err != nil {
+		t.Fatalf("CreateConversation() error = %v", err)
+	}
+
+	err = store.AppendMessages(context.Background(), "conv_1", "task_1", []model.Message{{
+		Role:    model.RoleUser,
+		Content: "hello",
+		Attachments: []model.Attachment{{
+			ID:          "att_1",
+			FileName:    "notes.txt",
+			MimeType:    "text/plain",
+			SizeBytes:   5,
+			Kind:        "text",
+			Status:      "sent",
+			PreviewText: "hello",
+			ContextText: "hello",
+			Data:        []byte("hello"),
+		}},
+	}})
+	if err != nil {
+		t.Fatalf("AppendMessages() error = %v", err)
+	}
+
+	var record ConversationMessage
+	if err := store.db.WithContext(context.Background()).Where("conversation_id = ?", "conv_1").Take(&record).Error; err != nil {
+		t.Fatalf("load persisted record error = %v", err)
+	}
+
+	var envelope map[string]any
+	if err := json.Unmarshal(record.MessageJSON, &envelope); err != nil {
+		t.Fatalf("json.Unmarshal(envelope) error = %v", err)
+	}
+	message, ok := envelope["message"].(map[string]any)
+	if !ok {
+		t.Fatalf("persisted message = %#v, want object", envelope["message"])
+	}
+	rawAttachments, ok := message["Attachments"].([]any)
+	if !ok || len(rawAttachments) != 1 {
+		t.Fatalf("persisted Attachments = %#v, want one attachment", message["Attachments"])
+	}
+	firstAttachment, ok := rawAttachments[0].(map[string]any)
+	if !ok {
+		t.Fatalf("persisted attachment = %#v, want object", rawAttachments[0])
+	}
+	if _, exists := firstAttachment["Data"]; exists {
+		t.Fatalf("persisted attachment unexpectedly includes Data field: %#v", firstAttachment)
+	}
+
+	got, err := store.ListMessages(context.Background(), "conv_1")
+	if err != nil {
+		t.Fatalf("ListMessages() error = %v", err)
+	}
+	if len(got) != 1 || len(got[0].Attachments) != 1 {
+		t.Fatalf("messages = %#v, want one message with one attachment", got)
+	}
+	if got[0].Attachments[0].ID != "att_1" {
+		t.Fatalf("attachment id = %q, want %q", got[0].Attachments[0].ID, "att_1")
+	}
+	if len(got[0].Attachments[0].Data) != 0 {
+		t.Fatalf("attachment data length = %d, want 0", len(got[0].Attachments[0].Data))
+	}
+}
+
+func TestListReplayMessagesReturnsAttachmentReferences(t *testing.T) {
+	store := newConversationStoreForTest(t)
+	_, err := store.CreateConversation(context.Background(), CreateConversationInput{
+		ID:         "conv_1",
+		ProviderID: "openai",
+		ModelID:    "gpt-5.4",
+	})
+	if err != nil {
+		t.Fatalf("CreateConversation() error = %v", err)
+	}
+
+	err = store.AppendMessages(context.Background(), "conv_1", "task_1", []model.Message{{
+		Role:    model.RoleUser,
+		Content: "hello",
+		Attachments: []model.Attachment{{
+			ID:          "att_1",
+			FileName:    "notes.txt",
+			MimeType:    "text/plain",
+			SizeBytes:   5,
+			Kind:        "text",
+			Status:      "sent",
+			PreviewText: "hello",
+			Data:        []byte("hello"),
+		}},
+	}})
+	if err != nil {
+		t.Fatalf("AppendMessages() error = %v", err)
+	}
+
+	got, err := store.ListReplayMessages(context.Background(), "conv_1")
+	if err != nil {
+		t.Fatalf("ListReplayMessages() error = %v", err)
+	}
+	if len(got) != 1 || len(got[0].Attachments) != 1 {
+		t.Fatalf("replay messages = %#v, want one attachment ref", got)
+	}
+	if got[0].Attachments[0].ID != "att_1" {
+		t.Fatalf("attachment id = %q, want %q", got[0].Attachments[0].ID, "att_1")
+	}
+	if got[0].Attachments[0].FileName != "notes.txt" {
+		t.Fatalf("attachment file_name = %q, want %q", got[0].Attachments[0].FileName, "notes.txt")
+	}
+	if len(got[0].Attachments[0].Data) != 0 {
+		t.Fatalf("attachment data length = %d, want 0", len(got[0].Attachments[0].Data))
+	}
+}
+
 func TestConversationStoreListMessagesPreservesReplayableAssistantState(t *testing.T) {
 	store := newConversationStoreForTest(t)
 	_, err := store.CreateConversation(context.Background(), CreateConversationInput{

@@ -1127,5 +1127,86 @@ describe('MessageList', () => {
 		expect(wrapper.emitted('interaction-respond')).toEqual([
 			[{ taskId: 'task_co', interactionId: 'interaction_custom_only', selectedOptionId: undefined, customText: 'my free-form text' }],
 		])
-	})
+  })
+
+  it('renders image attachment thumbnails inside a user message', () => {
+    const wrapper = mount(MessageList, {
+      props: {
+        loading: false,
+        entries: [
+          {
+            id: 'user-1',
+            kind: 'user',
+            title: '',
+            content: 'see image',
+            attachments: [
+              {
+                id: 'att_1',
+                file_name: 'image.png',
+                mime_type: 'image/png',
+                status: 'sent',
+              },
+            ],
+          },
+        ],
+      },
+    })
+
+    expect(wrapper.find('.message-attachment-thumbnail').exists()).toBe(true)
+    expect(wrapper.text()).toContain('image.png')
+  })
+
+  it('renders file cards for non-image attachments', () => {
+    const wrapper = mount(MessageList, {
+      props: {
+        loading: false,
+        entries: [
+          {
+            id: 'reply-1',
+            kind: 'reply',
+            title: '',
+            content: 'see file',
+            attachments: [
+              {
+                id: 'att_2',
+                file_name: 'note.txt',
+                mime_type: 'text/plain',
+                status: 'sent',
+              },
+            ],
+          },
+        ],
+      },
+    })
+
+    expect(wrapper.find('.message-attachment-card').exists()).toBe(true)
+    expect(wrapper.find('.message-attachment-thumbnail').exists()).toBe(false)
+    expect(wrapper.text()).toContain('note.txt')
+  })
+
+  it('shows expired attachment state', () => {
+    const wrapper = mount(MessageList, {
+      props: {
+        loading: false,
+        entries: [
+          {
+            id: 'reply-1',
+            kind: 'reply',
+            title: '',
+            content: 'expired',
+            attachments: [
+              {
+                id: 'att_3',
+                file_name: 'old.png',
+                mime_type: 'image/png',
+                status: 'expired',
+              },
+            ],
+          },
+        ],
+      },
+    })
+
+    expect(wrapper.text()).toContain('附件已过期')
+  })
 })

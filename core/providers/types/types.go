@@ -52,9 +52,18 @@ type ProviderState struct {
 }
 
 type Attachment struct {
-	FileName string
-	MimeType string
-	Data     []byte
+	ID          string
+	FileName    string
+	MimeType    string
+	SizeBytes   int64
+	Kind        string
+	Status      string
+	PreviewText string
+	ContextText string
+	Width       *int
+	Height      *int
+	ExpiresAt   *time.Time
+	Data        []byte `json:",omitempty"`
 }
 
 type ReasoningItem struct {

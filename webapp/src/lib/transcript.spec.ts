@@ -150,6 +150,97 @@ describe('buildTranscriptEntries', () => {
     })
   })
 
+  it('builds transcript entries from conversation messages with attachments', () => {
+    const entries = buildTranscriptEntries([
+      {
+        role: 'user',
+        content: 'see file',
+        attachments: [
+          {
+            id: 'att_1',
+            file_name: 'note.txt',
+            mime_type: 'text/plain',
+            status: 'sent',
+          },
+        ],
+      },
+    ] as any)
+
+    expect(entries).toEqual([
+      expect.objectContaining({
+        kind: 'user',
+        attachments: [
+          expect.objectContaining({
+            id: 'att_1',
+            file_name: 'note.txt',
+          }),
+        ],
+      }),
+    ])
+  })
+
+  it('keeps attachment metadata on reply and user entries', () => {
+    const entries = buildTranscriptEntries([
+      {
+        role: 'user',
+        content: 'user message',
+        attachments: [
+          { id: 'att_user', file_name: 'user.txt', mime_type: 'text/plain', status: 'sent' },
+        ],
+      },
+      {
+        role: 'assistant',
+        content: 'assistant reply',
+        attachments: [
+          { id: 'att_reply', file_name: 'reply.png', mime_type: 'image/png', status: 'expired' },
+        ],
+      },
+    ] as any)
+
+    expect(entries[0]).toMatchObject({
+      kind: 'user',
+      attachments: [expect.objectContaining({ id: 'att_user' })],
+    })
+    expect(entries[1]).toMatchObject({
+      kind: 'reply',
+      attachments: [expect.objectContaining({ id: 'att_reply', status: 'expired' })],
+    })
+  })
+
+  it('replaces attachments on an existing latest reply when completed assistant message arrives', () => {
+    const entries = updateTranscriptFromStreamEvent(
+      [
+        {
+          id: 'reply-1',
+          kind: 'reply',
+          title: '',
+          content: 'assistant reply',
+          attachments: [
+            { id: 'att_old', file_name: 'old.png', mime_type: 'image/png', status: 'sent' },
+          ],
+        },
+      ] as any,
+      {
+        type: 'log.message',
+        payload: {
+          Kind: 'completed',
+          Message: {
+            role: 'assistant',
+            content: 'assistant reply',
+            attachments: [
+              { id: 'att_new', file_name: 'new.txt', mime_type: 'text/plain', status: 'sent' },
+            ],
+          },
+        },
+      },
+    )
+
+    expect(entries[0]).toMatchObject({
+      kind: 'reply',
+      attachments: [expect.objectContaining({ id: 'att_new' })],
+    })
+  })
+
   it('ignores persisted system prompt messages in normal transcript rendering', () => {
     const entries = buildTranscriptEntries([
       { role: 'user', content: 'hello' },

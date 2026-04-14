@@ -83,6 +83,46 @@ type ConversationDeleteSwaggerData struct {
 	Deleted bool `json:"deleted"`
 }
 
+// AttachmentSwaggerDoc 描述附件元数据的文档结构。
+type AttachmentSwaggerDoc struct {
+	ID             string `json:"id"`
+	ConversationID string `json:"conversation_id,omitempty"`
+	FileName       string `json:"file_name"`
+	MimeType       string `json:"mime_type"`
+	SizeBytes      int64  `json:"size_bytes"`
+	Kind           string `json:"kind"`
+	Status         string `json:"status"`
+	PreviewText    string `json:"preview_text,omitempty"`
+	Width          *int   `json:"width,omitempty"`
+	Height         *int   `json:"height,omitempty"`
+	ExpiresAt      string `json:"expires_at,omitempty"`
+	CreatedAt      string `json:"created_at"`
+	UpdatedAt      string `json:"updated_at"`
+}
+
+// AttachmentSwaggerResponse 描述附件元数据接口的成功响应结构。
+type AttachmentSwaggerResponse struct {
+	Code    int                  `json:"code"`
+	Message string               `json:"message"`
+	Data    AttachmentSwaggerDoc `json:"data"`
+	OK      bool                 `json:"ok"`
+	Time    string               `json:"time"`
+}
+
+// AttachmentDeleteSwaggerResponse 描述删除附件接口的成功响应结构。
+type AttachmentDeleteSwaggerResponse struct {
+	Code    int                         `json:"code"`
+	Message string                      `json:"message"`
+	Data    AttachmentDeleteSwaggerData `json:"data"`
+	OK      bool                        `json:"ok"`
+	Time    string                      `json:"time"`
+}
+
+// AttachmentDeleteSwaggerData 描述删除附件结果。
+type AttachmentDeleteSwaggerData struct {
+	Deleted bool `json:"deleted"`
+}
+
 // ConversationMessageDoc 描述会话消息列表的文档结构。
 type ConversationMessageDoc struct {
 	Role       string `json:"role"`
@@ -118,11 +158,17 @@ type ModelProviderSwaggerDoc struct {
 
 // ModelEntrySwaggerDoc 描述一个模型选项。
 type ModelEntrySwaggerDoc struct {
-	ID      string                  `json:"id"`
-	Name    string                  `json:"name"`
-	Type    string                  `json:"type"`
-	Context *ModelContextSwaggerDoc `json:"context,omitempty"`
-	Cost    *ModelPricingSwaggerDoc `json:"cost,omitempty"`
+	ID           string                       `json:"id"`
+	Name         string                       `json:"name"`
+	Type         string                       `json:"type"`
+	Context      *ModelContextSwaggerDoc      `json:"context,omitempty"`
+	Cost         *ModelPricingSwaggerDoc      `json:"cost,omitempty"`
+	Capabilities *ModelCapabilitiesSwaggerDoc `json:"capabilities,omitempty"`
+}
+
+// ModelCapabilitiesSwaggerDoc 描述模型能力开关。
+type ModelCapabilitiesSwaggerDoc struct {
+	Attachments bool `json:"attachments"`
 }
 
 // ModelContextSwaggerDoc 描述模型的上下文窗口信息。

@@ -282,6 +282,51 @@ func TestConversationAPIsDoNotExposeRuntimePromptEnvelopeContent(t *testing.T) {
 	}
 }
 
+func TestGetConversationMessagesIncludesAttachmentMetadata(t *testing.T) {
+	store, _, server := newConversationHandlerTestServer(t)
+	ctx := context.Background()
+	_, err := store.CreateConversation(ctx, coreagent.CreateConversationInput{ID: "conv_1", ProviderID: "openai", ModelID: "gpt-5.4"})
+	if err != nil {
+		t.Fatalf("CreateConversation() error = %v", err)
+	}
+	if err := store.AppendMessages(ctx, "conv_1", "task_1", []model.Message{{
+		Role:    model.RoleUser,
+		Content: "hello",
+		Attachments: []model.Attachment{{
+			ID:          "att_1",
+			FileName:    "notes.txt",
+			MimeType:    "text/plain",
+			SizeBytes:   5,
+			Kind:        "text",
+			Status:      "sent",
+			PreviewText: "hello",
+			Data:        []byte("hello"),
+		}},
+	}}); err != nil {
+		t.Fatalf("AppendMessages() error = %v", err)
+	}
+
+	resp, err := http.Get(server.URL + "/api/v1/conversations/conv_1/messages")
+	if err != nil {
+		t.Fatalf("http.Get() error = %v", err)
+	}
+	defer resp.Body.Close()
+
+	messages := decodeConversationMessagesResponse(t, resp.Body)
+	if len(messages) != 1 || len(messages[0].Attachments) != 1 {
+		t.Fatalf("messages = %#v, want one message with one attachment", messages)
+	}
+	if messages[0].Attachments[0].ID != "att_1" {
+		t.Fatalf("attachment id = %q, want %q", messages[0].Attachments[0].ID, "att_1")
+	}
+	if messages[0].Attachments[0].FileName != "notes.txt" {
+		t.Fatalf("attachment file_name = %q, want %q", messages[0].Attachments[0].FileName, "notes.txt")
+	}
+	if len(messages[0].Attachments[0].Data) != 0 {
+		t.Fatalf("attachment data length = %d, want 0", len(messages[0].Attachments[0].Data))
+	}
+}
+
 func TestConversationHandlerGetConversationHidesHiddenSystemMessagesFromSummary(t *testing.T) {
 	store, _, server := newConversationHandlerTestServer(t)
 	ctx := context.Background()

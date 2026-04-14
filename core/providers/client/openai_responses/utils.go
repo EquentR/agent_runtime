@@ -1,10 +1,13 @@
 package openai_responses
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
+	"unicode/utf8"
 
 	model "github.com/EquentR/agent_runtime/core/providers/types"
 	"github.com/EquentR/agent_runtime/core/types"
@@ -160,7 +163,11 @@ func buildResponseInput(messages []model.Message, systemMessageMode string) (res
 				input = append(input, responses.ResponseInputItemParamOfMessage(m.Content, responses.EasyInputMessageRoleSystem))
 			}
 		case model.RoleUser:
-			input = append(input, responses.ResponseInputItemParamOfMessage(m.Content, responses.EasyInputMessageRoleUser))
+			content, err := buildUserMessageContent(m)
+			if err != nil {
+				return nil, "", err
+			}
+			input = append(input, responses.ResponseInputItemParamOfMessage(content, responses.EasyInputMessageRoleUser))
 		case model.RoleAssistant:
 			if rawItems, _, ok, err := rawOutputItemsFromProviderData(m.ProviderData); err != nil {
 				return nil, "", err
@@ -210,6 +217,57 @@ func buildResponseInput(messages []model.Message, systemMessageMode string) (res
 	return input, "", nil
 }
 
+func buildUserMessageContent(message model.Message) (responses.ResponseInputMessageContentListParam, error) {
+	content := make(responses.ResponseInputMessageContentListParam, 0, len(message.Attachments)+1)
+	if strings.TrimSpace(message.Content) != "" {
+		content = append(content, responses.ResponseInputContentParamOfInputText(message.Content))
+	}
+	for _, attachment := range message.Attachments {
+		item, err := responseContentItemFromAttachment(attachment)
+		if err != nil {
+			return nil, err
+		}
+		content = append(content, item)
+	}
+	if len(content) == 0 {
+		content = append(content, responses.ResponseInputContentParamOfInputText(""))
+	}
+	return content, nil
+}
+
+func responseContentItemFromAttachment(attachment model.Attachment) (responses.ResponseInputContentUnionParam, error) {
+	mimeType := strings.TrimSpace(attachment.MimeType)
+	if mimeType == "" {
+		mimeType = http.DetectContentType(attachment.Data)
+	}
+	switch {
+	case strings.HasPrefix(strings.ToLower(mimeType), "image/"):
+		if len(attachment.Data) == 0 {
+			return responses.ResponseInputContentUnionParam{}, fmt.Errorf("image attachment %q data is empty", attachment.FileName)
+		}
+		item := responses.ResponseInputContentParamOfInputImage(responses.ResponseInputImageDetailAuto)
+		item.OfInputImage.ImageURL = openai.String("data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(attachment.Data))
+		return item, nil
+	case isTextMimeType(mimeType) || (strings.TrimSpace(attachment.MimeType) == "" && utf8.Valid(attachment.Data)):
+		if len(attachment.Data) == 0 {
+			return responses.ResponseInputContentUnionParam{}, fmt.Errorf("text attachment %q data is empty", attachment.FileName)
+		}
+		fileItem := responses.ResponseInputContentUnionParam{
+			OfInputFile: &responses.ResponseInputFileParam{},
+		}
+		fileItem.OfInputFile.FileData = openai.String(base64.StdEncoding.EncodeToString(attachment.Data))
+		fileItem.OfInputFile.Filename = openai.String(firstNonEmpty(strings.TrimSpace(attachment.FileName), "attachment.txt"))
+		return fileItem, nil
+	default:
+		return responses.ResponseInputContentUnionParam{}, fmt.Errorf("unsupported attachment type %q", mimeType)
+	}
+}
+
+func isTextMimeType(mimeType string) bool {
+	mimeType = strings.ToLower(strings.TrimSpace(mimeType))
+	return strings.HasPrefix(mimeType, "text/") || mimeType == "application/json" || strings.HasSuffix(mimeType, "+json")
+}
+
 func hasFollowingToolOutput(messages []model.Message, index int) bool {
 	if index < 0 || index >= len(messages) {
 		return false
@@ -257,6 +315,15 @@ func filterReplayInputItems(items []responses.ResponseInputItemUnionParam, toolC
 		}
 	}
 	return filtered
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func modelToolsToResponse(tools []types.Tool) []responses.ToolUnionParam {

@@ -215,4 +215,109 @@ describe('MessageComposer', () => {
 
     expect(wrapper.find('.composer-skill-select').exists()).toBe(false)
   })
+
+  it('shows drag upload area when model supports attachments', () => {
+    const wrapper = mount(MessageComposer, {
+      global: {
+        stubs: { ElSelect: true, ElOption: true },
+      },
+      props: {
+        disabled: false,
+        attachmentsEnabled: true,
+      },
+    })
+
+    expect(wrapper.find('.composer-upload-dropzone').exists()).toBe(true)
+  })
+
+  it('disables send while attachments are uploading', async () => {
+    const wrapper = mount(MessageComposer, {
+      global: {
+        stubs: { ElSelect: true, ElOption: true },
+      },
+      props: {
+        disabled: false,
+        attachmentsEnabled: true,
+        attachmentsUploading: true,
+      },
+    })
+
+    const textarea = wrapper.find('textarea')
+    await textarea.setValue('hello')
+
+    expect(wrapper.find('.composer-submit').attributes('disabled')).toBeDefined()
+  })
+
+  it('emits remove for failed draft attachment', async () => {
+    const wrapper = mount(MessageComposer, {
+      global: {
+        stubs: { ElSelect: true, ElOption: true },
+      },
+      props: {
+        disabled: false,
+        attachmentsEnabled: true,
+        attachments: [
+          {
+            local_id: 'local-1',
+            file_name: 'failed.txt',
+            upload_state: 'failed',
+            error_message: '上传失败',
+          },
+        ],
+      },
+    })
+
+    await wrapper.find('.composer-attachment-remove').trigger('click')
+
+    expect(wrapper.emitted('remove-attachment')).toEqual([['local-1']])
+  })
+
+  it('uploads pasted image files from clipboard', async () => {
+    const wrapper = mount(MessageComposer, {
+      global: {
+        stubs: { ElSelect: true, ElOption: true },
+      },
+      props: {
+        disabled: false,
+        attachmentsEnabled: true,
+      },
+    })
+
+    const file = new File(['image-bytes'], 'paste.png', { type: 'image/png' })
+    await wrapper.find('textarea').trigger('paste', {
+      clipboardData: {
+        items: [
+          {
+            kind: 'file',
+            type: 'image/png',
+            getAsFile: () => file,
+          },
+        ],
+      },
+      preventDefault() {},
+    })
+
+    expect(wrapper.emitted('add-attachments')).toEqual([[[file]]])
+  })
+
+  it('emits dropped files from the drag upload area', async () => {
+    const wrapper = mount(MessageComposer, {
+      global: {
+        stubs: { ElSelect: true, ElOption: true },
+      },
+      props: {
+        disabled: false,
+        attachmentsEnabled: true,
+      },
+    })
+
+    const file = new File(['hello'], 'drop.txt', { type: 'text/plain' })
+    await wrapper.find('.composer-upload-dropzone').trigger('drop', {
+      dataTransfer: {
+        files: [file],
+      },
+    })
+
+    expect(wrapper.emitted('add-attachments')).toEqual([[[file]]])
+  })
 })

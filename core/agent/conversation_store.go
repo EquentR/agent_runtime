@@ -214,12 +214,13 @@ func (s *ConversationStore) AppendMessages(ctx context.Context, conversationID s
 		now := time.Now().UTC()
 		for _, message := range messages {
 			seq++
+			persistedMessage := stripMessageAttachmentsForPersistence(message)
 			if !isConversationMessageVisible(message) {
-				raw, err := json.Marshal(cloneMessage(message))
+				raw, err := json.Marshal(persistedMessage)
 				if err == nil {
 					raw, err = json.Marshal(persistedConversationMessage{
 						Version: persistedConversationMessageVersion,
-						Message: cloneMessage(message),
+						Message: persistedMessage,
 					})
 				}
 				if err != nil {
@@ -246,11 +247,11 @@ func (s *ConversationStore) AppendMessages(ctx context.Context, conversationID s
 				conversation.LastMessageAt = &now
 			}
 			conversation.MessageCount++
-			raw, err := json.Marshal(cloneMessage(message))
+			raw, err := json.Marshal(persistedMessage)
 			if err == nil {
 				raw, err = json.Marshal(persistedConversationMessage{
 					Version: persistedConversationMessageVersion,
-					Message: cloneMessage(message),
+					Message: persistedMessage,
 				})
 			}
 			if err != nil {
@@ -410,6 +411,20 @@ func decodePersistedConversationMessage(raw json.RawMessage) (model.Message, err
 		return model.Message{}, err
 	}
 	return cloneMessage(legacy), nil
+}
+
+func stripMessageAttachmentsForPersistence(message model.Message) model.Message {
+	persisted := cloneMessage(message)
+	if len(persisted.Attachments) == 0 {
+		return persisted
+	}
+	for index := range persisted.Attachments {
+		persisted.Attachments[index].Data = nil
+		if persisted.Attachments[index].SizeBytes == 0 && len(message.Attachments[index].Data) > 0 {
+			persisted.Attachments[index].SizeBytes = int64(len(message.Attachments[index].Data))
+		}
+	}
+	return persisted
 }
 
 func newVisibleFailureSystemMessage(content string) model.Message {

@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
 	"github.com/EquentR/agent_runtime/core/approvals"
+	"github.com/EquentR/agent_runtime/core/attachments"
 	coreaudit "github.com/EquentR/agent_runtime/core/audit"
 	"github.com/EquentR/agent_runtime/core/forcedprompt"
 	"github.com/EquentR/agent_runtime/core/interactions"
@@ -52,11 +54,12 @@ type ModelContext struct {
 }
 
 type ModelOptionEntry struct {
-	ID      string                  `json:"id"`
-	Name    string                  `json:"name"`
-	Type    string                  `json:"type"`
-	Context ModelContext            `json:"context"`
-	Cost    *coretypes.ModelPricing `json:"cost,omitempty"`
+	ID           string                      `json:"id"`
+	Name         string                      `json:"name"`
+	Type         string                      `json:"type"`
+	Context      ModelContext                `json:"context"`
+	Cost         *coretypes.ModelPricing     `json:"cost,omitempty"`
+	Capabilities coretypes.ModelCapabilities `json:"capabilities"`
 }
 
 type RunTaskInput struct {
@@ -65,6 +68,7 @@ type RunTaskInput struct {
 	ModelID        string   `json:"model_id"`
 	UserID         string   `json:"user_id,omitempty"`
 	Message        string   `json:"message"`
+	AttachmentIDs  []string `json:"attachment_ids,omitempty"`
 	Scene          string   `json:"scene,omitempty"`
 	SystemPrompt   string   `json:"system_prompt,omitempty"`
 	CreatedBy      string   `json:"created_by,omitempty"`
@@ -94,6 +98,8 @@ type EventSinkFactory func(runtime *coretasks.Runtime) EventSink
 type ExecutorDependencies struct {
 	Resolver          *ModelResolver
 	ConversationStore *ConversationStore
+	AttachmentStore   *attachments.Store
+	AttachmentStorage attachments.Storage
 	Registry          *tools.Registry
 	ApprovalStore     *approvals.Store
 	InteractionStore  *interactions.Store
@@ -144,7 +150,8 @@ func (r *ModelResolver) Catalog() ModelCatalog {
 					Input:  ctx.Input,
 					Output: ctx.Output,
 				},
-				Cost: llmModel.Pricing(),
+				Cost:         llmModel.Pricing(),
+				Capabilities: llmModel.Capabilities,
 			})
 		}
 		providers = append(providers, ModelProviderOption{
@@ -289,7 +296,19 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 		}
 		conversationID = conversation.ID
 		auditor.setConversation(conversation)
+		savedSummary := ""
+		if deps.ConversationStore != nil {
+			if loadedSummary, loadErr := deps.ConversationStore.GetMemorySummary(ctx, conversationID); loadErr != nil {
+				corelog.Warn("failed to restore memory summary", corelog.String("component", "agent"), corelog.String("module", "executor"), corelog.String("conversation_id", conversationID), corelog.Err(loadErr))
+			} else {
+				savedSummary = loadedSummary
+			}
+		}
 		history, err := deps.ConversationStore.ListReplayMessages(ctx, conversation.ID)
+		if err != nil {
+			return nil, err
+		}
+		history, err = hydrateReplayMessages(ctx, deps.AttachmentStore, deps.AttachmentStorage, history, conversation.ID, savedSummary != "")
 		if err != nil {
 			return nil, err
 		}
@@ -303,13 +322,8 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 		if err != nil {
 			return nil, err
 		}
-		// Restore cross-task memory summary if one was persisted.
-		if memoryManager != nil && deps.ConversationStore != nil {
-			if savedSummary, loadErr := deps.ConversationStore.GetMemorySummary(ctx, conversationID); loadErr != nil {
-				corelog.Warn("failed to restore memory summary", corelog.String("component", "agent"), corelog.String("module", "executor"), corelog.String("conversation_id", conversationID), corelog.Err(loadErr))
-			} else if savedSummary != "" {
-				memoryManager.LoadSummary(savedSummary)
-			}
+		if memoryManager != nil && savedSummary != "" {
+			memoryManager.LoadSummary(savedSummary)
 		}
 		var sink EventSink
 		if deps.NewEventSink != nil {
@@ -345,7 +359,11 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 		messages := cloneMessages(history)
 		runInput := RunInput{Messages: messages}
 		if checkpoint == nil {
-			userMessage := model.Message{Role: model.RoleUser, Content: input.Message, ProviderID: input.ProviderID, ModelID: input.ModelID}
+			attachmentsForInput, err := hydrateAttachmentRefs(ctx, deps.AttachmentStore, deps.AttachmentStorage, input.AttachmentIDs, firstNonEmpty(strings.TrimSpace(input.CreatedBy), strings.TrimSpace(task.CreatedBy)), conversation.ID, true)
+			if err != nil {
+				return nil, err
+			}
+			userMessage := model.Message{Role: model.RoleUser, Content: input.Message, ProviderID: input.ProviderID, ModelID: input.ModelID, Attachments: attachmentsForInput}
 			if err := deps.ConversationStore.AppendMessages(ctx, conversation.ID, task.ID, []model.Message{userMessage}); err != nil {
 				return nil, err
 			}
@@ -422,6 +440,103 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 			MemoryCompression: latestCompression,
 		}, nil
 	}
+}
+
+func hydrateReplayMessages(ctx context.Context, store *attachments.Store, storage attachments.Storage, messages []model.Message, conversationID string, allowExpiredHistoryContinuation bool) ([]model.Message, error) {
+	if len(messages) == 0 {
+		return nil, nil
+	}
+	hydratedMessages := cloneMessages(messages)
+	for messageIndex := range hydratedMessages {
+		if len(hydratedMessages[messageIndex].Attachments) == 0 {
+			continue
+		}
+		hydratedAttachments := make([]model.Attachment, 0, len(hydratedMessages[messageIndex].Attachments))
+		for _, attachment := range hydratedMessages[messageIndex].Attachments {
+			hydrated, err := hydrateAttachmentForProvider(ctx, store, storage, attachment, "", conversationID, false)
+			if err != nil {
+				if allowExpiredHistoryContinuation && errors.Is(err, attachments.ErrAttachmentExpired) && messageIndex < len(hydratedMessages)-1 {
+					continue
+				}
+				return nil, err
+			}
+			hydratedAttachments = append(hydratedAttachments, hydrated)
+		}
+		hydratedMessages[messageIndex].Attachments = hydratedAttachments
+	}
+	return hydratedMessages, nil
+}
+
+func hydrateAttachmentRefs(ctx context.Context, store *attachments.Store, storage attachments.Storage, attachmentIDs []string, owner string, conversationID string, promoteDrafts bool) ([]model.Attachment, error) {
+	if len(attachmentIDs) == 0 {
+		return nil, nil
+	}
+	hydrated := make([]model.Attachment, 0, len(attachmentIDs))
+	for _, attachmentID := range attachmentIDs {
+		trimmedID := strings.TrimSpace(attachmentID)
+		if trimmedID == "" {
+			continue
+		}
+		attachment, err := hydrateAttachmentForProvider(ctx, store, storage, model.Attachment{ID: trimmedID}, owner, conversationID, promoteDrafts)
+		if err != nil {
+			return nil, err
+		}
+		hydrated = append(hydrated, attachment)
+	}
+	return hydrated, nil
+}
+
+func hydrateAttachmentForProvider(ctx context.Context, store *attachments.Store, storage attachments.Storage, attachment model.Attachment, owner string, conversationID string, promoteDrafts bool) (model.Attachment, error) {
+	if len(attachment.Data) > 0 {
+		return attachment, nil
+	}
+	if store == nil || storage == nil {
+		return model.Attachment{}, fmt.Errorf("attachment runtime is not configured")
+	}
+	if strings.TrimSpace(attachment.ID) == "" {
+		return model.Attachment{}, fmt.Errorf("attachment id cannot be empty")
+	}
+
+	record, err := store.GetAttachment(ctx, attachment.ID)
+	if err != nil {
+		return model.Attachment{}, err
+	}
+	if trimmedOwner := strings.TrimSpace(owner); trimmedOwner != "" && record.CreatedBy != trimmedOwner {
+		return model.Attachment{}, fmt.Errorf("attachment %q does not belong to %s", record.ID, trimmedOwner)
+	}
+	if record.ExpiresAt != nil && !record.ExpiresAt.After(time.Now().UTC()) {
+		return model.Attachment{}, fmt.Errorf("%w: %s", attachments.ErrAttachmentExpired, record.ID)
+	}
+	if promoteDrafts && record.Status == attachments.StatusDraft {
+		record, err = store.PromoteDraftToSent(ctx, record.ID, attachments.PromoteInput{ConversationID: conversationID})
+		if err != nil {
+			return model.Attachment{}, err
+		}
+	}
+
+	reader, meta, err := storage.Open(ctx, record.StorageKey)
+	if err != nil {
+		return model.Attachment{}, err
+	}
+	defer reader.Close()
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return model.Attachment{}, err
+	}
+	return model.Attachment{
+		ID:          record.ID,
+		FileName:    firstNonEmpty(record.FileName, meta.FileName),
+		MimeType:    firstNonEmpty(record.MimeType, meta.MimeType),
+		SizeBytes:   record.SizeBytes,
+		Kind:        record.Kind,
+		Status:      string(record.Status),
+		PreviewText: record.PreviewText,
+		ContextText: record.ContextText,
+		Width:       record.Width,
+		Height:      record.Height,
+		ExpiresAt:   record.ExpiresAt,
+		Data:        data,
+	}, nil
 }
 
 func taskInteractionCheckpointFromMetadata(metadataJSON []byte) (*interactionCheckpoint, error) {

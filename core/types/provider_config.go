@@ -68,10 +68,15 @@ func (p *LLMProvider) UnmarshalYAML(value *yaml.Node) error {
 }
 
 type LLMModel struct {
-	BaseModel `yaml:",inline"`
-	Type      string           `yaml:"type"`
-	Cost      LLMCostConfig    `yaml:"cost"`
-	Context   LLMContextConfig `yaml:"context"`
+	BaseModel    `yaml:",inline"`
+	Type         string            `yaml:"type"`
+	Cost         LLMCostConfig     `yaml:"cost"`
+	Context      LLMContextConfig  `yaml:"context"`
+	Capabilities ModelCapabilities `yaml:"capabilities" json:"capabilities"`
+}
+
+type ModelCapabilities struct {
+	Attachments bool `yaml:"attachments" json:"attachments"`
 }
 
 type LLMCostConfig struct {
@@ -110,6 +115,10 @@ func (m LLMModel) Validate() error {
 	default:
 		return fmt.Errorf("llm model %q has unsupported type %q", m.ModelName(), m.ModelType())
 	}
+}
+
+func (m *LLMModel) SupportsAttachments() bool {
+	return m != nil && m.Capabilities.Attachments
 }
 
 func (p *LLMProvider) FindModel(query string) *LLMModel {

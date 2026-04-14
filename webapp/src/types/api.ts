@@ -173,6 +173,7 @@ export interface AuditReplayBundle {
 export interface ConversationMessage {
   role: 'user' | 'assistant' | 'tool' | 'system'
   content: string
+  attachments?: AttachmentRef[]
   provider_id?: string
   model_id?: string
   provider_data?: {
@@ -186,6 +187,20 @@ export interface ConversationMessage {
   tool_call_id?: string
   reasoning_items?: Array<{ text?: string }>
   tool_calls?: Array<{ id: string; name: string; arguments?: string }>
+}
+
+export interface AttachmentRef {
+  id: string
+  file_name: string
+  mime_type: string
+  size_bytes?: number
+  kind?: string
+  status?: string
+  preview_text?: string
+  context_text?: string
+  width?: number
+  height?: number
+  expires_at?: string
 }
 
 export interface ModelCatalog {
@@ -204,6 +219,9 @@ export interface ModelCatalogEntry {
   id: string
   name: string
   type: string
+  capabilities?: {
+    attachments: boolean
+  }
   context_window?: {
     max?: number
     input?: number
@@ -242,6 +260,7 @@ export interface TaskInput {
   provider_id?: string
   model_id?: string
   message?: string
+  attachment_ids?: string[]
   created_by?: string
   skills?: string[]
 }
@@ -356,6 +375,7 @@ export interface TranscriptEntry {
   kind: 'user' | 'reasoning' | 'tool' | 'reply' | 'error' | 'approval' | 'question' | 'memory'
   title: string
   content?: string
+  attachments?: AttachmentRef[]
   provider_id?: string
   model_id?: string
   details?: TranscriptEntryDetail[]
@@ -413,6 +433,7 @@ export interface RunTaskRequest {
     provider_id: string
     model_id: string
     message: string
+    attachment_ids?: string[]
     created_by: string
     skills?: string[]
   }

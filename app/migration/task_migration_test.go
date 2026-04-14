@@ -11,6 +11,7 @@ import (
 	"github.com/EquentR/agent_runtime/app/models"
 	"github.com/EquentR/agent_runtime/core/agent"
 	"github.com/EquentR/agent_runtime/core/approvals"
+	"github.com/EquentR/agent_runtime/core/attachments"
 	"github.com/EquentR/agent_runtime/core/interactions"
 	"github.com/EquentR/agent_runtime/core/memory"
 	"github.com/EquentR/agent_runtime/core/prompt"
@@ -218,6 +219,76 @@ func TestBootstrapMigratesTaskConcurrencyKeyColumn(t *testing.T) {
 
 	if !rawDB.Migrator().HasColumn("tasks", "concurrency_key") {
 		t.Fatal("tasks.concurrency_key column was not created")
+	}
+}
+
+func TestMigrationAddsConversationAttachmentsTable(t *testing.T) {
+	log.Init(&log.Config{Level: "error"})
+
+	db.Init(&db.Database{
+		Name:     "conversation_attachments_migration_test",
+		DbDir:    t.TempDir(),
+		InMemory: true,
+		LogLevel: "silent",
+	})
+
+	rawDB := db.DB()
+	if err := rawDB.Migrator().DropTable(&attachments.Attachment{}, &migrate.DataVersion{}); err != nil {
+		t.Fatalf("reset attachment migration tables error = %v", err)
+	}
+
+	Bootstrap("0.1.4")
+
+	if !rawDB.Migrator().HasTable(&attachments.Attachment{}) {
+		t.Fatal("conversation_attachments table was not created")
+	}
+
+	assertTableHasColumns(t, "conversation_attachments",
+		"id",
+		"conversation_id",
+		"message_seq",
+		"created_by",
+		"storage_backend",
+		"storage_key",
+		"sha256",
+		"file_name",
+		"mime_type",
+		"size_bytes",
+		"kind",
+		"status",
+		"lifecycle",
+		"preview_text",
+		"context_text",
+		"width",
+		"height",
+		"expires_at",
+		"last_accessed_at",
+		"deleted_at",
+		"created_at",
+		"updated_at",
+	)
+	for _, indexName := range []string{
+		"idx_conversation_attachments_conversation_id",
+		"idx_conversation_attachments_status",
+		"idx_conversation_attachments_lifecycle",
+		"idx_conversation_attachments_expires_at",
+	} {
+		if !rawDB.Migrator().HasIndex(&attachments.Attachment{}, indexName) {
+			t.Fatalf("conversation_attachments index %q was not created", indexName)
+		}
+	}
+
+	Bootstrap("0.1.4")
+
+	if !rawDB.Migrator().HasTable(&attachments.Attachment{}) {
+		t.Fatal("conversation_attachments table missing after repeated bootstrap")
+	}
+	var versionCount int64
+	if err := rawDB.Model(&migrate.DataVersion{}).Count(&versionCount).Error; err != nil {
+		t.Fatalf("count data_versions error = %v", err)
+	}
+	if versionCount != 1 {
+		t.Fatalf("data_versions row count = %d, want 1", versionCount)
 	}
 }
 

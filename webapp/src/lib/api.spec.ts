@@ -481,6 +481,82 @@ describe('audit API helpers', () => {
     expect(runs).toEqual([expect.objectContaining({ id: 'run_1', conversation_id: 'conv_1' })])
   })
 })
+
+describe('model catalog normalization', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    vi.stubGlobal('fetch', vi.fn())
+  })
+
+  it('normalizes model attachment capability', async () => {
+    vi.mocked(fetch).mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        code: 200,
+        message: 'OK',
+        data: {
+          default_provider_id: 'openai',
+          default_model_id: 'gpt-5.4',
+          providers: [
+            {
+              id: 'openai',
+              name: 'OpenAI',
+              models: [
+                {
+                  id: 'gpt-5.4',
+                  name: 'GPT-5.4',
+                  type: 'openai_responses',
+                  capabilities: {
+                    attachments: false,
+                  },
+                },
+                {
+                  id: 'gpt-4.1',
+                  name: 'GPT-4.1',
+                  type: 'openai_completions',
+                  capabilities: {
+                    attachments: true,
+                  },
+                },
+              ],
+            },
+          ],
+        },
+        time: '',
+      }),
+    } as Response)
+
+    const api = await import('./api')
+    const catalog = await api.fetchModelCatalog()
+
+    expect(catalog.providers[0].models[0].capabilities?.attachments).toBe(false)
+    expect(catalog.providers[0].models[1].capabilities?.attachments).toBe(true)
+  })
+})
+
+describe('task normalization', () => {
+  it('normalizes attachment ids on task details input', async () => {
+    const api = await import('./api')
+    const task = api.normalizeTaskDetails({
+      id: 'task_1',
+      task_type: 'agent.run',
+      status: 'queued',
+      created_by: 'alice',
+      created_at: '2026-04-14T00:00:00Z',
+      updated_at: '2026-04-14T00:00:00Z',
+      input: {
+        conversation_id: 'conv_1',
+        provider_id: 'openai',
+        model_id: 'gpt-5.4',
+        message: 'hello',
+        attachment_ids: ['att_1', 'att_2'],
+      },
+    })
+
+    expect(task.input?.attachment_ids).toEqual(['att_1', 'att_2'])
+  })
+})
 describe('prompt API helpers', () => {
   beforeEach(() => {
     vi.restoreAllMocks()

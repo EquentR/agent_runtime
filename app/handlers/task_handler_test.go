@@ -285,6 +285,34 @@ func TestTaskHandlerCreateTaskTransparentlyPassesSkillsInInput(t *testing.T) {
 	}
 }
 
+func TestCreateTaskAcceptsAttachmentIDsInAgentRunInput(t *testing.T) {
+	manager, server := newTaskHandlerTestServer(t, nil, false)
+
+	created := createTaskViaHTTP(t, server.URL, map[string]any{
+		"task_type": "agent.run",
+		"input": map[string]any{
+			"conversation_id": "conv_1",
+			"provider_id":     "openai",
+			"model_id":        "gpt-5.4",
+			"message":         "hello",
+			"attachment_ids":  []string{"att_1", "att_2"},
+		},
+	})
+
+	persisted, err := manager.GetTask(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("GetTask() error = %v", err)
+	}
+	persistedInput := decodeJSONRaw(t, persisted.InputJSON)
+	rawAttachmentIDs, ok := persistedInput["attachment_ids"].([]any)
+	if !ok {
+		t.Fatalf("persisted input.attachment_ids = %#v, want JSON array", persistedInput["attachment_ids"])
+	}
+	if len(rawAttachmentIDs) != 2 || rawAttachmentIDs[0] != "att_1" || rawAttachmentIDs[1] != "att_2" {
+		t.Fatalf("persisted input.attachment_ids = %#v, want [att_1 att_2]", rawAttachmentIDs)
+	}
+}
+
 func TestTaskHandlerAgentRunEndToEndAppendsConversationHistory(t *testing.T) {
 	manager, server := newAgentRunTaskTestServer(t)
 	first := createTaskViaHTTP(t, server.URL, map[string]any{

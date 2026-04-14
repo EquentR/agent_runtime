@@ -4,10 +4,13 @@ import type {
   AuditEvent,
   AuditReplayBundle,
   AuditRun,
+  AttachmentRef,
   AuthUser,
   Conversation,
   ConversationMessage,
   ModelCatalog,
+  ModelCatalogEntry,
+  ModelCatalogProvider,
   CreatePromptDocumentInput,
   MemoryCompression,
   MemoryContextState,
@@ -75,6 +78,7 @@ export function buildRunTaskRequest(input: {
   providerId: string
   modelId: string
   message: string
+  attachmentIds?: string[]
   skills?: string[]
 }): RunTaskRequest {
   const request: RunTaskRequest = {
@@ -93,6 +97,9 @@ export function buildRunTaskRequest(input: {
   }
   if (input.skills && input.skills.length > 0) {
     request.input.skills = input.skills
+  }
+  if (input.attachmentIds && input.attachmentIds.length > 0) {
+    request.input.attachment_ids = input.attachmentIds
   }
 
   return request
@@ -170,12 +177,136 @@ function normalizeConversationToolCalls(...values: unknown[]): ConversationMessa
   return undefined
 }
 
+function normalizeAttachmentRef(
+  attachment: Partial<AttachmentRef> & {
+    ID?: string
+    FileName?: string
+    MimeType?: string
+    SizeBytes?: number | string
+    Kind?: string
+    Status?: string
+    PreviewText?: string
+    ContextText?: string
+    Width?: number | string
+    Height?: number | string
+    ExpiresAt?: string
+  },
+): AttachmentRef {
+  return {
+    id: normalizeFirstStringValue(attachment.id, attachment.ID),
+    file_name: normalizeFirstStringValue(attachment.file_name, attachment.FileName),
+    mime_type: normalizeFirstStringValue(attachment.mime_type, attachment.MimeType),
+    size_bytes: normalizeIntegerValue(attachment.size_bytes ?? attachment.SizeBytes),
+    kind: normalizeFirstOptionalStringValue(attachment.kind, attachment.Kind),
+    status: normalizeFirstOptionalStringValue(attachment.status, attachment.Status),
+    preview_text: normalizeFirstOptionalStringValue(attachment.preview_text, attachment.PreviewText),
+    context_text: normalizeFirstOptionalStringValue(attachment.context_text, attachment.ContextText),
+    width: normalizeIntegerValue(attachment.width ?? attachment.Width),
+    height: normalizeIntegerValue(attachment.height ?? attachment.Height),
+    expires_at: normalizeFirstOptionalStringValue(attachment.expires_at, attachment.ExpiresAt),
+  }
+}
+
+function normalizeAttachmentRefs(...values: unknown[]): AttachmentRef[] | undefined {
+  for (const value of values) {
+    if (!Array.isArray(value)) {
+      continue
+    }
+    return value.map((attachment) =>
+      normalizeAttachmentRef(attachment && typeof attachment === 'object' ? (attachment as Record<string, unknown>) : {}),
+    )
+  }
+  return undefined
+}
+
 function normalizeIntegerValue(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value)
     ? value
     : typeof value === 'string' && value.trim() && Number.isFinite(Number(value))
       ? Number(value)
       : undefined
+}
+
+function normalizeBooleanValue(value: unknown) {
+  if (typeof value === 'boolean') {
+    return value
+  }
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase()
+    if (normalized === 'true') {
+      return true
+    }
+    if (normalized === 'false') {
+      return false
+    }
+  }
+  return undefined
+}
+
+function normalizeModelCatalogEntry(
+  entry: Partial<ModelCatalogEntry> & {
+    ID?: string
+    Name?: string
+    Type?: string
+    Context?: Record<string, unknown>
+    context?: Record<string, unknown>
+    capabilities?: Record<string, unknown>
+    Capabilities?: Record<string, unknown>
+  },
+): ModelCatalogEntry {
+  const rawContext = entry.context_window ?? entry.context ?? entry.Context
+  const rawCapabilities = entry.capabilities ?? entry.Capabilities ?? {}
+  return {
+    id: normalizeFirstStringValue(entry.id, entry.ID),
+    name: normalizeFirstStringValue(entry.name, entry.Name),
+    type: normalizeFirstStringValue(entry.type, entry.Type),
+    context_window:
+      rawContext && typeof rawContext === 'object'
+        ? {
+            max: normalizeIntegerValue(rawContext.max),
+            input: normalizeIntegerValue(rawContext.input),
+            output: normalizeIntegerValue(rawContext.output),
+            short_term_limit: normalizeIntegerValue(rawContext.short_term_limit),
+          }
+        : undefined,
+    capabilities: {
+      attachments: normalizeBooleanValue(rawCapabilities.attachments) ?? false,
+    },
+  }
+}
+
+function normalizeModelCatalogProvider(
+  provider: Partial<ModelCatalogProvider> & {
+    ID?: string
+    Name?: string
+    Models?: Array<Partial<ModelCatalogEntry>>
+  },
+): ModelCatalogProvider {
+  const models: Array<Partial<ModelCatalogEntry>> = Array.isArray(provider.models ?? provider.Models)
+    ? ((provider.models ?? provider.Models) as Array<Partial<ModelCatalogEntry>>)
+    : []
+  return {
+    id: normalizeFirstStringValue(provider.id, provider.ID),
+    name: normalizeFirstStringValue(provider.name, provider.Name),
+    models: models.map((model) => normalizeModelCatalogEntry(model)),
+  }
+}
+
+function normalizeModelCatalog(
+  catalog: Partial<ModelCatalog> & {
+    DefaultProviderID?: string
+    DefaultModelID?: string
+    Providers?: Array<Partial<ModelCatalogProvider>>
+  },
+): ModelCatalog {
+  const providers: Array<Partial<ModelCatalogProvider>> = Array.isArray(catalog.providers ?? catalog.Providers)
+    ? ((catalog.providers ?? catalog.Providers) as Array<Partial<ModelCatalogProvider>>)
+    : []
+  return {
+    default_provider_id: normalizeFirstStringValue(catalog.default_provider_id, catalog.DefaultProviderID),
+    default_model_id: normalizeFirstStringValue(catalog.default_model_id, catalog.DefaultModelID),
+    providers: providers.map((provider) => normalizeModelCatalogProvider(provider)),
+  }
 }
 
 function normalizeApprovalDecision(value: unknown): ApprovalDecision | undefined {
@@ -236,11 +367,13 @@ export function normalizeConversationMessage(
     provider_data?: unknown
     Usage?: unknown
     Reasoning?: string
-    ToolCallId?: string
-    ToolCallID?: string
-    toolCallId?: string
-    providerId?: string
-    modelId?: string
+  ToolCallId?: string
+  ToolCallID?: string
+  toolCallId?: string
+  attachments?: unknown
+  Attachments?: unknown
+  providerId?: string
+  modelId?: string
     usage?: unknown
     ReasoningItems?: Array<{ Summary?: Array<{ Text?: string }> }>
     ToolCalls?: Array<{ ID?: string; Name?: string; Arguments?: string; id?: string; name?: string; arguments?: string }>
@@ -250,6 +383,7 @@ export function normalizeConversationMessage(
   return {
     role: normalizeConversationRole(message.role, message.Role),
     content: normalizeFirstStringValue(message.content, message.Content),
+    attachments: normalizeAttachmentRefs(message.attachments, message.Attachments),
     provider_id: normalizeFirstOptionalStringValue(message.provider_id, message.providerId, message.ProviderID),
     model_id: normalizeFirstOptionalStringValue(message.model_id, message.modelId, message.ModelID),
     provider_data: normalizeConversationProviderData(message.provider_data ?? message.providerData ?? message.ProviderData),
@@ -398,9 +532,35 @@ export function normalizeTranscriptTokenUsage(value: unknown): TranscriptTokenUs
 export function normalizeTaskDetails(task: TaskDetails): TaskDetails {
   return {
     ...task,
-    input: task.input,
+    input: normalizeTaskInput(task.input),
     result: task.result ? normalizeRunTaskResult(task.result) : undefined,
     result_json: task.result_json ? normalizeRunTaskResult(task.result_json) : undefined,
+  }
+}
+
+function normalizeTaskInput(input: TaskDetails['input'] | undefined): TaskDetails['input'] {
+  if (!input || typeof input !== 'object') {
+    return input
+  }
+
+  const raw = input as Record<string, unknown>
+  const attachmentIDs = Array.isArray(raw.attachment_ids)
+    ? raw.attachment_ids.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    : Array.isArray(raw.attachmentIds)
+      ? raw.attachmentIds.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+      : undefined
+  const skills = Array.isArray(raw.skills)
+    ? raw.skills.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    : undefined
+
+  return {
+    conversation_id: normalizeFirstOptionalStringValue(raw.conversation_id, raw.conversationId),
+    provider_id: normalizeFirstOptionalStringValue(raw.provider_id, raw.providerId),
+    model_id: normalizeFirstOptionalStringValue(raw.model_id, raw.modelId),
+    message: normalizeFirstOptionalStringValue(raw.message, raw.Message),
+    attachment_ids: attachmentIDs,
+    created_by: normalizeFirstOptionalStringValue(raw.created_by, raw.createdBy),
+    skills,
   }
 }
 
@@ -493,7 +653,8 @@ export async function fetchConversation(conversationId: string) {
 }
 
 export async function fetchModelCatalog() {
-  return request<ModelCatalog>('/models')
+  const catalog = await request<Partial<ModelCatalog> & Record<string, unknown>>('/models')
+  return normalizeModelCatalog(catalog)
 }
 
 export async function fetchConversationMessages(conversationId: string) {
@@ -501,6 +662,33 @@ export async function fetchConversationMessages(conversationId: string) {
     Array<Partial<ConversationMessage> & { Role?: string; Content?: string; Reasoning?: string; ToolCallId?: string }>
   >(`/conversations/${conversationId}/messages`)
   return messages.map((message) => normalizeConversationMessage(message))
+}
+
+export async function uploadAttachment(file: File, conversationId?: string) {
+  const formData = new FormData()
+  formData.append('file', file)
+  if (conversationId) {
+    formData.append('conversation_id', conversationId)
+  }
+
+  const response = await fetch(`${API_BASE}/attachments`, {
+    method: 'POST',
+    credentials: 'include',
+    body: formData,
+  })
+
+  const payload = (await response.json()) as ApiEnvelope<AttachmentRef>
+  return unwrapEnvelope(payload)
+}
+
+export async function deleteAttachment(attachmentId: string) {
+  return request<{ deleted: boolean }>(`/attachments/${encodeURIComponent(attachmentId)}`, {
+    method: 'DELETE',
+  })
+}
+
+export function getAttachmentContentURL(attachmentId: string) {
+  return `${API_BASE}/attachments/${encodeURIComponent(attachmentId)}/content`
 }
 
 export async function deleteConversation(conversationId: string) {
@@ -591,6 +779,7 @@ export async function createRunTask(input: {
   providerId: string
   modelId: string
   message: string
+  attachmentIds?: string[]
   skills?: string[]
 }) {
   return request<TaskSnapshot>('/tasks', {

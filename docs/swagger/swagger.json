@@ -8,6 +8,183 @@
     },
     "basePath": "/api/v1",
     "paths": {
+        "/attachments": {
+            "post": {
+                "description": "上传一个 multipart 文件，创建 draft 附件并返回展示元数据。",
+                "consumes": [
+                    "multipart/form-data"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "attachments"
+                ],
+                "summary": "上传附件",
+                "parameters": [
+                    {
+                        "type": "file",
+                        "description": "附件文件",
+                        "name": "file",
+                        "in": "formData",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "会话 ID",
+                        "name": "conversation_id",
+                        "in": "formData"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.AttachmentSwaggerResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/attachments/{id}": {
+            "get": {
+                "description": "返回指定附件的元数据与当前状态。",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "attachments"
+                ],
+                "summary": "获取附件元数据",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "附件 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.AttachmentSwaggerResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "description": "删除指定 draft 附件及其底层存储对象。",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "attachments"
+                ],
+                "summary": "删除草稿附件",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "附件 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.AttachmentDeleteSwaggerResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/attachments/{id}/content": {
+            "get": {
+                "description": "鉴权后返回附件原始内容流。",
+                "produces": [
+                    "application/octet-stream"
+                ],
+                "tags": [
+                    "attachments"
+                ],
+                "summary": "获取附件原始内容",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "附件 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "attachment content",
+                        "schema": {
+                            "type": "file"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/audit/conversations/{conversation_id}/events": {
             "get": {
                 "description": "按 conversation_id 返回该会话下跨审计运行的所有事件，按时间和序列升序排列。",
@@ -1603,6 +1780,98 @@
                 }
             }
         },
+        "handlers.AttachmentDeleteSwaggerData": {
+            "type": "object",
+            "properties": {
+                "deleted": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "handlers.AttachmentDeleteSwaggerResponse": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "integer"
+                },
+                "data": {
+                    "$ref": "#/definitions/handlers.AttachmentDeleteSwaggerData"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "ok": {
+                    "type": "boolean"
+                },
+                "time": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.AttachmentSwaggerDoc": {
+            "type": "object",
+            "properties": {
+                "conversation_id": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "expires_at": {
+                    "type": "string"
+                },
+                "file_name": {
+                    "type": "string"
+                },
+                "height": {
+                    "type": "integer"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "mime_type": {
+                    "type": "string"
+                },
+                "preview_text": {
+                    "type": "string"
+                },
+                "size_bytes": {
+                    "type": "integer"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "width": {
+                    "type": "integer"
+                }
+            }
+        },
+        "handlers.AttachmentSwaggerResponse": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "integer"
+                },
+                "data": {
+                    "$ref": "#/definitions/handlers.AttachmentSwaggerDoc"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "ok": {
+                    "type": "boolean"
+                },
+                "time": {
+                    "type": "string"
+                }
+            }
+        },
         "handlers.AuditEventListSwaggerResponse": {
             "type": "object",
             "properties": {
@@ -2295,6 +2564,14 @@
                 }
             }
         },
+        "handlers.ModelCapabilitiesSwaggerDoc": {
+            "type": "object",
+            "properties": {
+                "attachments": {
+                    "type": "boolean"
+                }
+            }
+        },
         "handlers.ModelCatalogSwaggerDoc": {
             "type": "object",
             "properties": {
@@ -2349,6 +2626,9 @@
         "handlers.ModelEntrySwaggerDoc": {
             "type": "object",
             "properties": {
+                "capabilities": {
+                    "$ref": "#/definitions/handlers.ModelCapabilitiesSwaggerDoc"
+                },
                 "context": {
                     "$ref": "#/definitions/handlers.ModelContextSwaggerDoc"
                 },

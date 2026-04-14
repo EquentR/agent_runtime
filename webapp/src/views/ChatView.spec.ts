@@ -15,6 +15,7 @@ const api = vi.hoisted(() => ({
   cancelTask: vi.fn(),
   createRunTask: vi.fn(),
   decideTaskApproval: vi.fn(),
+  deleteAttachment: vi.fn(),
   deleteConversation: vi.fn(),
   fetchModelCatalog: vi.fn(),
   fetchConversationMessages: vi.fn(),
@@ -62,6 +63,7 @@ const api = vi.hoisted(() => ({
   normalizeTranscriptTokenUsage: vi.fn((usage: any) => usage),
   respondTaskInteraction: vi.fn(),
   streamRunTask: vi.fn(),
+  uploadAttachment: vi.fn(),
 }))
 
 vi.mock('../lib/api', () => api)
@@ -106,6 +108,7 @@ describe('ChatView', () => {
     api.fetchSkills.mockReset()
     api.createRunTask.mockReset()
     api.decideTaskApproval.mockReset()
+    api.deleteAttachment.mockReset()
     api.deleteConversation.mockReset()
     api.fetchTaskInteractions.mockReset()
     api.findRunningTaskByConversation.mockReset()
@@ -113,6 +116,7 @@ describe('ChatView', () => {
     api.fetchTaskApprovals.mockReset()
     api.respondTaskInteraction.mockReset()
     api.streamRunTask.mockReset()
+    api.uploadAttachment.mockReset()
     api.fetchModelCatalog.mockResolvedValue({
       default_provider_id: 'openai',
       default_model_id: 'gpt-5.4',
@@ -121,14 +125,14 @@ describe('ChatView', () => {
           id: 'openai',
           name: 'openai',
           models: [
-            { id: 'gpt-5.4', name: 'GPT-5.4', type: 'chat' },
+            { id: 'gpt-5.4', name: 'GPT-5.4', type: 'chat', capabilities: { attachments: true } },
           ],
         },
         {
           id: 'google',
           name: 'google',
           models: [
-            { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', type: 'chat' },
+            { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', type: 'chat', capabilities: { attachments: true } },
           ],
         },
       ],
@@ -1631,6 +1635,110 @@ describe('ChatView', () => {
       providerId: 'google',
       modelId: 'gemini-2.5-flash',
     }))
+  })
+
+  it('sends attachment_ids with run task request', async () => {
+    api.fetchConversations.mockResolvedValue([])
+    api.uploadAttachment.mockResolvedValue({
+      id: 'att_1',
+      file_name: 'note.txt',
+      mime_type: 'text/plain',
+      status: 'draft',
+      kind: 'text',
+    })
+    api.createRunTask.mockResolvedValue({ id: 'task_1', input: { conversation_id: 'conv_new' } })
+    api.streamRunTask.mockResolvedValue({ conversation_id: 'conv_new' })
+
+    const router = makeRouter()
+    await router.push('/chat')
+    await router.isReady()
+
+    const wrapper = mount(ChatView, {
+      global: {
+        plugins: [router],
+      },
+    })
+
+    await flushPromises()
+
+    const composer = wrapper.findComponent({ name: 'MessageComposer' })
+    composer.vm.$emit('add-attachments', [new File(['hello'], 'note.txt', { type: 'text/plain' })])
+    await flushPromises()
+    await wrapper.find('textarea').setValue('hello')
+    await wrapper.find('form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(api.createRunTask).toHaveBeenCalledWith(expect.objectContaining({
+      attachmentIds: ['att_1'],
+    }))
+  })
+
+  it('hides uploader for models without attachment capability', async () => {
+    api.fetchModelCatalog.mockResolvedValue({
+      default_provider_id: 'openai',
+      default_model_id: 'gpt-5.4',
+      providers: [
+        {
+          id: 'openai',
+          name: 'openai',
+          models: [
+            { id: 'gpt-5.4', name: 'GPT-5.4', type: 'chat', capabilities: { attachments: false } },
+          ],
+        },
+      ],
+    })
+    api.fetchConversations.mockResolvedValue([])
+
+    const router = makeRouter()
+    await router.push('/chat')
+    await router.isReady()
+
+    const wrapper = mount(ChatView, {
+      global: {
+        plugins: [router],
+      },
+    })
+
+    await flushPromises()
+
+    const composer = wrapper.findComponent({ name: 'MessageComposer' })
+    expect(composer.props('attachmentsEnabled')).toBe(false)
+  })
+
+  it('keeps attachment in failed state when backend delete fails', async () => {
+    api.fetchConversations.mockResolvedValue([])
+    api.uploadAttachment.mockResolvedValue({
+      id: 'att_1',
+      file_name: 'note.txt',
+      mime_type: 'text/plain',
+      status: 'draft',
+      kind: 'text',
+    })
+    api.deleteAttachment.mockRejectedValue(new Error('delete failed'))
+
+    const router = makeRouter()
+    await router.push('/chat')
+    await router.isReady()
+
+    const wrapper = mount(ChatView, {
+      global: {
+        plugins: [router],
+      },
+    })
+
+    await flushPromises()
+
+    const composer = wrapper.findComponent({ name: 'MessageComposer' })
+    composer.vm.$emit('add-attachments', [new File(['hello'], 'note.txt', { type: 'text/plain' })])
+    await flushPromises()
+    const uploadedAttachments = wrapper.findComponent({ name: 'MessageComposer' }).props('attachments') as Array<Record<string, unknown>>
+    composer.vm.$emit('remove-attachment', uploadedAttachments[0].local_id)
+    await flushPromises()
+
+    const attachments = wrapper.findComponent({ name: 'MessageComposer' }).props('attachments') as Array<Record<string, unknown>>
+    expect(attachments).toHaveLength(1)
+    expect(attachments[0].upload_state).toBe('failed')
+    expect(attachments[0].error_message).toBe('delete failed')
   })
 
   it('restores per-conversation skill selection from local storage', async () => {

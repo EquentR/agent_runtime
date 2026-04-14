@@ -187,6 +187,46 @@ llmProvider:
 	}
 }
 
+func TestLLMProviderParsesAttachmentCapability(t *testing.T) {
+	provider := mustLoadLLMProvider(t, `
+llmProvider:
+  name: openai
+  models:
+    - id: gpt54
+      name: gpt-5.4
+      type: openai_responses
+      capabilities:
+        attachments: true
+`)
+
+	model := provider.FindModel("gpt54")
+	if model == nil {
+		t.Fatalf("FindModel() = nil, want gpt54")
+	}
+	if !model.SupportsAttachments() {
+		t.Fatal("SupportsAttachments() = false, want true")
+	}
+}
+
+func TestLLMProviderDefaultsAttachmentCapabilityToFalse(t *testing.T) {
+	provider := mustLoadLLMProvider(t, `
+llmProvider:
+  name: openai
+  models:
+    - id: gpt54
+      name: gpt-5.4
+      type: openai_responses
+`)
+
+	model := provider.FindModel("gpt54")
+	if model == nil {
+		t.Fatalf("FindModel() = nil, want gpt54")
+	}
+	if model.SupportsAttachments() {
+		t.Fatal("SupportsAttachments() = true, want false when omitted")
+	}
+}
+
 func TestLLMProviderRejectsUnknownModelTypeAtYAMLLoad(t *testing.T) {
 	var cfg struct {
 		LLM LLMProvider `yaml:"llmProvider"`

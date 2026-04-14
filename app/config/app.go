@@ -1,8 +1,10 @@
 package config
 
 import (
+	"strings"
 	"time"
 
+	"github.com/EquentR/agent_runtime/core/attachments"
 	coretasks "github.com/EquentR/agent_runtime/core/tasks"
 	builtin "github.com/EquentR/agent_runtime/core/tools/builtin"
 	coretypes "github.com/EquentR/agent_runtime/core/types"
@@ -12,6 +14,10 @@ import (
 )
 
 const defaultLLMRequestTimeout = 10 * time.Minute
+const defaultAttachmentDraftTTL = 24 * time.Hour
+const defaultAttachmentSentRetention = 30 * 24 * time.Hour
+const defaultAttachmentGCInterval = 1 * time.Hour
+const defaultAttachmentFilesystemRoot = "data/attachments"
 
 type Config struct {
 	WorkspaceDir      string                      `yaml:"workspaceDir"`
@@ -20,6 +26,7 @@ type Config struct {
 	Log               log.Config                  `yaml:"log"`
 	Tasks             TaskManagerConfig           `yaml:"tasks"`
 	Tools             ToolsConfig                 `yaml:"tools"`
+	Attachments       AttachmentStorageConfig     `yaml:"attachments"`
 	LLMRequestTimeout time.Duration               `yaml:"llmRequestTimeout"`
 	LLM               []coretypes.LLMProvider     `yaml:"llmProviders"`
 	Embedding         coretypes.EmbeddingProvider `yaml:"embeddingProvider"`
@@ -48,6 +55,53 @@ func (c TaskManagerConfig) ManagerOptions(auditRecorder coretasks.AuditRecorder)
 
 type ToolsConfig struct {
 	WebSearch WebSearchConfig `yaml:"webSearch"`
+}
+
+type AttachmentStorageConfig struct {
+	StorageBackend string                     `yaml:"storageBackend"`
+	Filesystem     AttachmentFilesystemConfig `yaml:"filesystem"`
+	DraftTTL       time.Duration              `yaml:"draftTTL"`
+	SentRetention  time.Duration              `yaml:"sentRetention"`
+	GCInterval     time.Duration              `yaml:"gcInterval"`
+}
+
+type AttachmentFilesystemConfig struct {
+	Root string `yaml:"root"`
+}
+
+func (c AttachmentStorageConfig) ResolvedStorageBackend() string {
+	if backend := strings.TrimSpace(c.StorageBackend); backend != "" {
+		return backend
+	}
+	return attachments.BackendFilesystem
+}
+
+func (c AttachmentStorageConfig) ResolvedFilesystemRoot() string {
+	if root := strings.TrimSpace(c.Filesystem.Root); root != "" {
+		return root
+	}
+	return defaultAttachmentFilesystemRoot
+}
+
+func (c AttachmentStorageConfig) ResolvedDraftTTL() time.Duration {
+	if c.DraftTTL > 0 {
+		return c.DraftTTL
+	}
+	return defaultAttachmentDraftTTL
+}
+
+func (c AttachmentStorageConfig) ResolvedSentRetention() time.Duration {
+	if c.SentRetention > 0 {
+		return c.SentRetention
+	}
+	return defaultAttachmentSentRetention
+}
+
+func (c AttachmentStorageConfig) ResolvedGCInterval() time.Duration {
+	if c.GCInterval > 0 {
+		return c.GCInterval
+	}
+	return defaultAttachmentGCInterval
 }
 
 type WebSearchConfig struct {

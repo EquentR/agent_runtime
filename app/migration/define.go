@@ -7,6 +7,7 @@ import (
 	"github.com/EquentR/agent_runtime/app/models"
 	"github.com/EquentR/agent_runtime/core/agent"
 	"github.com/EquentR/agent_runtime/core/approvals"
+	"github.com/EquentR/agent_runtime/core/attachments"
 	"github.com/EquentR/agent_runtime/core/audit"
 	"github.com/EquentR/agent_runtime/core/interactions"
 	"github.com/EquentR/agent_runtime/core/memory"
@@ -161,6 +162,11 @@ var to012 = migrate.NewMigration("0.1.2", func(tx *gorm.DB) error {
 // to013 为 conversations 表补齐结构化 memory snapshot 列，支持 reload 使用后端权威值。
 var to013 = migrate.NewMigration("0.1.3", func(tx *gorm.DB) error {
 	return tx.AutoMigrate(&agent.Conversation{})
+})
+
+// to014 创建 conversation_attachments 表，为附件元数据与存储引用提供持久化支持。
+var to014 = migrate.NewMigration("0.1.4", func(tx *gorm.DB) error {
+	return tx.AutoMigrate(&attachments.Attachment{})
 })
 
 type approvalInteractionRequest struct {

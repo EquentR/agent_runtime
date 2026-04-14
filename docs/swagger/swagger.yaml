@@ -74,6 +74,66 @@ definitions:
       time:
         type: string
     type: object
+  handlers.AttachmentDeleteSwaggerData:
+    properties:
+      deleted:
+        type: boolean
+    type: object
+  handlers.AttachmentDeleteSwaggerResponse:
+    properties:
+      code:
+        type: integer
+      data:
+        $ref: '#/definitions/handlers.AttachmentDeleteSwaggerData'
+      message:
+        type: string
+      ok:
+        type: boolean
+      time:
+        type: string
+    type: object
+  handlers.AttachmentSwaggerDoc:
+    properties:
+      conversation_id:
+        type: string
+      created_at:
+        type: string
+      expires_at:
+        type: string
+      file_name:
+        type: string
+      height:
+        type: integer
+      id:
+        type: string
+      kind:
+        type: string
+      mime_type:
+        type: string
+      preview_text:
+        type: string
+      size_bytes:
+        type: integer
+      status:
+        type: string
+      updated_at:
+        type: string
+      width:
+        type: integer
+    type: object
+  handlers.AttachmentSwaggerResponse:
+    properties:
+      code:
+        type: integer
+      data:
+        $ref: '#/definitions/handlers.AttachmentSwaggerDoc'
+      message:
+        type: string
+      ok:
+        type: boolean
+      time:
+        type: string
+    type: object
   handlers.AuditEventListSwaggerResponse:
     properties:
       code:
@@ -530,6 +590,11 @@ definitions:
       total_tokens:
         type: integer
     type: object
+  handlers.ModelCapabilitiesSwaggerDoc:
+    properties:
+      attachments:
+        type: boolean
+    type: object
   handlers.ModelCatalogSwaggerDoc:
     properties:
       default_model_id:
@@ -565,6 +630,8 @@ definitions:
     type: object
   handlers.ModelEntrySwaggerDoc:
     properties:
+      capabilities:
+        $ref: '#/definitions/handlers.ModelCapabilitiesSwaggerDoc'
       context:
         $ref: '#/definitions/handlers.ModelContextSwaggerDoc'
       cost:
@@ -938,6 +1005,123 @@ info:
   title: Agent Runtime API
   version: 0.0.1
 paths:
+  /attachments:
+    post:
+      consumes:
+      - multipart/form-data
+      description: 上传一个 multipart 文件，创建 draft 附件并返回展示元数据。
+      parameters:
+      - description: 附件文件
+        in: formData
+        name: file
+        required: true
+        type: file
+      - description: 会话 ID
+        in: formData
+        name: conversation_id
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.AttachmentSwaggerResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+      summary: 上传附件
+      tags:
+      - attachments
+  /attachments/{id}:
+    delete:
+      description: 删除指定 draft 附件及其底层存储对象。
+      parameters:
+      - description: 附件 ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.AttachmentDeleteSwaggerResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+      summary: 删除草稿附件
+      tags:
+      - attachments
+    get:
+      description: 返回指定附件的元数据与当前状态。
+      parameters:
+      - description: 附件 ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.AttachmentSwaggerResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+      summary: 获取附件元数据
+      tags:
+      - attachments
+  /attachments/{id}/content:
+    get:
+      description: 鉴权后返回附件原始内容流。
+      parameters:
+      - description: 附件 ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/octet-stream
+      responses:
+        "200":
+          description: attachment content
+          schema:
+            type: file
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+      summary: 获取附件原始内容
+      tags:
+      - attachments
   /audit/conversations/{conversation_id}/events:
     get:
       description: 按 conversation_id 返回该会话下跨审计运行的所有事件，按时间和序列升序排列。

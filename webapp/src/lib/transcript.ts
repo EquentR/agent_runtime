@@ -330,14 +330,17 @@ function stopAllLoading(entries: TranscriptEntry[], toolStatus: TranscriptEntry[
   })
 }
 
-function appendReply(entries: TranscriptEntry[], content: string) {
+function appendReply(entries: TranscriptEntry[], content: string, attachments?: ConversationMessage['attachments']) {
   const next = completeLatestReasoning(entries)
   const last = next[next.length - 1]
   if (last?.kind === 'reply') {
     last.content = content
+    if (attachments !== undefined) {
+      last.attachments = attachments.length > 0 ? attachments : undefined
+    }
     return next
   }
-  next.push({ id: createEntryId('reply'), kind: 'reply', title: '', content })
+  next.push({ id: createEntryId('reply'), kind: 'reply', title: '', content, ...(attachments && attachments.length > 0 ? { attachments } : {}) })
   return next
 }
 
@@ -523,7 +526,13 @@ function applyConversationMessage(
   }
 
   if (message.role === 'user') {
-    next.push({ id: createEntryId('user'), kind: 'user', title: '', content: message.content })
+    next.push({
+      id: createEntryId('user'),
+      kind: 'user',
+      title: '',
+      content: message.content,
+      ...(message.attachments && message.attachments.length > 0 ? { attachments: message.attachments } : {}),
+    })
     return next
   }
 
@@ -544,8 +553,8 @@ function applyConversationMessage(
     next = updatePendingToolGroupFromMessage(next, options.groupKey, toolCalls)
   }
 
-  if (message.content.trim()) {
-    next = appendReply(next, message.content)
+  if (message.content.trim() || (message.attachments?.length ?? 0) > 0) {
+    next = appendReply(next, message.content, message.attachments ?? [])
     next = attachReplyMetaToLatestReply(next, {
       provider_id: message.provider_id,
       model_id: message.model_id,
@@ -583,19 +592,20 @@ function applyCompletedAssistantMessage(
     next = updatePendingToolGroupFromMessage(next, options.groupKey, toolCalls)
   }
 
-  if (!content) {
+  if (!content && !(message.attachments && message.attachments.length > 0)) {
     return next
   }
 
   if (hasMatchingLatestReply) {
-    return attachReplyMetaAtIndex(next, findLatestReplyIndex(next), {
+    next = attachReplyMetaAtIndex(next, findLatestReplyIndex(next), {
       provider_id: message.provider_id,
       model_id: message.model_id,
       token_usage: message.usage,
     })
+    return attachReplyAttachmentsToLatestReply(next, message.attachments ?? [])
   }
 
-  next = appendReply(next, message.content)
+  next = appendReply(next, message.content, message.attachments ?? [])
   return attachReplyMetaToLatestReply(next, {
     provider_id: message.provider_id,
     model_id: message.model_id,
@@ -809,6 +819,22 @@ export function buildTranscriptEntries(messages: ConversationMessage[]): Transcr
   }
 
   return entries
+}
+
+function attachReplyAttachmentsToLatestReply(entries: TranscriptEntry[], attachments: ConversationMessage['attachments']) {
+  const next = [...entries]
+  for (let index = next.length - 1; index >= 0; index -= 1) {
+    const entry = next[index]
+    if (entry.kind !== 'reply') {
+      continue
+    }
+    next[index] = {
+      ...entry,
+      attachments: attachments && attachments.length > 0 ? attachments : undefined,
+    }
+    return next
+  }
+  return next
 }
 
 export function updateTranscriptFromStreamEvent(entries: TranscriptEntry[], event: Partial<TaskStreamEvent>): TranscriptEntry[] {

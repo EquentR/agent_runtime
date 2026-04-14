@@ -1,35 +1,52 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { Close, Promotion, FullScreen, UploadFilled } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
 
 import type { WorkspaceSkillListItem } from '../types/api'
 
-const props = defineProps<{
+interface DraftAttachmentItem {
+  local_id: string
+  id?: string
+  file_name: string
+  upload_state: 'uploading' | 'uploaded' | 'failed'
+  error_message?: string
+}
+
+const props = withDefaults(defineProps<{
   disabled: boolean
   busy?: boolean
   stopDisabled?: boolean
   skills?: WorkspaceSkillListItem[]
   selectedSkillNames?: string[]
-}>()
+  attachmentsEnabled?: boolean
+  attachmentsUploading?: boolean
+  attachments?: DraftAttachmentItem[]
+}>(), {
+  attachmentsEnabled: true,
+  attachmentsUploading: false,
+  attachments: () => [],
+})
 
 const emit = defineEmits<{
   send: [message: string]
   stop: []
   'update:selectedSkillNames': [names: string[]]
+  'add-attachments': [files: File[]]
+  'remove-attachment': [localId: string]
 }>()
 
 const draft = ref('')
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
 const fullscreenTextareaRef = ref<HTMLTextAreaElement | null>(null)
 const fullscreenOpen = ref(false)
+const fileInputRef = ref<HTMLInputElement | null>(null)
 
 /* One line height ~24px (font-size 0.92rem * line-height 1.5 ≈ 22px + minor padding). */
 const singleLineHeight = 24
 const maxVisibleLines = 4
 const maxTextareaHeight = singleLineHeight * maxVisibleLines
 
-const canSend = computed(() => !props.disabled && !props.busy && draft.value.trim().length > 0)
+const canSend = computed(() => !props.disabled && !props.busy && !props.attachmentsUploading && draft.value.trim().length > 0)
 const isBusy = computed(() => Boolean(props.busy))
 const canStop = computed(() => isBusy.value && !props.stopDisabled)
 
@@ -95,7 +112,7 @@ function handleInput() {
 }
 
 function handleAttachClick() {
-  ElMessage.info('附件上传功能开发中')
+  fileInputRef.value?.click()
 }
 
 function openFullscreen() {
@@ -143,12 +160,102 @@ function focus() {
   textareaRef.value?.focus()
 }
 
+function emitFiles(files: File[]) {
+  if (files.length === 0) {
+    return
+  }
+  emit('add-attachments', files)
+}
+
+function handleFileInputChange(event: Event) {
+  const input = event.target as HTMLInputElement | null
+  const files = input?.files ? Array.from(input.files) : []
+  emitFiles(files)
+  if (input) {
+    input.value = ''
+  }
+}
+
+function handleDrop(event: DragEvent) {
+  if (!props.attachmentsEnabled) {
+    return
+  }
+  const files = event.dataTransfer?.files ? Array.from(event.dataTransfer.files) : []
+  emitFiles(files)
+}
+
+function handlePaste(event: ClipboardEvent) {
+  if (!props.attachmentsEnabled) {
+    return
+  }
+  const items = Array.from(event.clipboardData?.items ?? [])
+  const files = items
+    .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+    .map((item) => item.getAsFile())
+    .filter((file): file is File => file instanceof File)
+  if (files.length === 0) {
+    return
+  }
+  event.preventDefault()
+  emitFiles(files)
+}
+
+function removeAttachment(localId: string) {
+  emit('remove-attachment', localId)
+}
+
 defineExpose({ focus })
 </script>
 
 <template>
   <form class="composer-panel" @submit.prevent="submit">
     <div class="composer-card">
+      <input
+        v-if="attachmentsEnabled"
+        ref="fileInputRef"
+        class="composer-file-input"
+        type="file"
+        multiple
+        @change="handleFileInputChange"
+      />
+
+      <div
+        v-if="attachmentsEnabled"
+        class="composer-upload-dropzone"
+        @dragover.prevent
+        @drop.prevent="handleDrop"
+      >
+        <span class="composer-upload-dropzone-label">拖拽文件到这里，或点击“附件”上传</span>
+      </div>
+
+      <div v-if="attachments.length > 0" class="composer-attachment-list">
+        <div
+          v-for="attachment in attachments"
+          :key="attachment.local_id"
+          class="composer-attachment-chip"
+          :data-upload-state="attachment.upload_state"
+        >
+          <span class="composer-attachment-name">{{ attachment.file_name }}</span>
+          <span class="composer-attachment-state">
+            {{
+              attachment.upload_state === 'uploading'
+                ? '上传中'
+                : attachment.upload_state === 'failed'
+                  ? attachment.error_message || '上传失败'
+                  : '已上传'
+            }}
+          </span>
+          <button
+            type="button"
+            class="composer-attachment-remove"
+            :aria-label="`移除附件 ${attachment.file_name}`"
+            @click="removeAttachment(attachment.local_id)"
+          >
+            <Close />
+          </button>
+        </div>
+      </div>
+
       <!-- Textarea area -->
       <div class="composer-textarea-wrapper">
         <textarea
@@ -159,6 +266,7 @@ defineExpose({ focus })
           placeholder="输入消息..."
           @input="handleInput"
           @keydown="handleKeydown"
+          @paste="handlePaste"
         />
         <button
           v-if="showExpandButton"
@@ -176,6 +284,7 @@ defineExpose({ focus })
         <div class="composer-toolbar-left">
           <!-- File attachment placeholder -->
           <button
+            v-if="attachmentsEnabled"
             class="composer-attach-btn"
             type="button"
             aria-label="上传附件"

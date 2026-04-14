@@ -15,6 +15,7 @@ import (
 	"github.com/EquentR/agent_runtime/app/router"
 	coreagent "github.com/EquentR/agent_runtime/core/agent"
 	"github.com/EquentR/agent_runtime/core/approvals"
+	"github.com/EquentR/agent_runtime/core/attachments"
 	coreaudit "github.com/EquentR/agent_runtime/core/audit"
 	"github.com/EquentR/agent_runtime/core/interactions"
 	corelog "github.com/EquentR/agent_runtime/core/log"
@@ -60,6 +61,12 @@ func Serve(c *config.Config, version, commit string) {
 	if err := conversationStore.AutoMigrate(); err != nil {
 		log.Panicf("Failed to migrate conversation store: %v", err)
 	}
+	attachmentStorage, err := initAttachmentStorage(c.Attachments)
+	if err != nil {
+		log.Panicf("Failed to init attachment storage: %v", err)
+	}
+	attachmentStore := attachments.NewStore(db.DB(), attachmentStorage)
+	startAttachmentGCLoop(globalCtx, attachmentStore, c.Attachments.ResolvedGCInterval())
 	promptRuntime, err := initPromptRuntime(db.DB())
 	if err != nil {
 		log.Panicf("Failed to init prompt runtime: %v", err)
@@ -78,12 +85,12 @@ func Serve(c *config.Config, version, commit string) {
 		log.Panicf("Failed to register builtin tools: %v", err)
 	}
 	resolver := &coreagent.ModelResolver{Providers: c.LLM}
-	if err := registerAgentRunExecutor(taskManager, approvalStore, interactionStore, resolver, conversationStore, toolRegistry, promptRuntime.Resolver, workspaceRoot, buildConfiguredLLMClientFactory(c), auditRuntime.RunRecorder); err != nil {
+	if err := registerAgentRunExecutor(taskManager, approvalStore, interactionStore, attachmentStore, attachmentStorage, resolver, conversationStore, toolRegistry, promptRuntime.Resolver, workspaceRoot, buildConfiguredLLMClientFactory(c), auditRuntime.RunRecorder); err != nil {
 		log.Panicf("Failed to register agent.run executor: %v", err)
 	}
 	taskManager.Start(globalCtx)
 
-	router.Init(engine, c.Server.ApiBasePath, c.Server.StaticPaths, buildRouterDependencies(taskManager, approvalStore, conversationStore, auditRuntime.Store, resolver, promptRuntime.Store, promptRuntime.Resolver, skillLoader, authLogic, interactionStore))
+	router.Init(engine, c.Server.ApiBasePath, c.Server.StaticPaths, buildRouterDependencies(taskManager, approvalStore, attachmentStore, attachmentStorage, c.Attachments.ResolvedDraftTTL(), conversationStore, auditRuntime.Store, resolver, promptRuntime.Store, promptRuntime.Resolver, skillLoader, authLogic, interactionStore))
 
 	addr := fmt.Sprintf("%s:%d", c.Server.Host, c.Server.Port)
 	ln, err := net.Listen("tcp", addr)
@@ -129,30 +136,64 @@ func buildConfiguredLLMClientFactory(cfg *config.Config) coreagent.ClientFactory
 	return buildLLMClientFactory(cfg.ResolvedLLMRequestTimeout())
 }
 
-func registerAgentRunExecutor(taskManager *coretasks.Manager, approvalStore *approvals.Store, interactionStore *interactions.Store, resolver *coreagent.ModelResolver, conversationStore *coreagent.ConversationStore, toolRegistry *coretools.Registry, promptResolver *coreprompt.Resolver, workspaceRoot string, clientFactory coreagent.ClientFactory, auditRecorder coreaudit.Recorder) error {
+func registerAgentRunExecutor(taskManager *coretasks.Manager, approvalStore *approvals.Store, interactionStore *interactions.Store, attachmentStore *attachments.Store, attachmentStorage attachments.Storage, resolver *coreagent.ModelResolver, conversationStore *coreagent.ConversationStore, toolRegistry *coretools.Registry, promptResolver *coreprompt.Resolver, workspaceRoot string, clientFactory coreagent.ClientFactory, auditRecorder coreaudit.Recorder) error {
 	if taskManager == nil {
 		return fmt.Errorf("task manager is required")
 	}
-	return taskManager.RegisterExecutor("agent.run", coreagent.NewTaskExecutor(buildAgentRunExecutorDependencies(resolver, conversationStore, toolRegistry, approvalStore, interactionStore, promptResolver, workspaceRoot, clientFactory, auditRecorder)))
+	return taskManager.RegisterExecutor("agent.run", coreagent.NewTaskExecutor(buildAgentRunExecutorDependencies(resolver, conversationStore, attachmentStore, attachmentStorage, toolRegistry, approvalStore, interactionStore, promptResolver, workspaceRoot, clientFactory, auditRecorder)))
 }
 
-func buildRouterDependencies(taskManager *coretasks.Manager, approvalStore *approvals.Store, conversationStore *coreagent.ConversationStore, auditStore *coreaudit.Store, resolver *coreagent.ModelResolver, promptStore *coreprompt.Store, promptResolver *coreprompt.Resolver, skillLoader *coreskills.Loader, authLogic *logics.AuthLogic, interactionStores ...*interactions.Store) router.Dependencies {
+func buildRouterDependencies(taskManager *coretasks.Manager, approvalStore *approvals.Store, attachmentStore *attachments.Store, attachmentStorage attachments.Storage, attachmentDraftTTL time.Duration, conversationStore *coreagent.ConversationStore, auditStore *coreaudit.Store, resolver *coreagent.ModelResolver, promptStore *coreprompt.Store, promptResolver *coreprompt.Resolver, skillLoader *coreskills.Loader, authLogic *logics.AuthLogic, interactionStores ...*interactions.Store) router.Dependencies {
 	var interactionStore *interactions.Store
 	if len(interactionStores) > 0 {
 		interactionStore = interactionStores[0]
 	}
 	return router.Dependencies{
-		TaskManager:       taskManager,
-		ApprovalStore:     approvalStore,
-		InteractionStore:  interactionStore,
-		ConversationStore: conversationStore,
-		AuditStore:        auditStore,
-		ModelResolver:     resolver,
-		PromptStore:       promptStore,
-		PromptResolver:    promptResolver,
-		SkillLoader:       skillLoader,
-		AuthLogic:         authLogic,
+		TaskManager:        taskManager,
+		ApprovalStore:      approvalStore,
+		AttachmentStore:    attachmentStore,
+		AttachmentStorage:  attachmentStorage,
+		AttachmentDraftTTL: attachmentDraftTTL,
+		InteractionStore:   interactionStore,
+		ConversationStore:  conversationStore,
+		AuditStore:         auditStore,
+		ModelResolver:      resolver,
+		PromptStore:        promptStore,
+		PromptResolver:     promptResolver,
+		SkillLoader:        skillLoader,
+		AuthLogic:          authLogic,
 	}
+}
+
+func initAttachmentStorage(cfg config.AttachmentStorageConfig) (attachments.Storage, error) {
+	switch cfg.ResolvedStorageBackend() {
+	case attachments.BackendFilesystem:
+		return attachments.NewFilesystemStore(cfg.ResolvedFilesystemRoot())
+	default:
+		return nil, fmt.Errorf("unsupported attachment storage backend %q", cfg.ResolvedStorageBackend())
+	}
+}
+
+func startAttachmentGCLoop(ctx context.Context, store *attachments.Store, interval time.Duration) {
+	if ctx == nil || store == nil || interval <= 0 {
+		return
+	}
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if processed, err := store.GCExpired(ctx, time.Now().UTC(), 100); err != nil {
+					log.Warnf("Attachment GC failed: %v", err)
+				} else if processed > 0 {
+					log.Infof("Attachment GC processed %d expired attachments", processed)
+				}
+			}
+		}
+	}()
 }
 
 type promptRuntime struct {
@@ -191,10 +232,12 @@ func resolveEffectiveWorkspaceRoot(configuredRoot string) (string, error) {
 	return filepath.Clean(workspaceRoot), nil
 }
 
-func buildAgentRunExecutorDependencies(resolver *coreagent.ModelResolver, conversationStore *coreagent.ConversationStore, toolRegistry *coretools.Registry, approvalStore *approvals.Store, interactionStore *interactions.Store, promptResolver *coreprompt.Resolver, workspaceRoot string, clientFactory coreagent.ClientFactory, auditRecorder coreaudit.Recorder) coreagent.ExecutorDependencies {
+func buildAgentRunExecutorDependencies(resolver *coreagent.ModelResolver, conversationStore *coreagent.ConversationStore, attachmentStore *attachments.Store, attachmentStorage attachments.Storage, toolRegistry *coretools.Registry, approvalStore *approvals.Store, interactionStore *interactions.Store, promptResolver *coreprompt.Resolver, workspaceRoot string, clientFactory coreagent.ClientFactory, auditRecorder coreaudit.Recorder) coreagent.ExecutorDependencies {
 	return coreagent.ExecutorDependencies{
 		Resolver:          resolver,
 		ConversationStore: conversationStore,
+		AttachmentStore:   attachmentStore,
+		AttachmentStorage: attachmentStorage,
 		Registry:          toolRegistry,
 		ApprovalStore:     approvalStore,
 		InteractionStore:  interactionStore,

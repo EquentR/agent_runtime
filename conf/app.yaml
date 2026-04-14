@@ -45,6 +45,14 @@ tools:
     #   apiKey: ${BING_SEARCH_API_KEY}
     #   baseUrl: https://api.bing.microsoft.com
 
+attachments:
+  storageBackend: filesystem
+  filesystem:
+    root: data/attachments
+  draftTTL: 24h
+  sentRetention: 720h
+  gcInterval: 1h
+
 llmRequestTimeout: 10m
 
 llmProviders:
@@ -57,6 +65,8 @@ llmProviders:
     - id: glm-5
       name: GLM-5
       type: openai_completions
+      capabilities:
+        attachments: true
       context:
         max: 20200
         input: 12008
@@ -68,6 +78,8 @@ llmProviders:
     - id: kimi-k2.5
       name: Kimi-K2.5
       type: openai_completions
+      capabilities:
+        attachments: true
       context:
         max: 256000
         input: 247808
@@ -79,6 +91,8 @@ llmProviders:
     - id: gpt-5.4
       name: GPT-5.4
       type: openai_responses
+      capabilities:
+        attachments: true
       context:
         max: 1050000
         input: 922000

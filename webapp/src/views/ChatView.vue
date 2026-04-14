@@ -10,6 +10,7 @@ import {
   cancelTask,
   createRunTask,
   decideTaskApproval,
+  deleteAttachment,
   deleteConversation,
   fetchConversationMessages,
   fetchConversations,
@@ -17,6 +18,7 @@ import {
   fetchSkills,
   fetchTaskApprovals,
   fetchTaskDetails,
+  uploadAttachment,
   fetchTaskInteractions,
   findRunningTaskByConversation,
   respondTaskInteraction,
@@ -41,6 +43,7 @@ import {
   updateTranscriptFromStreamEvent,
 } from '../lib/transcript'
 import type {
+  AttachmentRef,
   Conversation,
   MemoryContextState,
   ModelCatalog,
@@ -53,6 +56,13 @@ import type {
 } from '../types/api'
 
 const NEW_CONVERSATION_SENDING_KEY = '__new__'
+
+interface DraftAttachmentItem extends Omit<AttachmentRef, 'id'> {
+  local_id: string
+  id?: string
+  upload_state: 'uploading' | 'uploaded' | 'failed'
+  error_message?: string
+}
 
 const router = useRouter()
 const route = useRoute()
@@ -72,6 +82,7 @@ const sendingConversationKey = ref('')
 const conversations = ref<Conversation[]>([])
 const entries = ref<TranscriptEntry[]>([])
 const draftEntriesByConversation = ref<Record<string, TranscriptEntry[]>>({})
+const draftAttachmentsByConversation = ref<Record<string, DraftAttachmentItem[]>>({})
 const pendingConversationById = ref<Record<string, Conversation>>({})
 const approvalDecisionStateById = ref<Record<string, { pending: boolean; decision: 'approve' | 'reject' }>>({})
 const questionResponseStateById = ref<Record<string, { pending: boolean }>>({})
@@ -119,6 +130,10 @@ const selectedModel = computed<ModelCatalogEntry | null>(
 )
 const selectedModelLabel = computed(() => selectedModel.value?.name || selectedModelId.value || '选择模型')
 const selectedSkillNames = computed(() => selectedSkillsByConversation.value[activeConversationId.value] ?? [])
+const currentAttachmentDraftKey = computed(() => activeConversationId.value || NEW_CONVERSATION_SENDING_KEY)
+const currentDraftAttachments = computed(() => draftAttachmentsByConversation.value[currentAttachmentDraftKey.value] ?? [])
+const attachmentsUploading = computed(() => currentDraftAttachments.value.some((attachment) => attachment.upload_state === 'uploading'))
+const selectedModelSupportsAttachments = computed(() => selectedModel.value?.capabilities?.attachments === true)
 const activeConversationTaskId = computed(() => (activeConversationId.value ? activeTaskIdByConversation.value[activeConversationId.value] ?? '' : ''))
 const currentConversationBusy = computed(() => {
   if (activeConversationTaskId.value) {
@@ -237,6 +252,7 @@ function currentChatState() {
     activeTaskEventSeqByConversation: activeTaskEventSeqByConversation.value,
     entries: entries.value,
     draftEntriesByConversation: draftEntriesByConversation.value,
+    draftAttachmentsByConversation: draftAttachmentsByConversation.value,
     selectedSkillsByConversation: selectedSkillsByConversation.value,
   }
 }
@@ -253,10 +269,26 @@ function flushChatState() {
 }
 
 watch(
-  [activeConversationId, activeTaskId, activeTaskEventSeq, activeTaskIdByConversation, activeTaskEventSeqByConversation, entries, draftEntriesByConversation, selectedSkillsByConversation],
+  [activeConversationId, activeTaskId, activeTaskEventSeq, activeTaskIdByConversation, activeTaskEventSeqByConversation, entries, draftEntriesByConversation, draftAttachmentsByConversation, selectedSkillsByConversation],
   syncChatState,
   { deep: true },
 )
+
+function setDraftAttachments(key: string, attachments: DraftAttachmentItem[]) {
+  draftAttachmentsByConversation.value = {
+    ...draftAttachmentsByConversation.value,
+    [key]: attachments,
+  }
+}
+
+function clearDraftAttachments(key: string) {
+  if (!key || !(key in draftAttachmentsByConversation.value)) {
+    return
+  }
+  const next = { ...draftAttachmentsByConversation.value }
+  delete next[key]
+  draftAttachmentsByConversation.value = next
+}
 
 function upsertPendingConversation(conversation: Conversation) {
   pendingConversationById.value = {
@@ -871,6 +903,9 @@ async function handleSend(message: string) {
   const previousConversationId = activeConversationId.value
   const startedFromRouteConversationId = routeConversationId.value
   const sendingKey = previousConversationId || NEW_CONVERSATION_SENDING_KEY
+  const readyAttachmentIDs = currentDraftAttachments.value
+    .filter((attachment) => attachment.upload_state === 'uploaded' && attachment.id)
+    .map((attachment) => attachment.id as string)
   sendingConversationKey.value = sendingKey
 
   const nextEntries = [...currentConversationEntries.value, { id: `user-${Date.now()}`, kind: 'user' as const, title: 'You', content: message }]
@@ -886,9 +921,11 @@ async function handleSend(message: string) {
       providerId: selectedProviderId.value,
       modelId: selectedModelId.value,
       message,
+      ...(readyAttachmentIDs.length > 0 ? { attachmentIds: readyAttachmentIDs } : {}),
       ...(selectedSkillNames.value.length > 0 ? { skills: selectedSkillNames.value } : {}),
     })
     const createdConversationId = task.input?.conversation_id ?? ''
+    clearDraftAttachments(sendingKey)
 
     if (createdConversationId) {
       setDraftEntries(createdConversationId, nextEntries)
@@ -926,6 +963,79 @@ async function handleSend(message: string) {
     }
     sendingConversationKey.value = ''
   }
+}
+
+async function handleAddAttachments(files: File[]) {
+  if (!selectedModelSupportsAttachments.value || files.length === 0) {
+    return
+  }
+  const draftKey = currentAttachmentDraftKey.value
+  const existing = draftAttachmentsByConversation.value[draftKey] ?? []
+  const created = files.map<DraftAttachmentItem>((file, index) => ({
+    local_id: `${Date.now()}-${index}-${file.name}`,
+    file_name: file.name,
+    mime_type: file.type,
+    size_bytes: file.size,
+    upload_state: 'uploading',
+  }))
+  setDraftAttachments(draftKey, [...existing, ...created])
+
+  await Promise.all(
+    created.map(async (draftAttachment, index) => {
+      try {
+        const uploaded = await uploadAttachment(files[index], activeConversationId.value || undefined)
+        const next = (draftAttachmentsByConversation.value[draftKey] ?? []).map((item) =>
+          item.local_id === draftAttachment.local_id
+            ? { ...item, ...uploaded, upload_state: 'uploaded' as const }
+            : item,
+        )
+        setDraftAttachments(draftKey, next)
+      } catch (error) {
+        const next = (draftAttachmentsByConversation.value[draftKey] ?? []).map((item) =>
+          item.local_id === draftAttachment.local_id
+            ? {
+                ...item,
+                upload_state: 'failed' as const,
+                error_message: error instanceof Error ? error.message : '上传失败',
+              }
+            : item,
+        )
+        setDraftAttachments(draftKey, next)
+      }
+    }),
+  )
+}
+
+async function handleRemoveAttachment(localId: string) {
+  const draftKey = currentAttachmentDraftKey.value
+  const current = draftAttachmentsByConversation.value[draftKey] ?? []
+  const target = current.find((attachment) => attachment.local_id === localId)
+  if (!target) {
+    return
+  }
+  if (target.id) {
+    try {
+      await deleteAttachment(target.id)
+    } catch (error) {
+      setDraftAttachments(
+        draftKey,
+        current.map((attachment) =>
+          attachment.local_id === localId
+            ? {
+                ...attachment,
+                upload_state: 'failed' as const,
+                error_message: error instanceof Error ? error.message : '删除附件失败',
+              }
+            : attachment,
+        ),
+      )
+      return
+    }
+  }
+  setDraftAttachments(
+    draftKey,
+    current.filter((attachment) => attachment.local_id !== localId),
+  )
 }
 
 async function handleDeleteConversation(conversationId: string) {
@@ -1259,9 +1369,14 @@ onBeforeUnmount(() => {
           :disabled="composerDisabled"
           :busy="currentConversationBusy"
           :stop-disabled="stoppingTask"
+          :attachments-enabled="selectedModelSupportsAttachments"
+          :attachments-uploading="attachmentsUploading"
+          :attachments="currentDraftAttachments"
           :skills="availableSkills"
           :selected-skill-names="selectedSkillNames"
           @send="handleSend"
+          @add-attachments="handleAddAttachments"
+          @remove-attachment="handleRemoveAttachment"
           @stop="handleStopTask"
           @update:selected-skill-names="handleSkillSelectionChange"
         />

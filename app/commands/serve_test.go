@@ -129,7 +129,7 @@ func TestPromptBuildRouterDependenciesExposePromptRuntime(t *testing.T) {
 		t.Fatalf("initPromptRuntime() error = %v", err)
 	}
 
-	deps := buildRouterDependencies(nil, nil, nil, nil, nil, promptRuntime.Store, promptRuntime.Resolver, nil, nil)
+	deps := buildRouterDependencies(nil, nil, nil, nil, 0, nil, nil, nil, promptRuntime.Store, promptRuntime.Resolver, nil, nil)
 	if deps.PromptStore != promptRuntime.Store {
 		t.Fatalf("PromptStore = %#v, want %#v", deps.PromptStore, promptRuntime.Store)
 	}
@@ -141,7 +141,7 @@ func TestPromptBuildRouterDependenciesExposePromptRuntime(t *testing.T) {
 func TestBuildRouterDependenciesExposeApprovalStore(t *testing.T) {
 	db := newServeTestDB(t)
 	approvalStore := approvals.NewStore(db)
-	deps := buildRouterDependencies(nil, approvalStore, nil, nil, nil, nil, nil, nil, nil)
+	deps := buildRouterDependencies(nil, approvalStore, nil, nil, 0, nil, nil, nil, nil, nil, nil, nil)
 	if deps.ApprovalStore != approvalStore {
 		t.Fatalf("ApprovalStore = %#v, want %#v", deps.ApprovalStore, approvalStore)
 	}
@@ -278,7 +278,7 @@ func TestNewDefaultToolRegistryUsesConfiguredWebSearchOptions(t *testing.T) {
 }
 
 func TestBuildAgentRunExecutorDependenciesProvideSkillsResolver(t *testing.T) {
-	deps := buildAgentRunExecutorDependencies(nil, nil, nil, nil, nil, nil, t.TempDir(), nil, nil)
+	deps := buildAgentRunExecutorDependencies(nil, nil, nil, nil, nil, nil, nil, nil, t.TempDir(), nil, nil)
 	if deps.SkillsResolver == nil {
 		t.Fatal("SkillsResolver = nil, want workspace skills resolver")
 	}
@@ -502,7 +502,7 @@ func TestBuildAgentRunExecutorDependenciesThreadPromptRuntimeAndWorkspaceRoot(t 
 		return &serveStubClient{answer: "hello"}, nil
 	}
 
-	deps := buildAgentRunExecutorDependencies(resolver, conversationStore, nil, nil, nil, promptRuntime.Resolver, workspaceRoot, clientFactory, recorder)
+	deps := buildAgentRunExecutorDependencies(resolver, conversationStore, nil, nil, nil, nil, nil, promptRuntime.Resolver, workspaceRoot, clientFactory, recorder)
 	if deps.Resolver != resolver {
 		t.Fatalf("deps.Resolver = %#v, want %#v", deps.Resolver, resolver)
 	}
@@ -563,7 +563,7 @@ func TestRegisterAgentRunExecutorPromptWiringKeepsAuditRecorder(t *testing.T) {
 		HeartbeatInterval: 20 * time.Millisecond,
 		AuditRecorder:     newTaskAuditRecorder(recorder),
 	})
-	if err := registerAgentRunExecutor(manager, nil, nil, &coreagent.ModelResolver{Providers: []coretypes.LLMProvider{{
+	if err := registerAgentRunExecutor(manager, nil, nil, nil, nil, &coreagent.ModelResolver{Providers: []coretypes.LLMProvider{{
 		BaseProvider: coretypes.BaseProvider{Name: "openai"},
 		Models:       []coretypes.LLMModel{{BaseModel: coretypes.BaseModel{ID: "gpt-5.4", Name: "GPT 5.4"}, Type: coretypes.LLMTypeOpenAIResponses}},
 	}}}, conversationStore, nil, promptRuntime.Resolver, workspaceRoot, func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) {

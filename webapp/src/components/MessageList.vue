@@ -4,9 +4,10 @@ import MarkdownIt from 'markdown-it'
 import { CircleCheckFilled, CopyDocument, Operation, WarningFilled } from '@element-plus/icons-vue'
 
 import ApprovalRecordCard from './ApprovalRecordCard.vue'
+import { getAttachmentContentURL } from '../lib/api'
 import { formatMessageContent } from '../lib/chat'
 import { normalizeQuestionEntry } from '../lib/question-entry'
-import type { QuestionInteractionSubmitInput, TranscriptEntry, TranscriptEntryDetail } from '../types/api'
+import type { AttachmentRef, QuestionInteractionSubmitInput, TranscriptEntry, TranscriptEntryDetail } from '../types/api'
 
 const props = withDefaults(defineProps<{
   loading: boolean
@@ -459,6 +460,32 @@ function renderReplyContent(content: string) {
   return markdown.render(formatMessageContent(content))
 }
 
+function hasAttachments(entry: TranscriptEntry) {
+  return Array.isArray(entry.attachments) && entry.attachments.length > 0
+}
+
+function isImageAttachment(attachment: AttachmentRef) {
+  return attachment.mime_type.startsWith('image/')
+}
+
+function isUnavailableAttachment(attachment: AttachmentRef) {
+  return attachment.status === 'expired' || attachment.status === 'deleted'
+}
+
+function attachmentHref(attachment: AttachmentRef) {
+  return getAttachmentContentURL(attachment.id)
+}
+
+function attachmentStatusLabel(attachment: AttachmentRef) {
+  if (attachment.status === 'expired') {
+    return '附件已过期'
+  }
+  if (attachment.status === 'deleted') {
+    return '附件已删除'
+  }
+  return attachment.preview_text || attachment.kind || attachment.mime_type
+}
+
 async function copyReply(entry: TranscriptEntry) {
   if (!canCopyReply(entry) || !navigator.clipboard) {
     showCopyToast('复制失败', 'error')
@@ -642,6 +669,33 @@ function showCopyToast(message: string, variant: 'success' | 'error') {
           <p v-else-if="entry.content && entry.kind === 'user'" class="trace-content">
             {{ formatMessageContent(entry.content) }}
           </p>
+          <div v-if="hasAttachments(entry)" class="message-attachment-list">
+            <div
+              v-for="attachment in entry.attachments"
+              :key="attachment.id"
+              class="message-attachment-card"
+              :data-attachment-status="attachment.status ?? 'available'"
+            >
+              <template v-if="!isUnavailableAttachment(attachment)">
+                <a class="message-attachment-link" :href="attachmentHref(attachment)" target="_blank" rel="noreferrer">
+                  <img
+                    v-if="isImageAttachment(attachment)"
+                    class="message-attachment-thumbnail"
+                    :src="attachmentHref(attachment)"
+                    :alt="attachment.file_name"
+                  />
+                  <div class="message-attachment-meta">
+                    <p class="message-attachment-name">{{ attachment.file_name }}</p>
+                    <p class="message-attachment-status">{{ attachmentStatusLabel(attachment) }}</p>
+                  </div>
+                </a>
+              </template>
+              <div v-else class="message-attachment-meta unavailable">
+                <p class="message-attachment-name">{{ attachment.file_name }}</p>
+                <p class="message-attachment-status">{{ attachmentStatusLabel(attachment) }}</p>
+              </div>
+            </div>
+          </div>
           <div v-if="entry.kind === 'reply' && (canCopyReply(entry) || hasUsage(entry))" class="trace-reply-footer">
             <button
               v-if="canCopyReply(entry)"
