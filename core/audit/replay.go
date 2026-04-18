@@ -90,6 +90,8 @@ var replayEventDisplayNames = map[string]string{
 	"step.started":          "步骤开始",
 	"step.finished":         "步骤完成",
 	"prompt.resolved":       "提示词解析",
+	"memory.compressed":     "内存已压缩",
+	"memory.context_state":  "内存上下文状态",
 	"request.budgeted":      "请求预算决策",
 	"request.built":         "构建 LLM 请求",
 	"model.completed":       "模型生成",

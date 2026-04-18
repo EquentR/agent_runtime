@@ -31,6 +31,10 @@ func (r *Runner) prepareConversationContextWithPersistedCount(ctx context.Contex
 	}
 	memoryContext, trace, err := r.options.Memory.RuntimeContextWithReserve(ctx, 0)
 	if err != nil {
+		if trace.Succeeded {
+			r.emitMemoryCompressed(ctx, trace)
+			r.emitMemoryContextStateFromManager(ctx)
+		}
 		return preparedConversationContext{}, err
 	}
 	if trace.Succeeded {

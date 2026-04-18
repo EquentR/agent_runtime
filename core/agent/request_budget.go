@@ -15,12 +15,17 @@ import (
 var ErrContextBudgetExceeded = errors.New("request context exceeds model budget")
 
 type requestBudgetDecision struct {
-	CompressionAttempted bool   `json:"compression_attempted"`
-	CompressionSucceeded bool   `json:"compression_succeeded"`
-	TrimApplied          bool   `json:"trim_applied"`
-	FinalPath            string `json:"final_path"`
-	TokenCount           int64  `json:"token_count"`
-	MessageCount         int    `json:"message_count"`
+	CompressionAttempted        bool   `json:"compression_attempted"`
+	CompressionSucceeded        bool   `json:"compression_succeeded"`
+	HasSummaryBefore            bool   `json:"has_summary_before"`
+	ShortTermTokensBefore       int64  `json:"short_term_tokens_before"`
+	SummaryTokensBefore         int64  `json:"summary_tokens_before"`
+	RenderedSummaryTokensBefore int64  `json:"rendered_summary_tokens_before"`
+	TotalTokensBefore           int64  `json:"total_tokens_before"`
+	TrimApplied                 bool   `json:"trim_applied"`
+	FinalPath                   string `json:"final_path"`
+	TokenCount                  int64  `json:"token_count"`
+	MessageCount                int    `json:"message_count"`
 }
 
 func (r *Runner) buildBudgetedRequest(ctx context.Context, extraBody []model.Message, afterToolTurn bool) (runtimeprompt.BuildResult, []model.Message, requestBudgetDecision, error) {
@@ -30,16 +35,26 @@ func (r *Runner) buildBudgetedRequest(ctx context.Context, extraBody []model.Mes
 		return r.buildBudgetedRequestFromContext(ctx, runtimeContext, afterToolTurn)
 	}
 
+	beforeState := r.options.Memory.ContextState()
 	state, trace, err := r.options.Memory.RuntimeContextWithReserve(ctx, 0)
 	if err != nil {
-		return runtimeprompt.BuildResult{}, nil, requestBudgetDecision{}, err
+		decision := requestBudgetDecision{}
+		decision.applyBeforeState(beforeState)
+		decision.applyCompressionTrace(trace)
+		if trace.Succeeded {
+			r.emitMemoryCompressed(ctx, trace)
+			r.emitMemoryContextStateFromManager(ctx)
+		}
+		return runtimeprompt.BuildResult{}, nil, decision, err
 	}
+	compressionAttempted := trace.Attempted
+	compressionSucceeded := trace.Succeeded
 	state.Tail = append(state.Tail, cloneMessages(extraBody)...)
 	buildResult, requestMessages, decision, err := r.buildBudgetedRequestFromContext(ctx, state, afterToolTurn)
+	decision.applyBeforeState(beforeState)
+	decision.applyCompressionTrace(trace)
 	if err == nil {
-		decision.CompressionAttempted = trace.Attempted
-		decision.CompressionSucceeded = trace.Succeeded
-		if trace.Attempted && trace.Succeeded && decision.FinalPath == "direct" {
+		if compressionSucceeded && decision.FinalPath == "direct" {
 			decision.FinalPath = "compressed"
 		}
 		if trace.Succeeded {
@@ -49,6 +64,10 @@ func (r *Runner) buildBudgetedRequest(ctx context.Context, extraBody []model.Mes
 		return buildResult, requestMessages, decision, nil
 	}
 	if !errors.Is(err, ErrContextBudgetExceeded) {
+		if trace.Succeeded {
+			r.emitMemoryCompressed(ctx, trace)
+			r.emitMemoryContextStateFromManager(ctx)
+		}
 		return buildResult, requestMessages, decision, err
 	}
 	if trace.Succeeded {
@@ -58,8 +77,18 @@ func (r *Runner) buildBudgetedRequest(ctx context.Context, extraBody []model.Mes
 
 	reserve := requestMessageOverhead(r.requestTokenCounter(), state, requestMessages)
 	state, trace, err = r.options.Memory.RuntimeContextWithReserve(ctx, reserve)
+	compressionAttempted = compressionAttempted || trace.Attempted
+	compressionSucceeded = compressionSucceeded || trace.Succeeded
 	if err != nil {
-		return runtimeprompt.BuildResult{}, nil, requestBudgetDecision{}, err
+		decision := requestBudgetDecision{}
+		decision.applyBeforeState(beforeState)
+		decision.CompressionAttempted = compressionAttempted
+		decision.CompressionSucceeded = compressionSucceeded
+		if trace.Succeeded {
+			r.emitMemoryCompressed(ctx, trace)
+			r.emitMemoryContextStateFromManager(ctx)
+		}
+		return runtimeprompt.BuildResult{}, nil, decision, err
 	}
 	if trace.Succeeded {
 		r.emitMemoryCompressed(ctx, trace)
@@ -67,9 +96,10 @@ func (r *Runner) buildBudgetedRequest(ctx context.Context, extraBody []model.Mes
 	}
 	state.Tail = append(state.Tail, cloneMessages(extraBody)...)
 	buildResult, requestMessages, decision, err = r.buildBudgetedRequestFromContext(ctx, state, afterToolTurn)
-	decision.CompressionAttempted = true
-	decision.CompressionSucceeded = trace.Succeeded
-	if err == nil && trace.Succeeded && decision.FinalPath == "direct" {
+	decision.applyBeforeState(beforeState)
+	decision.CompressionAttempted = compressionAttempted
+	decision.CompressionSucceeded = compressionSucceeded
+	if err == nil && compressionSucceeded && decision.FinalPath == "direct" {
 		decision.FinalPath = "compressed"
 	}
 	if err == nil && !trace.Succeeded {
@@ -156,11 +186,35 @@ func (r *Runner) requestMaxContextTokens() int64 {
 func (r *Runner) recordRequestBudgetDecision(ctx context.Context, step int, decision requestBudgetDecision) {
 	artifactID := r.attachAuditArtifact(ctx, coreaudit.ArtifactKindRequestBudgetDecision, decision)
 	r.appendAuditEvent(ctx, step, coreaudit.PhaseRequest, "request.budgeted", map[string]any{
-		"compression_attempted": decision.CompressionAttempted,
-		"compression_succeeded": decision.CompressionSucceeded,
-		"trim_applied":          decision.TrimApplied,
-		"final_path":            decision.FinalPath,
-		"token_count":           decision.TokenCount,
-		"message_count":         decision.MessageCount,
+		"compression_attempted":          decision.CompressionAttempted,
+		"compression_succeeded":          decision.CompressionSucceeded,
+		"has_summary_before":             decision.HasSummaryBefore,
+		"short_term_tokens_before":       decision.ShortTermTokensBefore,
+		"summary_tokens_before":          decision.SummaryTokensBefore,
+		"rendered_summary_tokens_before": decision.RenderedSummaryTokensBefore,
+		"total_tokens_before":            decision.TotalTokensBefore,
+		"trim_applied":                   decision.TrimApplied,
+		"final_path":                     decision.FinalPath,
+		"token_count":                    decision.TokenCount,
+		"message_count":                  decision.MessageCount,
 	}, artifactID)
+}
+
+func (d *requestBudgetDecision) applyBeforeState(state memory.ContextState) {
+	if d == nil {
+		return
+	}
+	d.HasSummaryBefore = state.HasSummary
+	d.ShortTermTokensBefore = state.ShortTermTokens
+	d.SummaryTokensBefore = state.SummaryTokens
+	d.RenderedSummaryTokensBefore = state.RenderedSummaryTokens
+	d.TotalTokensBefore = state.TotalTokens
+}
+
+func (d *requestBudgetDecision) applyCompressionTrace(trace memory.CompressionTrace) {
+	if d == nil {
+		return
+	}
+	d.CompressionAttempted = trace.Attempted
+	d.CompressionSucceeded = trace.Succeeded
 }

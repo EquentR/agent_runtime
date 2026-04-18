@@ -430,6 +430,56 @@ func TestPrepareConversationContextEmitsMemorySnapshotWhenInitialCompressionOccu
 	}
 }
 
+func TestPrepareConversationContextEmitsMemoryEventsWhenCompressionSucceedsBeforeBudgetFailure(t *testing.T) {
+	errExpected := "memory summary exceeds summary budget after rendering"
+	counter := &sequencedCountTokenCounter{countValues: []int{1, 1, 7}}
+	mgr, err := memory.NewManager(memory.Options{
+		MaxContextTokens: 20,
+		Counter:          counter,
+		Compressor: func(context.Context, memory.CompressionRequest) (string, error) {
+			return "summary", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+
+	runtime := &recordingTaskRuntime{}
+	runner, err := NewRunner(&stubClient{}, nil, Options{
+		Model:     "test-model",
+		Memory:    mgr,
+		EventSink: &taskRuntimeSink{runtime: runtime},
+	})
+	if err != nil {
+		t.Fatalf("NewRunner() error = %v", err)
+	}
+
+	_, err = runner.prepareConversationContextWithPersistedCount(context.Background(), []model.Message{
+		{Role: model.RoleUser, Content: strings.Repeat("a", 12)},
+		{Role: model.RoleAssistant, Content: strings.Repeat("b", 12)},
+	}, 0)
+	if err == nil || err.Error() != errExpected {
+		t.Fatalf("prepareConversationContextWithPersistedCount() error = %v, want %v", err, errExpected)
+	}
+
+	compressedEmits := 0
+	contextStateEmits := 0
+	for _, emit := range runtime.emits {
+		switch emit.eventType {
+		case coretasks.EventMemoryCompressed:
+			compressedEmits++
+		case coretasks.EventMemoryContextState:
+			contextStateEmits++
+		}
+	}
+	if compressedEmits != 1 {
+		t.Fatalf("memory.compressed emit count = %d, want 1 after post-compression budget failure; emits = %#v", compressedEmits, runtime.emits)
+	}
+	if contextStateEmits != 1 {
+		t.Fatalf("memory.context_state emit count = %d, want 1 after post-compression budget failure; emits = %#v", contextStateEmits, runtime.emits)
+	}
+}
+
 func TestPrepareConversationContextDoesNotWriteInjectedPromptContentIntoMemory(t *testing.T) {
 	mgr, err := memory.NewManager(memory.Options{Counter: fakeTokenCounter{}})
 	if err != nil {
@@ -633,6 +683,31 @@ func (fakeTokenCounter) Count(text string) int {
 }
 
 func (fakeTokenCounter) CountMessages(messages []string) int {
+	total := 0
+	for _, message := range messages {
+		total += len([]rune(message))
+	}
+	return total
+}
+
+type sequencedCountTokenCounter struct {
+	countValues []int
+	index       int
+}
+
+func (c *sequencedCountTokenCounter) Count(text string) int {
+	if len(c.countValues) == 0 {
+		return len([]rune(text))
+	}
+	if c.index >= len(c.countValues) {
+		return c.countValues[len(c.countValues)-1]
+	}
+	value := c.countValues[c.index]
+	c.index++
+	return value
+}
+
+func (c *sequencedCountTokenCounter) CountMessages(messages []string) int {
 	total := 0
 	for _, message := range messages {
 		total += len([]rune(message))

@@ -60,6 +60,56 @@ func TestBuildBudgetedRequestRetriesAfterReserveCompression(t *testing.T) {
 	}
 }
 
+func TestBuildBudgetedRequestPreservesBeforeStateWhenInitialReserveCallFails(t *testing.T) {
+	errExpected := errors.New("compress failed")
+	counter := &fixedCounter{count: 10}
+	mgr, err := memory.NewManager(memory.Options{
+		MaxContextTokens: 100,
+		Counter:          counter,
+		Compressor: func(context.Context, memory.CompressionRequest) (string, error) {
+			return "", errExpected
+		},
+		SummaryTemplate: "%s",
+	})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	mgr.LoadSummary(strings.Repeat("s", 10))
+	for i := 0; i < 8; i++ {
+		mgr.AddMessage(model.Message{Role: model.RoleUser, Content: "hello"})
+	}
+
+	runner, err := NewRunner(&stubClient{}, nil, Options{
+		Model:                "test-model",
+		LLMModel:             &coretypes.LLMModel{Context: coretypes.LLMContextConfig{Max: 200}},
+		Memory:               mgr,
+		RuntimePromptBuilder: runtimeprompt.NewBuilder(nil),
+	})
+	if err != nil {
+		t.Fatalf("NewRunner() error = %v", err)
+	}
+
+	_, _, decision, err := runner.buildBudgetedRequest(context.Background(), nil, false)
+	if !errors.Is(err, errExpected) {
+		t.Fatalf("buildBudgetedRequest() error = %v, want %v", err, errExpected)
+	}
+	if !decision.HasSummaryBefore {
+		t.Fatalf("budget decision = %#v, want summary before-state preserved", decision)
+	}
+	if decision.SummaryTokensBefore != 10 || decision.RenderedSummaryTokensBefore != 10 {
+		t.Fatalf("budget decision = %#v, want summary tokens before preserved", decision)
+	}
+	if decision.ShortTermTokensBefore != 80 || decision.TotalTokensBefore != 90 {
+		t.Fatalf("budget decision = %#v, want short-term and total before-state preserved", decision)
+	}
+	if !decision.CompressionAttempted || decision.CompressionSucceeded {
+		t.Fatalf("budget decision = %#v, want attempted=true succeeded=false from failing first reserve call", decision)
+	}
+	if decision.FinalPath != "" || decision.TokenCount != 0 || decision.MessageCount != 0 {
+		t.Fatalf("budget decision = %#v, want empty final request fields on early memory failure", decision)
+	}
+}
+
 func TestBuildBudgetedRequestTrimsOldToolMessagesWhenCompressionIsInsufficient(t *testing.T) {
 	messages := []model.Message{
 		{Role: model.RoleUser, Content: strings.Repeat("u", 30)},
@@ -147,6 +197,56 @@ func TestBuildBudgetedRequestUsesReserveAwareCompressionBeforeTrim(t *testing.T)
 	}
 	if len(messages) == 0 {
 		t.Fatal("messages = empty, want rebuilt request")
+	}
+}
+
+func TestBuildBudgetedRequestAggregatesReserveAwareTraceWhenSecondReserveCallFails(t *testing.T) {
+	errExpected := errors.New("compress failed")
+	mgr, err := memory.NewManager(memory.Options{
+		MaxContextTokens: 100,
+		Counter:          fakeTokenCounter{},
+		Compressor: func(context.Context, memory.CompressionRequest) (string, error) {
+			return "", errExpected
+		},
+		SummaryTemplate: "%s",
+	})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	mgr.LoadSummary(strings.Repeat("s", 10))
+	mgr.AddMessages([]model.Message{{Role: model.RoleUser, Content: strings.Repeat("a", 25)}, {Role: model.RoleAssistant, Content: strings.Repeat("b", 25)}})
+	beforeState := mgr.ContextState()
+
+	runner, err := NewRunner(&stubClient{}, nil, Options{
+		Model:                "test-model",
+		LLMModel:             &coretypes.LLMModel{Context: coretypes.LLMContextConfig{Max: 100}},
+		Memory:               mgr,
+		RuntimePromptBuilder: runtimeprompt.NewBuilder(nil),
+		SystemPrompt:         strings.Repeat("p", 90),
+		Now:                  func() time.Time { return time.Date(2026, time.April, 6, 9, 0, 0, 0, time.UTC) },
+	})
+	if err != nil {
+		t.Fatalf("NewRunner() error = %v", err)
+	}
+
+	_, _, decision, err := runner.buildBudgetedRequest(context.Background(), nil, false)
+	if !errors.Is(err, errExpected) {
+		t.Fatalf("buildBudgetedRequest() error = %v, want %v", err, errExpected)
+	}
+	if !decision.HasSummaryBefore {
+		t.Fatalf("budget decision = %#v, want summary before-state preserved", decision)
+	}
+	if decision.SummaryTokensBefore != 10 || decision.RenderedSummaryTokensBefore != 10 {
+		t.Fatalf("budget decision = %#v, want summary tokens before preserved", decision)
+	}
+	if decision.ShortTermTokensBefore != beforeState.ShortTermTokens || decision.TotalTokensBefore != beforeState.TotalTokens {
+		t.Fatalf("budget decision = %#v, want short-term and total before-state preserved", decision)
+	}
+	if !decision.CompressionAttempted || decision.CompressionSucceeded {
+		t.Fatalf("budget decision = %#v, want reserve-aware attempted=true succeeded=false after second reserve call fails", decision)
+	}
+	if decision.FinalPath != "" || decision.TokenCount != 0 || decision.MessageCount != 0 {
+		t.Fatalf("budget decision = %#v, want empty final request fields on failed reserve-aware retry", decision)
 	}
 }
 
@@ -318,9 +418,12 @@ func TestBuildBudgetedRequestEmitsMemoryEventsWhenFirstPassCompressionPrecedesBl
 		t.Fatalf("NewRunner() error = %v", err)
 	}
 
-	_, _, _, err = runner.buildBudgetedRequest(context.Background(), nil, false)
+	_, _, decision, err := runner.buildBudgetedRequest(context.Background(), nil, false)
 	if err == nil {
 		t.Fatal("buildBudgetedRequest() error = nil, want blocked request after first-pass compression")
+	}
+	if !decision.CompressionAttempted || !decision.CompressionSucceeded {
+		t.Fatalf("budget decision = %#v, want first-pass compression outcome preserved across blocked reserve retry", decision)
 	}
 
 	compressedEmits := 0
@@ -396,6 +499,61 @@ func TestBuildBudgetedRequestEmitsMemoryEventsWhenReserveAwareCompressionStillEn
 	}
 	if contextStateEmits != 1 {
 		t.Fatalf("memory.context_state emit count = %d, want 1 after reserve-aware blocked compression; emits = %#v", contextStateEmits, runtime.emits)
+	}
+}
+
+func TestBuildBudgetedRequestEmitsMemoryEventsWhenPromptBuildFailsAfterCompression(t *testing.T) {
+	errExpected := errors.New("forced prompt build failed")
+	mgr, err := memory.NewManager(memory.Options{
+		MaxContextTokens: 100,
+		Counter:          fakeTokenCounter{},
+		Compressor: func(context.Context, memory.CompressionRequest) (string, error) {
+			return "compressed memory", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	mgr.AddMessages([]model.Message{
+		{Role: model.RoleUser, Content: strings.Repeat("a", 60)},
+		{Role: model.RoleAssistant, Content: strings.Repeat("b", 60)},
+	})
+
+	runtime := &recordingTaskRuntime{}
+	runner, err := NewRunner(&stubClient{}, nil, Options{
+		Model:                "test-model",
+		LLMModel:             &coretypes.LLMModel{Context: coretypes.LLMContextConfig{Max: 100}},
+		Memory:               mgr,
+		RuntimePromptBuilder: runtimeprompt.NewBuilder(failingSessionSegmentProvider{err: errExpected}),
+		EventSink:            &taskRuntimeSink{runtime: runtime},
+	})
+	if err != nil {
+		t.Fatalf("NewRunner() error = %v", err)
+	}
+
+	_, _, decision, err := runner.buildBudgetedRequest(context.Background(), nil, false)
+	if !errors.Is(err, errExpected) {
+		t.Fatalf("buildBudgetedRequest() error = %v, want %v", err, errExpected)
+	}
+	if !decision.CompressionAttempted || !decision.CompressionSucceeded {
+		t.Fatalf("budget decision = %#v, want compression outcome preserved on prompt build failure", decision)
+	}
+
+	compressedEmits := 0
+	contextStateEmits := 0
+	for _, emit := range runtime.emits {
+		switch emit.eventType {
+		case coretasks.EventMemoryCompressed:
+			compressedEmits++
+		case coretasks.EventMemoryContextState:
+			contextStateEmits++
+		}
+	}
+	if compressedEmits != 1 {
+		t.Fatalf("memory.compressed emit count = %d, want 1 after prompt build failure; emits = %#v", compressedEmits, runtime.emits)
+	}
+	if contextStateEmits != 1 {
+		t.Fatalf("memory.context_state emit count = %d, want 1 after prompt build failure; emits = %#v", contextStateEmits, runtime.emits)
 	}
 }
 
@@ -528,6 +686,14 @@ func requireRecordedEmitPayloadMap(t *testing.T, emits []recordedEmit, eventType
 
 	t.Fatalf("recorded emits = %#v, want %q", emits, eventType)
 	return nil
+}
+
+type failingSessionSegmentProvider struct {
+	err error
+}
+
+func (p failingSessionSegmentProvider) SessionSegments(time.Time) ([]runtimeprompt.Segment, error) {
+	return nil, p.err
 }
 
 func requireRecordedEmitInt64(t *testing.T, payload map[string]any, key string) int64 {

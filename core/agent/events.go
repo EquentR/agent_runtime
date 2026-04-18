@@ -73,6 +73,8 @@ type StreamEventSink interface {
 	OnStreamEvent(ctx context.Context, event RunStreamEvent) error
 }
 
+type auditStepContextKey struct{}
+
 func cloneMetadata(input map[string]string) map[string]any {
 	if len(input) == 0 {
 		return nil
@@ -266,33 +268,35 @@ func (r *Runner) emitStreamEvent(ctx context.Context, event RunStreamEvent) {
 func (r *Runner) emitMemoryCompressed(ctx context.Context, trace memory.CompressionTrace) {
 	snapshot := newMemoryCompressionSnapshot(trace)
 	r.rememberMemoryCompressionSnapshot(snapshot)
-	if r == nil || r.options.EventSink == nil {
+	if r == nil {
 		return
 	}
-	sink, ok := r.options.EventSink.(taskRuntimeBridge)
-	if !ok {
-		return
+	if r.options.EventSink != nil {
+		sink, ok := r.options.EventSink.(taskRuntimeBridge)
+		if ok {
+			runtime := sink.TaskRuntime()
+			if runtime != nil {
+				_ = runtime.Emit(ctx, coretasks.EventMemoryCompressed, "info", memoryCompressionPayload(snapshot))
+			}
+		}
 	}
-	runtime := sink.TaskRuntime()
-	if runtime == nil {
-		return
-	}
-	_ = runtime.Emit(ctx, coretasks.EventMemoryCompressed, "info", memoryCompressionPayload(snapshot))
+	r.appendAuditEvent(ctx, auditStepFromContext(ctx), coreaudit.PhaseRequest, "memory.compressed", memoryCompressionPayload(snapshot), "")
 }
 
 func (r *Runner) emitMemoryContextState(ctx context.Context, state *MemoryContextSnapshot) {
-	if r == nil || r.options.EventSink == nil {
+	if r == nil {
 		return
 	}
-	sink, ok := r.options.EventSink.(taskRuntimeBridge)
-	if !ok {
-		return
+	if r.options.EventSink != nil {
+		sink, ok := r.options.EventSink.(taskRuntimeBridge)
+		if ok {
+			runtime := sink.TaskRuntime()
+			if runtime != nil {
+				_ = runtime.Emit(ctx, coretasks.EventMemoryContextState, "info", memoryContextPayload(state))
+			}
+		}
 	}
-	runtime := sink.TaskRuntime()
-	if runtime == nil {
-		return
-	}
-	_ = runtime.Emit(ctx, coretasks.EventMemoryContextState, "info", memoryContextPayload(state))
+	r.appendAuditEvent(ctx, auditStepFromContext(ctx), coreaudit.PhaseRequest, "memory.context_state", memoryContextPayload(state), "")
 }
 
 func (r *Runner) emitMemoryContextStateFromManager(ctx context.Context) {
@@ -300,6 +304,24 @@ func (r *Runner) emitMemoryContextStateFromManager(ctx context.Context) {
 		return
 	}
 	r.emitMemoryContextState(ctx, newMemoryContextSnapshot(r.options.Memory.ContextState()))
+}
+
+func withAuditStep(ctx context.Context, step int) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if step <= 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, auditStepContextKey{}, step)
+}
+
+func auditStepFromContext(ctx context.Context) int {
+	if ctx == nil {
+		return 0
+	}
+	step, _ := ctx.Value(auditStepContextKey{}).(int)
+	return step
 }
 
 func (r *Runner) toolContext(ctx context.Context, step int) context.Context {

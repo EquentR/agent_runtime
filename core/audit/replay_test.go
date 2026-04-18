@@ -62,6 +62,67 @@ func TestBuildReplayBundleReturnsOrderedTimeline(t *testing.T) {
 	}
 }
 
+func TestBuildReplayBundleIncludesMemoryEventDisplayNames(t *testing.T) {
+	store := newReplayStore(t)
+	now := time.Date(2026, time.March, 21, 18, 0, 0, 0, time.UTC)
+
+	run := &Run{
+		ID:            "run_memory_events",
+		TaskID:        "task_memory_events",
+		TaskType:      "agent.run",
+		Status:        StatusSucceeded,
+		Replayable:    true,
+		SchemaVersion: SchemaVersionV1,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	if err := store.db.Create(run).Error; err != nil {
+		t.Fatalf("create run error = %v", err)
+	}
+
+	events := []*Event{
+		{
+			RunID:       run.ID,
+			TaskID:      run.TaskID,
+			Seq:         1,
+			Phase:       PhaseRequest,
+			EventType:   "memory.compressed",
+			Level:       "info",
+			PayloadJSON: json.RawMessage(`{"tokens_before":120,"tokens_after":40}`),
+			CreatedAt:   now.Add(time.Second),
+		},
+		{
+			RunID:       run.ID,
+			TaskID:      run.TaskID,
+			Seq:         2,
+			Phase:       PhaseRequest,
+			EventType:   "memory.context_state",
+			Level:       "info",
+			PayloadJSON: json.RawMessage(`{"has_summary":true,"total_tokens":40}`),
+			CreatedAt:   now.Add(2 * time.Second),
+		},
+	}
+	for _, event := range events {
+		if err := store.db.Create(event).Error; err != nil {
+			t.Fatalf("create event seq %d error = %v", event.Seq, err)
+		}
+	}
+
+	bundle, err := BuildReplayBundle(context.Background(), store, run.ID)
+	if err != nil {
+		t.Fatalf("BuildReplayBundle() error = %v", err)
+	}
+	if len(bundle.Timeline) != 2 {
+		t.Fatalf("len(bundle.Timeline) = %d, want 2", len(bundle.Timeline))
+	}
+	if bundle.Timeline[0].DisplayName != "内存已压缩" {
+		t.Fatalf("timeline[0].DisplayName = %q, want 内存已压缩", bundle.Timeline[0].DisplayName)
+	}
+	if bundle.Timeline[1].DisplayName != "内存上下文状态" {
+		t.Fatalf("timeline[1].DisplayName = %q, want 内存上下文状态", bundle.Timeline[1].DisplayName)
+	}
+}
+
 func TestBuildReplayBundleOmitsUnsupportedArtifactBodies(t *testing.T) {
 	store := newReplayStore(t)
 	now := time.Date(2026, time.March, 21, 14, 0, 0, 0, time.UTC)

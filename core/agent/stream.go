@@ -70,7 +70,7 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 	memoryInsertedCount := len(input.Messages)
 	baseConversation := cloneMessages(input.Messages)
 	if r.options.Memory != nil {
-		if _, err := r.prepareConversationContextWithPersistedCount(ctx, baseConversation, 0); err != nil {
+		if _, err := r.prepareConversationContextWithPersistedCount(withAuditStep(ctx, 1), baseConversation, 0); err != nil {
 			return nil, err
 		}
 	}
@@ -149,12 +149,13 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 				return
 			}
 			if step > 1 && r.options.Memory != nil {
-				if _, err := r.prepareConversationContextWithPersistedCount(ctx, baseConversation, memoryInsertedCount); err != nil {
+				if _, err := r.prepareConversationContextWithPersistedCount(withAuditStep(ctx, step), baseConversation, memoryInsertedCount); err != nil {
 					snapshotResult(step - 1)
 					runErr = err
 					return
 				}
 			}
+			stepCtx := withAuditStep(ctx, step)
 			var (
 				buildResult     runtimeprompt.BuildResult
 				requestMessages []model.Message
@@ -162,10 +163,10 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 				err             error
 			)
 			if r.options.Memory != nil {
-				buildResult, requestMessages, budgetDecision, err = r.buildBudgetedRequest(ctx, ephemeralConversationTail, afterToolTurn)
+				buildResult, requestMessages, budgetDecision, err = r.buildBudgetedRequest(stepCtx, ephemeralConversationTail, afterToolTurn)
 			} else {
 				body := append(cloneMessages(baseConversation), cloneMessages(ephemeralConversationTail)...)
-				buildResult, requestMessages, budgetDecision, err = r.buildBudgetedRequestFromContext(ctx, memory.RuntimeContext{Tail: body}, afterToolTurn)
+				buildResult, requestMessages, budgetDecision, err = r.buildBudgetedRequestFromContext(stepCtx, memory.RuntimeContext{Tail: body}, afterToolTurn)
 			}
 			ephemeralConversationTail = nil
 			usage = model.TokenUsage{}

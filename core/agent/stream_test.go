@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	coreaudit "github.com/EquentR/agent_runtime/core/audit"
+	"github.com/EquentR/agent_runtime/core/memory"
 	coreprompt "github.com/EquentR/agent_runtime/core/prompt"
 	model "github.com/EquentR/agent_runtime/core/providers/types"
 	"github.com/EquentR/agent_runtime/core/runtimeprompt"
@@ -112,6 +113,201 @@ func TestRunStreamRecordsRequestBudgetDecisionWhenGuardBlocksSend(t *testing.T) 
 	if decision.FinalPath != "blocked" {
 		t.Fatalf("budget decision = %#v, want blocked", decision)
 	}
+}
+
+func TestRunStreamRecordsRequestBudgetDecisionWithPreexistingMemoryState(t *testing.T) {
+	recorder := newRecordingRunnerAuditRecorder()
+	client := &stubClient{
+		streams: []model.Stream{newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "hello"}}},
+			model.Message{Role: model.RoleAssistant, Content: "hello"},
+			nil,
+		)},
+	}
+	mgr, err := memory.NewManager(memory.Options{
+		MaxContextTokens: 33,
+		Counter:          fakeTokenCounter{},
+		SummaryTemplate:  "%s",
+	})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	mgr.LoadSummary(strings.Repeat("s", 10))
+
+	runner, err := NewRunner(client, nil, Options{
+		Model:                "test-model",
+		LLMModel:             &coretypes.LLMModel{Context: coretypes.LLMContextConfig{Max: 64}},
+		Memory:               mgr,
+		RuntimePromptBuilder: runtimeprompt.NewBuilder(nil),
+		AuditRecorder:        recorder,
+		AuditRunID:           "run_stream_memory_before_state",
+	})
+	if err != nil {
+		t.Fatalf("NewRunner() error = %v", err)
+	}
+
+	streamResult, err := runner.RunStream(context.Background(), RunInput{Messages: []model.Message{{Role: model.RoleUser, Content: "hi"}}})
+	if err != nil {
+		t.Fatalf("RunStream() error = %v", err)
+	}
+	for range streamResult.Events {
+	}
+	if _, err := streamResult.Wait(); err != nil {
+		t.Fatalf("Wait() error = %v", err)
+	}
+
+	budgetEvent := recorder.requireEventForStep(t, "run_stream_memory_before_state", "request.budgeted", 1)
+	budgetPayload := decodeAuditPayload(t, budgetEvent)
+	if budgetPayload["has_summary_before"] != true {
+		t.Fatalf("budget payload = %#v, want has_summary_before=true", budgetPayload)
+	}
+	if budgetPayload["summary_tokens_before"] != float64(10) {
+		t.Fatalf("budget payload = %#v, want summary_tokens_before=10", budgetPayload)
+	}
+	if budgetPayload["rendered_summary_tokens_before"] != float64(10) {
+		t.Fatalf("budget payload = %#v, want rendered_summary_tokens_before=10", budgetPayload)
+	}
+	totalTokensBefore, ok := budgetPayload["total_tokens_before"].(float64)
+	if !ok || totalTokensBefore < 10 {
+		t.Fatalf("budget payload = %#v, want total_tokens_before>=10", budgetPayload)
+	}
+
+	artifact := recorder.requireArtifactByKind(t, "run_stream_memory_before_state", coreaudit.ArtifactKindRequestBudgetDecision)
+	var decision requestBudgetDecision
+	if err := json.Unmarshal(artifact.BodyJSON, &decision); err != nil {
+		t.Fatalf("decode request_budget_decision artifact error = %v", err)
+	}
+	if !decision.HasSummaryBefore || decision.SummaryTokensBefore != 10 || decision.RenderedSummaryTokensBefore != 10 || decision.TotalTokensBefore < 10 {
+		t.Fatalf("budget decision = %#v, want preexisting memory state preserved", decision)
+	}
+}
+
+func TestRunStreamRecordsMemoryAuditEventsForCompression(t *testing.T) {
+	recorder := newRecordingRunnerAuditRecorder()
+	client := &stubClient{
+		streams: []model.Stream{newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "hello"}}},
+			model.Message{Role: model.RoleAssistant, Content: "hello"},
+			nil,
+		)},
+	}
+	mgr, err := memory.NewManager(memory.Options{
+		MaxContextTokens: 100,
+		Counter:          fakeTokenCounter{},
+		Compressor: func(context.Context, memory.CompressionRequest) (string, error) {
+			return "compressed memory", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	mgr.AddMessages([]model.Message{
+		{Role: model.RoleUser, Content: strings.Repeat("a", 60)},
+		{Role: model.RoleAssistant, Content: strings.Repeat("b", 60)},
+	})
+
+	runner, err := NewRunner(client, nil, Options{
+		Model:                "test-model",
+		LLMModel:             &coretypes.LLMModel{Context: coretypes.LLMContextConfig{Max: 100}},
+		Memory:               mgr,
+		RuntimePromptBuilder: runtimeprompt.NewBuilder(nil),
+		AuditRecorder:        recorder,
+		AuditRunID:           "run_stream_memory_audit",
+	})
+	if err != nil {
+		t.Fatalf("NewRunner() error = %v", err)
+	}
+
+	streamResult, err := runner.RunStream(context.Background(), RunInput{Messages: []model.Message{{Role: model.RoleUser, Content: "hi"}}})
+	if err != nil {
+		t.Fatalf("RunStream() error = %v", err)
+	}
+	for range streamResult.Events {
+	}
+	if _, err := streamResult.Wait(); err != nil {
+		t.Fatalf("Wait() error = %v", err)
+	}
+
+	hasCompressed := false
+	hasContextState := false
+	for _, eventType := range recorder.eventTypes("run_stream_memory_audit") {
+		switch eventType {
+		case "memory.compressed":
+			hasCompressed = true
+		case "memory.context_state":
+			hasContextState = true
+		}
+	}
+	if !hasCompressed || !hasContextState {
+		t.Fatalf("audit events = %v, want memory.compressed and memory.context_state", recorder.eventTypes("run_stream_memory_audit"))
+	}
+	recorder.requireEventForStep(t, "run_stream_memory_audit", "memory.compressed", 1)
+	recorder.requireEventForStep(t, "run_stream_memory_audit", "memory.context_state", 1)
+}
+
+func TestRunStreamRecordsMemoryAuditEventsForStepTwoPreparation(t *testing.T) {
+	recorder := newRecordingRunnerAuditRecorder()
+	registry := coretools.NewRegistry()
+	if err := registry.Register(coretools.Tool{
+		Name: "lookup_weather",
+		Handler: func(context.Context, map[string]interface{}) (string, error) {
+			return "sunny", nil
+		},
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	client := &stubClient{streams: []model.Stream{
+		newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "lookup_weather", Arguments: `{"city":"Shanghai"}`}}}}},
+			model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "lookup_weather", Arguments: `{"city":"Shanghai"}`}}},
+			nil,
+		),
+		newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "done"}}},
+			model.Message{Role: model.RoleAssistant, Content: "done"},
+			nil,
+		),
+	}}
+	mgr, err := memory.NewManager(memory.Options{
+		MaxContextTokens: 40,
+		Counter:          &fixedCounter{count: 10},
+		Compressor: func(context.Context, memory.CompressionRequest) (string, error) {
+			return "summary", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+
+	runner, err := NewRunner(client, registry, Options{
+		Model:                "test-model",
+		LLMModel:             &coretypes.LLMModel{Context: coretypes.LLMContextConfig{Max: 200}},
+		Memory:               mgr,
+		RuntimePromptBuilder: runtimeprompt.NewBuilder(nil),
+		AuditRecorder:        recorder,
+		AuditRunID:           "run_stream_memory_step_two",
+		MaxSteps:             4,
+	})
+	if err != nil {
+		t.Fatalf("NewRunner() error = %v", err)
+	}
+
+	streamResult, err := runner.RunStream(context.Background(), RunInput{Messages: []model.Message{{Role: model.RoleUser, Content: "weather?"}}, Tools: registry.List()})
+	if err != nil {
+		t.Fatalf("RunStream() error = %v", err)
+	}
+	for range streamResult.Events {
+	}
+	result, err := streamResult.Wait()
+	if err != nil {
+		t.Fatalf("Wait() error = %v", err)
+	}
+	if result.FinalMessage.Content != "done" {
+		t.Fatalf("FinalMessage.Content = %q, want done", result.FinalMessage.Content)
+	}
+
+	recorder.requireEventForStep(t, "run_stream_memory_step_two", "memory.compressed", 2)
+	recorder.requireEventForStep(t, "run_stream_memory_step_two", "memory.context_state", 2)
 }
 
 func TestRunnerRunUsesRunStreamAggregation(t *testing.T) {
