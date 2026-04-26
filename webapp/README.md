@@ -15,6 +15,7 @@
 - `/chat`：主聊天页，提供会话列表、模型选择、流式消息展示、任务恢复、取消运行、审批决策和人工问题回复。
 - `/admin/prompts`：提示词管理页，面向管理员维护 prompt documents 与 bindings。
 - `/admin/audit`：审计会话页，面向管理员查看任务运行轨迹。
+- 审批独立视图：`ApprovalView` 提供审批卡片与决策操作的独立入口。
 
 ## ✨ 当前交互特性
 
@@ -23,6 +24,7 @@
 - 支持思考与工具调用显示切换，便于控制信息密度。
 - 会话草稿与活动任务状态本地持久化，刷新后可恢复界面状态。
 - 在聊天流中内嵌处理工具审批与人工问题回复。
+- 模型选择器仅展示已配置的可用模型，并持久化用户偏好。
 - 动态文档标题与移动端侧边栏适配。
 
 ## 🗂️ 目录职责
@@ -31,10 +33,16 @@
 |---|---|
 | `src/views` | 页面级视图 |
 | `src/components` | 聊天与管理台复用组件 |
+| `src/router` | 路由定义与鉴权守卫 |
 | `src/lib/api.ts` | HTTP API 调用边界 |
 | `src/lib/transcript.ts` | 流式事件到转录条目的归一化逻辑 |
 | `src/lib/session.ts` | 会话同步与登录态辅助 |
 | `src/lib/chat-state.ts` | 聊天页本地状态持久化 |
+| `src/lib/chat.ts` | 聊天页逻辑与模型选择整合 |
+| `src/lib/model-selection.ts` | 模型选择状态管理 |
+| `src/lib/question-entry.ts` | 人工问题输入状态管理 |
+| `src/lib/task-runtime.ts` | 任务运行时状态映射 |
+| `src/lib/time.ts` | 时间格式化工具 |
 | `src/types/api.ts` | 后端契约在前端侧的类型定义 |
 
 ## 🛠️ 开发命令
@@ -80,6 +88,6 @@ pnpm build
 
 ## 🔗 相关后端依赖
 
-- 聊天页依赖 `tasks`、`conversations`、`models`、`approvals`、`interactions` API。
+- 聊天页依赖 `tasks`、`conversations`、`models`、`approvals`、`interactions`、`attachments`、`skills` API。
 - 管理台依赖 `prompts` 和 `audit` API。
 - 登录态与路由守卫依赖 `auth` API。

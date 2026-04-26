@@ -16,7 +16,9 @@
 - 统一的 `agent.run` 执行入口，负责驱动模型调用、工具调用、会话写入和事件推送。
 - 会话持久化：自动维护对话标题、最近消息、消息计数等字段，无需业务层手动管理。
 - 短期记忆压缩：上下文接近长度上限时，自动压缩历史消息并保留关键工作记忆。
+- 长期记忆：跨会话持久化用户偏好与关键事实，通过 LLM 做增量压缩。
 - 提示词路由：通过 document + binding + resolver 体系，按场景、阶段、模型分发提示词。
+- 技能注入：运行时按需解析 workspace skills，通过 `using_skills` 工具动态加载。
 
 ### 任务调度
 
@@ -24,6 +26,12 @@
 - Worker pool 并发执行，可通过 `concurrency_key` 对同一资源下的任务做串行保护。
 - `waiting` 状态支持任务挂起与恢复——等待审批或用户回复时自动暂停，条件满足后继续执行。
 - 支持父子任务基本编排结构，为 fan-out / fan-in 和子 agent 调度预留基础能力。
+
+### 技能系统
+
+- 基于工作目录 `skills/<name>/SKILL.md` 的技能包定义，运行时按需加载与注入。
+- `using_skills` 内建工具可在运行中动态加载技能内容，其结果不写入会话历史（ephemeral）。
+- 技能列表 API 支持前端浏览与按名查询。
 
 ### 🙋 人工介入
 
@@ -36,8 +44,8 @@
 
 - 统一的 `ChatRequest` / `ChatResponse` / `Stream` 调用抽象，屏蔽不同 provider 的差异。
 - 已适配 Gemini、OpenAI-compatible Chat Completions 和 OpenAI Responses API。
-- 内建工具涵盖文件读写、命令执行、HTTP 请求、进程管理和 Web 搜索，运行范围限制在配置的工作区目录内。
-- 预留 MCP tools / prompts 接入点，支持对接外部工具生态。
+- 内建 17 个工具，涵盖文件读写、命令执行、HTTP 请求、进程管理、Web 搜索、技能加载和人工问答，运行范围限制在配置的工作区目录内。
+- MCP tools / prompts 接入点已就绪，支持 stdio、SSE 和 Streamable HTTP 三种传输方式对接外部工具生态。
 
 ### 🖥️ 前端
 
@@ -48,10 +56,12 @@
 
 ## 📦 近期主要更新
 
+- **技能系统**：新增 workspace skills 支持，通过 `using_skills` 工具在运行中动态加载技能内容。
+- **附件系统**：支持文件上传与在消息中引用附件，附件可在 provider 层按需消费。
 - **提示词管理**：从运行时内部配置升级为独立资源，可通过 HTTP API 和管理后台进行增删改查。
 - **任务调度**：新增并发 worker、挂起恢复、状态细化，事件轨迹更完整。
 - **人工介入**：执行链新增审批流和人工问答流，支持在工具调用前后等待人类决策。
-- **模型调用**：修复 OpenAI completions 流式工具调用参数块的连续性问题，减少 reasoning 与 tool call 展示错乱。
+- **模型调用**：新增 OpenAI Responses API 适配、请求预算管控、provider state 无损回放与跨轮复用。
 - **前端**：补全审批卡片展示、中文界面文案、动态页面标题、思考与工具调用显示切换。
 
 ## 🚀 快速开始
@@ -111,6 +121,8 @@ pnpm --dir webapp dev
 | `tasks` | 创建任务、查询详情、取消、重试、订阅 SSE 事件流 |
 | `conversations` | 查询会话列表、会话详情、历史消息，删除会话 |
 | `prompts` | 提示词文档与绑定规则管理（需管理员权限） |
+| `skills` | 查询 workspace 技能列表与详情 |
+| `attachments` | 上传文件附件、查询附件元数据与内容 |
 | `approvals` | 查询审批记录、提交审批决策 |
 | `interactions` | 查询待回复问题、提交用户回复 |
 | `audit` | 查询任务运行审计记录 |
@@ -131,22 +143,26 @@ pnpm --dir webapp dev
 |------|------|
 | `cmd/example_agent` | 可执行入口，读取配置并启动服务 |
 | `app` | 应用层，负责依赖组装、数据库迁移、路由注册和 HTTP handler |
-| `core/agent` | Agent 执行器、流式处理、会话存储 |
+| `core/agent` | Agent 执行器、流式处理、会话存储、任务桥接、审计输出 |
 | `core/tasks` | 任务存储、调度管理、事件流、并发执行、挂起恢复 |
 | `core/prompt` | 提示词文档、绑定规则与分发逻辑 |
+| `core/skills` | 工作目录技能包扫描、解析、只读查询与运行时注入 |
 | `core/approvals` | 审批记录存储 |
 | `core/interactions` | 人工问答记录存储 |
 | `core/audit` | 任务运行审计记录与事件追踪 |
 | `core/tools` | 内建工具注册表与 MCP 接入点 |
 | `core/providers` | 模型调用抽象与各 provider 适配器 |
-| `core/memory` | 上下文长度管理与记忆压缩 |
+| `core/memory` | 短期上下文管理、长期记忆持久化与上下文预算控制 |
+| `core/mcp` | MCP 抽象接口、通用类型与 mark3labs 适配器 |
 | `pkg` | 数据库、日志、迁移、HTTP 工具等基础设施 |
 | `webapp` | 前端应用，包含聊天界面和管理后台 |
+| `docs` | 设计文档、Swagger 生成产物与子计划 |
+| `skills` | 工作目录级技能包存放位置（按 `skills/<name>/SKILL.md` 组织） |
 
 ## 📍 当前状态
 
 - 后端与前端均已可运行，适合本地联调、功能演示和在此基础上继续开发。
-- 当前功能集中在单 agent 运行、任务调度、人工介入和管理后台，暂不包含完整产品化功能。
+- 当前功能覆盖：task 驱动的 agent 执行、会话持久化、17 个内建工具、3 个模型 provider 适配、workspace skills 系统、短期/长期记忆管理、人工审批/问答、审计追溯、附件上传、提示词管理、MCP 外部工具接入。
 - `core/rag` 为预留目录，尚未实现；多 agent 编排等能力留待后续扩展。
 
 ## ✅ 运行验证
