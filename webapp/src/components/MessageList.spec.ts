@@ -1156,6 +1156,62 @@ describe('MessageList', () => {
     expect(wrapper.text()).toContain('image.png')
   })
 
+  it('renders image partial preview for reply entries', () => {
+    const wrapper = mount(MessageList, {
+      props: {
+        loading: true,
+        entries: [
+          {
+            id: 'reply-preview',
+            kind: 'reply',
+            title: '',
+            status: 'running',
+            image_preview: {
+              tool: 'generate_image',
+              operation: 'generate',
+              mime_type: 'image/png',
+              data_url: 'data:image/png;base64,cGFydGlhbA==',
+            },
+          },
+        ],
+      },
+    })
+
+    const preview = wrapper.find('[data-image-preview]')
+    const image = preview.find('img')
+
+    expect(preview.exists()).toBe(true)
+    expect(image.exists()).toBe(true)
+    expect(image.attributes('src')).toBe('data:image/png;base64,cGFydGlhbA==')
+  })
+
+  it('uses attachment content_url before generated attachment URLs for links and image sources', () => {
+    const wrapper = mount(MessageList, {
+      props: {
+        loading: false,
+        entries: [
+          {
+            id: 'reply-content-url',
+            kind: 'reply',
+            title: '',
+            attachments: [
+              {
+                id: 'att_content_url',
+                file_name: 'generated.png',
+                mime_type: 'image/png',
+                status: 'sent',
+                content_url: '/api/v1/attachments/att_content_url/content?download=1',
+              },
+            ],
+          },
+        ],
+      },
+    })
+
+    expect(wrapper.find('.message-attachment-link').attributes('href')).toBe('/api/v1/attachments/att_content_url/content?download=1')
+    expect(wrapper.find('.message-attachment-thumbnail').attributes('src')).toBe('/api/v1/attachments/att_content_url/content?download=1')
+  })
+
   it('renders file cards for non-image attachments', () => {
     const wrapper = mount(MessageList, {
       props: {

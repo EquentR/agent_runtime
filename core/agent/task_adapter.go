@@ -7,6 +7,7 @@ import (
 	"github.com/EquentR/agent_runtime/core/approvals"
 	"github.com/EquentR/agent_runtime/core/interactions"
 	coretasks "github.com/EquentR/agent_runtime/core/tasks"
+	coretypes "github.com/EquentR/agent_runtime/core/types"
 )
 
 type taskRuntime interface {
@@ -21,7 +22,7 @@ type taskRuntime interface {
 	CreateInteraction(ctx context.Context, input interactions.CreateInteractionInput) (*interactions.Interaction, error)
 	GetApproval(ctx context.Context, approvalID string) (*approvals.ToolApproval, error)
 	ExpireApproval(ctx context.Context, approvalID string, reason string) (*approvals.ToolApproval, error)
-	ToolContext(ctx context.Context, stepID string) context.Context
+	ToolContext(ctx context.Context, stepID string, metadata map[string]string, call coretypes.ToolCall) context.Context
 }
 
 type taskRuntimeBridge interface {

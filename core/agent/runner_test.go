@@ -121,6 +121,70 @@ func TestRunnerExecutesToolCallsAndContinuesConversation(t *testing.T) {
 	}
 }
 
+func TestRunnerToolContextCarriesMetadataToolCallAndEmitter(t *testing.T) {
+	recorder := &recordingTaskRuntime{taskID: "task_1"}
+	registry := coretools.NewRegistry()
+	if err := registry.Register(coretools.Tool{
+		Name: "capture_runtime",
+		Handler: func(ctx context.Context, arguments map[string]interface{}) (string, error) {
+			runtime, ok := coretools.RuntimeFromContext(ctx)
+			if !ok {
+				t.Fatal("RuntimeFromContext() ok = false, want true")
+			}
+			if runtime.TaskID != "task_1" || runtime.StepID != "step-1" {
+				t.Fatalf("runtime task/step = %q/%q, want task_1/step-1", runtime.TaskID, runtime.StepID)
+			}
+			if runtime.ToolCallID != "call_1" || runtime.ToolName != "capture_runtime" {
+				t.Fatalf("runtime tool call = %q/%q, want call_1/capture_runtime", runtime.ToolCallID, runtime.ToolName)
+			}
+			if runtime.Metadata["conversation_id"] != "conv_1" || runtime.Metadata["created_by"] != "tester" {
+				t.Fatalf("runtime.Metadata = %#v, want conversation_id and created_by", runtime.Metadata)
+			}
+			if runtime.Emit == nil {
+				t.Fatal("runtime.Emit = nil, want task runtime emitter")
+			}
+			if err := runtime.Emit(ctx, coretasks.EventLogMessage, "info", map[string]any{"message": "from tool"}); err != nil {
+				t.Fatalf("runtime.Emit() error = %v", err)
+			}
+			return "captured", nil
+		},
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	client := &stubClient{streams: []model.Stream{
+		newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "capture_runtime", Arguments: `{}`}}}}},
+			model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "capture_runtime", Arguments: `{}`}}},
+			nil,
+		),
+		newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "done"}}},
+			model.Message{Role: model.RoleAssistant, Content: "done"},
+			nil,
+		),
+	}}
+
+	runner, err := NewRunner(client, registry, Options{
+		Model:     "test-model",
+		MaxSteps:  4,
+		EventSink: &taskRuntimeSink{runtime: recorder},
+		Metadata: map[string]string{
+			"conversation_id": "conv_1",
+			"created_by":      "tester",
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRunner() error = %v", err)
+	}
+	if _, err := runner.Run(context.Background(), RunInput{Messages: []model.Message{{Role: model.RoleUser, Content: "capture"}}, Tools: registry.List()}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(recorder.emits) == 0 || recorder.emits[0].eventType != coretasks.EventLogMessage {
+		t.Fatalf("recorder.emits = %#v, want tool-emitted log.message", recorder.emits)
+	}
+}
+
 func TestRunnerInjectsStepPreModelOnEveryTurnAndToolResultOnlyAfterToolContinuation(t *testing.T) {
 	registry := coretools.NewRegistry()
 	if err := registry.Register(coretools.Tool{
@@ -1930,8 +1994,20 @@ func (r *recordingTaskRuntime) ExpireApproval(_ context.Context, approvalID stri
 	return nil, fmt.Errorf("approval %q not found", approvalID)
 }
 
-func (r *recordingTaskRuntime) ToolContext(ctx context.Context, stepID string) context.Context {
-	return coretools.WithRuntime(ctx, &coretools.Runtime{TaskID: r.taskID, StepID: stepID, Actor: "runner-test"})
+func (r *recordingTaskRuntime) ToolContext(ctx context.Context, stepID string, metadata map[string]string, call coretypes.ToolCall) context.Context {
+	cloned := make(map[string]string, len(metadata))
+	for key, value := range metadata {
+		cloned[key] = value
+	}
+	return coretools.WithRuntime(ctx, &coretools.Runtime{
+		TaskID:     r.taskID,
+		StepID:     stepID,
+		Actor:      "runner-test",
+		ToolCallID: call.ID,
+		ToolName:   call.Name,
+		Metadata:   cloned,
+		Emit:       r.Emit,
+	})
 }
 
 func newTestRegistry(t *testing.T, handlers map[string]func(context.Context, map[string]interface{}) (string, error)) *coretools.Registry {

@@ -22,6 +22,17 @@ type Runtime struct {
 	suspended bool
 }
 
+// RuntimeEventPayload lets callers persist a sanitized payload while publishing
+// a richer live payload to current subscribers.
+type RuntimeEventPayload struct {
+	Persistent any
+	Live       any
+}
+
+func NewRuntimeEventPayload(persistent any, live any) RuntimeEventPayload {
+	return RuntimeEventPayload{Persistent: persistent, Live: live}
+}
+
 // newRuntime 为被领取的任务创建运行时封装。
 func newRuntime(manager *Manager, taskID string) *Runtime {
 	return &Runtime{manager: manager, taskID: taskID}
@@ -138,9 +149,36 @@ func (r *Runtime) ListChildTasks(ctx context.Context) ([]Task, error) {
 
 // Emit 追加一个自定义任务事件并广播给实时订阅者。
 func (r *Runtime) Emit(ctx context.Context, eventType string, level string, payload any) error {
-	event, err := r.manager.store.AppendEvent(ctx, r.taskID, eventType, level, payload)
+	persistentPayload := payload
+	var livePayloadJSON json.RawMessage
+	switch typed := payload.(type) {
+	case RuntimeEventPayload:
+		persistentPayload = typed.Persistent
+		marshaled, err := marshalJSON(typed.Live, true)
+		if err != nil {
+			return err
+		}
+		livePayloadJSON = marshaled
+	case *RuntimeEventPayload:
+		if typed != nil {
+			persistentPayload = typed.Persistent
+			marshaled, err := marshalJSON(typed.Live, true)
+			if err != nil {
+				return err
+			}
+			livePayloadJSON = marshaled
+		}
+	}
+
+	event, err := r.manager.store.AppendEvent(ctx, r.taskID, eventType, level, persistentPayload)
 	if err != nil {
 		return err
+	}
+	if len(livePayloadJSON) > 0 {
+		liveEvent := event
+		liveEvent.PayloadJSON = cloneRawMessage(livePayloadJSON)
+		r.manager.publish(liveEvent)
+		return nil
 	}
 	r.manager.publish(event)
 	return nil
@@ -298,10 +336,18 @@ func (r *Runtime) isSuspended() bool {
 //
 // 这样后续真正接入 agent executor 时，工具层可以无缝拿到
 // `task_id`、`step_id` 与 `actor` 等任务级信息。
-func (r *Runtime) ToolContext(ctx context.Context, stepID string) context.Context {
+func (r *Runtime) ToolContext(ctx context.Context, stepID string, metadata map[string]string, call coretypes.ToolCall) context.Context {
+	clonedMetadata := make(map[string]string, len(metadata))
+	for key, value := range metadata {
+		clonedMetadata[key] = value
+	}
 	return coretools.WithRuntime(ctx, &coretools.Runtime{
-		TaskID: r.taskID,
-		StepID: stepID,
-		Actor:  r.manager.runnerID,
+		TaskID:     r.taskID,
+		StepID:     stepID,
+		Actor:      r.manager.runnerID,
+		ToolCallID: call.ID,
+		ToolName:   call.Name,
+		Metadata:   clonedMetadata,
+		Emit:       r.Emit,
 	})
 }

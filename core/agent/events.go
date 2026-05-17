@@ -324,15 +324,17 @@ func auditStepFromContext(ctx context.Context) int {
 	return step
 }
 
-func (r *Runner) toolContext(ctx context.Context, step int) context.Context {
+func (r *Runner) toolContext(ctx context.Context, step int, call coretypes.ToolCall) context.Context {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	return coretools.WithRuntime(ctx, &coretools.Runtime{
-		TaskID:   strings.TrimSpace(r.options.TaskID),
-		StepID:   fmt.Sprintf("step-%d", step),
-		Actor:    r.options.Actor,
-		Metadata: cloneStringMap(r.options.Metadata),
+		TaskID:     strings.TrimSpace(r.options.TaskID),
+		StepID:     fmt.Sprintf("step-%d", step),
+		Actor:      r.options.Actor,
+		ToolCallID: call.ID,
+		ToolName:   call.Name,
+		Metadata:   cloneStringMap(r.options.Metadata),
 	})
 }
 

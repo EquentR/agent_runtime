@@ -423,7 +423,7 @@ func (r *Runner) executeAssistantToolCalls(ctx context.Context, step int, title 
 		}
 
 		r.emitToolStart(ctx, step, call)
-		output, err := r.registry.Execute(r.executionToolContext(ctx, step), call.Name, arguments)
+		output, err := r.registry.Execute(r.executionToolContext(ctx, step, call), call.Name, arguments)
 		if err != nil {
 			toolError := fmt.Sprintf("tool %q execution error: %s", call.Name, err.Error())
 			r.emitToolFinish(ctx, step, call, "", err)
@@ -597,12 +597,12 @@ func (r *Runner) taskRuntime() taskRuntime {
 	return bridge.TaskRuntime()
 }
 
-func (r *Runner) executionToolContext(ctx context.Context, step int) context.Context {
+func (r *Runner) executionToolContext(ctx context.Context, step int, call coretypes.ToolCall) context.Context {
 	runtime := r.taskRuntime()
 	if runtime != nil {
-		return runtime.ToolContext(ctx, fmt.Sprintf("step-%d", step))
+		return runtime.ToolContext(ctx, fmt.Sprintf("step-%d", step), cloneStringMap(r.options.Metadata), call)
 	}
-	return r.toolContext(ctx, step)
+	return r.toolContext(ctx, step, call)
 }
 
 func decodeToolArguments(call coretypes.ToolCall) (map[string]interface{}, error) {

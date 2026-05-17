@@ -1,6 +1,9 @@
 import type {
   ApprovalDecision,
+  AttachmentRef,
   ConversationMessage,
+  ImagePartialPreview,
+  ImageToolResult,
   InteractionRecord,
   TaskStreamEvent,
   ToolApproval,
@@ -61,6 +64,116 @@ function summarizeReasoning(message: ConversationMessage) {
   }
 
   return ''
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function firstString(...values: unknown[]) {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim()
+    }
+  }
+  return ''
+}
+
+function optionalNumber(value: unknown) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value
+  }
+  if (typeof value === 'string' && value.trim() && Number.isFinite(Number(value))) {
+    return Number(value)
+  }
+  return undefined
+}
+
+function isImageToolName(name: string) {
+  return name === 'generate_image' || name === 'edit_image'
+}
+
+function parseImageToolResult(content: string, actualToolName: string): { result: ImageToolResult; attachments: AttachmentRef[] } | undefined {
+  if (!isImageToolName(actualToolName)) {
+    return undefined
+  }
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(content)
+  } catch {
+    return undefined
+  }
+
+  if (!isRecord(parsed)) {
+    return undefined
+  }
+
+  const tool = firstString(parsed.tool, parsed.Tool)
+  if (tool !== actualToolName) {
+    return undefined
+  }
+
+  const rawImages = parsed.images ?? parsed.Images
+  if (!Array.isArray(rawImages)) {
+    return undefined
+  }
+
+  const operation = firstString(parsed.operation, parsed.Operation) || (tool === 'edit_image' ? 'edit' : 'generate')
+  const result = parsed as unknown as ImageToolResult
+  const attachments = rawImages.flatMap((item): AttachmentRef[] => {
+    if (!isRecord(item)) {
+      return []
+    }
+
+    const id = firstString(item.attachment_id, item.attachmentId, item.AttachmentID, item.id, item.ID)
+    if (!id) {
+      return []
+    }
+
+    const fileName = firstString(item.file_name, item.fileName, item.FileName) || id
+    const mimeType = firstString(item.mime_type, item.mimeType, item.MimeType) || 'image/png'
+    const preview = firstString(item.revised_prompt, item.revisedPrompt, item.RevisedPrompt) || operation
+    const contentUrl = firstString(item.content_url, item.contentUrl, item.ContentURL)
+    const sizeBytes = optionalNumber(item.size_bytes ?? item.sizeBytes ?? item.SizeBytes)
+    const width = optionalNumber(item.width ?? item.Width)
+    const height = optionalNumber(item.height ?? item.Height)
+    return [
+      {
+        id,
+        file_name: fileName,
+        mime_type: mimeType,
+        kind: 'image',
+        status: 'sent',
+        ...(preview ? { preview_text: preview } : {}),
+        ...(contentUrl ? { content_url: contentUrl } : {}),
+        ...(sizeBytes !== undefined ? { size_bytes: sizeBytes } : {}),
+        ...(width !== undefined ? { width } : {}),
+        ...(height !== undefined ? { height } : {}),
+      },
+    ]
+  })
+
+  if (attachments.length === 0) {
+    return undefined
+  }
+
+  return { result, attachments }
+}
+
+function makeImagePartialPreview(payload: Record<string, unknown>): ImagePartialPreview | undefined {
+  const b64 = firstString(payload.B64JSON, payload.b64_json, payload.b64JSON, payload.B64Json)
+  if (!b64) {
+    return undefined
+  }
+
+  const mimeType = firstString(payload.MimeType, payload.mime_type, payload.mimeType) || 'image/png'
+  return {
+    tool: firstString(payload.Tool, payload.tool) || undefined,
+    operation: firstString(payload.Operation, payload.operation) || undefined,
+    mime_type: mimeType,
+    data_url: `data:${mimeType};base64,${b64}`,
+  }
 }
 
 
@@ -237,12 +350,24 @@ function completeLatestReasoning(entries: TranscriptEntry[]) {
 
 function findLatestReplyIndex(entries: TranscriptEntry[]) {
   for (let index = entries.length - 1; index >= 0; index -= 1) {
-    if (entries[index]?.kind === 'reply') {
+    if (isReusableTextReply(entries[index])) {
       return index
     }
   }
 
   return -1
+}
+
+function hasReplyAttachments(entry: TranscriptEntry | undefined) {
+  return Boolean(entry?.attachments && entry.attachments.length > 0)
+}
+
+function isStandaloneAttachmentReply(entry: TranscriptEntry | undefined) {
+  return entry?.kind === 'reply' && !entry.image_preview && hasReplyAttachments(entry) && !compactWhitespace(entry.content ?? '')
+}
+
+function isReusableTextReply(entry: TranscriptEntry | undefined) {
+  return entry?.kind === 'reply' && !entry.image_preview && !isStandaloneAttachmentReply(entry)
 }
 
 function findLatestReasoningBeforeReply(entries: TranscriptEntry[], replyIndex: number) {
@@ -333,7 +458,7 @@ function stopAllLoading(entries: TranscriptEntry[], toolStatus: TranscriptEntry[
 function appendReply(entries: TranscriptEntry[], content: string, attachments?: ConversationMessage['attachments']) {
   const next = completeLatestReasoning(entries)
   const last = next[next.length - 1]
-  if (last?.kind === 'reply') {
+  if (isReusableTextReply(last)) {
     last.content = content
     if (attachments !== undefined) {
       last.attachments = attachments.length > 0 ? attachments : undefined
@@ -341,6 +466,49 @@ function appendReply(entries: TranscriptEntry[], content: string, attachments?: 
     return next
   }
   next.push({ id: createEntryId('reply'), kind: 'reply', title: '', content, ...(attachments && attachments.length > 0 ? { attachments } : {}) })
+  return next
+}
+
+function upsertImagePartialPreview(entries: TranscriptEntry[], imagePreview: ImagePartialPreview) {
+  const next = completeLatestReasoning(entries)
+  for (let index = next.length - 1; index >= 0; index -= 1) {
+    const entry = next[index]
+    if (entry.kind === 'reply' && entry.image_preview) {
+      next[index] = {
+        ...entry,
+        status: 'running',
+        image_preview: imagePreview,
+      }
+      return next
+    }
+    if (entry.kind === 'user' || entry.kind === 'error' || entry.kind === 'approval' || entry.kind === 'question') {
+      break
+    }
+  }
+
+  next.push({ id: createEntryId('reply'), kind: 'reply', title: '', status: 'running', image_preview: imagePreview })
+  return next
+}
+
+function upsertImageAttachmentsReply(entries: TranscriptEntry[], attachments: AttachmentRef[]) {
+  const next = completeLatestReasoning(entries)
+  for (let index = next.length - 1; index >= 0; index -= 1) {
+    const entry = next[index]
+    if (entry.kind === 'reply' && entry.image_preview) {
+      next[index] = {
+        ...entry,
+        status: 'done',
+        attachments,
+        image_preview: undefined,
+      }
+      return next
+    }
+    if (entry.kind === 'user' || entry.kind === 'error' || entry.kind === 'approval' || entry.kind === 'question') {
+      break
+    }
+  }
+
+  next.push({ id: createEntryId('reply'), kind: 'reply', title: '', content: '', status: 'done', attachments })
   return next
 }
 
@@ -476,7 +644,7 @@ function updatePendingToolGroupFromMessage(entries: TranscriptEntry[], groupKey:
 }
 
 function attachToolResult(entries: TranscriptEntry[], toolCallId: string, content: string, fallbackName = 'Tool') {
-  const next = [...entries]
+  let next = [...entries]
   for (let i = next.length - 1; i >= 0; i--) {
     const entry = next[i]
     if (entry.kind !== 'tool') {
@@ -486,25 +654,32 @@ function attachToolResult(entries: TranscriptEntry[], toolCallId: string, conten
     const detailIndex = findToolDetailIndex(details, toolCallId, fallbackName)
     if (detailIndex >= 0) {
       const existing = details[detailIndex]
+      const toolName = existing.label || fallbackName
       details[detailIndex] = makeToolDetail({
         toolCallId: toolCallId || existing.key,
-        name: existing.label,
+        name: toolName,
         argumentsText: existing.blocks?.find((block) => block.label === 'Params')?.value,
         resultText: content,
         loading: false,
       })
       next[i] = makeToolGroupEntry(entry.group_key || entry.id, details)
-      return next
+      return attachImageToolResultToReply(next, toolName, content)
     }
   }
 
-  return upsertToolInGroup(next, {
+  next = upsertToolInGroup(next, {
     groupKey: `persisted-${toolCallId || next.length}`,
     toolCallId,
     name: fallbackName,
     resultText: content,
     loading: false,
   })
+  return attachImageToolResultToReply(next, fallbackName, content)
+}
+
+function attachImageToolResultToReply(entries: TranscriptEntry[], toolName: string, content: string) {
+  const imageResult = parseImageToolResult(content, toolName)
+  return imageResult ? upsertImageAttachmentsReply(entries, imageResult.attachments) : entries
 }
 
 function applyConversationMessage(
@@ -825,7 +1000,7 @@ function attachReplyAttachmentsToLatestReply(entries: TranscriptEntry[], attachm
   const next = [...entries]
   for (let index = next.length - 1; index >= 0; index -= 1) {
     const entry = next[index]
-    if (entry.kind !== 'reply') {
+    if (entry.kind !== 'reply' || entry.image_preview || isStandaloneAttachmentReply(entry)) {
       continue
     }
     next[index] = {
@@ -842,16 +1017,21 @@ export function updateTranscriptFromStreamEvent(entries: TranscriptEntry[], even
   const groupKey = resolveStreamGroupKey(entries, payload)
 
   if (event.type === 'log.message') {
-    const kind = typeof payload.Kind === 'string' ? payload.Kind : ''
+    const kind = typeof payload.Kind === 'string' ? payload.Kind : typeof payload.kind === 'string' ? payload.kind : ''
     if (kind === 'reasoning_delta') {
       return upsertReasoning(entries, String(payload.Reasoning ?? ''))
+    }
+
+    if (kind === 'image_partial') {
+      const imagePreview = makeImagePartialPreview(payload)
+      return imagePreview ? upsertImagePartialPreview(entries, imagePreview) : entries
     }
 
     if (kind === 'text_delta') {
       const text = String(payload.Text ?? '')
       const next = completeLatestReasoning(entries)
       const last = next[next.length - 1]
-      if (last?.kind === 'reply') {
+      if (isReusableTextReply(last)) {
         last.content = `${last.content ?? ''}${text}`
         return next
       }
@@ -908,15 +1088,18 @@ export function updateTranscriptFromStreamEvent(entries: TranscriptEntry[], even
 
   if (event.type === 'tool.finished') {
     const err = payload.Err ? String(payload.Err) : ''
-    return upsertToolInGroup(entries, {
+    const toolName = String(payload.tool_name ?? payload.toolName ?? payload.ToolName ?? 'Tool')
+    const output = err || String(payload.Output ?? '')
+    const next = upsertToolInGroup(entries, {
       groupKey,
       toolCallId: String(payload.tool_call_id ?? payload.toolCallId ?? payload.ToolCallId ?? payload.ToolCallID ?? ''),
-      name: String(payload.tool_name ?? payload.toolName ?? payload.ToolName ?? 'Tool'),
+      name: toolName,
       argumentsText: typeof payload.Arguments === 'string' ? String(payload.Arguments) : '',
-      resultText: err || String(payload.Output ?? ''),
+      resultText: output,
       loading: false,
       error: Boolean(err),
     })
+    return err ? next : attachImageToolResultToReply(next, toolName, output)
   }
 
   if (event.type === 'approval.requested') {

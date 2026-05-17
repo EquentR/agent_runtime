@@ -347,6 +347,7 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 				"conversation_id": conversation.ID,
 				"provider_id":     conversation.ProviderID,
 				"model_id":        conversation.ModelID,
+				"created_by":      firstNonEmpty(input.CreatedBy, task.CreatedBy),
 			},
 		})
 		if err != nil {

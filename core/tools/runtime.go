@@ -4,11 +4,14 @@ import "context"
 
 // Runtime 描述一次工具调用所绑定的任务级运行时信息。
 type Runtime struct {
-	TaskID string
-	StepID string
-	Actor  string
+	TaskID     string
+	StepID     string
+	Actor      string
+	ToolCallID string
+	ToolName   string
 
 	Metadata map[string]string
+	Emit     func(ctx context.Context, eventType string, level string, payload any) error
 }
 
 type runtimeContextKey struct{}

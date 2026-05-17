@@ -34,5 +34,7 @@ func Register(registry *coretools.Registry, options Options) error {
 		newGetSystemInfoTool(env),
 		newHTTPRequestTool(env),
 		newWebSearchTool(env),
+		newEditImageTool(env),
+		newGenerateImageTool(env),
 	)
 }

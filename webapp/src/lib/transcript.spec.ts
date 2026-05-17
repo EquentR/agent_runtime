@@ -207,6 +207,188 @@ describe('buildTranscriptEntries', () => {
     })
   })
 
+  it('converts generate_image tool result into reply image attachments', () => {
+    const result = JSON.stringify({
+      tool: 'generate_image',
+      operation: 'generate',
+      provider: 'openai',
+      model: 'gpt-image-2',
+      count: 1,
+      images: [
+        {
+          attachment_id: 'att_1',
+          metadata_url: '/api/v1/attachments/att_1',
+          content_url: '/api/v1/attachments/att_1/content',
+          file_name: 'generated_att_1.png',
+          mime_type: 'image/png',
+          size_bytes: 12,
+          width: 1024,
+          height: 1024,
+          revised_prompt: 'optional',
+        },
+      ],
+      source_attachment_ids: [],
+      failed_images: [],
+    })
+
+    const entries = buildTranscriptEntries([
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [{ id: 'call_image_1', name: 'generate_image', arguments: '{"prompt":"draw"}' }],
+      },
+      { role: 'tool', content: result, tool_call_id: 'call_image_1' },
+    ] as any)
+
+    expect(entries.map((entry) => entry.kind)).toEqual(['tool', 'reply'])
+    expect(entries[0]).toMatchObject({
+      kind: 'tool',
+      status: 'done',
+      details: [
+        expect.objectContaining({
+          key: 'call_image_1',
+          label: 'generate_image',
+          blocks: expect.arrayContaining([expect.objectContaining({ label: 'Result', value: result })]),
+        }),
+      ],
+    })
+    expect(entries[1]).toMatchObject({
+      kind: 'reply',
+      status: 'done',
+      attachments: [
+        {
+          id: 'att_1',
+          file_name: 'generated_att_1.png',
+          mime_type: 'image/png',
+          size_bytes: 12,
+          kind: 'image',
+          status: 'sent',
+          preview_text: 'optional',
+          width: 1024,
+          height: 1024,
+          content_url: '/api/v1/attachments/att_1/content',
+        },
+      ],
+    })
+    expect(entries[1].image_preview).toBeUndefined()
+  })
+
+  it('keeps persisted image tool attachments when a later assistant message has text', () => {
+    const result = JSON.stringify({
+      tool: 'generate_image',
+      operation: 'generate',
+      images: [
+        {
+          attachment_id: 'att_history_image',
+          content_url: '/api/v1/attachments/att_history_image/content',
+          file_name: 'history-image.png',
+          mime_type: 'image/png',
+        },
+      ],
+    })
+
+    const entries = buildTranscriptEntries([
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [{ id: 'call_history_image', name: 'generate_image', arguments: '{"prompt":"draw"}' }],
+      },
+      { role: 'tool', content: result, tool_call_id: 'call_history_image' },
+      { role: 'assistant', content: '图片已经生成好了。' },
+    ] as any)
+
+    expect(entries.map((entry) => entry.kind)).toEqual(['tool', 'reply', 'reply'])
+    expect(entries[1]).toMatchObject({
+      kind: 'reply',
+      attachments: [
+        expect.objectContaining({
+          id: 'att_history_image',
+          content_url: '/api/v1/attachments/att_history_image/content',
+        }),
+      ],
+    })
+    expect(entries[1].content ?? '').toBe('')
+    expect(entries[2]).toMatchObject({
+      kind: 'reply',
+      content: '图片已经生成好了。',
+    })
+    expect(entries[2].attachments).toBeUndefined()
+  })
+
+  it('converts edit_image tool result into reply image attachments', () => {
+    const result = JSON.stringify({
+      tool: 'edit_image',
+      operation: 'edit',
+      images: [
+        {
+          attachment_id: 'att_edit',
+          content_url: '/api/v1/attachments/att_edit/content',
+        },
+      ],
+      source_attachment_ids: ['att_source'],
+      failed_images: [],
+    })
+
+    const entries = buildTranscriptEntries([
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [{ id: 'call_image_2', name: 'edit_image', arguments: '{"attachment_id":"att_source"}' }],
+      },
+      { role: 'tool', content: result, tool_call_id: 'call_image_2' },
+    ] as any)
+
+    expect(entries.map((entry) => entry.kind)).toEqual(['tool', 'reply'])
+    expect(entries[1]).toMatchObject({
+      kind: 'reply',
+      attachments: [
+        expect.objectContaining({
+          id: 'att_edit',
+          file_name: 'att_edit',
+          mime_type: 'image/png',
+          preview_text: 'edit',
+          content_url: '/api/v1/attachments/att_edit/content',
+        }),
+      ],
+    })
+  })
+
+  it('does not convert non-image tool results that only look like image tool JSON', () => {
+    const result = JSON.stringify({
+      tool: 'generate_image',
+      operation: 'generate',
+      images: [
+        {
+          attachment_id: 'att_spoofed',
+          content_url: '/api/v1/attachments/att_spoofed/content',
+        },
+      ],
+    })
+
+    const entries = buildTranscriptEntries([
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [{ id: 'call_http_1', name: 'http_request', arguments: '{"url":"https://example.test"}' }],
+      },
+      { role: 'tool', content: result, tool_call_id: 'call_http_1' },
+    ] as any)
+
+    expect(entries.map((entry) => entry.kind)).toEqual(['tool'])
+    expect(entries[0]).toMatchObject({
+      kind: 'tool',
+      status: 'done',
+      details: [
+        expect.objectContaining({
+          key: 'call_http_1',
+          label: 'http_request',
+          blocks: expect.arrayContaining([expect.objectContaining({ label: 'Result', value: result })]),
+        }),
+      ],
+    })
+    expect(entries.some((entry) => entry.kind === 'reply' && (entry.attachments?.length ?? 0) > 0)).toBe(false)
+  })
+
   it('replaces attachments on an existing latest reply when completed assistant message arrives', () => {
     const entries = updateTranscriptFromStreamEvent(
       [
@@ -544,6 +726,432 @@ describe('updateTranscriptFromStreamEvent', () => {
     expect(entries[1]).toMatchObject({ title: '工具调用', status: 'running' })
   })
 
+
+  it('creates and updates image partial preview entries while ignoring sanitized image partials without b64', () => {
+    let entries: TranscriptEntry[] = []
+
+    entries = updateTranscriptFromStreamEvent(entries, {
+      type: 'log.message',
+      payload: {
+        Kind: 'image_partial',
+        Tool: 'generate_image',
+        Operation: 'generate',
+        MimeType: 'image/png',
+        B64JSON: 'cGFydGlhbA==',
+      },
+    })
+
+    expect(entries).toHaveLength(1)
+    expect(entries[0]).toMatchObject({
+      kind: 'reply',
+      status: 'running',
+      image_preview: {
+        tool: 'generate_image',
+        operation: 'generate',
+        mime_type: 'image/png',
+        data_url: 'data:image/png;base64,cGFydGlhbA==',
+      },
+    })
+
+    entries = updateTranscriptFromStreamEvent(entries, {
+      type: 'log.message',
+      payload: {
+        kind: 'image_partial',
+        tool: 'edit_image',
+        operation: 'edit',
+        mime_type: 'image/jpeg',
+        b64_json: 'bmV4dA==',
+      },
+    })
+
+    expect(entries).toHaveLength(1)
+    expect(entries[0]).toMatchObject({
+      kind: 'reply',
+      status: 'running',
+      image_preview: {
+        tool: 'edit_image',
+        operation: 'edit',
+        mime_type: 'image/jpeg',
+        data_url: 'data:image/jpeg;base64,bmV4dA==',
+      },
+    })
+
+    const unchanged = updateTranscriptFromStreamEvent(entries, {
+      type: 'log.message',
+      payload: {
+        Kind: 'image_partial',
+        Tool: 'generate_image',
+        Operation: 'generate',
+        MimeType: 'image/png',
+        HasPreview: true,
+      },
+    })
+
+    expect(unchanged).toEqual(entries)
+    expect(updateTranscriptFromStreamEvent([], {
+      type: 'log.message',
+      payload: { Kind: 'image_partial', HasPreview: true },
+    })).toEqual([])
+  })
+
+  it('keeps image partial preview separate when text delta arrives afterward', () => {
+    let entries: TranscriptEntry[] = []
+
+    entries = updateTranscriptFromStreamEvent(entries, {
+      type: 'log.message',
+      payload: {
+        Kind: 'image_partial',
+        Tool: 'generate_image',
+        Operation: 'generate',
+        MimeType: 'image/png',
+        B64JSON: 'cGFydGlhbA==',
+      },
+    })
+    entries = updateTranscriptFromStreamEvent(entries, {
+      type: 'log.message',
+      payload: { Kind: 'text_delta', Text: 'Here is the result.' },
+    })
+
+    expect(entries.map((entry) => entry.kind)).toEqual(['reply', 'reply'])
+    expect(entries[0]).toMatchObject({
+      kind: 'reply',
+      status: 'running',
+      image_preview: expect.objectContaining({
+        data_url: 'data:image/png;base64,cGFydGlhbA==',
+      }),
+    })
+    expect(entries[0].content).toBeUndefined()
+    expect(entries[1]).toMatchObject({
+      kind: 'reply',
+      content: 'Here is the result.',
+    })
+    expect(entries[1].image_preview).toBeUndefined()
+    expect(entries[1].status).toBeUndefined()
+  })
+
+  it('keeps completed assistant content and attachments out of a running image preview reply', () => {
+    let entries: TranscriptEntry[] = []
+
+    entries = updateTranscriptFromStreamEvent(entries, {
+      type: 'log.message',
+      payload: {
+        Kind: 'image_partial',
+        Tool: 'generate_image',
+        Operation: 'generate',
+        MimeType: 'image/png',
+        B64JSON: 'cGFydGlhbA==',
+      },
+    })
+    entries = updateTranscriptFromStreamEvent(entries, {
+      type: 'log.message',
+      payload: {
+        Kind: 'completed',
+        Message: {
+          Role: 'assistant',
+          Content: 'Here is a normal attachment.',
+          Attachments: [
+            {
+              id: 'att_text',
+              file_name: 'note.txt',
+              mime_type: 'text/plain',
+              status: 'sent',
+            },
+          ],
+        },
+      },
+    })
+
+    expect(entries.map((entry) => entry.kind)).toEqual(['reply', 'reply'])
+    expect(entries[0]).toMatchObject({
+      kind: 'reply',
+      status: 'running',
+      image_preview: expect.objectContaining({
+        data_url: 'data:image/png;base64,cGFydGlhbA==',
+      }),
+    })
+    expect(entries[1]).toMatchObject({
+      kind: 'reply',
+      content: 'Here is a normal attachment.',
+      attachments: [expect.objectContaining({ id: 'att_text' })],
+    })
+    expect(entries[1].image_preview).toBeUndefined()
+    expect(entries[1].status).toBeUndefined()
+  })
+
+  it('attaches completed assistant attachments to matching text reply instead of later image preview reply', () => {
+    let entries: TranscriptEntry[] = []
+
+    entries = updateTranscriptFromStreamEvent(entries, {
+      type: 'log.message',
+      payload: { Kind: 'text_delta', Text: 'Here is the result.' },
+    })
+    entries = updateTranscriptFromStreamEvent(entries, {
+      type: 'log.message',
+      payload: {
+        Kind: 'image_partial',
+        Tool: 'generate_image',
+        Operation: 'generate',
+        MimeType: 'image/png',
+        B64JSON: 'cGFydGlhbA==',
+      },
+    })
+    entries = updateTranscriptFromStreamEvent(entries, {
+      type: 'log.message',
+      payload: {
+        Kind: 'completed',
+        Message: {
+          Role: 'assistant',
+          Content: 'Here is the result.',
+          ProviderID: 'openai',
+          ModelID: 'gpt-5.4',
+          Usage: {
+            PromptTokens: 20,
+            CompletionTokens: 5,
+            TotalTokens: 25,
+          },
+          Attachments: [
+            {
+              id: 'att_final_text',
+              file_name: 'note.txt',
+              mime_type: 'text/plain',
+              status: 'sent',
+            },
+          ],
+        },
+      },
+    })
+
+    expect(entries.map((entry) => entry.kind)).toEqual(['reply', 'reply'])
+    expect(entries[0]).toMatchObject({
+      kind: 'reply',
+      content: 'Here is the result.',
+      provider_id: 'openai',
+      model_id: 'gpt-5.4',
+      token_usage: {
+        prompt_tokens: 20,
+        completion_tokens: 5,
+        total_tokens: 25,
+      },
+      attachments: [expect.objectContaining({ id: 'att_final_text' })],
+    })
+    expect(entries[0].image_preview).toBeUndefined()
+    expect(entries[0].status).toBeUndefined()
+    expect(entries[1]).toMatchObject({
+      kind: 'reply',
+      status: 'running',
+      image_preview: expect.objectContaining({
+        data_url: 'data:image/png;base64,cGFydGlhbA==',
+      }),
+    })
+    expect(entries[1].attachments).toBeUndefined()
+    expect(entries.some((entry) => entry.image_preview && entry.attachments?.some((attachment) => attachment.id === 'att_final_text'))).toBe(false)
+  })
+
+  it('replaces a running image partial preview with final image attachments from a completed tool message', () => {
+    const result = JSON.stringify({
+      tool: 'generate_image',
+      operation: 'generate',
+      images: [
+        {
+          attachment_id: 'att_final',
+          content_url: '/api/v1/attachments/att_final/content',
+          file_name: 'final.png',
+          mime_type: 'image/png',
+        },
+      ],
+    })
+    let entries: TranscriptEntry[] = []
+
+    entries = updateTranscriptFromStreamEvent(entries, {
+      type: 'tool.started',
+      payload: { ToolCallID: 'call_image_final', ToolName: 'generate_image', Arguments: '{"prompt":"draw"}' },
+    })
+    entries = updateTranscriptFromStreamEvent(entries, {
+      type: 'log.message',
+      payload: {
+        Kind: 'image_partial',
+        Tool: 'generate_image',
+        Operation: 'generate',
+        MimeType: 'image/png',
+        B64JSON: 'cGFydGlhbA==',
+      },
+    })
+    entries = updateTranscriptFromStreamEvent(entries, {
+      type: 'log.message',
+      payload: {
+        Kind: 'completed',
+        Message: {
+          Role: 'tool',
+          Content: result,
+          ToolCallID: 'call_image_final',
+        },
+      },
+    })
+
+    expect(entries.map((entry) => entry.kind)).toEqual(['tool', 'reply'])
+    expect(entries[0]).toMatchObject({
+      kind: 'tool',
+      status: 'done',
+      details: [expect.objectContaining({ key: 'call_image_final', label: 'generate_image' })],
+    })
+    expect(entries[1]).toMatchObject({
+      kind: 'reply',
+      status: 'done',
+      attachments: [
+        expect.objectContaining({
+          id: 'att_final',
+          content_url: '/api/v1/attachments/att_final/content',
+        }),
+      ],
+    })
+    expect(entries[1].image_preview).toBeUndefined()
+  })
+
+  it('replaces a running image partial preview with final image attachments from tool.finished', () => {
+    const result = JSON.stringify({
+      tool: 'generate_image',
+      operation: 'generate',
+      images: [
+        {
+          attachment_id: 'att_final_stream',
+          content_url: '/api/v1/attachments/att_final_stream/content',
+          file_name: 'final-stream.png',
+          mime_type: 'image/png',
+        },
+      ],
+    })
+    let entries: TranscriptEntry[] = []
+
+    entries = updateTranscriptFromStreamEvent(entries, {
+      type: 'tool.started',
+      payload: { ToolCallID: 'call_image_stream', ToolName: 'generate_image', Arguments: '{"prompt":"draw"}' },
+    })
+    entries = updateTranscriptFromStreamEvent(entries, {
+      type: 'log.message',
+      payload: {
+        Kind: 'image_partial',
+        Tool: 'generate_image',
+        Operation: 'generate',
+        MimeType: 'image/png',
+        B64JSON: 'cGFydGlhbA==',
+      },
+    })
+    entries = updateTranscriptFromStreamEvent(entries, {
+      type: 'tool.finished',
+      payload: {
+        ToolCallID: 'call_image_stream',
+        ToolName: 'generate_image',
+        Output: result,
+      },
+    })
+
+    expect(entries.map((entry) => entry.kind)).toEqual(['tool', 'reply'])
+    expect(entries[0]).toMatchObject({
+      kind: 'tool',
+      status: 'done',
+      details: [expect.objectContaining({ key: 'call_image_stream', label: 'generate_image' })],
+    })
+    expect(entries[1]).toMatchObject({
+      kind: 'reply',
+      status: 'done',
+      attachments: [
+        expect.objectContaining({
+          id: 'att_final_stream',
+          content_url: '/api/v1/attachments/att_final_stream/content',
+        }),
+      ],
+    })
+    expect(entries[1].image_preview).toBeUndefined()
+    expect(entries.some((entry) => entry.image_preview)).toBe(false)
+  })
+
+  it('keeps final image attachments visible when assistant streams text after image generation', () => {
+    const result = JSON.stringify({
+      tool: 'generate_image',
+      operation: 'generate',
+      images: [
+        {
+          attachment_id: 'att_final_then_text',
+          content_url: '/api/v1/attachments/att_final_then_text/content',
+          file_name: 'final-then-text.png',
+          mime_type: 'image/png',
+        },
+      ],
+    })
+    let entries: TranscriptEntry[] = []
+
+    entries = updateTranscriptFromStreamEvent(entries, {
+      type: 'tool.started',
+      payload: { ToolCallID: 'call_image_then_text', ToolName: 'generate_image', Arguments: '{"prompt":"draw"}' },
+    })
+    entries = updateTranscriptFromStreamEvent(entries, {
+      type: 'log.message',
+      payload: {
+        Kind: 'image_partial',
+        Tool: 'generate_image',
+        Operation: 'generate',
+        MimeType: 'image/png',
+        B64JSON: 'cGFydGlhbA==',
+      },
+    })
+    entries = updateTranscriptFromStreamEvent(entries, {
+      type: 'tool.finished',
+      payload: {
+        ToolCallID: 'call_image_then_text',
+        ToolName: 'generate_image',
+        Output: result,
+      },
+    })
+    entries = updateTranscriptFromStreamEvent(entries, {
+      type: 'log.message',
+      payload: {
+        Kind: 'text_delta',
+        Text: '图片已经生成好了。',
+      },
+    })
+
+    expect(entries.map((entry) => entry.kind)).toEqual(['tool', 'reply', 'reply'])
+    expect(entries[1]).toMatchObject({
+      kind: 'reply',
+      attachments: [
+        expect.objectContaining({
+          id: 'att_final_then_text',
+          content_url: '/api/v1/attachments/att_final_then_text/content',
+        }),
+      ],
+    })
+    expect(entries[1].content ?? '').toBe('')
+    expect(entries[2]).toMatchObject({
+      kind: 'reply',
+      content: '图片已经生成好了。',
+    })
+    expect(entries[2].attachments).toBeUndefined()
+  })
+
+  it('does not convert lookalike image JSON from non-image tool.finished events', () => {
+    const result = JSON.stringify({
+      tool: 'generate_image',
+      operation: 'generate',
+      images: [{ attachment_id: 'att_wrong_tool', file_name: 'wrong.png', mime_type: 'image/png' }],
+    })
+
+    const entries = updateTranscriptFromStreamEvent([], {
+      type: 'tool.finished',
+      payload: {
+        ToolCallID: 'call_read_file',
+        ToolName: 'read_file',
+        Output: result,
+      },
+    })
+
+    expect(entries).toHaveLength(1)
+    expect(entries[0]).toMatchObject({
+      kind: 'tool',
+      status: 'done',
+      details: [expect.objectContaining({ key: 'call_read_file', label: 'read_file' })],
+    })
+    expect(entries.some((entry) => entry.kind === 'reply')).toBe(false)
+  })
 
   it('uses the shared conversation normalizer for completed stream assistant messages', () => {
     const entries = updateTranscriptFromStreamEvent([], {

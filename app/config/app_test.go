@@ -109,6 +109,101 @@ tools:
 	}
 }
 
+func TestImageGenConfigBuiltinOptionsIncludesModelAndStreaming(t *testing.T) {
+	var cfg Config
+	if err := yaml.Unmarshal([]byte(`
+tools:
+  imageGen:
+    defaultProvider: openai
+    openai:
+      apiKey: ${OPENAI_API_KEY}
+      baseUrl: https://api.openai.com/v1
+      model: gpt-image-1
+      stream: true
+      partialImages: 2
+      defaultSize: 1024x1024
+      defaultQuality: auto
+      defaultOutputFormat: png
+`), &cfg); err != nil {
+		t.Fatalf("yaml.Unmarshal() error = %v", err)
+	}
+
+	options := cfg.Tools.ImageGen.BuiltinOptions()
+	if options.DefaultProvider != "openai" {
+		t.Fatalf("options.DefaultProvider = %q, want openai", options.DefaultProvider)
+	}
+	if options.Openai == nil {
+		t.Fatal("options.Openai = nil, want configured provider")
+	}
+	if options.Openai.Model != "gpt-image-1" {
+		t.Fatalf("options.Openai.Model = %q, want gpt-image-1", options.Openai.Model)
+	}
+	if options.Openai.Stream == nil || !*options.Openai.Stream {
+		t.Fatalf("options.Openai.Stream = %#v, want true pointer", options.Openai.Stream)
+	}
+	if options.Openai.PartialImages == nil || *options.Openai.PartialImages != 2 {
+		t.Fatalf("options.Openai.PartialImages = %#v, want 2 pointer", options.Openai.PartialImages)
+	}
+	if options.Openai.DefaultSize != "1024x1024" {
+		t.Fatalf("options.Openai.DefaultSize = %q, want 1024x1024", options.Openai.DefaultSize)
+	}
+	if options.Openai.DefaultQuality != "auto" {
+		t.Fatalf("options.Openai.DefaultQuality = %q, want auto", options.Openai.DefaultQuality)
+	}
+	if options.Openai.DefaultOutputFormat != "png" {
+		t.Fatalf("options.Openai.DefaultOutputFormat = %q, want png", options.Openai.DefaultOutputFormat)
+	}
+}
+
+func TestImageGenConfigBuiltinOptionsPreservesPartialImagesUnsetAndExplicitZero(t *testing.T) {
+	tests := []struct {
+		name          string
+		partialImages string
+		wantNil       bool
+		wantValue     int
+	}{
+		{name: "unset", wantNil: true},
+		{name: "explicit zero", partialImages: "      partialImages: 0\n", wantValue: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var cfg Config
+			if err := yaml.Unmarshal([]byte(`
+tools:
+  imageGen:
+    defaultProvider: openai
+    openai:
+      apiKey: ${OPENAI_API_KEY}
+      stream: true
+`+tt.partialImages), &cfg); err != nil {
+				t.Fatalf("yaml.Unmarshal() error = %v", err)
+			}
+
+			options := cfg.Tools.ImageGen.BuiltinOptions()
+			if options.Openai == nil {
+				t.Fatal("options.Openai = nil, want configured provider")
+			}
+			partialImages := reflect.ValueOf(options.Openai.PartialImages)
+			if partialImages.Kind() != reflect.Ptr {
+				t.Fatalf("options.Openai.PartialImages kind = %s, want ptr to preserve unset", partialImages.Kind())
+			}
+			if tt.wantNil {
+				if !partialImages.IsNil() {
+					t.Fatalf("options.Openai.PartialImages = %v, want nil", options.Openai.PartialImages)
+				}
+				return
+			}
+			if partialImages.IsNil() {
+				t.Fatal("options.Openai.PartialImages = nil, want explicit value")
+			}
+			if got := int(partialImages.Elem().Int()); got != tt.wantValue {
+				t.Fatalf("options.Openai.PartialImages = %d, want %d", got, tt.wantValue)
+			}
+		})
+	}
+}
+
 func TestConfigUnmarshalSupportsLLMRequestTimeout(t *testing.T) {
 	var cfg Config
 	if err := yaml.Unmarshal([]byte(`

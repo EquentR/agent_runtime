@@ -17,6 +17,7 @@ import (
 	"github.com/EquentR/agent_runtime/app/router"
 	coreagent "github.com/EquentR/agent_runtime/core/agent"
 	"github.com/EquentR/agent_runtime/core/approvals"
+	"github.com/EquentR/agent_runtime/core/attachments"
 	coreaudit "github.com/EquentR/agent_runtime/core/audit"
 	"github.com/EquentR/agent_runtime/core/interactions"
 	model "github.com/EquentR/agent_runtime/core/providers/types"
@@ -212,7 +213,7 @@ func TestResolveEffectiveWorkspaceRootCreatesCanonicalConfiguredDirectory(t *tes
 	if !info.IsDir() {
 		t.Fatalf("workspace root %q is not a directory", want)
 	}
-	registry, err := newDefaultToolRegistry(resolved, builtin.WebSearchOptions{})
+	registry, err := newDefaultToolRegistry(resolved, builtin.WebSearchOptions{}, builtin.ImageGenOptions{}, nil, nil, 7*24*time.Hour)
 	if err != nil {
 		t.Fatalf("newDefaultToolRegistry() error = %v", err)
 	}
@@ -231,8 +232,8 @@ func TestNewDefaultToolRegistryUsesConfiguredWebSearchOptions(t *testing.T) {
 	defer server.Close()
 
 	fn := reflect.ValueOf(newDefaultToolRegistry)
-	if fn.Type().NumIn() != 2 {
-		t.Fatalf("newDefaultToolRegistry arg count = %d, want 2", fn.Type().NumIn())
+	if fn.Type().NumIn() != 6 {
+		t.Fatalf("newDefaultToolRegistry arg count = %d, want 6", fn.Type().NumIn())
 	}
 	if fn.Type().In(1) != reflect.TypeOf(builtin.WebSearchOptions{}) {
 		t.Fatalf("newDefaultToolRegistry second arg = %s, want %s", fn.Type().In(1), reflect.TypeOf(builtin.WebSearchOptions{}))
@@ -244,6 +245,10 @@ func TestNewDefaultToolRegistryUsesConfiguredWebSearchOptions(t *testing.T) {
 			DefaultProvider: "tavily",
 			Tavily:          &builtin.TavilyConfig{APIKey: "tavily-key", BaseURL: server.URL},
 		}),
+		reflect.ValueOf(builtin.ImageGenOptions{}),
+		reflect.ValueOf((*attachments.Store)(nil)),
+		reflect.Zero(reflect.TypeOf((*attachments.Storage)(nil)).Elem()),
+		reflect.ValueOf(7 * 24 * time.Hour),
 	})
 	if len(results) != 2 {
 		t.Fatalf("newDefaultToolRegistry return count = %d, want 2", len(results))
@@ -274,6 +279,16 @@ func TestNewDefaultToolRegistryUsesConfiguredWebSearchOptions(t *testing.T) {
 	}
 	if len(result.Results) != 1 || result.Results[0].Title != "Tavily Result" {
 		t.Fatalf("result.Results = %#v, want one Tavily Result", result.Results)
+	}
+}
+
+func TestNewDefaultToolRegistryPassesImageGenSentRetention(t *testing.T) {
+	options := newDefaultBuiltinOptions(t.TempDir(), builtin.WebSearchOptions{}, builtin.ImageGenOptions{DefaultProvider: "openai"}, nil, nil, 45*24*time.Hour)
+	if options.ImageGen.SentRetention != 45*24*time.Hour {
+		t.Fatalf("options.ImageGen.SentRetention = %v, want 1080h", options.ImageGen.SentRetention)
+	}
+	if options.ImageGen.DefaultProvider != "openai" {
+		t.Fatalf("options.ImageGen.DefaultProvider = %q, want openai", options.ImageGen.DefaultProvider)
 	}
 }
 

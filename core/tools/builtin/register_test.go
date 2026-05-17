@@ -41,7 +41,9 @@ func TestRegisterRegistersPlannedTools(t *testing.T) {
 		"check_command",
 		"copy_file",
 		"delete_file",
+		"edit_image",
 		"exec_command",
+		"generate_image",
 		"get_system_info",
 		"grep_file",
 		"http_request",
@@ -80,6 +82,36 @@ func TestRegisterRegistersAskUserTool(t *testing.T) {
 	}
 	if _, ok := tool.Parameters.Properties["question"]; !ok {
 		t.Fatal("ask_user.question property missing")
+	}
+}
+
+func TestRegisterRegistersEditImageTool(t *testing.T) {
+	registry := newBuiltinRegistry(t, Options{WorkspaceRoot: t.TempDir()})
+	tool := toolDefinitionByName(t, registry, "edit_image")
+	sourceIDs := tool.Parameters.Properties["source_attachment_ids"]
+	if sourceIDs.Type != "array" {
+		t.Fatalf("edit_image.source_attachment_ids type = %q, want array", sourceIDs.Type)
+	}
+	if sourceIDs.Items == nil {
+		t.Fatal("edit_image.source_attachment_ids items = nil, want string item schema")
+	}
+	if sourceIDs.Items.Type != "string" {
+		t.Fatalf("edit_image.source_attachment_ids item type = %q, want string", sourceIDs.Items.Type)
+	}
+	if !slices.Contains(tool.Parameters.Required, "prompt") {
+		t.Fatalf("edit_image required = %#v, want prompt", tool.Parameters.Required)
+	}
+	if !slices.Contains(tool.Parameters.Required, "source_attachment_ids") {
+		t.Fatalf("edit_image required = %#v, want source_attachment_ids", tool.Parameters.Required)
+	}
+}
+
+func TestRegisterGenerateImageToolOmitsLegacyStyleParameter(t *testing.T) {
+	registry := newBuiltinRegistry(t, Options{WorkspaceRoot: t.TempDir()})
+	tool := toolDefinitionByName(t, registry, "generate_image")
+
+	if _, ok := tool.Parameters.Properties["style"]; ok {
+		t.Fatal("generate_image exposes legacy style parameter, want omitted")
 	}
 }
 

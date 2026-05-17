@@ -2711,16 +2711,16 @@ func TestAgentExecutorWiresRunnerAuditEvidence(t *testing.T) {
 	}
 }
 
-func TestAgentExecutorPassesTaskIDToToolRuntimeContext(t *testing.T) {
+func TestAgentExecutorPassesRuntimeMetadataToToolContext(t *testing.T) {
 	store := newConversationStoreForTest(t)
-	var gotTaskID string
+	var gotRuntime *coretools.Runtime
 	registry := newTestRegistry(t, map[string]func(context.Context, map[string]interface{}) (string, error){
 		"capture_runtime": func(ctx context.Context, arguments map[string]interface{}) (string, error) {
 			runtime, ok := coretools.RuntimeFromContext(ctx)
 			if !ok {
 				t.Fatal("RuntimeFromContext() ok = false, want true")
 			}
-			gotTaskID = runtime.TaskID
+			gotRuntime = runtime
 			return "ok", nil
 		},
 	})
@@ -2743,14 +2743,26 @@ func TestAgentExecutorPassesTaskIDToToolRuntimeContext(t *testing.T) {
 		ClientFactory:     func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return client, nil },
 	})
 	payload, _ := json.Marshal(RunTaskInput{ConversationID: "conv_1", ProviderID: "openai", ModelID: "gpt-5.4", Message: "hi"})
-	task := &coretasks.Task{ID: "task_1", TaskType: "agent.run", InputJSON: payload}
+	task := &coretasks.Task{ID: "task_1", TaskType: "agent.run", CreatedBy: "task-owner", InputJSON: payload}
 
 	_, err := executor(context.Background(), task, nil)
 	if err != nil {
 		t.Fatalf("executor() error = %v", err)
 	}
-	if gotTaskID != task.ID {
-		t.Fatalf("tool runtime TaskID = %q, want %q", gotTaskID, task.ID)
+	if gotRuntime == nil {
+		t.Fatal("tool runtime = nil, want captured runtime")
+	}
+	if gotRuntime.TaskID != task.ID {
+		t.Fatalf("tool runtime TaskID = %q, want %q", gotRuntime.TaskID, task.ID)
+	}
+	if gotRuntime.ToolCallID != "call_1" || gotRuntime.ToolName != "capture_runtime" {
+		t.Fatalf("tool runtime call = %q/%q, want call_1/capture_runtime", gotRuntime.ToolCallID, gotRuntime.ToolName)
+	}
+	if gotRuntime.Metadata["conversation_id"] != "conv_1" {
+		t.Fatalf("tool runtime conversation_id = %q, want conv_1", gotRuntime.Metadata["conversation_id"])
+	}
+	if gotRuntime.Metadata["created_by"] != "task-owner" {
+		t.Fatalf("tool runtime created_by = %q, want task-owner", gotRuntime.Metadata["created_by"])
 	}
 }
 

@@ -44,6 +44,17 @@ tools:
     # bing:
     #   apiKey: ${BING_SEARCH_API_KEY}
     #   baseUrl: https://api.bing.microsoft.com
+  imageGen:
+    defaultProvider: openai
+    openai:
+      baseUrl: ${OPENAI_BASE_URL}
+      apiKey: ${OPENAI_API_KEY}
+      model: gpt-image-2
+      stream: true
+      partialImages: 1
+      defaultSize: 1024x1024
+      defaultQuality: auto
+      defaultOutputFormat: png
 
 attachments:
   storageBackend: filesystem
@@ -58,36 +69,23 @@ llmRequestTimeout: 10m
 llmProviders:
   # UI 侧会通过 provider_id + model_id 选择具体模型，
   # 其中 provider_id 对应这里的 name，model_id 对应 models[].id。
-- name: aihubmix
+- name: openai
   baseUrl: ${OPENAI_BASE_URL}
   apiKey: ${OPENAI_API_KEY}
   models:
-    - id: glm-5
-      name: GLM-5
-      type: openai_completions
+    - id: gpt-5.5
+      name: GPT-5.5
+      type: openai_responses
       capabilities:
         attachments: true
       context:
-        max: 20200
-        input: 12008
-        output: 8192
+        max: 258000
+        input: 235712
+        output: 16288
       cost:
-        input: 0.438
-        cachedInput: 0.04375
-        output: 3.5
-    - id: kimi-k2.5
-      name: Kimi-K2.5
-      type: openai_completions
-      capabilities:
-        attachments: true
-      context:
-        max: 256000
-        input: 247808
-        output: 8192
-      cost:
-        input: 0.6
-        cachedInput: 0.01
-        output: 3
+        input: 6
+        cachedInput: 0.6
+        output: 25
     - id: gpt-5.4
       name: GPT-5.4
       type: openai_responses
@@ -98,9 +96,10 @@ llmProviders:
         input: 922000
         output: 128000
       cost:
-        input: 0.6
-        cachedInput: 0.01
-        output: 3
+        input: 3
+        cachedInput: 0.3
+        output: 12
+
 
 #embeddingProvider:
 #  # 下面是 embedding / rerank 的占位示例；当前 app 还未实际装配。

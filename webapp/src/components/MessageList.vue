@@ -473,7 +473,7 @@ function isUnavailableAttachment(attachment: AttachmentRef) {
 }
 
 function attachmentHref(attachment: AttachmentRef) {
-  return getAttachmentContentURL(attachment.id)
+  return attachment.content_url || getAttachmentContentURL(attachment.id)
 }
 
 function attachmentStatusLabel(attachment: AttachmentRef) {
@@ -669,6 +669,15 @@ function showCopyToast(message: string, variant: 'success' | 'error') {
           <p v-else-if="entry.content && entry.kind === 'user'" class="trace-content">
             {{ formatMessageContent(entry.content) }}
           </p>
+          <div v-if="entry.kind === 'reply' && entry.image_preview" class="message-attachment-list" data-image-preview>
+            <div class="message-attachment-card" data-attachment-status="preview">
+              <img
+                class="message-attachment-thumbnail"
+                :src="entry.image_preview.data_url"
+                :alt="entry.image_preview.operation || entry.image_preview.tool || 'image preview'"
+              />
+            </div>
+          </div>
           <div v-if="hasAttachments(entry)" class="message-attachment-list">
             <div
               v-for="attachment in entry.attachments"

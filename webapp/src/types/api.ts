@@ -193,6 +193,7 @@ export interface AttachmentRef {
   id: string
   file_name: string
   mime_type: string
+  content_url?: string
   size_bytes?: number
   kind?: string
   status?: string
@@ -201,6 +202,36 @@ export interface AttachmentRef {
   width?: number
   height?: number
   expires_at?: string
+}
+
+export interface ImageToolResultItem {
+  attachment_id: string
+  metadata_url?: string
+  content_url?: string
+  file_name?: string
+  mime_type?: string
+  size_bytes?: number
+  width?: number
+  height?: number
+  revised_prompt?: string
+}
+
+export interface ImageToolResult {
+  tool: 'generate_image' | 'edit_image' | string
+  operation: 'generate' | 'edit' | string
+  provider?: string
+  model?: string
+  count?: number
+  images: ImageToolResultItem[]
+  source_attachment_ids?: string[]
+  failed_images?: unknown[]
+}
+
+export interface ImagePartialPreview {
+  tool?: string
+  operation?: string
+  mime_type: string
+  data_url: string
 }
 
 export interface ModelCatalog {
@@ -382,6 +413,7 @@ export interface TranscriptEntry {
   status?: 'running' | 'done' | 'error'
   group_key?: string
   token_usage?: TranscriptTokenUsage
+  image_preview?: ImagePartialPreview
   approval?: ToolApproval
   question_interaction?: InteractionRecord
   memory_context_state?: MemoryContextState

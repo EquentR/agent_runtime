@@ -8,23 +8,27 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/EquentR/agent_runtime/core/attachments"
 	corelog "github.com/EquentR/agent_runtime/core/log"
 	coretools "github.com/EquentR/agent_runtime/core/tools"
 )
 
 const (
 	defaultCommandTimeout = 10 * time.Second
-	defaultHTTPTimeout    = 30 * time.Second
+	defaultHTTPTimeout    = 10 * time.Minute
 	maxCommandTimeout     = 120 * time.Second
 	minCommandTimeout     = 1 * time.Second
 )
 
 type Options struct {
-	WorkspaceRoot  string
-	CommandTimeout time.Duration
-	HTTPClient     *http.Client
-	WebSearch      WebSearchOptions
-	OutputBudget   OutputBudgetOptions
+	WorkspaceRoot     string
+	CommandTimeout    time.Duration
+	HTTPClient        *http.Client
+	WebSearch         WebSearchOptions
+	ImageGen          ImageGenOptions
+	AttachmentStore   *attachments.Store
+	AttachmentStorage attachments.Storage
+	OutputBudget      OutputBudgetOptions
 }
 
 type WebSearchOptions struct {
@@ -49,12 +53,32 @@ type BingConfig struct {
 	BaseURL string
 }
 
+type ImageGenOptions struct {
+	DefaultProvider string
+	Openai          *ImageGenProviderConfig
+	SentRetention   time.Duration
+}
+
+type ImageGenProviderConfig struct {
+	BaseURL             string
+	APIKey              string
+	Model               string
+	Stream              *bool
+	PartialImages       *int
+	DefaultSize         string
+	DefaultQuality      string
+	DefaultOutputFormat string
+}
+
 type runtimeEnv struct {
-	workspaceRoot  string
-	commandTimeout time.Duration
-	httpClient     *http.Client
-	webSearch      WebSearchOptions
-	outputBudget   outputBudgetConfig
+	workspaceRoot     string
+	commandTimeout    time.Duration
+	httpClient        *http.Client
+	webSearch         WebSearchOptions
+	imageGen          ImageGenOptions
+	attachmentStore   *attachments.Store
+	attachmentStorage attachments.Storage
+	outputBudget      outputBudgetConfig
 }
 
 func normalizeOptions(options Options) (runtimeEnv, error) {
@@ -95,11 +119,14 @@ func normalizeOptions(options Options) (runtimeEnv, error) {
 	}
 
 	return runtimeEnv{
-		workspaceRoot:  root,
-		commandTimeout: clampDuration(timeout, minCommandTimeout, maxCommandTimeout),
-		httpClient:     client,
-		webSearch:      options.WebSearch,
-		outputBudget:   normalizeOutputBudgetOptions(options.OutputBudget),
+		workspaceRoot:     root,
+		commandTimeout:    clampDuration(timeout, minCommandTimeout, maxCommandTimeout),
+		httpClient:        client,
+		webSearch:         options.WebSearch,
+		imageGen:          options.ImageGen,
+		attachmentStore:   options.AttachmentStore,
+		attachmentStorage: options.AttachmentStorage,
+		outputBudget:      normalizeOutputBudgetOptions(options.OutputBudget),
 	}, nil
 }
 

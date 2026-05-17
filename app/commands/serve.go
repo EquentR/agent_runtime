@@ -80,7 +80,7 @@ func Serve(c *config.Config, version, commit string) {
 	if err != nil {
 		log.Panicf("Failed to init auth logic: %v", err)
 	}
-	toolRegistry, err := newDefaultToolRegistry(workspaceRoot, c.Tools.WebSearch.BuiltinOptions())
+	toolRegistry, err := newDefaultToolRegistry(workspaceRoot, c.Tools.WebSearch.BuiltinOptions(), c.Tools.ImageGen.BuiltinOptions(), attachmentStore, attachmentStorage, c.Attachments.ResolvedSentRetention())
 	if err != nil {
 		log.Panicf("Failed to register builtin tools: %v", err)
 	}
@@ -275,12 +275,23 @@ func newTaskManager(store *coretasks.Store, approvalStore *approvals.Store, inte
 	return coretasks.NewManager(store, options)
 }
 
-func newDefaultToolRegistry(workspaceRoot string, webSearch builtin.WebSearchOptions) (*coretools.Registry, error) {
+func newDefaultToolRegistry(workspaceRoot string, webSearch builtin.WebSearchOptions, imageGen builtin.ImageGenOptions, attachmentStore *attachments.Store, attachmentStorage attachments.Storage, attachmentSentRetention time.Duration) (*coretools.Registry, error) {
 	registry := coretools.NewRegistry()
-	if err := builtin.Register(registry, builtin.Options{WorkspaceRoot: workspaceRoot, WebSearch: webSearch}); err != nil {
+	if err := builtin.Register(registry, newDefaultBuiltinOptions(workspaceRoot, webSearch, imageGen, attachmentStore, attachmentStorage, attachmentSentRetention)); err != nil {
 		return nil, err
 	}
 	return registry, nil
+}
+
+func newDefaultBuiltinOptions(workspaceRoot string, webSearch builtin.WebSearchOptions, imageGen builtin.ImageGenOptions, attachmentStore *attachments.Store, attachmentStorage attachments.Storage, attachmentSentRetention time.Duration) builtin.Options {
+	imageGen.SentRetention = attachmentSentRetention
+	return builtin.Options{
+		WorkspaceRoot:     workspaceRoot,
+		WebSearch:         webSearch,
+		ImageGen:          imageGen,
+		AttachmentStore:   attachmentStore,
+		AttachmentStorage: attachmentStorage,
+	}
 }
 
 type taskAuditRecorder struct {

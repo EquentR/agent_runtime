@@ -55,6 +55,7 @@ func (c TaskManagerConfig) ManagerOptions(auditRecorder coretasks.AuditRecorder)
 
 type ToolsConfig struct {
 	WebSearch WebSearchConfig `yaml:"webSearch"`
+	ImageGen  ImageGenConfig  `yaml:"imageGen"`
 }
 
 type AttachmentStorageConfig struct {
@@ -144,4 +145,43 @@ func toBingConfig(provider *WebSearchProvider) *builtin.BingConfig {
 		return nil
 	}
 	return &builtin.BingConfig{APIKey: provider.APIKey, BaseURL: provider.BaseURL}
+}
+
+type ImageGenConfig struct {
+	DefaultProvider string            `yaml:"defaultProvider"`
+	Openai          *ImageGenProvider `yaml:"openai"`
+}
+
+func (c ImageGenConfig) BuiltinOptions() builtin.ImageGenOptions {
+	return builtin.ImageGenOptions{
+		DefaultProvider: c.DefaultProvider,
+		Openai:          toImageGenProviderConfig(c.Openai),
+	}
+}
+
+type ImageGenProvider struct {
+	BaseURL             string `yaml:"baseUrl"`
+	APIKey              string `yaml:"apiKey"`
+	Model               string `yaml:"model"`
+	Stream              *bool  `yaml:"stream"`
+	PartialImages       *int   `yaml:"partialImages"`
+	DefaultSize         string `yaml:"defaultSize"`
+	DefaultQuality      string `yaml:"defaultQuality"`
+	DefaultOutputFormat string `yaml:"defaultOutputFormat"`
+}
+
+func toImageGenProviderConfig(provider *ImageGenProvider) *builtin.ImageGenProviderConfig {
+	if provider == nil {
+		return nil
+	}
+	return &builtin.ImageGenProviderConfig{
+		BaseURL:             provider.BaseURL,
+		APIKey:              provider.APIKey,
+		Model:               provider.Model,
+		Stream:              provider.Stream,
+		PartialImages:       provider.PartialImages,
+		DefaultSize:         provider.DefaultSize,
+		DefaultQuality:      provider.DefaultQuality,
+		DefaultOutputFormat: provider.DefaultOutputFormat,
+	}
 }
