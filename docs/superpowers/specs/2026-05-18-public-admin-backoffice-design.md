@@ -62,7 +62,7 @@
 
 扩展 `users`：
 
-- `email`：唯一邮箱，首个用户也必须填写。
+- `email`：非空邮箱唯一；旧账号迁移时允许临时保留空邮箱，直到用户完成绑定。
 - `email_verified_at`：邮箱验证时间。
 - `display_name`：普通用户可修改，可重复。
 - `status`：用户状态枚举，第一阶段固定为 `pending_email_verification`、`active`、`disabled`、`needs_email_binding`。

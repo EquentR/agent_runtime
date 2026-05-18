@@ -156,7 +156,7 @@ const (
 Extend `User`:
 
 ```go
-Email               string     `json:"email" gorm:"type:varchar(255);uniqueIndex"`
+Email               string     `json:"email" gorm:"type:varchar(255);uniqueIndex:,where:email <> ''"`
 DisplayName         string     `json:"display_name" gorm:"type:varchar(128)"`
 Status              string     `json:"status" gorm:"type:varchar(64);not null;default:active;index"`
 EmailVerifiedAt     *time.Time `json:"email_verified_at"`
@@ -238,7 +238,7 @@ Add `TableName()` methods returning exact table names from the spec.
 
 Append migration `to015` in `app/migration/define.go`, register it in `app/migration/init.go`, and backfill existing users with:
 
-- empty email remains empty
+- empty email remains empty, and non-empty email values are unique
 - status becomes `needs_email_binding`
 - display name defaults to username
 - force password change remains false
