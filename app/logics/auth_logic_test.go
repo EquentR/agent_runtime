@@ -264,6 +264,40 @@ func TestAuthLogicRejectsSecondRegistrationWhenSMTPUnavailable(t *testing.T) {
 	}
 }
 
+func TestAuthLogicRejectsUsernameAndEmailCrossFieldConflicts(t *testing.T) {
+	mailer := &fakeAuthMailSender{}
+	logic := newAuthLogicTestSubject(t, withAuthTestMailer(mailer, "123456"))
+
+	if _, err := logic.RegisterWithInput(context.Background(), RegisterInput{
+		Username:        "alice",
+		Email:           "alice@example.com",
+		Password:        "secret-123",
+		ConfirmPassword: "secret-123",
+	}); err != nil {
+		t.Fatalf("RegisterWithInput(first) error = %v", err)
+	}
+
+	_, err := logic.RegisterWithInput(context.Background(), RegisterInput{
+		Username:        "alice@example.com",
+		Email:           "bob@example.com",
+		Password:        "secret-123",
+		ConfirmPassword: "secret-123",
+	})
+	if !errors.Is(err, ErrUsernameTaken) {
+		t.Fatalf("RegisterWithInput(username conflicts with email) error = %v, want %v", err, ErrUsernameTaken)
+	}
+
+	_, err = logic.RegisterWithInput(context.Background(), RegisterInput{
+		Username:        "bob",
+		Email:           "alice",
+		Password:        "secret-123",
+		ConfirmPassword: "secret-123",
+	})
+	if !errors.Is(err, ErrEmailTaken) {
+		t.Fatalf("RegisterWithInput(email conflicts with username) error = %v, want %v", err, ErrEmailTaken)
+	}
+}
+
 func TestAuthLogicLoginAcceptsUsernameOrEmail(t *testing.T) {
 	logic := newAuthLogicTestSubject(t)
 

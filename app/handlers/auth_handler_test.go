@@ -482,6 +482,25 @@ func TestAuthHandlerTurnstileProtectsLoginRegisterAndVerificationSend(t *testing
 	}
 }
 
+func TestAuthHandlerEmailVerificationSendDoesNotEnumerateUnknownEmails(t *testing.T) {
+	_, server := newAuthHandlerTestServerWithDeps(t)
+	defer server.Close()
+
+	response := postAuthJSON(t, server.URL+"/api/v1/auth/email-verification/send", map[string]any{
+		"email":   "missing@example.com",
+		"purpose": logics.EmailVerificationPurposeRegistration,
+	})
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(response.Body)
+		t.Fatalf("status = %d, want 200, body = %s", response.StatusCode, string(body))
+	}
+	envelope := decodeEnvelope(t, response.Body)
+	if !envelope.OK {
+		t.Fatal("envelope OK = false, want indistinguishable success")
+	}
+}
+
 type authHandlerTestDeps struct {
 	authLogic         *logics.AuthLogic
 	emailVerification *logics.EmailVerificationLogic

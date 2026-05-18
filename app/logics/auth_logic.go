@@ -141,10 +141,6 @@ func (l *AuthLogic) register(ctx context.Context, input RegisterInput, legacyCom
 		return nil, fmt.Errorf("两次输入的密码不一致")
 	}
 
-	hash, err := bcrypt.GenerateFromPassword([]byte(input.Password), bcrypt.DefaultCost)
-	if err != nil {
-		return nil, err
-	}
 	email := normalizeAuthEmail(input.Email)
 	var user *models.User
 	needsVerification := false
@@ -182,6 +178,13 @@ func (l *AuthLogic) register(ctx context.Context, input RegisterInput, legacyCom
 		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 			return err
 		}
+		err = tx.Where("email = ?", username).Take(&existing).Error
+		if err == nil {
+			return ErrUsernameTaken
+		}
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
 		if email != "" {
 			err = tx.Where("email = ?", email).Take(&existing).Error
 			if err == nil {
@@ -190,6 +193,18 @@ func (l *AuthLogic) register(ctx context.Context, input RegisterInput, legacyCom
 			if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 				return err
 			}
+			err = tx.Where("username = ?", email).Take(&existing).Error
+			if err == nil {
+				return ErrEmailTaken
+			}
+			if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
+		}
+
+		hash, err := bcrypt.GenerateFromPassword([]byte(input.Password), bcrypt.DefaultCost)
+		if err != nil {
+			return err
 		}
 
 		now := l.now().UTC()

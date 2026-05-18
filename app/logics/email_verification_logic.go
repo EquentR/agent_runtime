@@ -129,6 +129,17 @@ func (l *EmailVerificationLogic) Send(ctx context.Context, input SendEmailVerifi
 	var code string
 	var row models.EmailVerification
 	if err := l.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var user models.User
+		if err := tx.First(&user, input.UserID).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrEmailVerificationNotFound
+			}
+			return err
+		}
+		if err := validateEmailVerificationTarget(tx, &user, email, purpose); err != nil {
+			return err
+		}
+
 		var existing models.EmailVerification
 		err := tx.Where("user_id = ? AND email = ? AND purpose = ? AND consumed_at IS NULL", input.UserID, email, purpose).
 			Order("created_at DESC").
@@ -176,12 +187,28 @@ func (l *EmailVerificationLogic) Send(ctx context.Context, input SendEmailVerifi
 }
 
 func (l *EmailVerificationLogic) SendByEmail(ctx context.Context, input SendEmailVerificationInput) error {
-	if input.UserID != 0 {
-		return l.Send(ctx, input)
+	purpose := normalizeEmailVerificationPurpose(input.Purpose)
+	if purpose != EmailVerificationPurposeRegistration {
+		return ErrEmailVerificationInvalidState
 	}
 	email := normalizeAuthEmail(input.Email)
 	if email == "" {
 		return ErrEmailRequired
+	}
+	if input.UserID != 0 {
+		var user models.User
+		if err := l.db.WithContext(ctx).First(&user, input.UserID).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrEmailVerificationNotFound
+			}
+			return err
+		}
+		if normalizeAuthEmail(user.Email) != email {
+			return ErrEmailVerificationNotFound
+		}
+		input.Email = email
+		input.Purpose = purpose
+		return l.Send(ctx, input)
 	}
 	var user models.User
 	if err := l.db.WithContext(ctx).Where("email = ?", email).Take(&user).Error; err != nil {
@@ -191,7 +218,8 @@ func (l *EmailVerificationLogic) SendByEmail(ctx context.Context, input SendEmai
 		return err
 	}
 	input.UserID = user.ID
-	input.Email = email
+	input.Email = normalizeAuthEmail(user.Email)
+	input.Purpose = purpose
 	return l.Send(ctx, input)
 }
 
@@ -246,8 +274,8 @@ func (l *EmailVerificationLogic) Verify(ctx context.Context, input VerifyEmailIn
 		if err := tx.First(&user, input.UserID).Error; err != nil {
 			return err
 		}
-		if !canApplyEmailVerificationPurpose(user.Status, purpose) {
-			return ErrEmailVerificationInvalidState
+		if err := validateEmailVerificationTarget(tx, &user, verification.Email, purpose); err != nil {
+			return err
 		}
 
 		consumedAt := now
@@ -258,7 +286,7 @@ func (l *EmailVerificationLogic) Verify(ctx context.Context, input VerifyEmailIn
 			return err
 		}
 
-		user.Email = email
+		user.Email = verification.Email
 		user.EmailVerifiedAt = &consumedAt
 		switch purpose {
 		case EmailVerificationPurposeRegistration, EmailVerificationPurposeEmailBinding:
@@ -311,4 +339,35 @@ func canApplyEmailVerificationPurpose(status string, purpose string) bool {
 	default:
 		return false
 	}
+}
+
+func validateEmailVerificationTarget(tx *gorm.DB, user *models.User, email string, purpose string) error {
+	if user == nil {
+		return ErrEmailVerificationNotFound
+	}
+	email = normalizeAuthEmail(email)
+	if email == "" {
+		return ErrEmailRequired
+	}
+	if !canApplyEmailVerificationPurpose(user.Status, purpose) {
+		return ErrEmailVerificationInvalidState
+	}
+	switch purpose {
+	case EmailVerificationPurposeRegistration:
+		if normalizeAuthEmail(user.Email) != email {
+			return ErrEmailVerificationNotFound
+		}
+	case EmailVerificationPurposeEmailBinding:
+		var existing models.User
+		err := tx.Where("email = ? AND id <> ?", email, user.ID).Take(&existing).Error
+		if err == nil {
+			return ErrEmailTaken
+		}
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+	default:
+		return ErrEmailVerificationInvalidState
+	}
+	return nil
 }

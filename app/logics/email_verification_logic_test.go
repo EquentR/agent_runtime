@@ -155,11 +155,28 @@ func TestEmailVerificationDoesNotActivateDisabledUser(t *testing.T) {
 		UserID:  user.ID,
 		Email:   user.Email,
 		Purpose: EmailVerificationPurposeRegistration,
-	}); err != nil {
-		t.Fatalf("Send() error = %v", err)
+	}); !errors.Is(err, ErrEmailVerificationInvalidState) {
+		t.Fatalf("Send(disabled) error = %v, want %v", err, ErrEmailVerificationInvalidState)
 	}
 
-	_, err := subject.logic.Verify(context.Background(), VerifyEmailInput{
+	hash, err := bcrypt.GenerateFromPassword([]byte("123456"), bcrypt.DefaultCost)
+	if err != nil {
+		t.Fatalf("GenerateFromPassword() error = %v", err)
+	}
+	if err := subject.db.Create(&models.EmailVerification{
+		ID:          "ev_disabled",
+		UserID:      user.ID,
+		Email:       user.Email,
+		Purpose:     EmailVerificationPurposeRegistration,
+		CodeHash:    string(hash),
+		MaxAttempts: 5,
+		ExpiresAt:   now.Add(10 * time.Minute),
+		LastSentAt:  now,
+	}).Error; err != nil {
+		t.Fatalf("seed disabled verification: %v", err)
+	}
+
+	_, err = subject.logic.Verify(context.Background(), VerifyEmailInput{
 		UserID:  user.ID,
 		Email:   user.Email,
 		Purpose: EmailVerificationPurposeRegistration,
@@ -178,6 +195,42 @@ func TestEmailVerificationDoesNotActivateDisabledUser(t *testing.T) {
 	}
 	if stored.EmailVerifiedAt != nil {
 		t.Fatalf("disabled user EmailVerifiedAt = %v, want nil", stored.EmailVerifiedAt)
+	}
+}
+
+func TestEmailVerificationRejectsMismatchedUserEmail(t *testing.T) {
+	now := time.Date(2026, 5, 18, 10, 0, 0, 0, time.UTC)
+	subject := newEmailVerificationTestSubject(t, now, "123456")
+	user := seedEmailVerificationUser(t, subject.db, "pending", "pending@example.com", models.UserStatusPendingEmailVerification)
+
+	err := subject.logic.SendByEmail(context.Background(), SendEmailVerificationInput{
+		UserID:  user.ID,
+		Email:   "attacker@example.com",
+		Purpose: EmailVerificationPurposeRegistration,
+	})
+	if !errors.Is(err, ErrEmailVerificationNotFound) {
+		t.Fatalf("SendByEmail(mismatched email) error = %v, want %v", err, ErrEmailVerificationNotFound)
+	}
+	if len(subject.mailer.messages) != 0 {
+		t.Fatalf("sent messages = %d, want 0", len(subject.mailer.messages))
+	}
+
+	_, err = subject.logic.Verify(context.Background(), VerifyEmailInput{
+		UserID:  user.ID,
+		Email:   "attacker@example.com",
+		Purpose: EmailVerificationPurposeRegistration,
+		Code:    "123456",
+	})
+	if !errors.Is(err, ErrEmailVerificationNotFound) {
+		t.Fatalf("Verify(mismatched email) error = %v, want %v", err, ErrEmailVerificationNotFound)
+	}
+
+	var stored models.User
+	if err := subject.db.First(&stored, user.ID).Error; err != nil {
+		t.Fatalf("reload pending user: %v", err)
+	}
+	if stored.Email != user.Email || stored.Status != models.UserStatusPendingEmailVerification || stored.EmailVerifiedAt != nil {
+		t.Fatalf("user after attack = %#v, want unchanged pending user", stored)
 	}
 }
 

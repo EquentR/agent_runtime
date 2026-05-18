@@ -241,6 +241,9 @@ func (h *AuthHandler) handleSendEmailVerification() (method, relativePath string
 			Email:   request.Email,
 			Purpose: request.Purpose,
 		}); err != nil {
+			if errors.Is(err, logics.ErrEmailVerificationNotFound) {
+				return gin.H{"sent": true}, nil, nil
+			}
 			return nil, []resp.ResOpt{resp.WithCode(authStatusCode(err, http.StatusBadRequest))}, err
 		}
 		return gin.H{"sent": true}, nil, nil
