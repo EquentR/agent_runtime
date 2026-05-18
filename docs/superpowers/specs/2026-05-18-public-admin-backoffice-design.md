@@ -114,7 +114,16 @@ YAML 模型除 `enabled/scope` 外仍以配置文件为准。
 - 加密后的 `api_key`
 - `scope`：`owner`、`admin`、`global`
 - `enabled`
-- `capabilities_json`、`context_json`、`cost_json`：可选模型元数据。
+- `context_max_tokens`：模型上下文硬上限，必填，用于运行时预算保护。
+- `capabilities_json`、`cost_json`：可选模型元数据。
+
+自定义模型第一阶段不单独存储 input/output context 字段。运行时根据 `context_max_tokens` 动态计算：
+
+- `max_context_tokens = context_max_tokens`
+- `default_output_tokens = min(8192, floor(context_max_tokens / 4))`
+- `input_budget_tokens = context_max_tokens - default_output_tokens`
+
+若 `context_max_tokens` 小于 4，则拒绝保存配置。任务运行时不得让输入预算和输出预算之和超过 `context_max_tokens`。用户后续如果显式配置单次输出上限，也必须满足 `1 <= output_tokens < context_max_tokens`，且默认值仍不超过 8192 tokens。
 
 管理员创建的自定义模型可选择 `owner/admin/global`。普通用户自定义模型只能是 owner-scoped，除非后续明确授权流程。
 
@@ -228,6 +237,8 @@ YAML 模型：
 
 无可用模型时，聊天页显示空状态并引导联系管理员或去个人设置添加自定义模型。
 
+自定义模型必须设置 `context_max_tokens`。模型 resolver 在组装 `LLMModel.Context` 时把该值映射为 `Max`，并按默认输出预算规则填充 `Output` 和 `Input`，避免缺失上下文信息导致 memory budget 或模型请求溢出。YAML 模型继续使用配置文件中的 context；如果 YAML 模型缺少 context，沿用现有后端默认值，但后台需要在模型管理页标记为“使用系统默认上下文”。
+
 ## 系统设置
 
 ### SMTP
@@ -319,6 +330,7 @@ Turnstile 使用 YAML 默认 + DB 覆盖。后台可配置：
 
 - YAML 模型 scope/enabled override。
 - 自定义模型 store/logic。
+- 自定义模型 `context_max_tokens` 校验和运行时 input/output 预算计算。
 - 按用户过滤 `/models` catalog。
 - 任务创建强校验。
 - 模型测试接口。
@@ -348,6 +360,7 @@ Turnstile 使用 YAML 默认 + DB 覆盖。后台可配置：
 - `app/handlers`：auth、users、admin users、settings、models、tasks 权限边界。
 - `app/migration`：新增表和 users 扩展列。
 - `core`：模型 resolver 合并 YAML + DB，并按用户过滤。
+- `core/memory` 与 `core/agent`：自定义模型 context 上限映射、默认输出不超过 8192 tokens、输入和输出预算不超过总 context。
 - `pkg`：加密、SMTP sender 可替换测试。
 
 前端：
