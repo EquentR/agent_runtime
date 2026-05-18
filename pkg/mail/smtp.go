@@ -3,6 +3,7 @@ package mail
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
 	netmail "net/mail"
@@ -153,9 +154,15 @@ func (s *smtpSender) prepareMessage(message Message) (smtpPreparedMessage, error
 }
 
 func (s *smtpSender) sendPlain(ctx context.Context, from string, to string, payload []byte) error {
-	client, err := smtp.Dial(s.addr)
+	var dialer net.Dialer
+	conn, err := dialer.DialContext(ctx, "tcp", s.addr)
 	if err != nil {
-		return fmt.Errorf("dial smtp: %w", err)
+		return wrapSMTPError("dial smtp", err)
+	}
+	client, err := newSMTPClientWithContext(ctx, conn, s.config.Host)
+	if err != nil {
+		_ = conn.Close()
+		return wrapSMTPError("dial smtp", err)
 	}
 	defer client.Close()
 
@@ -164,25 +171,32 @@ func (s *smtpSender) sendPlain(ctx context.Context, from string, to string, payl
 	}
 	if s.config.UseStartTLS {
 		tlsConfig := &tls.Config{ServerName: s.config.Host, MinVersion: tls.VersionTLS12}
-		if ok, _ := client.Extension("STARTTLS"); !ok {
+		ok, _, err := smtpExtension(ctx, client, "STARTTLS")
+		if err != nil {
+			return wrapSMTPError("smtp extension STARTTLS", err)
+		}
+		if !ok {
 			return fmt.Errorf("smtp server does not support STARTTLS")
 		}
-		if err := client.StartTLS(tlsConfig); err != nil {
-			return fmt.Errorf("start tls: %w", err)
+		if err := runSMTPCommand(ctx, client.Close, func() error {
+			return client.StartTLS(tlsConfig)
+		}); err != nil {
+			return wrapSMTPError("start tls", err)
 		}
 	}
 	return s.sendWithClient(ctx, client, from, to, payload)
 }
 
 func (s *smtpSender) sendTLS(ctx context.Context, from string, to string, payload []byte) error {
-	conn, err := tls.Dial("tcp", s.addr, &tls.Config{ServerName: s.config.Host, MinVersion: tls.VersionTLS12})
+	dialer := tls.Dialer{NetDialer: &net.Dialer{}, Config: &tls.Config{ServerName: s.config.Host, MinVersion: tls.VersionTLS12}}
+	conn, err := dialer.DialContext(ctx, "tcp", s.addr)
 	if err != nil {
-		return fmt.Errorf("dial smtp tls: %w", err)
+		return wrapSMTPError("dial smtp tls", err)
 	}
-	client, err := smtp.NewClient(conn, s.config.Host)
+	client, err := newSMTPClientWithContext(ctx, conn, s.config.Host)
 	if err != nil {
 		_ = conn.Close()
-		return fmt.Errorf("create smtp tls client: %w", err)
+		return wrapSMTPError("create smtp tls client", err)
 	}
 	defer client.Close()
 
@@ -194,28 +208,115 @@ func (s *smtpSender) sendWithClient(ctx context.Context, client *smtp.Client, fr
 		return err
 	}
 	auth := smtp.PlainAuth("", s.config.Username, s.config.Password, s.config.Host)
-	if err := client.Auth(auth); err != nil {
-		return fmt.Errorf("smtp auth: %w", err)
+	if err := runSMTPCommand(ctx, client.Close, func() error {
+		return client.Auth(auth)
+	}); err != nil {
+		return wrapSMTPError("smtp auth", err)
 	}
-	if err := client.Mail(from); err != nil {
-		return fmt.Errorf("smtp mail from: %w", err)
+	if err := runSMTPCommand(ctx, client.Close, func() error {
+		return client.Mail(from)
+	}); err != nil {
+		return wrapSMTPError("smtp mail from", err)
 	}
-	if err := client.Rcpt(to); err != nil {
-		return fmt.Errorf("smtp rcpt: %w", err)
+	if err := runSMTPCommand(ctx, client.Close, func() error {
+		return client.Rcpt(to)
+	}); err != nil {
+		return wrapSMTPError("smtp rcpt", err)
 	}
-	writer, err := client.Data()
+	var writerCloser interface {
+		Write([]byte) (int, error)
+		Close() error
+	}
+	if err := runSMTPCommand(ctx, client.Close, func() error {
+		var err error
+		writerCloser, err = client.Data()
+		return err
+	}); err != nil {
+		return wrapSMTPError("smtp data", err)
+	}
+	if err := runSMTPCommand(ctx, client.Close, func() error {
+		_, err := writerCloser.Write(payload)
+		return err
+	}); err != nil {
+		_ = writerCloser.Close()
+		return wrapSMTPError("write smtp payload", err)
+	}
+	if err := runSMTPCommand(ctx, client.Close, writerCloser.Close); err != nil {
+		return wrapSMTPError("close smtp payload", err)
+	}
+	if err := runSMTPCommand(ctx, client.Close, client.Quit); err != nil {
+		return wrapSMTPError("smtp quit", err)
+	}
+	return nil
+}
+
+func newSMTPClientWithContext(ctx context.Context, conn net.Conn, host string) (*smtp.Client, error) {
+	type result struct {
+		client *smtp.Client
+		err    error
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		client, err := smtp.NewClient(conn, host)
+		resultCh <- result{client: client, err: err}
+	}()
+
+	select {
+	case result := <-resultCh:
+		return result.client, result.err
+	case <-ctx.Done():
+		_ = conn.Close()
+		result := <-resultCh
+		if result.client != nil {
+			_ = result.client.Close()
+		}
+		return nil, ctx.Err()
+	}
+}
+
+func smtpExtension(ctx context.Context, client *smtp.Client, extension string) (bool, string, error) {
+	type result struct {
+		ok    bool
+		param string
+	}
+	var extensionResult result
+	if err := runSMTPCommand(ctx, client.Close, func() error {
+		extensionResult.ok, extensionResult.param = client.Extension(extension)
+		return nil
+	}); err != nil {
+		return false, "", err
+	}
+	return extensionResult.ok, extensionResult.param, nil
+}
+
+func runSMTPCommand(ctx context.Context, closeFn func() error, fn func() error) error {
+	if err := ctx.Err(); err != nil {
+		if closeFn != nil {
+			_ = closeFn()
+		}
+		return err
+	}
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- fn()
+	}()
+	select {
+	case err := <-errCh:
+		return err
+	case <-ctx.Done():
+		if closeFn != nil {
+			_ = closeFn()
+		}
+		return ctx.Err()
+	}
+}
+
+func wrapSMTPError(operation string, err error) error {
 	if err != nil {
-		return fmt.Errorf("smtp data: %w", err)
-	}
-	if _, err := writer.Write(payload); err != nil {
-		_ = writer.Close()
-		return fmt.Errorf("write smtp payload: %w", err)
-	}
-	if err := writer.Close(); err != nil {
-		return fmt.Errorf("close smtp payload: %w", err)
-	}
-	if err := client.Quit(); err != nil {
-		return fmt.Errorf("smtp quit: %w", err)
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
+		return fmt.Errorf("%s: %w", operation, err)
 	}
 	return nil
 }

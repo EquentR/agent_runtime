@@ -209,6 +209,70 @@ func TestSMTPConfigStartTLSRequiresServerSupport(t *testing.T) {
 	}
 }
 
+func TestSMTPSenderContextCanceledBeforeSendReturnsCanceled(t *testing.T) {
+	sender, err := NewSMTPSender(SMTPConfig{
+		Enabled:  true,
+		Host:     "localhost",
+		Port:     1,
+		Username: "smtp-user",
+		Password: "smtp-password",
+		From:     "noreply@example.com",
+	})
+	if err != nil {
+		t.Fatalf("NewSMTPSender() error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err = sender.Send(ctx, Message{To: "user@example.com", Subject: "Subject", Body: "body"})
+	if err != context.Canceled {
+		t.Fatalf("Send(canceled) error = %v, want context.Canceled", err)
+	}
+}
+
+func TestSMTPSenderContextCancellationUnblocksSMTPDial(t *testing.T) {
+	addr, closeServer := startSMTPServerWithoutGreeting(t)
+	defer closeServer()
+
+	_, portText, err := net.SplitHostPort(addr)
+	if err != nil {
+		t.Fatalf("SplitHostPort() error = %v", err)
+	}
+	var port int
+	if _, err := fmt.Sscanf(portText, "%d", &port); err != nil {
+		t.Fatalf("parse port %q: %v", portText, err)
+	}
+	sender, err := NewSMTPSender(SMTPConfig{
+		Enabled:  true,
+		Host:     "localhost",
+		Port:     port,
+		Username: "smtp-user",
+		Password: "smtp-password",
+		From:     "noreply@example.com",
+	})
+	if err != nil {
+		t.Fatalf("NewSMTPSender() error = %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- sender.Send(ctx, Message{To: "user@example.com", Subject: "Subject", Body: "body"})
+	}()
+
+	select {
+	case err := <-errCh:
+		if err != context.DeadlineExceeded {
+			t.Fatalf("Send(timeout) error = %v, want context deadline exceeded", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		closeServer()
+		err := <-errCh
+		t.Fatalf("Send(timeout) did not return before server close; final error = %v", err)
+	}
+}
+
 func startSMTPServerWithoutStartTLS(t *testing.T) (string, <-chan error, func()) {
 	t.Helper()
 
@@ -261,6 +325,37 @@ func startSMTPServerWithoutStartTLS(t *testing.T) (string, <-chan error, func())
 	}()
 
 	return listener.Addr().String(), done, func() { _ = listener.Close() }
+}
+
+func startSMTPServerWithoutGreeting(t *testing.T) (string, func()) {
+	t.Helper()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen() error = %v", err)
+	}
+	done := make(chan struct{})
+	connCh := make(chan net.Conn, 1)
+	go func() {
+		defer close(done)
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		connCh <- conn
+		_, _ = bufio.NewReader(conn).ReadString('\n')
+	}()
+
+	closeServer := func() {
+		_ = listener.Close()
+		select {
+		case conn := <-connCh:
+			_ = conn.Close()
+		default:
+		}
+		<-done
+	}
+	return listener.Addr().String(), closeServer
 }
 
 type smtpCapture struct {

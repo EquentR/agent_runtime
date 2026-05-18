@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/EquentR/agent_runtime/app/models"
+	"github.com/EquentR/agent_runtime/pkg/mail"
 	"github.com/EquentR/agent_runtime/pkg/secret"
 	"gorm.io/gorm"
 )
@@ -149,10 +150,6 @@ func (l *SettingsLogic) GetSMTP(ctx context.Context) (SMTPSettings, error) {
 }
 
 func (l *SettingsLogic) UpdateSMTP(ctx context.Context, input UpdateSMTPInput) (SMTPSettings, error) {
-	current, err := l.loadSMTP(ctx)
-	if err != nil {
-		return SMTPSettings{}, err
-	}
 	settings := SMTPSettings{
 		Enabled:     input.Enabled,
 		Host:        strings.TrimSpace(input.Host),
@@ -161,12 +158,20 @@ func (l *SettingsLogic) UpdateSMTP(ctx context.Context, input UpdateSMTPInput) (
 		From:        strings.TrimSpace(input.From),
 		UseTLS:      input.UseTLS,
 		UseStartTLS: input.UseStartTLS,
-		Password:    current.Password,
 	}
 	if input.ClearPassword {
 		settings.Password = ""
 	} else if input.Password != "" {
 		settings.Password = input.Password
+	} else {
+		current, err := l.loadSMTP(ctx)
+		if err != nil {
+			return SMTPSettings{}, err
+		}
+		settings.Password = current.Password
+	}
+	if err := validateSMTPSettingsForSend(settings); err != nil {
+		return SMTPSettings{}, err
 	}
 	payload, err := l.encryptSMTP(settings)
 	if err != nil {
@@ -187,22 +192,23 @@ func (l *SettingsLogic) GetTurnstile(ctx context.Context) (TurnstileSettings, er
 }
 
 func (l *SettingsLogic) UpdateTurnstile(ctx context.Context, input UpdateTurnstileInput) (TurnstileSettings, error) {
-	current, err := l.loadTurnstile(ctx)
-	if err != nil {
-		return TurnstileSettings{}, err
-	}
 	settings := TurnstileSettings{
 		Enabled:             input.Enabled,
 		SiteKey:             strings.TrimSpace(input.SiteKey),
 		ProtectLogin:        input.ProtectLogin,
 		ProtectRegistration: input.ProtectRegistration,
 		ProtectVerification: input.ProtectVerification,
-		Secret:              current.Secret,
 	}
 	if input.ClearSecret {
 		settings.Secret = ""
 	} else if input.Secret != "" {
 		settings.Secret = input.Secret
+	} else {
+		current, err := l.loadTurnstile(ctx)
+		if err != nil {
+			return TurnstileSettings{}, err
+		}
+		settings.Secret = current.Secret
 	}
 	payload, err := l.encryptTurnstile(settings)
 	if err != nil {
@@ -380,4 +386,17 @@ func maskTurnstile(settings TurnstileSettings) TurnstileSettings {
 	}
 	settings.Secret = ""
 	return settings
+}
+
+func validateSMTPSettingsForSend(settings SMTPSettings) error {
+	return (mail.SMTPConfig{
+		Enabled:     settings.Enabled,
+		Host:        settings.Host,
+		Port:        settings.Port,
+		Username:    settings.Username,
+		Password:    settings.Password,
+		From:        settings.From,
+		UseTLS:      settings.UseTLS,
+		UseStartTLS: settings.UseStartTLS,
+	}).ValidateForSend()
 }

@@ -210,7 +210,7 @@ func TestSettingsLogicClearsSMTPPasswordAndTurnstileSecret(t *testing.T) {
 		t.Fatal("UpdateSMTP(preserve) PasswordMasked = empty, want preserved password mask")
 	}
 	clearedSMTP, err := logic.UpdateSMTP(context.Background(), UpdateSMTPInput{
-		Enabled:       true,
+		Enabled:       false,
 		Host:          "smtp.example.com",
 		Port:          587,
 		Username:      "smtp-user",
@@ -277,6 +277,143 @@ func TestSettingsLogicClearsSMTPPasswordAndTurnstileSecret(t *testing.T) {
 	}
 	if storedTurnstilePayload.Secret != "" {
 		t.Fatalf("cleared turnstile secret = %q, want empty", storedTurnstilePayload.Secret)
+	}
+}
+
+func TestSettingsLogicSMTPReplaceAndClearDoNotDecryptCorruptStoredPassword(t *testing.T) {
+	logic, db, codec := newSettingsLogicTestSubject(t, SettingsDefaults{})
+	seedCorruptSMTPSetting(t, db)
+
+	replaced, err := logic.UpdateSMTP(context.Background(), UpdateSMTPInput{
+		Enabled:  true,
+		Host:     "smtp.example.com",
+		Port:     587,
+		Username: "smtp-user",
+		Password: "replacement-password",
+		From:     "noreply@example.com",
+	})
+	if err != nil {
+		t.Fatalf("UpdateSMTP(replace corrupt) error = %v", err)
+	}
+	if replaced.PasswordMasked == "" {
+		t.Fatal("UpdateSMTP(replace corrupt) PasswordMasked = empty, want replacement mask")
+	}
+	storedSMTP := loadSettingsTestSetting(t, db, "smtp")
+	var storedSMTPPayload struct {
+		Password string `json:"password"`
+	}
+	if err := json.Unmarshal(storedSMTP.ValueJSON, &storedSMTPPayload); err != nil {
+		t.Fatalf("unmarshal replaced smtp payload: %v", err)
+	}
+	decrypted, err := codec.DecryptString(storedSMTPPayload.Password)
+	if err != nil {
+		t.Fatalf("DecryptString(replaced smtp password) error = %v", err)
+	}
+	if decrypted != "replacement-password" {
+		t.Fatalf("replaced smtp password decrypts to %q, want replacement-password", decrypted)
+	}
+
+	seedCorruptSMTPSetting(t, db)
+	cleared, err := logic.UpdateSMTP(context.Background(), UpdateSMTPInput{
+		Enabled:       false,
+		Host:          "smtp.example.com",
+		Port:          587,
+		Username:      "smtp-user",
+		From:          "noreply@example.com",
+		ClearPassword: true,
+	})
+	if err != nil {
+		t.Fatalf("UpdateSMTP(clear corrupt) error = %v", err)
+	}
+	if cleared.PasswordMasked != "" {
+		t.Fatalf("UpdateSMTP(clear corrupt) PasswordMasked = %q, want empty", cleared.PasswordMasked)
+	}
+	storedSMTP = loadSettingsTestSetting(t, db, "smtp")
+	if storedSMTP.Encrypted {
+		t.Fatal("cleared corrupt smtp setting Encrypted = true, want false")
+	}
+	if err := json.Unmarshal(storedSMTP.ValueJSON, &storedSMTPPayload); err != nil {
+		t.Fatalf("unmarshal cleared corrupt smtp payload: %v", err)
+	}
+	if storedSMTPPayload.Password != "" {
+		t.Fatalf("cleared corrupt smtp password = %q, want empty", storedSMTPPayload.Password)
+	}
+}
+
+func TestSettingsLogicTurnstileReplaceAndClearDoNotDecryptCorruptStoredSecret(t *testing.T) {
+	logic, db, codec := newSettingsLogicTestSubject(t, SettingsDefaults{})
+	seedCorruptTurnstileSetting(t, db)
+
+	replaced, err := logic.UpdateTurnstile(context.Background(), UpdateTurnstileInput{
+		Enabled: true,
+		SiteKey: "site-key",
+		Secret:  "replacement-secret",
+	})
+	if err != nil {
+		t.Fatalf("UpdateTurnstile(replace corrupt) error = %v", err)
+	}
+	if replaced.SecretMasked == "" {
+		t.Fatal("UpdateTurnstile(replace corrupt) SecretMasked = empty, want replacement mask")
+	}
+	storedTurnstile := loadSettingsTestSetting(t, db, "turnstile")
+	var storedTurnstilePayload struct {
+		Secret string `json:"secret"`
+	}
+	if err := json.Unmarshal(storedTurnstile.ValueJSON, &storedTurnstilePayload); err != nil {
+		t.Fatalf("unmarshal replaced turnstile payload: %v", err)
+	}
+	decrypted, err := codec.DecryptString(storedTurnstilePayload.Secret)
+	if err != nil {
+		t.Fatalf("DecryptString(replaced turnstile secret) error = %v", err)
+	}
+	if decrypted != "replacement-secret" {
+		t.Fatalf("replaced turnstile secret decrypts to %q, want replacement-secret", decrypted)
+	}
+
+	seedCorruptTurnstileSetting(t, db)
+	cleared, err := logic.UpdateTurnstile(context.Background(), UpdateTurnstileInput{
+		Enabled:     true,
+		SiteKey:     "site-key",
+		ClearSecret: true,
+	})
+	if err != nil {
+		t.Fatalf("UpdateTurnstile(clear corrupt) error = %v", err)
+	}
+	if cleared.SecretMasked != "" {
+		t.Fatalf("UpdateTurnstile(clear corrupt) SecretMasked = %q, want empty", cleared.SecretMasked)
+	}
+	storedTurnstile = loadSettingsTestSetting(t, db, "turnstile")
+	if storedTurnstile.Encrypted {
+		t.Fatal("cleared corrupt turnstile setting Encrypted = true, want false")
+	}
+	if err := json.Unmarshal(storedTurnstile.ValueJSON, &storedTurnstilePayload); err != nil {
+		t.Fatalf("unmarshal cleared corrupt turnstile payload: %v", err)
+	}
+	if storedTurnstilePayload.Secret != "" {
+		t.Fatalf("cleared corrupt turnstile secret = %q, want empty", storedTurnstilePayload.Secret)
+	}
+}
+
+func TestSettingsLogicUpdateSMTPValidatesEnabledConfigBeforePersisting(t *testing.T) {
+	logic, db, _ := newSettingsLogicTestSubject(t, SettingsDefaults{})
+
+	_, err := logic.UpdateSMTP(context.Background(), UpdateSMTPInput{
+		Enabled:  true,
+		Host:     "smtp.example.com",
+		Port:     587,
+		Username: "smtp-user",
+		From:     "noreply@example.com",
+	})
+	if err == nil {
+		t.Fatal("UpdateSMTP(invalid enabled config) error = nil, want validation error")
+	}
+
+	var count int64
+	if err := db.Model(&models.SystemSetting{}).Where("key = ?", "smtp").Count(&count).Error; err != nil {
+		t.Fatalf("count smtp settings: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("smtp settings count = %d, want 0", count)
 	}
 }
 
@@ -356,4 +493,46 @@ func loadSettingsTestSetting(t *testing.T, db *gorm.DB, key string) models.Syste
 		t.Fatalf("load setting %q: %v", key, err)
 	}
 	return setting
+}
+
+func seedCorruptSMTPSetting(t *testing.T, db *gorm.DB) {
+	t.Helper()
+
+	seedSettingsTestSetting(t, db, "smtp", smtpSettingPayload{
+		Enabled:     true,
+		Host:        "smtp.example.com",
+		Port:        587,
+		Username:    "smtp-user",
+		Password:    "v1:not-valid-ciphertext",
+		From:        "noreply@example.com",
+		UseStartTLS: true,
+	}, true)
+}
+
+func seedCorruptTurnstileSetting(t *testing.T, db *gorm.DB) {
+	t.Helper()
+
+	seedSettingsTestSetting(t, db, "turnstile", turnstileSettingPayload{
+		Enabled:             true,
+		SiteKey:             "site-key",
+		Secret:              "v1:not-valid-ciphertext",
+		ProtectLogin:        true,
+		ProtectRegistration: true,
+		ProtectVerification: true,
+	}, true)
+}
+
+func seedSettingsTestSetting(t *testing.T, db *gorm.DB, key string, value any, encrypted bool) {
+	t.Helper()
+
+	payload, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal setting %q: %v", key, err)
+	}
+	if err := db.Where("key = ?", key).Delete(&models.SystemSetting{}).Error; err != nil {
+		t.Fatalf("delete setting %q: %v", key, err)
+	}
+	if err := db.Create(&models.SystemSetting{Key: key, ValueJSON: payload, Encrypted: encrypted}).Error; err != nil {
+		t.Fatalf("create setting %q: %v", key, err)
+	}
 }
