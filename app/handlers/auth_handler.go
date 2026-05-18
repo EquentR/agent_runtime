@@ -1,7 +1,9 @@
 package handlers
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/EquentR/agent_runtime/app/logics"
@@ -11,23 +13,80 @@ import (
 )
 
 type AuthHandler struct {
-	logic      *logics.AuthLogic
-	middleware *AuthMiddleware
+	logic             *logics.AuthLogic
+	middleware        *AuthMiddleware
+	settings          AuthHandlerSettingsReader
+	emailVerification *logics.EmailVerificationLogic
+	turnstileVerifier TurnstileVerifier
 }
 
 type registerRequest struct {
 	Username        string `json:"username"`
+	Email           string `json:"email"`
 	Password        string `json:"password"`
 	ConfirmPassword string `json:"confirm_password"`
+	TurnstileToken  string `json:"turnstile_token"`
 }
 
 type loginRequest struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
+	Username       string `json:"username"`
+	Password       string `json:"password"`
+	TurnstileToken string `json:"turnstile_token"`
 }
 
-func NewAuthHandler(logic *logics.AuthLogic) *AuthHandler {
-	return &AuthHandler{logic: logic, middleware: NewAuthMiddleware(logic)}
+type emailVerificationSendRequest struct {
+	UserID         uint64 `json:"user_id"`
+	Email          string `json:"email"`
+	Purpose        string `json:"purpose"`
+	TurnstileToken string `json:"turnstile_token"`
+}
+
+type emailVerificationVerifyRequest struct {
+	UserID  uint64 `json:"user_id"`
+	Email   string `json:"email"`
+	Purpose string `json:"purpose"`
+	Code    string `json:"code"`
+}
+
+type TurnstileVerifier interface {
+	Verify(ctx context.Context, token string, remoteIP string) error
+}
+
+type AuthHandlerSettingsReader interface {
+	GetTurnstile(ctx context.Context) (logics.TurnstileSettings, error)
+}
+
+type AuthHandlerOption func(*AuthHandler)
+
+func WithAuthHandlerSettings(settings AuthHandlerSettingsReader) AuthHandlerOption {
+	return func(h *AuthHandler) {
+		h.settings = settings
+	}
+}
+
+func WithAuthHandlerEmailVerification(verification *logics.EmailVerificationLogic) AuthHandlerOption {
+	return func(h *AuthHandler) {
+		h.emailVerification = verification
+	}
+}
+
+func WithAuthHandlerTurnstileVerifier(verifier TurnstileVerifier) AuthHandlerOption {
+	return func(h *AuthHandler) {
+		h.turnstileVerifier = verifier
+	}
+}
+
+func NewAuthHandler(logic *logics.AuthLogic, opts ...AuthHandlerOption) *AuthHandler {
+	handler := &AuthHandler{logic: logic, middleware: NewAuthMiddleware(logic)}
+	if logic != nil {
+		handler.emailVerification = logic.EmailVerification()
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(handler)
+		}
+	}
+	return handler
 }
 
 func (h *AuthHandler) Register(rg *gin.RouterGroup) {
@@ -39,6 +98,8 @@ func (h *AuthHandler) Register(rg *gin.RouterGroup) {
 		resp.NewJsonOptionsHandler(h.handleLogin),
 		resp.NewJsonOptionsHandler(h.handleLogout),
 		resp.NewJsonOptionsHandler(h.handleCurrentUser),
+		resp.NewJsonOptionsHandler(h.handleSendEmailVerification),
+		resp.NewJsonOptionsHandler(h.handleVerifyEmail),
 	})
 }
 
@@ -60,7 +121,18 @@ func (h *AuthHandler) handleRegister() (method, relativePath string, wrapper res
 		if err := c.ShouldBindJSON(&request); err != nil {
 			return nil, []resp.ResOpt{resp.WithCode(http.StatusBadRequest)}, err
 		}
-		user, err := h.logic.Register(c.Request.Context(), request.Username, request.Password, request.ConfirmPassword)
+		if err := h.verifyTurnstile(c, request.TurnstileToken, func(settings logics.TurnstileSettings) bool {
+			return settings.ProtectRegistration
+		}); err != nil {
+			return nil, []resp.ResOpt{resp.WithCode(http.StatusBadRequest)}, err
+		}
+		user, err := h.logic.RegisterWithInput(c.Request.Context(), logics.RegisterInput{
+			Username:        request.Username,
+			Email:           request.Email,
+			Password:        request.Password,
+			ConfirmPassword: request.ConfirmPassword,
+			TurnstileToken:  request.TurnstileToken,
+		})
 		if err != nil {
 			return nil, []resp.ResOpt{resp.WithCode(authStatusCode(err, http.StatusBadRequest))}, err
 		}
@@ -84,6 +156,11 @@ func (h *AuthHandler) handleLogin() (method, relativePath string, wrapper resp.J
 	return http.MethodPost, "/login", func(c *gin.Context) (any, []resp.ResOpt, error) {
 		var request loginRequest
 		if err := c.ShouldBindJSON(&request); err != nil {
+			return nil, []resp.ResOpt{resp.WithCode(http.StatusBadRequest)}, err
+		}
+		if err := h.verifyTurnstile(c, request.TurnstileToken, func(settings logics.TurnstileSettings) bool {
+			return settings.ProtectLogin
+		}); err != nil {
 			return nil, []resp.ResOpt{resp.WithCode(http.StatusBadRequest)}, err
 		}
 		user, session, err := h.logic.Login(c.Request.Context(), request.Username, request.Password)
@@ -135,6 +212,53 @@ func (h *AuthHandler) handleCurrentUser() (method, relativePath string, wrapper 
 	}, []resp.WrapperOption{h.middleware.RequireSessionOption()}
 }
 
+func (h *AuthHandler) handleSendEmailVerification() (method, relativePath string, wrapper resp.JsonOptionsResultWrapper, opts []resp.WrapperOption) {
+	return http.MethodPost, "/email-verification/send", func(c *gin.Context) (any, []resp.ResOpt, error) {
+		var request emailVerificationSendRequest
+		if err := c.ShouldBindJSON(&request); err != nil {
+			return nil, []resp.ResOpt{resp.WithCode(http.StatusBadRequest)}, err
+		}
+		if err := h.verifyTurnstile(c, request.TurnstileToken, func(settings logics.TurnstileSettings) bool {
+			return settings.ProtectVerification
+		}); err != nil {
+			return nil, []resp.ResOpt{resp.WithCode(http.StatusBadRequest)}, err
+		}
+		if h.emailVerification == nil {
+			return nil, []resp.ResOpt{resp.WithCode(http.StatusServiceUnavailable)}, logics.ErrMailServiceUnavailable
+		}
+		if err := h.emailVerification.SendByEmail(c.Request.Context(), logics.SendEmailVerificationInput{
+			UserID:  request.UserID,
+			Email:   request.Email,
+			Purpose: request.Purpose,
+		}); err != nil {
+			return nil, []resp.ResOpt{resp.WithCode(authStatusCode(err, http.StatusBadRequest))}, err
+		}
+		return gin.H{"sent": true}, nil, nil
+	}, nil
+}
+
+func (h *AuthHandler) handleVerifyEmail() (method, relativePath string, wrapper resp.JsonOptionsResultWrapper, opts []resp.WrapperOption) {
+	return http.MethodPost, "/email-verification/verify", func(c *gin.Context) (any, []resp.ResOpt, error) {
+		var request emailVerificationVerifyRequest
+		if err := c.ShouldBindJSON(&request); err != nil {
+			return nil, []resp.ResOpt{resp.WithCode(http.StatusBadRequest)}, err
+		}
+		if h.emailVerification == nil {
+			return nil, []resp.ResOpt{resp.WithCode(http.StatusServiceUnavailable)}, logics.ErrMailServiceUnavailable
+		}
+		user, err := h.emailVerification.Verify(c.Request.Context(), logics.VerifyEmailInput{
+			UserID:  request.UserID,
+			Email:   request.Email,
+			Purpose: request.Purpose,
+			Code:    request.Code,
+		})
+		if err != nil {
+			return nil, []resp.ResOpt{resp.WithCode(authStatusCode(err, http.StatusBadRequest))}, err
+		}
+		return authUserResponse(user), nil, nil
+	}, nil
+}
+
 func (h *AuthHandler) setSessionCookie(c *gin.Context, session *models.UserSession) {
 	c.SetSameSite(http.SameSiteLaxMode)
 	c.SetCookie(h.logic.CookieName(), session.ID, int(h.logic.SessionTTL().Seconds()), "/", "", false, true)
@@ -146,15 +270,53 @@ func (h *AuthHandler) clearSessionCookie(c *gin.Context) {
 }
 
 func authUserResponse(user *models.User) gin.H {
-	return gin.H{"id": user.ID, "username": user.Username, "role": user.Role}
+	return gin.H{
+		"id":                    user.ID,
+		"username":              user.Username,
+		"email":                 user.Email,
+		"display_name":          user.DisplayName,
+		"role":                  user.Role,
+		"status":                user.Status,
+		"email_verified_at":     user.EmailVerifiedAt,
+		"force_password_change": user.ForcePasswordChange,
+	}
+}
+
+func (h *AuthHandler) verifyTurnstile(c *gin.Context, token string, protected func(logics.TurnstileSettings) bool) error {
+	if h == nil || h.settings == nil || protected == nil {
+		return nil
+	}
+	settings, err := h.settings.GetTurnstile(c.Request.Context())
+	if err != nil {
+		return err
+	}
+	if !settings.Enabled || !protected(settings) {
+		return nil
+	}
+	if h.turnstileVerifier == nil {
+		return fmt.Errorf("turnstile verifier is not configured")
+	}
+	return h.turnstileVerifier.Verify(c.Request.Context(), token, c.ClientIP())
 }
 
 func authStatusCode(err error, fallback int) int {
 	switch {
 	case errors.Is(err, logics.ErrUnauthorized), errors.Is(err, logics.ErrInvalidCredentials):
 		return http.StatusUnauthorized
-	case errors.Is(err, logics.ErrUsernameTaken):
+	case errors.Is(err, logics.ErrUsernameTaken), errors.Is(err, logics.ErrEmailTaken):
 		return http.StatusConflict
+	case errors.Is(err, logics.ErrPublicRegistrationDisabled),
+		errors.Is(err, logics.ErrUserDisabled),
+		errors.Is(err, logics.ErrEmailVerificationRequired),
+		errors.Is(err, logics.ErrEmailBindingRequired),
+		errors.Is(err, logics.ErrPasswordChangeRequired):
+		return http.StatusForbidden
+	case errors.Is(err, logics.ErrMailServiceUnavailable):
+		return http.StatusServiceUnavailable
+	case errors.Is(err, logics.ErrEmailVerificationCooldown), errors.Is(err, logics.ErrEmailVerificationTooManyAttempts):
+		return http.StatusTooManyRequests
+	case errors.Is(err, logics.ErrEmailVerificationNotFound):
+		return http.StatusNotFound
 	default:
 		return fallback
 	}

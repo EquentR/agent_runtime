@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,8 +13,10 @@ import (
 	"testing"
 
 	"github.com/EquentR/agent_runtime/app/logics"
+	"github.com/EquentR/agent_runtime/app/models"
 	coreagent "github.com/EquentR/agent_runtime/core/agent"
 	coretasks "github.com/EquentR/agent_runtime/core/tasks"
+	"github.com/EquentR/agent_runtime/pkg/mail"
 	"github.com/EquentR/agent_runtime/pkg/rest"
 	resp "github.com/EquentR/agent_runtime/pkg/rest"
 	"github.com/gin-gonic/gin"
@@ -32,6 +35,7 @@ func TestAuthHandlerRegisterLoginLogoutFlow(t *testing.T) {
 
 	register := postAuthJSON(t, server.URL+"/api/v1/auth/register", map[string]any{
 		"username":         "alice",
+		"email":            "alice@example.com",
 		"password":         "secret-123",
 		"confirm_password": "secret-123",
 	})
@@ -49,6 +53,7 @@ func TestAuthHandlerRegisterLoginLogoutFlow(t *testing.T) {
 
 	duplicate := postAuthJSON(t, server.URL+"/api/v1/auth/register", map[string]any{
 		"username":         "alice",
+		"email":            "alice@example.com",
 		"password":         "secret-123",
 		"confirm_password": "secret-123",
 	})
@@ -164,9 +169,14 @@ func TestAuthMiddlewareWrapperOptionProtectsSingleRoute(t *testing.T) {
 		t.Fatalf("gorm.Open() error = %v", err)
 	}
 	authLogic := newAuthLogicForTest(t, db)
-	user, err := authLogic.Register(context.Background(), "alice", "secret-123", "secret-123")
+	user, err := authLogic.RegisterWithInput(context.Background(), logics.RegisterInput{
+		Username:        "alice",
+		Email:           "alice@example.com",
+		Password:        "secret-123",
+		ConfirmPassword: "secret-123",
+	})
 	if err != nil {
-		t.Fatalf("Register() error = %v", err)
+		t.Fatalf("RegisterWithInput() error = %v", err)
 	}
 	_, session, err := authLogic.Login(context.Background(), user.Username, "secret-123")
 	if err != nil {
@@ -233,10 +243,7 @@ func TestAuthMiddlewareWrapperOptionProtectsSingleRoute(t *testing.T) {
 func TestAuthMiddlewareRejectsTaskCreationAgainstAnotherUsersConversation(t *testing.T) {
 	deps, server := newAuthHandlerTestServerWithDeps(t)
 
-	owner, err := deps.authLogic.Register(context.Background(), "owner", "secret-123", "secret-123")
-	if err != nil {
-		t.Fatalf("Register(owner) error = %v", err)
-	}
+	owner := registerVerifiedAuthHandlerTestUser(t, deps, "owner")
 	conversation, err := deps.conversationStore.CreateConversation(context.Background(), coreagent.CreateConversationInput{
 		ID:         "conv_owner",
 		ProviderID: "openai",
@@ -250,9 +257,7 @@ func TestAuthMiddlewareRejectsTaskCreationAgainstAnotherUsersConversation(t *tes
 	if err == nil {
 		t.Fatal("guest login unexpectedly succeeded before registration")
 	}
-	if _, regErr := deps.authLogic.Register(context.Background(), "guest", "secret-123", "secret-123"); regErr != nil {
-		t.Fatalf("Register(guest) error = %v", regErr)
-	}
+	registerVerifiedAuthHandlerTestUser(t, deps, "guest")
 	_, guestSession, err = deps.authLogic.Login(context.Background(), "guest", "secret-123")
 	if err != nil {
 		t.Fatalf("Login(guest) error = %v", err)
@@ -291,17 +296,11 @@ func TestAuthMiddlewareRejectsTaskCreationAgainstAnotherUsersConversation(t *tes
 func TestAuthMiddlewareRejectsAdminTaskCreationAgainstAnotherUsersConversation(t *testing.T) {
 	deps, server := newAuthHandlerTestServerWithDeps(t)
 
-	admin, err := deps.authLogic.Register(context.Background(), "admin", "secret-123", "secret-123")
-	if err != nil {
-		t.Fatalf("Register(admin) error = %v", err)
-	}
+	admin := registerVerifiedAuthHandlerTestUser(t, deps, "admin")
 	if admin.Role != "admin" {
 		t.Fatalf("admin.Role = %q, want admin", admin.Role)
 	}
-	owner, err := deps.authLogic.Register(context.Background(), "owner", "secret-123", "secret-123")
-	if err != nil {
-		t.Fatalf("Register(owner) error = %v", err)
-	}
+	owner := registerVerifiedAuthHandlerTestUser(t, deps, "owner")
 	conversation, err := deps.conversationStore.CreateConversation(context.Background(), coreagent.CreateConversationInput{
 		ID:         "conv_owner",
 		ProviderID: "openai",
@@ -352,10 +351,7 @@ func TestAuthMiddlewareRejectsAdminTaskCreationAgainstAnotherUsersConversation(t
 func TestAuthMiddlewareCanonicalizesNestedCreatedByOnTaskCreate(t *testing.T) {
 	deps, server := newAuthHandlerTestServerWithDeps(t)
 
-	owner, err := deps.authLogic.Register(context.Background(), "owner", "secret-123", "secret-123")
-	if err != nil {
-		t.Fatalf("Register(owner) error = %v", err)
-	}
+	owner := registerVerifiedAuthHandlerTestUser(t, deps, "owner")
 	_, ownerSession, err := deps.authLogic.Login(context.Background(), owner.Username, "secret-123")
 	if err != nil {
 		t.Fatalf("Login(owner) error = %v", err)
@@ -397,8 +393,98 @@ func TestAuthMiddlewareCanonicalizesNestedCreatedByOnTaskCreate(t *testing.T) {
 	}
 }
 
+func TestAuthHandlerTurnstileProtectsLoginRegisterAndVerificationSend(t *testing.T) {
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("gorm.Open() error = %v", err)
+	}
+	authLogic := newAuthLogicForTest(t, db)
+	verifier := &fakeTurnstileVerifier{err: errors.New("turnstile rejected")}
+	settings := &fakeAuthHandlerSettings{turnstile: logics.TurnstileSettings{
+		Enabled:             true,
+		ProtectLogin:        true,
+		ProtectRegistration: true,
+		ProtectVerification: true,
+	}}
+
+	engine := rest.Init()
+	group := engine.Group("/api/v1")
+	NewAuthHandler(
+		authLogic,
+		WithAuthHandlerSettings(settings),
+		WithAuthHandlerTurnstileVerifier(verifier),
+	).Register(group)
+
+	server := httptest.NewServer(engine)
+	t.Cleanup(server.Close)
+
+	requests := []struct {
+		name    string
+		path    string
+		payload map[string]any
+		token   string
+	}{
+		{
+			name: "register",
+			path: "/api/v1/auth/register",
+			payload: map[string]any{
+				"username":         "alice",
+				"email":            "alice@example.com",
+				"password":         "secret-123",
+				"confirm_password": "secret-123",
+				"turnstile_token":  "register-token",
+			},
+			token: "register-token",
+		},
+		{
+			name: "login",
+			path: "/api/v1/auth/login",
+			payload: map[string]any{
+				"username":        "alice",
+				"password":        "secret-123",
+				"turnstile_token": "login-token",
+			},
+			token: "login-token",
+		},
+		{
+			name: "verification send",
+			path: "/api/v1/auth/email-verification/send",
+			payload: map[string]any{
+				"email":           "alice@example.com",
+				"purpose":         logics.EmailVerificationPurposeRegistration,
+				"turnstile_token": "verification-token",
+			},
+			token: "verification-token",
+		},
+	}
+
+	for _, request := range requests {
+		t.Run(request.name, func(t *testing.T) {
+			response := postAuthJSON(t, server.URL+request.path, request.payload)
+			defer response.Body.Close()
+			if decodeEnvelope(t, response.Body).OK {
+				t.Fatalf("%s ok = true, want false", request.name)
+			}
+		})
+	}
+
+	if len(verifier.calls) != len(requests) {
+		t.Fatalf("turnstile calls = %d, want %d", len(verifier.calls), len(requests))
+	}
+	for idx, request := range requests {
+		if verifier.calls[idx].token != request.token {
+			t.Fatalf("turnstile call %d token = %q, want %q", idx, verifier.calls[idx].token, request.token)
+		}
+		if verifier.calls[idx].remoteIP == "" {
+			t.Fatalf("turnstile call %d remote IP is empty", idx)
+		}
+	}
+}
+
 type authHandlerTestDeps struct {
 	authLogic         *logics.AuthLogic
+	emailVerification *logics.EmailVerificationLogic
 	conversationStore *coreagent.ConversationStore
 	taskManager       *coretasks.Manager
 }
@@ -425,34 +511,134 @@ func newAuthHandlerTestServerWithDeps(t *testing.T) (*authHandlerTestDeps, *http
 		t.Fatalf("task AutoMigrate() error = %v", err)
 	}
 	taskManager := coretasks.NewManager(taskStore, coretasks.ManagerOptions{RunnerID: "auth-test"})
-	authLogic := newAuthLogicForTest(t, db)
+	mailer := &fakeHandlerMailSender{}
+	emailVerification, err := logics.NewEmailVerificationLogic(db, logics.EmailVerificationConfig{
+		Sender: mailer,
+		CodeGenerator: func() (string, error) {
+			return "123456", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewEmailVerificationLogic() error = %v", err)
+	}
+	authLogic, err := logics.NewAuthLogic(db, logics.AuthConfig{CookieName: authSessionCookieName}, logics.WithAuthEmailVerification(emailVerification))
+	if err != nil {
+		t.Fatalf("NewAuthLogic() error = %v", err)
+	}
+	if err := authLogic.AutoMigrate(); err != nil {
+		t.Fatalf("AuthLogic.AutoMigrate() error = %v", err)
+	}
+	if err := db.AutoMigrate(&models.EmailVerification{}); err != nil {
+		t.Fatalf("EmailVerification AutoMigrate() error = %v", err)
+	}
 	authMiddleware := NewAuthMiddleware(authLogic)
 
 	engine := rest.Init()
 	group := engine.Group("/api/v1")
-	NewAuthHandler(authLogic).Register(group)
+	NewAuthHandler(authLogic, WithAuthHandlerEmailVerification(emailVerification)).Register(group)
 	NewConversationHandler(conversationStore, nil, authMiddleware.RequireSession()).Register(group)
 	NewTaskHandler(taskManager, conversationStore, authMiddleware.RequireSession()).Register(group)
 
 	server := httptest.NewServer(engine)
 	t.Cleanup(server.Close)
-	return &authHandlerTestDeps{authLogic: authLogic, conversationStore: conversationStore, taskManager: taskManager}, server
+	return &authHandlerTestDeps{authLogic: authLogic, emailVerification: emailVerification, conversationStore: conversationStore, taskManager: taskManager}, server
 }
 
 func newAuthLogicForTest(t *testing.T, db *gorm.DB) *logics.AuthLogic {
 	t.Helper()
-	logic, err := logics.NewAuthLogic(db, logics.AuthConfig{CookieName: authSessionCookieName})
+	mailer := &fakeHandlerMailSender{}
+	emailVerification, err := logics.NewEmailVerificationLogic(db, logics.EmailVerificationConfig{
+		Sender: mailer,
+		CodeGenerator: func() (string, error) {
+			return "123456", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewEmailVerificationLogic() error = %v", err)
+	}
+	logic, err := logics.NewAuthLogic(db, logics.AuthConfig{CookieName: authSessionCookieName}, logics.WithAuthEmailVerification(emailVerification))
 	if err != nil {
 		t.Fatalf("NewAuthLogic() error = %v", err)
 	}
 	if err := logic.AutoMigrate(); err != nil {
 		t.Fatalf("AuthLogic.AutoMigrate() error = %v", err)
 	}
+	if err := db.AutoMigrate(&models.EmailVerification{}); err != nil {
+		t.Fatalf("EmailVerification AutoMigrate() error = %v", err)
+	}
 	return logic
+}
+
+type fakeHandlerMailSender struct {
+	messages []mail.Message
+}
+
+func (s *fakeHandlerMailSender) Send(ctx context.Context, message mail.Message) error {
+	s.messages = append(s.messages, message)
+	return nil
+}
+
+type fakeTurnstileCall struct {
+	token    string
+	remoteIP string
+}
+
+type fakeTurnstileVerifier struct {
+	calls []fakeTurnstileCall
+	err   error
+}
+
+func (v *fakeTurnstileVerifier) Verify(ctx context.Context, token string, remoteIP string) error {
+	v.calls = append(v.calls, fakeTurnstileCall{token: token, remoteIP: remoteIP})
+	return v.err
+}
+
+type fakeAuthHandlerSettings struct {
+	turnstile logics.TurnstileSettings
+}
+
+func (s *fakeAuthHandlerSettings) GetTurnstile(ctx context.Context) (logics.TurnstileSettings, error) {
+	return s.turnstile, nil
+}
+
+func registerVerifiedAuthHandlerTestUser(t *testing.T, deps *authHandlerTestDeps, username string) *models.User {
+	t.Helper()
+
+	email := username + "@example.com"
+	user, err := deps.authLogic.RegisterWithInput(context.Background(), logics.RegisterInput{
+		Username:        username,
+		Email:           email,
+		Password:        "secret-123",
+		ConfirmPassword: "secret-123",
+	})
+	if err != nil {
+		t.Fatalf("RegisterWithInput(%s) error = %v", username, err)
+	}
+	if user.Status == models.UserStatusPendingEmailVerification {
+		user, err = deps.emailVerification.Verify(context.Background(), logics.VerifyEmailInput{
+			UserID:  user.ID,
+			Email:   email,
+			Purpose: logics.EmailVerificationPurposeRegistration,
+			Code:    "123456",
+		})
+		if err != nil {
+			t.Fatalf("VerifyEmail(%s) error = %v", username, err)
+		}
+	}
+	return user
 }
 
 func postAuthJSON(t *testing.T, url string, payload map[string]any) *http.Response {
 	t.Helper()
+	autoVerifyEmail := false
+	if strings.Contains(url, "/auth/register") {
+		if _, ok := payload["email"]; !ok {
+			if username, ok := payload["username"].(string); ok && strings.TrimSpace(username) != "" {
+				payload["email"] = strings.TrimSpace(username) + "@example.com"
+				autoVerifyEmail = true
+			}
+		}
+	}
 	raw, err := json.Marshal(payload)
 	if err != nil {
 		t.Fatalf("json.Marshal() error = %v", err)
@@ -461,7 +647,66 @@ func postAuthJSON(t *testing.T, url string, payload map[string]any) *http.Respon
 	if err != nil {
 		t.Fatalf("http.Post() error = %v", err)
 	}
+	if autoVerifyEmail {
+		autoVerifyAuthRegistration(t, url, response)
+	}
 	return response
+}
+
+func autoVerifyAuthRegistration(t *testing.T, registerURL string, response *http.Response) {
+	t.Helper()
+	if response == nil || response.Body == nil {
+		return
+	}
+	raw, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("read register response body: %v", err)
+	}
+	if err := response.Body.Close(); err != nil {
+		t.Fatalf("close register response body: %v", err)
+	}
+	response.Body = io.NopCloser(bytes.NewReader(raw))
+	if response.StatusCode != http.StatusOK {
+		return
+	}
+
+	var envelope struct {
+		OK   bool            `json:"ok"`
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil || !envelope.OK {
+		return
+	}
+	var user struct {
+		ID     uint64 `json:"id"`
+		Email  string `json:"email"`
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(envelope.Data, &user); err != nil {
+		return
+	}
+	if user.Status != models.UserStatusPendingEmailVerification {
+		return
+	}
+	verifyURL := strings.Replace(registerURL, "/auth/register", "/auth/email-verification/verify", 1)
+	verifyRaw, err := json.Marshal(map[string]any{
+		"user_id": user.ID,
+		"email":   user.Email,
+		"purpose": logics.EmailVerificationPurposeRegistration,
+		"code":    "123456",
+	})
+	if err != nil {
+		t.Fatalf("marshal verification payload: %v", err)
+	}
+	verifyResponse, err := http.Post(verifyURL, "application/json", bytes.NewReader(verifyRaw))
+	if err != nil {
+		t.Fatalf("auto verify registration: %v", err)
+	}
+	defer verifyResponse.Body.Close()
+	if verifyResponse.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(verifyResponse.Body)
+		t.Fatalf("auto verify status = %d, body = %s", verifyResponse.StatusCode, string(body))
+	}
 }
 
 func decodeAuthUserResponse(t *testing.T, body io.Reader) authTestUser {

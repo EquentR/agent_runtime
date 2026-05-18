@@ -17,6 +17,8 @@ const (
 	authSessionContextKey = "auth.session"
 )
 
+var errAdminRequired = errors.New("需要管理员权限")
+
 type AuthMiddleware struct {
 	logic *logics.AuthLogic
 }
@@ -26,6 +28,34 @@ func NewAuthMiddleware(logic *logics.AuthLogic) *AuthMiddleware {
 }
 
 func (m *AuthMiddleware) RequireSession() gin.HandlerFunc {
+	return m.require(nil)
+}
+
+func (m *AuthMiddleware) RequireActiveUser() gin.HandlerFunc {
+	return m.require(requireActiveUserState)
+}
+
+func (m *AuthMiddleware) RequireAdmin() gin.HandlerFunc {
+	return m.require(func(user *models.User) error {
+		if err := requireActiveUserState(user); err != nil {
+			return err
+		}
+		if user.Role != models.UserRoleAdmin {
+			return errAdminRequired
+		}
+		return nil
+	})
+}
+
+func (m *AuthMiddleware) RequireActiveUserOption() resp.WrapperOption {
+	return resp.WithMiddlewares(m.RequireActiveUser())
+}
+
+func (m *AuthMiddleware) RequireAdminOption() resp.WrapperOption {
+	return resp.WithMiddlewares(m.RequireAdmin())
+}
+
+func (m *AuthMiddleware) require(check func(*models.User) error) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		user, session, err := m.resolve(c)
 		if err != nil {
@@ -39,6 +69,13 @@ func (m *AuthMiddleware) RequireSession() gin.HandlerFunc {
 		}
 		c.Set(authUserContextKey, user)
 		c.Set(authSessionContextKey, session)
+		if check != nil {
+			if err := check(user); err != nil {
+				resp.BadJson(c, nil, err, resp.WithCode(authStatusCode(err, http.StatusForbidden)))
+				c.Abort()
+				return
+			}
+		}
 		c.Next()
 	}
 }
@@ -65,4 +102,31 @@ func (m *AuthMiddleware) resolve(c *gin.Context) (*models.User, *models.UserSess
 		return nil, nil, logics.ErrUnauthorized
 	}
 	return m.logic.CurrentUser(c.Request.Context(), cookie)
+}
+
+func requireActiveUserState(user *models.User) error {
+	if user == nil {
+		return logics.ErrUnauthorized
+	}
+	switch user.Status {
+	case models.UserStatusDisabled:
+		return logics.ErrUserDisabled
+	case models.UserStatusNeedsEmailBinding:
+		return logics.ErrEmailBindingRequired
+	case models.UserStatusPendingEmailVerification:
+		return logics.ErrEmailVerificationRequired
+	}
+	if user.ForcePasswordChange {
+		return logics.ErrPasswordChangeRequired
+	}
+	if user.Email == "" {
+		return logics.ErrEmailBindingRequired
+	}
+	if user.EmailVerifiedAt == nil {
+		return logics.ErrEmailVerificationRequired
+	}
+	if user.Status != "" && user.Status != models.UserStatusActive {
+		return logics.ErrEmailVerificationRequired
+	}
+	return nil
 }
