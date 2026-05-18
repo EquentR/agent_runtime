@@ -73,6 +73,14 @@ function formatNumber(value: number | undefined) {
   return value.toLocaleString('en-US')
 }
 
+function formatYAMLContextMax(model: YAMLModel) {
+  const max = model.context?.max
+  if (typeof max !== 'number' || !Number.isFinite(max) || max <= 0) {
+    return '使用系统默认上下文'
+  }
+  return formatNumber(max)
+}
+
 function syncCustomDraft(model: CustomLLMModel) {
   selectedCustomId.value = model.id
   customDraft.ownerUserId = model.owner_user_id ? String(model.owner_user_id) : ''
@@ -308,7 +316,7 @@ onMounted(() => {
         >
           <span>{{ row.providerName }}</span>
           <span>{{ row.model.name }}</span>
-          <span>{{ formatNumber(row.model.context?.max) }}</span>
+          <span>{{ formatYAMLContextMax(row.model) }}</span>
           <label class="admin-check-row compact-check">
             <input
               type="checkbox"

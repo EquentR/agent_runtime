@@ -119,6 +119,35 @@ describe('AdminModelsView', () => {
     })
   })
 
+  it('marks YAML models missing context as using system default context', async () => {
+    api.fetchAdminModels.mockResolvedValueOnce({
+      ...buildYamlCatalog(),
+      providers: [
+        {
+          id: 'yaml',
+          name: 'yaml',
+          models: [
+            {
+              id: 'default-context',
+              name: 'Default Context',
+              type: 'openai_responses',
+              capabilities: { attachments: false },
+              scope: 'admin',
+              enabled: true,
+              scope_overridden: false,
+              enabled_overridden: false,
+            },
+          ],
+        },
+      ],
+    })
+
+    const wrapper = await mountAdminModelsView()
+
+    expect(wrapper.text()).toContain('Default Context')
+    expect(wrapper.text()).toContain('使用系统默认上下文')
+  })
+
   it('AdminModelsView creates custom admin/global model with context max', async () => {
     api.fetchAdminCustomModels.mockResolvedValueOnce([])
     const wrapper = await mountAdminModelsView()

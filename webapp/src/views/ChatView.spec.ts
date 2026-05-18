@@ -441,7 +441,7 @@ describe('ChatView', () => {
 
     expect(wrapper.text()).toContain('当前没有可用模型')
     expect(wrapper.text()).toContain('在个人设置中添加自定义模型')
-    expect(wrapper.get('[data-no-model-profile-link]').attributes('href')).toBe('/profile')
+    expect(wrapper.get('[data-no-model-profile-link]').attributes('href')).toBe('/profile#profile-models')
 
     await wrapper.get('.composer-input').setValue('hello')
     await wrapper.get('.composer-panel').trigger('submit')

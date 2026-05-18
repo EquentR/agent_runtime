@@ -1375,7 +1375,7 @@ onBeforeUnmount(() => {
         <div v-if="noUsableModels" class="chat-no-model-empty" data-no-model-empty>
           <h2>当前没有可用模型</h2>
           <p>请在个人设置中添加自定义模型，或联系管理员开启全局模型。</p>
-          <RouterLink class="primary-button" to="/profile" data-no-model-profile-link>打开个人设置</RouterLink>
+          <RouterLink class="primary-button" to="/profile#profile-models" data-no-model-profile-link>打开个人设置</RouterLink>
         </div>
         <MessageList
           v-else
