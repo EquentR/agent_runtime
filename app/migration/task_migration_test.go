@@ -393,6 +393,32 @@ func TestPublicAdminBackofficeMigrationMarksLegacyUsersForEmailBinding(t *testin
 	}
 }
 
+func TestPublicAdminBackofficeMigrationBackfillsMissingLegacyEmailToEmptyString(t *testing.T) {
+	db := openMigrationTestDB(t)
+	seedPublicAdminLegacyUsersTableWithoutEmail(t, db)
+
+	runRemainingMigrationsForTest(t, db)
+
+	var user models.User
+	if err := db.Where("username = ?", "legacy_no_email").Take(&user).Error; err != nil {
+		t.Fatalf("load migrated user: %v", err)
+	}
+	if user.Email != "" {
+		t.Fatalf("models.User.Email = %q, want empty string", user.Email)
+	}
+
+	var rawEmail sql.NullString
+	if err := db.Table("users").Select("email").Where("username = ?", "legacy_no_email").Scan(&rawEmail).Error; err != nil {
+		t.Fatalf("load raw email: %v", err)
+	}
+	if !rawEmail.Valid {
+		t.Fatal("raw users.email is NULL, want empty string")
+	}
+	if rawEmail.String != "" {
+		t.Fatalf("raw users.email = %q, want empty string", rawEmail.String)
+	}
+}
+
 func TestPublicAdminBackofficeCustomLLMModelProviderIDUniquePerOwner(t *testing.T) {
 	db := openMigrationTestDB(t)
 	runAllMigrationsForTest(t, db)
@@ -845,6 +871,37 @@ func newCustomLLMModelForTest(id string, ownerUserID uint64, providerID string) 
 		Scope:            "owner",
 		Enabled:          true,
 		ContextMaxTokens: 8192,
+	}
+}
+
+func seedPublicAdminLegacyUsersTableWithoutEmail(t *testing.T, database *gorm.DB) {
+	t.Helper()
+
+	if err := database.AutoMigrate(&migrate.DataVersion{}); err != nil {
+		t.Fatalf("AutoMigrate(data_versions) error = %v", err)
+	}
+	if err := database.Exec(`CREATE TABLE users (
+		id integer primary key autoincrement,
+		username varchar(128) not null unique,
+		password_hash varchar(255) not null,
+		role varchar(32) not null default 'user',
+		created_at datetime,
+		updated_at datetime
+	)`).Error; err != nil {
+		t.Fatalf("create legacy users table without email: %v", err)
+	}
+	if err := database.Exec(`INSERT INTO users (username, password_hash, role, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?)`,
+		"legacy_no_email",
+		"hash",
+		models.UserRoleAdmin,
+		time.Now().UTC(),
+		time.Now().UTC(),
+	).Error; err != nil {
+		t.Fatalf("seed legacy user without email: %v", err)
+	}
+	if err := database.Create(&migrate.DataVersion{ID: 1, Version: "0.1.4"}).Error; err != nil {
+		t.Fatalf("seed migration version: %v", err)
 	}
 }
 

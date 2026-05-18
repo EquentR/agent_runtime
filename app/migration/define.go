@@ -188,6 +188,7 @@ func migratePublicAdminBackoffice(tx *gorm.DB) error {
 
 	return tx.Model(&models.User{}).Where("1 = 1").Updates(map[string]any{
 		"display_name":          gorm.Expr("username"),
+		"email":                 gorm.Expr("COALESCE(email, '')"),
 		"status":                models.UserStatusNeedsEmailBinding,
 		"force_password_change": false,
 	}).Error
