@@ -203,7 +203,7 @@ func (h *AdminUserHandler) handleUpdateUser() (method, relativePath string, wrap
 			}
 			if normalizeAdminUserEmail(user.Email) != email {
 				user.EmailVerifiedAt = nil
-				if request.Status == nil {
+				if request.EmailVerified == nil || !*request.EmailVerified {
 					user.Status = models.UserStatusPendingEmailVerification
 				}
 			}

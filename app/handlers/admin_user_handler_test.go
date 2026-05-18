@@ -93,6 +93,19 @@ func TestAdminUserHandlerChangingEmailClearsVerificationByDefault(t *testing.T) 
 	if updated.Status != models.UserStatusPendingEmailVerification {
 		t.Fatalf("updated.Status = %q, want %q", updated.Status, models.UserStatusPendingEmailVerification)
 	}
+
+	activeResponse := doAdminRequest(t, http.MethodPatch, fmt.Sprintf("%s/api/v1/admin/users/%d", server.URL, target.ID), map[string]any{
+		"email":  "second-verified@example.com",
+		"status": models.UserStatusActive,
+	}, deps.adminCookie)
+	defer activeResponse.Body.Close()
+	activeUpdate := decodeAdminUserResponse(t, activeResponse.Body)
+	if activeUpdate.EmailVerifiedAt != nil {
+		t.Fatalf("activeUpdate.EmailVerifiedAt = %v, want nil after second email change", *activeUpdate.EmailVerifiedAt)
+	}
+	if activeUpdate.Status != models.UserStatusPendingEmailVerification {
+		t.Fatalf("activeUpdate.Status = %q, want %q despite requested active without verification", activeUpdate.Status, models.UserStatusPendingEmailVerification)
+	}
 }
 
 func TestAdminUserHandlerRejectsUsernameEmailCrossFieldConflicts(t *testing.T) {
