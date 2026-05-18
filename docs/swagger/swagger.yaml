@@ -350,6 +350,8 @@ definitions:
     properties:
       password:
         type: string
+      turnstile_token:
+        type: string
       username:
         type: string
     type: object
@@ -375,16 +377,30 @@ definitions:
     properties:
       confirm_password:
         type: string
+      email:
+        type: string
       password:
+        type: string
+      turnstile_token:
         type: string
       username:
         type: string
     type: object
   handlers.AuthUserSwaggerDoc:
     properties:
+      display_name:
+        type: string
+      email:
+        type: string
+      email_verified_at:
+        type: string
+      force_password_change:
+        type: boolean
       id:
         type: integer
       role:
+        type: string
+      status:
         type: string
       username:
         type: string
