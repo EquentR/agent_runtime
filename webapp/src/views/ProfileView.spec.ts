@@ -76,7 +76,8 @@ describe('ProfileView', () => {
     expect(api.fetchUserProfile).toHaveBeenCalledTimes(1)
     expect(wrapper.text()).toContain('必须绑定邮箱')
     expect(wrapper.text()).toContain('必须修改密码')
-    expect(wrapper.get('[data-profile-models-link]').attributes('href')).toBe('/profile/models')
+    expect(wrapper.find('[data-profile-models-link]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('我的模型')
 
     await wrapper.get('[data-profile-display-name-input]').setValue(' Alice Doe ')
     await wrapper.get('[data-profile-form]').trigger('submit')

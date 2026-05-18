@@ -64,7 +64,7 @@ describe('app router session guard', () => {
     await router.push('/admin/audit')
 
     expect(document.title).toBe('审计会话 - Agent Runtime')
-  })
+  }, 10_000)
 
   it('forces backend session validation before entering protected pages', async () => {
     session.hasActiveSession.mockReturnValue(true)

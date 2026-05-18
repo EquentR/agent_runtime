@@ -4,7 +4,6 @@ import { RouterLink, RouterView } from 'vue-router'
 const navigation = [
   { label: '仪表盘', to: '/chat' },
   { label: '用户管理', to: '/admin/users' },
-  { label: '模型管理', to: '/admin/models' },
   { label: '系统设置', to: '/admin/settings' },
   { label: '提示词管理', to: '/admin/prompts' },
   { label: '审计会话', to: '/admin/audit' },

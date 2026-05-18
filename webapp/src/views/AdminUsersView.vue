@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 
 import { fetchAdminUsers, resetAdminUserPassword, updateAdminUser } from '../lib/api'
-import type { AdminUserFilter, AuthUser, AuthUserStatus, UserRole } from '../types/api'
+import type { AdminUserFilter, AdminUserUpdateInput, AuthUser, AuthUserStatus, UserRole } from '../types/api'
 
 const users = ref<AuthUser[]>([])
 const selectedUser = ref<AuthUser | null>(null)
@@ -50,14 +50,24 @@ function syncDraft(user: AuthUser) {
   userDraft.forcePasswordChange = user.force_password_change
 }
 
+function clearSelection() {
+  selectedUser.value = null
+  resetDraft.password = ''
+}
+
 async function loadUsers() {
   loading.value = true
   errorMessage.value = ''
   try {
     users.value = await fetchAdminUsers(buildFilter())
     if (selectedUser.value) {
-      selectedUser.value = users.value.find((user) => user.id === selectedUser.value?.id) ?? selectedUser.value
-      syncDraft(selectedUser.value)
+      const refreshed = users.value.find((user) => user.id === selectedUser.value?.id)
+      if (refreshed) {
+        selectedUser.value = refreshed
+        syncDraft(refreshed)
+      } else {
+        clearSelection()
+      }
     }
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '加载用户失败'
@@ -84,14 +94,18 @@ async function submitUserUpdate() {
   errorMessage.value = ''
   statusMessage.value = ''
   try {
-    replaceUser(await updateAdminUser(selectedUser.value.id, {
+    const input: AdminUserUpdateInput = {
       role: userDraft.role,
       status: userDraft.status,
-      email: userDraft.email.trim(),
       display_name: userDraft.displayName.trim(),
       email_verified: userDraft.emailVerified,
       force_password_change: userDraft.forcePasswordChange,
-    }))
+    }
+    const email = userDraft.email.trim()
+    if (email) {
+      input.email = email
+    }
+    replaceUser(await updateAdminUser(selectedUser.value.id, input))
     statusMessage.value = '用户已更新'
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '更新用户失败'

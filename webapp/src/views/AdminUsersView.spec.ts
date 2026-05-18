@@ -93,4 +93,46 @@ describe('AdminUsersView', () => {
 
     expect(api.resetAdminUserPassword).toHaveBeenCalledWith(2, { password: 'temporary-123' })
   })
+
+  it('clears the selected user when filters remove it from the result list', async () => {
+    const AdminUsersView = await loadAdminUsersView()
+    const wrapper = mount(AdminUsersView)
+    await flushPromises()
+
+    await wrapper.get('[data-user-row="3"]').trigger('click')
+    expect(wrapper.text()).toContain('bob@example.com')
+
+    api.fetchAdminUsers.mockResolvedValueOnce([buildUser()])
+    await wrapper.get('[data-user-search-input]').setValue('alice')
+    await wrapper.get('[data-user-search-form]').trigger('submit')
+    await flushPromises()
+
+    expect(wrapper.find('[data-user-row="3"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('从左侧选择一个用户。')
+    expect(wrapper.text()).not.toContain('bob@example.com')
+  })
+
+  it('omits an empty email when updating legacy users without bound email', async () => {
+    api.fetchAdminUsers.mockResolvedValueOnce([buildUser({
+      id: 4,
+      username: 'legacy',
+      email: '',
+      display_name: 'Legacy',
+      status: 'needs_email_binding',
+      email_verified: false,
+    })])
+
+    const AdminUsersView = await loadAdminUsersView()
+    const wrapper = mount(AdminUsersView)
+    await flushPromises()
+
+    await wrapper.get('[data-user-row="4"]').trigger('click')
+    await wrapper.get('[data-user-status-select]').setValue('disabled')
+    await wrapper.get('[data-user-detail-form]').trigger('submit')
+    await flushPromises()
+
+    expect(api.updateAdminUser).toHaveBeenCalledWith(4, expect.not.objectContaining({
+      email: '',
+    }))
+  })
 })

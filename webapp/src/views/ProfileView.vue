@@ -240,13 +240,5 @@ onMounted(() => {
         </div>
       </form>
     </section>
-
-    <section class="admin-section profile-model-entry">
-      <div>
-        <h2>我的模型</h2>
-        <p>管理个人可用模型入口。</p>
-      </div>
-      <RouterLink class="ghost-button" data-profile-models-link to="/profile/models">进入我的模型</RouterLink>
-    </section>
   </main>
 </template>

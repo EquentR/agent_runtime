@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { onMounted, reactive, ref, watch } from 'vue'
 
 import {
   fetchAdminRegistrationSettings,
@@ -56,8 +56,20 @@ function syncSMTP(settings: AdminSMTPSettings) {
   smtpDraft.clearPassword = false
   smtpDraft.from = settings.from
   smtpDraft.useTLS = settings.use_tls
-  smtpDraft.useStartTLS = settings.use_start_tls
+  smtpDraft.useStartTLS = settings.use_tls ? false : settings.use_start_tls
 }
+
+watch(() => smtpDraft.useTLS, (useTLS) => {
+  if (useTLS) {
+    smtpDraft.useStartTLS = false
+  }
+})
+
+watch(() => smtpDraft.useStartTLS, (useStartTLS) => {
+  if (useStartTLS) {
+    smtpDraft.useTLS = false
+  }
+})
 
 function syncTurnstile(settings: AdminTurnstileSettings) {
   turnstileDraft.enabled = settings.enabled
@@ -103,7 +115,7 @@ async function submitSMTP() {
       clear_password: smtpDraft.clearPassword,
       from: smtpDraft.from.trim(),
       use_tls: smtpDraft.useTLS,
-      use_start_tls: smtpDraft.useStartTLS,
+      use_start_tls: smtpDraft.useTLS ? false : smtpDraft.useStartTLS,
     }))
     statusMessage.value = 'SMTP 设置已保存'
   } catch (error) {

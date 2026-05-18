@@ -121,4 +121,24 @@ describe('AdminSettingsView', () => {
 
     expect(api.updateAdminRegistrationSettings).toHaveBeenCalledWith({ enabled: false })
   })
+
+  it('keeps SMTP implicit TLS and STARTTLS mutually exclusive', async () => {
+    const AdminSettingsView = await loadAdminSettingsView()
+    const wrapper = mount(AdminSettingsView)
+    await flushPromises()
+
+    const tlsInput = wrapper.findAll('label.admin-check-row')
+      .find((label) => label.text().includes('Use TLS'))
+      ?.get('input')
+    expect(tlsInput).toBeDefined()
+
+    await tlsInput!.setValue(true)
+    await wrapper.get('[data-smtp-form]').trigger('submit')
+    await flushPromises()
+
+    expect(api.updateAdminSMTPSettings).toHaveBeenCalledWith(expect.objectContaining({
+      use_tls: true,
+      use_start_tls: false,
+    }))
+  })
 })
