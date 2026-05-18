@@ -965,13 +965,8 @@ func TestConversationHandlerDeleteConversation(t *testing.T) {
 
 func TestConversationHandlerAdminCanListOtherUsersConversations(t *testing.T) {
 	deps, server := newAuthenticatedConversationHandlerTestServer(t)
-	if _, err := deps.authLogic.Register(context.Background(), "admin", "secret-123", "secret-123"); err != nil {
-		t.Fatalf("Register(admin) error = %v", err)
-	}
-	owner, err := deps.authLogic.Register(context.Background(), "owner", "secret-123", "secret-123")
-	if err != nil {
-		t.Fatalf("Register(owner) error = %v", err)
-	}
+	registerActiveAuthUserForTest(t, deps.authLogic, "admin", "secret-123")
+	owner := registerActiveAuthUserForTest(t, deps.authLogic, "owner", "secret-123")
 	if _, err := deps.store.CreateConversation(context.Background(), coreagent.CreateConversationInput{
 		ID:         "conv_owner",
 		ProviderID: "openai",
@@ -1004,13 +999,8 @@ func TestConversationHandlerAdminCanListOtherUsersConversations(t *testing.T) {
 
 func TestConversationHandlerAdminCanViewAndDeleteOtherUsersConversation(t *testing.T) {
 	deps, server := newAuthenticatedConversationHandlerTestServer(t)
-	if _, err := deps.authLogic.Register(context.Background(), "admin", "secret-123", "secret-123"); err != nil {
-		t.Fatalf("Register(admin) error = %v", err)
-	}
-	owner, err := deps.authLogic.Register(context.Background(), "owner", "secret-123", "secret-123")
-	if err != nil {
-		t.Fatalf("Register(owner) error = %v", err)
-	}
+	registerActiveAuthUserForTest(t, deps.authLogic, "admin", "secret-123")
+	owner := registerActiveAuthUserForTest(t, deps.authLogic, "owner", "secret-123")
 	if _, err := deps.store.CreateConversation(context.Background(), coreagent.CreateConversationInput{
 		ID:         "conv_owner",
 		ProviderID: "openai",
@@ -1095,16 +1085,9 @@ func TestConversationHandlerAdminCanViewAndDeleteOtherUsersConversation(t *testi
 
 func TestConversationHandlerRejectsCrossUserAccessForNormalUsers(t *testing.T) {
 	deps, server := newAuthenticatedConversationHandlerTestServer(t)
-	if _, err := deps.authLogic.Register(context.Background(), "admin", "secret-123", "secret-123"); err != nil {
-		t.Fatalf("Register(admin) error = %v", err)
-	}
-	owner, err := deps.authLogic.Register(context.Background(), "owner", "secret-123", "secret-123")
-	if err != nil {
-		t.Fatalf("Register(owner) error = %v", err)
-	}
-	if _, err := deps.authLogic.Register(context.Background(), "guest", "secret-123", "secret-123"); err != nil {
-		t.Fatalf("Register(guest) error = %v", err)
-	}
+	registerActiveAuthUserForTest(t, deps.authLogic, "admin", "secret-123")
+	owner := registerActiveAuthUserForTest(t, deps.authLogic, "owner", "secret-123")
+	registerActiveAuthUserForTest(t, deps.authLogic, "guest", "secret-123")
 	if _, err := deps.store.CreateConversation(context.Background(), coreagent.CreateConversationInput{
 		ID:         "conv_owner",
 		ProviderID: "openai",

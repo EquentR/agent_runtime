@@ -146,9 +146,6 @@ func (l *AuthLogic) register(ctx context.Context, input RegisterInput, legacyCom
 		return nil, err
 	}
 	email := normalizeAuthEmail(input.Email)
-	if legacyCompatibility && email == "" {
-		email = strings.ToLower(username) + "@legacy.local"
-	}
 	var user *models.User
 	needsVerification := false
 	if err := l.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -156,10 +153,13 @@ func (l *AuthLogic) register(ctx context.Context, input RegisterInput, legacyCom
 		if err := tx.Model(&models.User{}).Count(&userCount).Error; err != nil {
 			return err
 		}
+		if legacyCompatibility && userCount == 0 && email == "" {
+			email = strings.ToLower(username) + "@legacy.local"
+		}
 		if email == "" {
 			return ErrEmailRequired
 		}
-		if userCount > 0 && !legacyCompatibility {
+		if userCount > 0 {
 			if l.settings != nil {
 				registration, err := l.settings.GetPublicRegistration(ctx)
 				if err != nil {
@@ -201,11 +201,8 @@ func (l *AuthLogic) register(ctx context.Context, input RegisterInput, legacyCom
 			Role:         models.UserRoleUser,
 			Status:       models.UserStatusPendingEmailVerification,
 		}
-		if userCount == 0 || legacyCompatibility {
+		if userCount == 0 {
 			user.Role = models.UserRoleAdmin
-			if userCount > 0 {
-				user.Role = models.UserRoleUser
-			}
 			user.Status = models.UserStatusActive
 			user.EmailVerifiedAt = &now
 		} else {

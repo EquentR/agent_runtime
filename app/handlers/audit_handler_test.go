@@ -504,9 +504,7 @@ func newAuditHandlerSessionCookie(t *testing.T, logic *logics.AuthLogic, usernam
 	t.Helper()
 
 	const password = "secret1"
-	if _, err := logic.Register(context.Background(), username, password, password); err != nil {
-		t.Fatalf("Register(%q) error = %v", username, err)
-	}
+	registerActiveAuthUserForTest(t, logic, username, password)
 	return loginAuditHandlerSessionCookie(t, logic, username)
 }
 
@@ -525,11 +523,7 @@ func registerAuditHandlerUser(t *testing.T, logic *logics.AuthLogic, username st
 	t.Helper()
 
 	const password = "secret1"
-	user, err := logic.Register(context.Background(), username, password, password)
-	if err != nil {
-		t.Fatalf("Register(%q) error = %v", username, err)
-	}
-	return user
+	return registerActiveAuthUserForTest(t, logic, username, password)
 }
 
 func decodeAuditRunResponse(t *testing.T, body io.Reader) coreaudit.Run {

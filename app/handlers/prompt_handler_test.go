@@ -652,12 +652,8 @@ func newPromptHandlerTestServer(t *testing.T) (*promptHandlerTestDeps, *httptest
 	authLogic := newAuthLogicForTest(t, db)
 	authMiddleware := NewAuthMiddleware(authLogic)
 
-	if _, err := authLogic.Register(context.Background(), "admin", "secret-123", "secret-123"); err != nil {
-		t.Fatalf("Register(admin) error = %v", err)
-	}
-	if _, err := authLogic.Register(context.Background(), "member", "secret-123", "secret-123"); err != nil {
-		t.Fatalf("Register(member) error = %v", err)
-	}
+	registerActiveAuthUserForTest(t, authLogic, "admin", "secret-123")
+	registerActiveAuthUserForTest(t, authLogic, "member", "secret-123")
 
 	engine := rest.Init()
 	NewPromptHandler(store, authMiddleware.RequireSession()).Register(engine.Group("/api/v1"))

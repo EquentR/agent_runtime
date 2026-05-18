@@ -10,6 +10,7 @@ import (
 	"github.com/EquentR/agent_runtime/app/logics"
 	"github.com/EquentR/agent_runtime/app/models"
 	coreagent "github.com/EquentR/agent_runtime/core/agent"
+	coreskills "github.com/EquentR/agent_runtime/core/skills"
 	coretypes "github.com/EquentR/agent_runtime/core/types"
 	"github.com/EquentR/agent_runtime/pkg/rest"
 	"github.com/glebarez/sqlite"
@@ -29,7 +30,7 @@ func TestRouterInitUsesActiveUserGateForCoreRoutesAndKeepsAuthMeSessionOnly(t *t
 		t.Run(status, func(t *testing.T) {
 			engine := rest.Init()
 			authLogic, sessionID := newRouterAuthGateSubject(t, status)
-			Init(engine, "/api/v1", nil, Dependencies{
+			deps := Dependencies{
 				AuthLogic: authLogic,
 				ModelResolver: &coreagent.ModelResolver{Providers: []coretypes.LLMProvider{{
 					BaseProvider: coretypes.BaseProvider{Name: "openai"},
@@ -38,7 +39,9 @@ func TestRouterInitUsesActiveUserGateForCoreRoutesAndKeepsAuthMeSessionOnly(t *t
 						Type:      coretypes.LLMTypeOpenAIResponses,
 					}},
 				}}},
-			})
+				SkillLoader: coreskills.NewLoader(t.TempDir()),
+			}
+			Init(engine, "/api/v1", nil, deps)
 
 			meRecorder := httptest.NewRecorder()
 			meRequest := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
@@ -59,6 +62,18 @@ func TestRouterInitUsesActiveUserGateForCoreRoutesAndKeepsAuthMeSessionOnly(t *t
 			}
 			if modelsEnvelope.Code != http.StatusForbidden {
 				t.Fatalf("/models code = %d, want %d", modelsEnvelope.Code, http.StatusForbidden)
+			}
+
+			skillsRecorder := httptest.NewRecorder()
+			skillsRequest := httptest.NewRequest(http.MethodGet, "/api/v1/skills", nil)
+			skillsRequest.AddCookie(&http.Cookie{Name: logics.DefaultAuthSessionCookieName, Value: sessionID})
+			engine.ServeHTTP(skillsRecorder, skillsRequest)
+			skillsEnvelope := decodeRouterAuthEnvelope(t, skillsRecorder)
+			if skillsEnvelope.OK {
+				t.Fatal("/skills OK = true, want active-user gate denial")
+			}
+			if skillsEnvelope.Code != http.StatusForbidden {
+				t.Fatalf("/skills code = %d, want %d", skillsEnvelope.Code, http.StatusForbidden)
 			}
 		})
 	}

@@ -569,6 +569,43 @@ func newAuthLogicForTest(t *testing.T, db *gorm.DB) *logics.AuthLogic {
 	return logic
 }
 
+func registerActiveAuthUserForTest(t *testing.T, logic *logics.AuthLogic, username, password string) *models.User {
+	t.Helper()
+
+	ctx := context.Background()
+	user, err := logic.RegisterWithInput(ctx, logics.RegisterInput{
+		Username:        username,
+		Email:           username + "@example.com",
+		Password:        password,
+		ConfirmPassword: password,
+	})
+	if err != nil {
+		t.Fatalf("RegisterWithInput(%q) error = %v", username, err)
+	}
+	if user.Status == models.UserStatusPendingEmailVerification {
+		verification := logic.EmailVerification()
+		if verification == nil {
+			t.Fatalf("EmailVerification() = nil for pending user %q", username)
+		}
+		user, err = verification.Verify(ctx, logics.VerifyEmailInput{
+			UserID:  user.ID,
+			Email:   user.Email,
+			Purpose: logics.EmailVerificationPurposeRegistration,
+			Code:    "123456",
+		})
+		if err != nil {
+			t.Fatalf("Verify(%q) error = %v", username, err)
+		}
+	}
+	if user.Status != models.UserStatusActive {
+		t.Fatalf("registered user %q status = %q, want %q", username, user.Status, models.UserStatusActive)
+	}
+	if user.EmailVerifiedAt == nil {
+		t.Fatalf("registered user %q EmailVerifiedAt = nil, want verified timestamp", username)
+	}
+	return user
+}
+
 type fakeHandlerMailSender struct {
 	messages []mail.Message
 }

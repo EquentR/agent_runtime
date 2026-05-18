@@ -281,6 +281,15 @@ type AuthEmailVerificationVerifySwaggerRequest struct {
 	Code    string `json:"code"`
 }
 
+// AuthEmailVerificationVerifySwaggerResponse 描述校验邮箱验证码接口的成功响应结构。
+type AuthEmailVerificationVerifySwaggerResponse struct {
+	Code    int                `json:"code"`
+	Message string             `json:"message"`
+	Data    AuthUserSwaggerDoc `json:"data"`
+	OK      bool               `json:"ok"`
+	Time    string             `json:"time"`
+}
+
 // PromptDocumentSwaggerDoc 描述提示词文档的文档结构。
 type PromptDocumentSwaggerDoc struct {
 	ID          string `json:"id"`

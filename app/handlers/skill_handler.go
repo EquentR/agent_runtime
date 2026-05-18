@@ -11,21 +11,26 @@ import (
 )
 
 type SkillHandler struct {
-	loader *coreskills.Loader
+	loader      *coreskills.Loader
+	middlewares []gin.HandlerFunc
 }
 
-func NewSkillHandler(loader *coreskills.Loader) *SkillHandler {
-	return &SkillHandler{loader: loader}
+func NewSkillHandler(loader *coreskills.Loader, middlewares ...gin.HandlerFunc) *SkillHandler {
+	return &SkillHandler{loader: loader, middlewares: middlewares}
 }
 
 func (h *SkillHandler) Register(rg *gin.RouterGroup) {
 	if h == nil || h.loader == nil {
 		return
 	}
+	options := []resp.WrapperOption{}
+	if len(h.middlewares) > 0 {
+		options = append(options, resp.WithMiddlewares(h.middlewares...))
+	}
 	resp.HandlerWrapper(rg, "skills", []*resp.Handler{
 		resp.NewJsonOptionsHandler(h.handleListSkills),
 		resp.NewJsonOptionsHandler(h.handleGetSkill),
-	})
+	}, options...)
 }
 
 // handleListSkills 返回当前 workspace 下可见的 skills 列表。

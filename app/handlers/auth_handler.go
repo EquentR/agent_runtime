@@ -208,6 +208,20 @@ func (h *AuthHandler) handleCurrentUser() (method, relativePath string, wrapper 
 	}, []resp.WrapperOption{h.middleware.RequireSessionOption()}
 }
 
+// handleSendEmailVerification 返回发送邮箱验证码接口的路由定义。
+//
+// @Summary 发送邮箱验证码
+// @Description 根据邮箱或用户 ID 发送邮箱验证码，可用于注册验证或邮箱绑定。
+// @Tags auth
+// @Accept json
+// @Produce json
+// @Param body body AuthEmailVerificationSendSwaggerRequest true "发送邮箱验证码请求"
+// @Success 200 {object} AuthEmailVerificationSentSwaggerResponse
+// @Failure 400 {object} ErrorSwaggerResponse
+// @Failure 404 {object} ErrorSwaggerResponse
+// @Failure 429 {object} ErrorSwaggerResponse
+// @Failure 503 {object} ErrorSwaggerResponse
+// @Router /auth/email-verification/send [post]
 func (h *AuthHandler) handleSendEmailVerification() (method, relativePath string, wrapper resp.JsonOptionsResultWrapper, opts []resp.WrapperOption) {
 	return http.MethodPost, "/email-verification/send", func(c *gin.Context) (any, []resp.ResOpt, error) {
 		var request emailVerificationSendRequest
@@ -233,6 +247,21 @@ func (h *AuthHandler) handleSendEmailVerification() (method, relativePath string
 	}, nil
 }
 
+// handleVerifyEmail 返回校验邮箱验证码接口的路由定义。
+//
+// @Summary 校验邮箱验证码
+// @Description 校验邮箱验证码并返回更新后的用户信息。
+// @Tags auth
+// @Accept json
+// @Produce json
+// @Param body body AuthEmailVerificationVerifySwaggerRequest true "校验邮箱验证码请求"
+// @Success 200 {object} AuthEmailVerificationVerifySwaggerResponse
+// @Failure 400 {object} ErrorSwaggerResponse
+// @Failure 403 {object} ErrorSwaggerResponse
+// @Failure 404 {object} ErrorSwaggerResponse
+// @Failure 429 {object} ErrorSwaggerResponse
+// @Failure 503 {object} ErrorSwaggerResponse
+// @Router /auth/email-verification/verify [post]
 func (h *AuthHandler) handleVerifyEmail() (method, relativePath string, wrapper resp.JsonOptionsResultWrapper, opts []resp.WrapperOption) {
 	return http.MethodPost, "/email-verification/verify", func(c *gin.Context) (any, []resp.ResOpt, error) {
 		var request emailVerificationVerifyRequest

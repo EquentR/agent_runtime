@@ -26,7 +26,7 @@ func Init(e *gin.Engine, baseUrl string, staticPath []rest.Static, deps Dependen
 		handlers.NewExampleHandler(),
 		handlers.NewModelCatalogHandler(deps.ModelResolver, activeUser),
 		handlers.NewAttachmentHandler(deps.AttachmentStore, deps.AttachmentStorage, deps.AttachmentDraftTTL, activeUser),
-		handlers.NewSkillHandler(deps.SkillLoader),
+		handlers.NewSkillHandler(deps.SkillLoader, activeUser),
 		handlers.NewPromptHandler(deps.PromptStore, activeUser),
 		handlers.NewTaskHandler(deps.TaskManager, deps.ConversationStore, activeUser),
 		handlers.NewInteractionHandler(deps.TaskManager, deps.InteractionStore, deps.ConversationStore, activeUser),

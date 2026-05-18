@@ -346,6 +346,59 @@ definitions:
       time:
         type: string
     type: object
+  handlers.AuthEmailVerificationSendSwaggerRequest:
+    properties:
+      email:
+        type: string
+      purpose:
+        type: string
+      turnstile_token:
+        type: string
+      user_id:
+        type: integer
+    type: object
+  handlers.AuthEmailVerificationSentSwaggerData:
+    properties:
+      sent:
+        type: boolean
+    type: object
+  handlers.AuthEmailVerificationSentSwaggerResponse:
+    properties:
+      code:
+        type: integer
+      data:
+        $ref: '#/definitions/handlers.AuthEmailVerificationSentSwaggerData'
+      message:
+        type: string
+      ok:
+        type: boolean
+      time:
+        type: string
+    type: object
+  handlers.AuthEmailVerificationVerifySwaggerRequest:
+    properties:
+      code:
+        type: string
+      email:
+        type: string
+      purpose:
+        type: string
+      user_id:
+        type: integer
+    type: object
+  handlers.AuthEmailVerificationVerifySwaggerResponse:
+    properties:
+      code:
+        type: integer
+      data:
+        $ref: '#/definitions/handlers.AuthUserSwaggerDoc'
+      message:
+        type: string
+      ok:
+        type: boolean
+      time:
+        type: string
+    type: object
   handlers.AuthLoginSwaggerRequest:
     properties:
       password:
@@ -1269,6 +1322,86 @@ paths:
       summary: 获取审计运行回放包
       tags:
       - audit
+  /auth/email-verification/send:
+    post:
+      consumes:
+      - application/json
+      description: 根据邮箱或用户 ID 发送邮箱验证码，可用于注册验证或邮箱绑定。
+      parameters:
+      - description: 发送邮箱验证码请求
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.AuthEmailVerificationSendSwaggerRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.AuthEmailVerificationSentSwaggerResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+      summary: 发送邮箱验证码
+      tags:
+      - auth
+  /auth/email-verification/verify:
+    post:
+      consumes:
+      - application/json
+      description: 校验邮箱验证码并返回更新后的用户信息。
+      parameters:
+      - description: 校验邮箱验证码请求
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.AuthEmailVerificationVerifySwaggerRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.AuthEmailVerificationVerifySwaggerResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+      summary: 校验邮箱验证码
+      tags:
+      - auth
   /auth/login:
     post:
       consumes:

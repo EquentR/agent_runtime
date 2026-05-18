@@ -121,6 +121,41 @@ func TestAuthLogicFirstUserRequiresEmailAndMarksVerifiedAdmin(t *testing.T) {
 	}
 }
 
+func TestAuthLogicLegacyRegisterOnlySynthesizesEmailForEmptyUserTable(t *testing.T) {
+	logic := newAuthLogicTestSubject(t)
+	ctx := context.Background()
+
+	firstUser, err := logic.Register(ctx, "legacy_admin", "secret-123", "secret-123")
+	if err != nil {
+		t.Fatalf("Register(first legacy) error = %v", err)
+	}
+	if firstUser.Email != "legacy_admin@legacy.local" {
+		t.Fatalf("first legacy email = %q, want synthesized legacy email", firstUser.Email)
+	}
+	if firstUser.Role != models.UserRoleAdmin {
+		t.Fatalf("first legacy role = %q, want %q", firstUser.Role, models.UserRoleAdmin)
+	}
+	if firstUser.Status != models.UserStatusActive {
+		t.Fatalf("first legacy status = %q, want %q", firstUser.Status, models.UserStatusActive)
+	}
+	if firstUser.EmailVerifiedAt == nil {
+		t.Fatal("first legacy EmailVerifiedAt = nil, want verified timestamp")
+	}
+
+	_, err = logic.Register(ctx, "legacy_bob", "secret-123", "secret-123")
+	if !errors.Is(err, ErrEmailRequired) {
+		t.Fatalf("Register(second legacy without email) error = %v, want %v", err, ErrEmailRequired)
+	}
+
+	var count int64
+	if err := logic.db.Model(&models.User{}).Where("username = ?", "legacy_bob").Count(&count).Error; err != nil {
+		t.Fatalf("count second legacy user: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("second legacy users created = %d, want 0", count)
+	}
+}
+
 func TestAuthLogicRegisterCreatesPendingUserAndSendsVerification(t *testing.T) {
 	mailer := &fakeAuthMailSender{}
 	logic := newAuthLogicTestSubject(t, withAuthTestMailer(mailer, "123456"))
