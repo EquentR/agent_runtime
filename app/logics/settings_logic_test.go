@@ -255,7 +255,7 @@ func TestSettingsLogicClearsSMTPPasswordAndTurnstileSecret(t *testing.T) {
 		t.Fatal("UpdateTurnstile(preserve) SecretMasked = empty, want preserved secret mask")
 	}
 	clearedTurnstile, err := logic.UpdateTurnstile(context.Background(), UpdateTurnstileInput{
-		Enabled:     true,
+		Enabled:     false,
 		SiteKey:     "site-key",
 		ClearSecret: true,
 	})
@@ -372,7 +372,7 @@ func TestSettingsLogicTurnstileReplaceAndClearDoNotDecryptCorruptStoredSecret(t 
 
 	seedCorruptTurnstileSetting(t, db)
 	cleared, err := logic.UpdateTurnstile(context.Background(), UpdateTurnstileInput{
-		Enabled:     true,
+		Enabled:     false,
 		SiteKey:     "site-key",
 		ClearSecret: true,
 	})
@@ -392,6 +392,113 @@ func TestSettingsLogicTurnstileReplaceAndClearDoNotDecryptCorruptStoredSecret(t 
 	if storedTurnstilePayload.Secret != "" {
 		t.Fatalf("cleared corrupt turnstile secret = %q, want empty", storedTurnstilePayload.Secret)
 	}
+}
+
+func TestSettingsLogicUpdateTurnstileValidatesEnabledConfigBeforePersisting(t *testing.T) {
+	t.Run("enabled missing site key", func(t *testing.T) {
+		logic, db, _ := newSettingsLogicTestSubject(t, SettingsDefaults{})
+
+		_, err := logic.UpdateTurnstile(context.Background(), UpdateTurnstileInput{
+			Enabled: true,
+			SiteKey: " ",
+			Secret:  "turnstile-secret",
+		})
+		if err == nil || !strings.Contains(strings.ToLower(err.Error()), "site key") {
+			t.Fatalf("UpdateTurnstile(missing site key) error = %v, want site key validation error", err)
+		}
+		if count := countSettingsTestSettings(t, db, "turnstile"); count != 0 {
+			t.Fatalf("turnstile settings count = %d, want 0", count)
+		}
+	})
+
+	t.Run("enabled missing secret", func(t *testing.T) {
+		logic, db, _ := newSettingsLogicTestSubject(t, SettingsDefaults{})
+
+		_, err := logic.UpdateTurnstile(context.Background(), UpdateTurnstileInput{
+			Enabled: true,
+			SiteKey: "site-key",
+		})
+		if err == nil || !strings.Contains(strings.ToLower(err.Error()), "secret") {
+			t.Fatalf("UpdateTurnstile(missing secret) error = %v, want secret validation error", err)
+		}
+		if count := countSettingsTestSettings(t, db, "turnstile"); count != 0 {
+			t.Fatalf("turnstile settings count = %d, want 0", count)
+		}
+	})
+
+	t.Run("enabled whitespace secret", func(t *testing.T) {
+		logic, db, _ := newSettingsLogicTestSubject(t, SettingsDefaults{})
+
+		_, err := logic.UpdateTurnstile(context.Background(), UpdateTurnstileInput{
+			Enabled: true,
+			SiteKey: "site-key",
+			Secret:  " ",
+		})
+		if err == nil || !strings.Contains(strings.ToLower(err.Error()), "secret") {
+			t.Fatalf("UpdateTurnstile(whitespace secret) error = %v, want secret validation error", err)
+		}
+		if count := countSettingsTestSettings(t, db, "turnstile"); count != 0 {
+			t.Fatalf("turnstile settings count = %d, want 0", count)
+		}
+	})
+
+	t.Run("enabled clear secret rejected", func(t *testing.T) {
+		logic, db, _ := newSettingsLogicTestSubject(t, SettingsDefaults{})
+		if _, err := logic.UpdateTurnstile(context.Background(), UpdateTurnstileInput{
+			Enabled: true,
+			SiteKey: "site-key",
+			Secret:  "stored-secret",
+		}); err != nil {
+			t.Fatalf("UpdateTurnstile(seed) error = %v", err)
+		}
+
+		_, err := logic.UpdateTurnstile(context.Background(), UpdateTurnstileInput{
+			Enabled:     true,
+			SiteKey:     "site-key",
+			ClearSecret: true,
+		})
+		if err == nil || !strings.Contains(strings.ToLower(err.Error()), "secret") {
+			t.Fatalf("UpdateTurnstile(clear enabled secret) error = %v, want secret validation error", err)
+		}
+		stored := loadSettingsTestSetting(t, db, "turnstile")
+		if !stored.Encrypted {
+			t.Fatal("stored turnstile setting Encrypted = false, want preserved encrypted secret")
+		}
+		var payload struct {
+			Secret string `json:"secret"`
+		}
+		if err := json.Unmarshal(stored.ValueJSON, &payload); err != nil {
+			t.Fatalf("unmarshal preserved turnstile payload: %v", err)
+		}
+		if payload.Secret == "" {
+			t.Fatal("stored turnstile secret = empty, want preserved secret")
+		}
+	})
+
+	t.Run("enabled preserves existing secret", func(t *testing.T) {
+		logic, _, _ := newSettingsLogicTestSubject(t, SettingsDefaults{})
+		if _, err := logic.UpdateTurnstile(context.Background(), UpdateTurnstileInput{
+			Enabled: true,
+			SiteKey: "site-key",
+			Secret:  "stored-secret",
+		}); err != nil {
+			t.Fatalf("UpdateTurnstile(seed) error = %v", err)
+		}
+
+		settings, err := logic.UpdateTurnstile(context.Background(), UpdateTurnstileInput{
+			Enabled: true,
+			SiteKey: "updated-site-key",
+		})
+		if err != nil {
+			t.Fatalf("UpdateTurnstile(preserve enabled secret) error = %v", err)
+		}
+		if settings.Secret != "" {
+			t.Fatalf("UpdateTurnstile(preserve enabled secret) Secret = %q, want plaintext omitted", settings.Secret)
+		}
+		if settings.SecretMasked == "" {
+			t.Fatal("UpdateTurnstile(preserve enabled secret) SecretMasked = empty, want preserved secret mask")
+		}
+	})
 }
 
 func TestSettingsLogicUpdateSMTPValidatesEnabledConfigBeforePersisting(t *testing.T) {
@@ -493,6 +600,16 @@ func loadSettingsTestSetting(t *testing.T, db *gorm.DB, key string) models.Syste
 		t.Fatalf("load setting %q: %v", key, err)
 	}
 	return setting
+}
+
+func countSettingsTestSettings(t *testing.T, db *gorm.DB, key string) int64 {
+	t.Helper()
+
+	var count int64
+	if err := db.Model(&models.SystemSetting{}).Where("key = ?", key).Count(&count).Error; err != nil {
+		t.Fatalf("count setting %q: %v", key, err)
+	}
+	return count
 }
 
 func seedCorruptSMTPSetting(t *testing.T, db *gorm.DB) {

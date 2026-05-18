@@ -64,8 +64,8 @@ func (c SMTPConfig) ValidateForSend() error {
 	if strings.TrimSpace(c.Username) == "" || c.Password == "" {
 		return fmt.Errorf("smtp username and password are required")
 	}
-	if c.Port <= 0 {
-		return fmt.Errorf("smtp port is required")
+	if c.Port < 1 || c.Port > 65535 {
+		return fmt.Errorf("smtp port must be between 1 and 65535")
 	}
 	return nil
 }

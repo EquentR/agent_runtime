@@ -210,6 +210,9 @@ func (l *SettingsLogic) UpdateTurnstile(ctx context.Context, input UpdateTurnsti
 		}
 		settings.Secret = current.Secret
 	}
+	if err := validateTurnstileSettings(settings); err != nil {
+		return TurnstileSettings{}, err
+	}
 	payload, err := l.encryptTurnstile(settings)
 	if err != nil {
 		return TurnstileSettings{}, err
@@ -399,4 +402,17 @@ func validateSMTPSettingsForSend(settings SMTPSettings) error {
 		UseTLS:      settings.UseTLS,
 		UseStartTLS: settings.UseStartTLS,
 	}).ValidateForSend()
+}
+
+func validateTurnstileSettings(settings TurnstileSettings) error {
+	if !settings.Enabled {
+		return nil
+	}
+	if strings.TrimSpace(settings.SiteKey) == "" {
+		return fmt.Errorf("turnstile site key is required")
+	}
+	if strings.TrimSpace(settings.Secret) == "" {
+		return fmt.Errorf("turnstile secret is required")
+	}
+	return nil
 }

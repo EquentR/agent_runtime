@@ -60,6 +60,11 @@ func TestSMTPConfigValidationRequiresHostFromAndCredentialsWhenEnabled(t *testin
 	if err := config.ValidateForSend(); err != nil {
 		t.Fatalf("valid ValidateForSend() error = %v", err)
 	}
+	invalidHighPort := config
+	invalidHighPort.Port = 65536
+	if err := invalidHighPort.ValidateForSend(); err == nil {
+		t.Fatal("port 65536 ValidateForSend() error = nil, want error")
+	}
 	bothTLSModes := config
 	bothTLSModes.UseTLS = true
 	bothTLSModes.UseStartTLS = true
