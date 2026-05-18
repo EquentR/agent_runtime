@@ -121,6 +121,27 @@ func NewSettingsLogic(db *gorm.DB, defaults SettingsDefaults, codec *secret.Code
 	return &SettingsLogic{db: db, defaults: defaults, codec: codec}, nil
 }
 
+func (l *SettingsLogic) Transaction(ctx context.Context, fn func(*SettingsLogic) error) error {
+	if l == nil || l.db == nil {
+		return fmt.Errorf("settings db is required")
+	}
+	if fn == nil {
+		return nil
+	}
+	return l.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		clone := *l
+		clone.db = tx
+		return fn(&clone)
+	})
+}
+
+func (l *SettingsLogic) DB() *gorm.DB {
+	if l == nil {
+		return nil
+	}
+	return l.db
+}
+
 func (l *SettingsLogic) GetPublicRegistration(ctx context.Context) (PublicRegistrationSettings, error) {
 	var settings PublicRegistrationSettings
 	found, err := l.loadSetting(ctx, settingKeyPublicRegistration, &settings)

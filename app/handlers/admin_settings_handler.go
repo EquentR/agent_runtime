@@ -101,23 +101,27 @@ func (h *AdminSettingsHandler) handleUpdateSMTP() (method, relativePath string, 
 		if err := c.ShouldBindJSON(&request); err != nil {
 			return nil, []resp.ResOpt{resp.WithCode(http.StatusBadRequest)}, err
 		}
-		after, err := h.settings.UpdateSMTP(c.Request.Context(), logics.UpdateSMTPInput{
-			Enabled:       request.Enabled,
-			Host:          request.Host,
-			Port:          request.Port,
-			Username:      request.Username,
-			Password:      request.Password,
-			ClearPassword: request.ClearPassword,
-			From:          request.From,
-			UseTLS:        request.UseTLS,
-			UseStartTLS:   request.UseStartTLS,
-			UpdatedBy:     actor.Username,
-		})
-		if err != nil {
+		var after logics.SMTPSettings
+		if err := h.settings.Transaction(c.Request.Context(), func(settings *logics.SettingsLogic) error {
+			var updateErr error
+			after, updateErr = settings.UpdateSMTP(c.Request.Context(), logics.UpdateSMTPInput{
+				Enabled:       request.Enabled,
+				Host:          request.Host,
+				Port:          request.Port,
+				Username:      request.Username,
+				Password:      request.Password,
+				ClearPassword: request.ClearPassword,
+				From:          request.From,
+				UseTLS:        request.UseTLS,
+				UseStartTLS:   request.UseStartTLS,
+				UpdatedBy:     actor.Username,
+			})
+			if updateErr != nil {
+				return updateErr
+			}
+			return h.recordAuditWithLogic(c, settings, *actor, "setting", "smtp", "admin.settings.smtp.update", before, after)
+		}); err != nil {
 			return nil, []resp.ResOpt{resp.WithCode(http.StatusBadRequest)}, err
-		}
-		if err := h.recordAudit(c, *actor, "setting", "smtp", "admin.settings.smtp.update", before, after); err != nil {
-			return nil, nil, err
 		}
 		return after, nil, nil
 	}, nil
@@ -171,21 +175,25 @@ func (h *AdminSettingsHandler) handleUpdateTurnstile() (method, relativePath str
 		if err := c.ShouldBindJSON(&request); err != nil {
 			return nil, []resp.ResOpt{resp.WithCode(http.StatusBadRequest)}, err
 		}
-		after, err := h.settings.UpdateTurnstile(c.Request.Context(), logics.UpdateTurnstileInput{
-			Enabled:             request.Enabled,
-			SiteKey:             request.SiteKey,
-			Secret:              request.Secret,
-			ClearSecret:         request.ClearSecret,
-			ProtectLogin:        request.ProtectLogin,
-			ProtectRegistration: request.ProtectRegistration,
-			ProtectVerification: request.ProtectVerification,
-			UpdatedBy:           actor.Username,
-		})
-		if err != nil {
+		var after logics.TurnstileSettings
+		if err := h.settings.Transaction(c.Request.Context(), func(settings *logics.SettingsLogic) error {
+			var updateErr error
+			after, updateErr = settings.UpdateTurnstile(c.Request.Context(), logics.UpdateTurnstileInput{
+				Enabled:             request.Enabled,
+				SiteKey:             request.SiteKey,
+				Secret:              request.Secret,
+				ClearSecret:         request.ClearSecret,
+				ProtectLogin:        request.ProtectLogin,
+				ProtectRegistration: request.ProtectRegistration,
+				ProtectVerification: request.ProtectVerification,
+				UpdatedBy:           actor.Username,
+			})
+			if updateErr != nil {
+				return updateErr
+			}
+			return h.recordAuditWithLogic(c, settings, *actor, "setting", "turnstile", "admin.settings.turnstile.update", before, after)
+		}); err != nil {
 			return nil, []resp.ResOpt{resp.WithCode(http.StatusBadRequest)}, err
-		}
-		if err := h.recordAudit(c, *actor, "setting", "turnstile", "admin.settings.turnstile.update", before, after); err != nil {
-			return nil, nil, err
 		}
 		return after, nil, nil
 	}, nil
@@ -215,14 +223,18 @@ func (h *AdminSettingsHandler) handleUpdateRegistration() (method, relativePath 
 		if err := c.ShouldBindJSON(&request); err != nil {
 			return nil, []resp.ResOpt{resp.WithCode(http.StatusBadRequest)}, err
 		}
-		after, err := h.settings.UpdatePublicRegistration(c.Request.Context(), logics.UpdatePublicRegistrationInput{
-			Enabled:   request.Enabled,
-			UpdatedBy: actor.Username,
-		})
-		if err != nil {
-			return nil, nil, err
-		}
-		if err := h.recordAudit(c, *actor, "setting", "registration", "admin.settings.registration.update", before, after); err != nil {
+		var after logics.PublicRegistrationSettings
+		if err := h.settings.Transaction(c.Request.Context(), func(settings *logics.SettingsLogic) error {
+			var updateErr error
+			after, updateErr = settings.UpdatePublicRegistration(c.Request.Context(), logics.UpdatePublicRegistrationInput{
+				Enabled:   request.Enabled,
+				UpdatedBy: actor.Username,
+			})
+			if updateErr != nil {
+				return updateErr
+			}
+			return h.recordAuditWithLogic(c, settings, *actor, "setting", "registration", "admin.settings.registration.update", before, after)
+		}); err != nil {
 			return nil, nil, err
 		}
 		return after, nil, nil
@@ -238,10 +250,18 @@ func requireAdminSettingsActor(c *gin.Context) (*models.User, error) {
 }
 
 func (h *AdminSettingsHandler) recordAudit(c *gin.Context, actor models.User, targetKind string, targetID string, action string, before any, after any) error {
+	return h.recordAuditWithLogic(c, nil, actor, targetKind, targetID, action, before, after)
+}
+
+func (h *AdminSettingsHandler) recordAuditWithLogic(c *gin.Context, settings *logics.SettingsLogic, actor models.User, targetKind string, targetID string, action string, before any, after any) error {
 	if h.audit == nil {
 		return fmt.Errorf("admin audit logic is not configured")
 	}
-	return h.audit.Record(c.Request.Context(), logics.RecordAdminAuditInput{
+	audit := h.audit
+	if settings != nil {
+		audit = h.audit.WithDB(settings.DB())
+	}
+	return audit.Record(c.Request.Context(), logics.RecordAdminAuditInput{
 		Actor:      actor,
 		TargetKind: targetKind,
 		TargetID:   targetID,

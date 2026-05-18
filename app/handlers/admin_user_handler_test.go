@@ -78,6 +78,23 @@ func TestAdminUserHandlerUpdatesRoleStatusEmailAndVerification(t *testing.T) {
 	}
 }
 
+func TestAdminUserHandlerChangingEmailClearsVerificationByDefault(t *testing.T) {
+	deps, server := newAdminHandlerTestServer(t)
+	target := seedAdminHandlerUser(t, deps.db, "verified", "verified@example.com", models.UserRoleUser, models.UserStatusActive, true)
+
+	updateResponse := doAdminRequest(t, http.MethodPatch, fmt.Sprintf("%s/api/v1/admin/users/%d", server.URL, target.ID), map[string]any{
+		"email": "new-verified@example.com",
+	}, deps.adminCookie)
+	defer updateResponse.Body.Close()
+	updated := decodeAdminUserResponse(t, updateResponse.Body)
+	if updated.EmailVerifiedAt != nil {
+		t.Fatalf("updated.EmailVerifiedAt = %v, want nil after email change", *updated.EmailVerifiedAt)
+	}
+	if updated.Status != models.UserStatusPendingEmailVerification {
+		t.Fatalf("updated.Status = %q, want %q", updated.Status, models.UserStatusPendingEmailVerification)
+	}
+}
+
 func TestAdminUserHandlerRejectsUsernameEmailCrossFieldConflicts(t *testing.T) {
 	deps, server := newAdminHandlerTestServer(t)
 	seedAdminHandlerUser(t, deps.db, "Taken@Example.COM", "owner@example.com", models.UserRoleUser, models.UserStatusActive, true)
@@ -101,6 +118,25 @@ func TestAdminUserHandlerRejectsUsernameEmailCrossFieldConflicts(t *testing.T) {
 	updateEnvelope := decodeEnvelope(t, updateResponse.Body)
 	if updateEnvelope.OK {
 		t.Fatal("update email matching existing username OK = true, want conflict")
+	}
+}
+
+func TestAdminUserMutationRollsBackWhenAuditFails(t *testing.T) {
+	deps, server := newAdminHandlerTestServerWithoutAuditTable(t)
+	target := seedAdminHandlerUser(t, deps.db, "rollback", "rollback@example.com", models.UserRoleUser, models.UserStatusActive, true)
+
+	response := doAdminRequest(t, http.MethodPatch, fmt.Sprintf("%s/api/v1/admin/users/%d", server.URL, target.ID), map[string]any{
+		"status": models.UserStatusDisabled,
+	}, deps.adminCookie)
+	defer response.Body.Close()
+	envelope := decodeEnvelope(t, response.Body)
+	if envelope.OK {
+		t.Fatal("update with failing audit OK = true, want false")
+	}
+
+	reloaded := loadAdminHandlerUser(t, deps.db, target.ID)
+	if reloaded.Status != models.UserStatusActive {
+		t.Fatalf("reloaded.Status = %q, want rollback to %q", reloaded.Status, models.UserStatusActive)
 	}
 }
 
@@ -208,12 +244,24 @@ type adminUserTestResponse struct {
 }
 
 func newAdminHandlerTestServer(t *testing.T) (*adminHandlerTestDeps, *httptest.Server) {
+	return newAdminHandlerTestServerWithAuditTable(t, true)
+}
+
+func newAdminHandlerTestServerWithoutAuditTable(t *testing.T) (*adminHandlerTestDeps, *httptest.Server) {
+	return newAdminHandlerTestServerWithAuditTable(t, false)
+}
+
+func newAdminHandlerTestServerWithAuditTable(t *testing.T, migrateAuditTable bool) (*adminHandlerTestDeps, *httptest.Server) {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("gorm.Open() error = %v", err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.UserSession{}, &models.SystemSetting{}, &models.EmailVerification{}, &models.AdminAuditEvent{}); err != nil {
+	migrations := []any{&models.User{}, &models.UserSession{}, &models.SystemSetting{}, &models.EmailVerification{}}
+	if migrateAuditTable {
+		migrations = append(migrations, &models.AdminAuditEvent{})
+	}
+	if err := db.AutoMigrate(migrations...); err != nil {
 		t.Fatalf("AutoMigrate() error = %v", err)
 	}
 	codec, err := secret.NewCodec("test-secret")

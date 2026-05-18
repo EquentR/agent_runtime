@@ -128,6 +128,27 @@ func TestAdminSettingsHandlerMasksSecrets(t *testing.T) {
 	}
 }
 
+func TestAdminSettingsMutationRollsBackWhenAuditFails(t *testing.T) {
+	deps, server := newAdminHandlerTestServerWithoutAuditTable(t)
+
+	response := doAdminRequest(t, http.MethodPut, server.URL+"/api/v1/admin/settings/registration", map[string]any{
+		"enabled": false,
+	}, deps.adminCookie)
+	defer response.Body.Close()
+	envelope := decodeEnvelope(t, response.Body)
+	if envelope.OK {
+		t.Fatal("settings update with failing audit OK = true, want false")
+	}
+
+	registration, err := deps.settings.GetPublicRegistration(context.Background())
+	if err != nil {
+		t.Fatalf("GetPublicRegistration() error = %v", err)
+	}
+	if !registration.Enabled {
+		t.Fatal("registration.Enabled = false, want rollback to default true")
+	}
+}
+
 type adminSMTPSettingsTestResponse struct {
 	Enabled        bool   `json:"enabled"`
 	Host           string `json:"host"`

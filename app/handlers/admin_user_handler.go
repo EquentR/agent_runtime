@@ -139,19 +139,25 @@ func (h *AdminUserHandler) handleCreateUser() (method, relativePath string, wrap
 		if displayName == "" {
 			displayName = username
 		}
-		user := models.User{
-			Username:            username,
-			Email:               email,
-			DisplayName:         displayName,
-			PasswordHash:        string(hash),
-			Role:                models.UserRoleUser,
-			Status:              models.UserStatusPendingEmailVerification,
-			ForcePasswordChange: true,
-		}
-		if err := h.db.WithContext(c.Request.Context()).Create(&user).Error; err != nil {
-			return nil, adminUserWriteErrorOptions(err), err
-		}
-		if err := h.recordAudit(c, *actor, "user", strconv.FormatUint(user.ID, 10), "admin.users.create", nil, user); err != nil {
+		var user models.User
+		if err := h.db.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
+			user = models.User{
+				Username:            username,
+				Email:               email,
+				DisplayName:         displayName,
+				PasswordHash:        string(hash),
+				Role:                models.UserRoleUser,
+				Status:              models.UserStatusPendingEmailVerification,
+				ForcePasswordChange: true,
+			}
+			if err := tx.Create(&user).Error; err != nil {
+				return err
+			}
+			return h.recordAuditWithDB(c, tx, *actor, "user", strconv.FormatUint(user.ID, 10), "admin.users.create", nil, user)
+		}); err != nil {
+			if opts := adminUserWriteErrorOptions(err); opts != nil {
+				return nil, opts, err
+			}
 			return nil, nil, err
 		}
 		return authUserResponse(&user), nil, nil
@@ -195,6 +201,12 @@ func (h *AdminUserHandler) handleUpdateUser() (method, relativePath string, wrap
 			if err := h.ensureUserIdentityAvailable(c, user.ID, user.Username, email); err != nil {
 				return nil, []resp.ResOpt{resp.WithCode(http.StatusConflict)}, err
 			}
+			if normalizeAdminUserEmail(user.Email) != email {
+				user.EmailVerifiedAt = nil
+				if request.Status == nil {
+					user.Status = models.UserStatusPendingEmailVerification
+				}
+			}
 			user.Email = email
 		}
 		if request.DisplayName != nil {
@@ -220,10 +232,15 @@ func (h *AdminUserHandler) handleUpdateUser() (method, relativePath string, wrap
 		if request.ForcePasswordChange != nil {
 			user.ForcePasswordChange = *request.ForcePasswordChange
 		}
-		if err := h.db.WithContext(c.Request.Context()).Save(&user).Error; err != nil {
-			return nil, adminUserWriteErrorOptions(err), err
-		}
-		if err := h.recordAudit(c, *actor, "user", strconv.FormatUint(user.ID, 10), "admin.users.update", before, user); err != nil {
+		if err := h.db.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
+			if err := tx.Save(&user).Error; err != nil {
+				return err
+			}
+			return h.recordAuditWithDB(c, tx, *actor, "user", strconv.FormatUint(user.ID, 10), "admin.users.update", before, user)
+		}); err != nil {
+			if opts := adminUserWriteErrorOptions(err); opts != nil {
+				return nil, opts, err
+			}
 			return nil, nil, err
 		}
 		return authUserResponse(&user), nil, nil
@@ -254,10 +271,12 @@ func (h *AdminUserHandler) handleResetPassword() (method, relativePath string, w
 		}
 		user.PasswordHash = string(hash)
 		user.ForcePasswordChange = true
-		if err := h.db.WithContext(c.Request.Context()).Save(&user).Error; err != nil {
-			return nil, nil, err
-		}
-		if err := h.recordAudit(c, *actor, "user", strconv.FormatUint(user.ID, 10), "admin.users.reset_password", before, user); err != nil {
+		if err := h.db.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
+			if err := tx.Save(&user).Error; err != nil {
+				return err
+			}
+			return h.recordAuditWithDB(c, tx, *actor, "user", strconv.FormatUint(user.ID, 10), "admin.users.reset_password", before, user)
+		}); err != nil {
 			return nil, nil, err
 		}
 		return authUserResponse(&user), nil, nil
@@ -316,10 +335,18 @@ func (h *AdminUserHandler) requireActor(c *gin.Context) (*models.User, error) {
 }
 
 func (h *AdminUserHandler) recordAudit(c *gin.Context, actor models.User, targetKind string, targetID string, action string, before any, after any) error {
+	return h.recordAuditWithDB(c, nil, actor, targetKind, targetID, action, before, after)
+}
+
+func (h *AdminUserHandler) recordAuditWithDB(c *gin.Context, tx *gorm.DB, actor models.User, targetKind string, targetID string, action string, before any, after any) error {
 	if h.audit == nil {
 		return fmt.Errorf("admin audit logic is not configured")
 	}
-	return h.audit.Record(c.Request.Context(), logics.RecordAdminAuditInput{
+	audit := h.audit
+	if tx != nil {
+		audit = h.audit.WithDB(tx)
+	}
+	return audit.Record(c.Request.Context(), logics.RecordAdminAuditInput{
 		Actor:      actor,
 		TargetKind: targetKind,
 		TargetID:   targetID,

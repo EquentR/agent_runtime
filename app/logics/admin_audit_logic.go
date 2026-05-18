@@ -40,6 +40,15 @@ func NewAdminAuditLogic(db *gorm.DB) *AdminAuditLogic {
 	return &AdminAuditLogic{db: db}
 }
 
+func (l *AdminAuditLogic) WithDB(db *gorm.DB) *AdminAuditLogic {
+	if l == nil {
+		return NewAdminAuditLogic(db)
+	}
+	clone := *l
+	clone.db = db
+	return &clone
+}
+
 func (l *AdminAuditLogic) Record(ctx context.Context, input RecordAdminAuditInput) error {
 	if l == nil || l.db == nil {
 		return fmt.Errorf("admin audit db is required")
