@@ -617,6 +617,74 @@ func TestAuthHandlerEmailBindingUsesCurrentSessionUser(t *testing.T) {
 	}
 }
 
+func TestAuthHandlerEmailBindingNormalizesPurposeBeforeChoosingSessionUser(t *testing.T) {
+	deps, server := newAuthHandlerTestServerWithDeps(t)
+	defer server.Close()
+
+	bindingUser := seedAuthHandlerUser(t, deps.db, "legacy", "", models.UserStatusNeedsEmailBinding, false, nil)
+	other := registerVerifiedAuthHandlerTestUser(t, deps, "other")
+
+	login := postAuthJSON(t, server.URL+"/api/v1/auth/login", map[string]any{
+		"username": "legacy",
+		"password": "secret-123",
+	})
+	defer login.Body.Close()
+	session := mustFindCookie(t, login.Cookies(), authSessionCookieName)
+
+	sendRaw, err := json.Marshal(map[string]any{
+		"user_id": other.ID,
+		"email":   "legacy-spaced@example.com",
+		"purpose": " " + logics.EmailVerificationPurposeEmailBinding + " ",
+	})
+	if err != nil {
+		t.Fatalf("marshal send payload: %v", err)
+	}
+	sendRequest, err := http.NewRequest(http.MethodPost, server.URL+"/api/v1/auth/email-verification/send", bytes.NewReader(sendRaw))
+	if err != nil {
+		t.Fatalf("NewRequest(send) error = %v", err)
+	}
+	sendRequest.Header.Set("Content-Type", "application/json")
+	sendRequest.AddCookie(session)
+	sendResponse, err := http.DefaultClient.Do(sendRequest)
+	if err != nil {
+		t.Fatalf("Do(send) error = %v", err)
+	}
+	defer sendResponse.Body.Close()
+	if sendResponse.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(sendResponse.Body)
+		t.Fatalf("send status = %d, want 200, body = %s", sendResponse.StatusCode, string(body))
+	}
+
+	verifyRaw, err := json.Marshal(map[string]any{
+		"user_id": other.ID,
+		"email":   "legacy-spaced@example.com",
+		"purpose": " " + logics.EmailVerificationPurposeEmailBinding + " ",
+		"code":    "123456",
+	})
+	if err != nil {
+		t.Fatalf("marshal verify payload: %v", err)
+	}
+	verifyRequest, err := http.NewRequest(http.MethodPost, server.URL+"/api/v1/auth/email-verification/verify", bytes.NewReader(verifyRaw))
+	if err != nil {
+		t.Fatalf("NewRequest(verify) error = %v", err)
+	}
+	verifyRequest.Header.Set("Content-Type", "application/json")
+	verifyRequest.AddCookie(session)
+	verifyResponse, err := http.DefaultClient.Do(verifyRequest)
+	if err != nil {
+		t.Fatalf("Do(verify) error = %v", err)
+	}
+	defer verifyResponse.Body.Close()
+	if verifyResponse.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(verifyResponse.Body)
+		t.Fatalf("verify status = %d, want 200, body = %s", verifyResponse.StatusCode, string(body))
+	}
+	verified := decodeAuthUserDetailsResponse(t, verifyResponse.Body)
+	if verified.ID != bindingUser.ID || verified.Email != "legacy-spaced@example.com" || verified.Status != models.UserStatusActive {
+		t.Fatalf("verified user = %#v, want current session user activated with normalized purpose", verified)
+	}
+}
+
 type authHandlerTestDeps struct {
 	db                *gorm.DB
 	authLogic         *logics.AuthLogic

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/EquentR/agent_runtime/app/logics"
 	"github.com/EquentR/agent_runtime/app/models"
@@ -236,7 +237,8 @@ func (h *AuthHandler) handleSendEmailVerification() (method, relativePath string
 		if h.emailVerification == nil {
 			return nil, []resp.ResOpt{resp.WithCode(http.StatusServiceUnavailable)}, logics.ErrMailServiceUnavailable
 		}
-		if request.Purpose == logics.EmailVerificationPurposeEmailBinding {
+		purpose := strings.TrimSpace(request.Purpose)
+		if purpose == logics.EmailVerificationPurposeEmailBinding {
 			user, _, err := h.middleware.resolve(c)
 			if err != nil {
 				return nil, []resp.ResOpt{resp.WithCode(http.StatusUnauthorized)}, logics.ErrUnauthorized
@@ -244,7 +246,7 @@ func (h *AuthHandler) handleSendEmailVerification() (method, relativePath string
 			if err := h.emailVerification.Send(c.Request.Context(), logics.SendEmailVerificationInput{
 				UserID:  user.ID,
 				Email:   request.Email,
-				Purpose: logics.EmailVerificationPurposeEmailBinding,
+				Purpose: purpose,
 			}); err != nil {
 				return nil, []resp.ResOpt{resp.WithCode(authStatusCode(err, http.StatusBadRequest))}, err
 			}
@@ -253,7 +255,7 @@ func (h *AuthHandler) handleSendEmailVerification() (method, relativePath string
 		if err := h.emailVerification.SendByEmail(c.Request.Context(), logics.SendEmailVerificationInput{
 			UserID:  request.UserID,
 			Email:   request.Email,
-			Purpose: request.Purpose,
+			Purpose: purpose,
 		}); err != nil {
 			if isIndistinguishableEmailVerificationSendError(err) {
 				return gin.H{"sent": true}, nil, nil
@@ -289,7 +291,8 @@ func (h *AuthHandler) handleVerifyEmail() (method, relativePath string, wrapper 
 			return nil, []resp.ResOpt{resp.WithCode(http.StatusServiceUnavailable)}, logics.ErrMailServiceUnavailable
 		}
 		userID := request.UserID
-		if request.Purpose == logics.EmailVerificationPurposeEmailBinding {
+		purpose := strings.TrimSpace(request.Purpose)
+		if purpose == logics.EmailVerificationPurposeEmailBinding {
 			user, _, err := h.middleware.resolve(c)
 			if err != nil {
 				return nil, []resp.ResOpt{resp.WithCode(http.StatusUnauthorized)}, logics.ErrUnauthorized
@@ -299,7 +302,7 @@ func (h *AuthHandler) handleVerifyEmail() (method, relativePath string, wrapper 
 		user, err := h.emailVerification.Verify(c.Request.Context(), logics.VerifyEmailInput{
 			UserID:  userID,
 			Email:   request.Email,
-			Purpose: request.Purpose,
+			Purpose: purpose,
 			Code:    request.Code,
 		})
 		if err != nil {

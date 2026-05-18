@@ -366,6 +366,13 @@ func validateEmailVerificationTarget(tx *gorm.DB, user *models.User, email strin
 		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 			return err
 		}
+		err = tx.Where("LOWER(username) = ? AND id <> ?", email, user.ID).Take(&existing).Error
+		if err == nil {
+			return ErrEmailTaken
+		}
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
 	default:
 		return ErrEmailVerificationInvalidState
 	}

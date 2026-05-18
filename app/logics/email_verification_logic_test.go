@@ -234,6 +234,25 @@ func TestEmailVerificationRejectsMismatchedUserEmail(t *testing.T) {
 	}
 }
 
+func TestEmailVerificationRejectsBindingEmailConflictingWithUsernameCaseInsensitively(t *testing.T) {
+	now := time.Date(2026, 5, 18, 10, 0, 0, 0, time.UTC)
+	subject := newEmailVerificationTestSubject(t, now, "123456")
+	bindingUser := seedEmailVerificationUser(t, subject.db, "legacy", "", models.UserStatusNeedsEmailBinding)
+	_ = seedEmailVerificationUser(t, subject.db, "Alice@Example.COM", "owner@example.com", models.UserStatusActive)
+
+	err := subject.logic.Send(context.Background(), SendEmailVerificationInput{
+		UserID:  bindingUser.ID,
+		Email:   "alice@example.com",
+		Purpose: EmailVerificationPurposeEmailBinding,
+	})
+	if !errors.Is(err, ErrEmailTaken) {
+		t.Fatalf("Send(binding email conflicts with username) error = %v, want %v", err, ErrEmailTaken)
+	}
+	if len(subject.mailer.messages) != 0 {
+		t.Fatalf("sent messages = %d, want 0", len(subject.mailer.messages))
+	}
+}
+
 func TestEmailVerificationEnforcesResendCooldown(t *testing.T) {
 	now := time.Date(2026, 5, 18, 10, 0, 0, 0, time.UTC)
 	subject := newEmailVerificationTestSubject(t, now, "123456")
