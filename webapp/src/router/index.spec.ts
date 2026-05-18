@@ -197,6 +197,36 @@ describe('app router session guard', () => {
     expect(router.currentRoute.value.path).toBe('/chat')
   })
 
+  it('uses the real profile view instead of the temporary placeholder', async () => {
+    session.hasActiveSession.mockReturnValue(true)
+    session.syncSession.mockResolvedValue(activeUser)
+
+    const { createAppRouter } = await import('./index')
+    const router = createAppRouter(true)
+
+    const route = router.resolve('/profile')
+    const component = route.matched[0]?.components?.default as { template?: string } | undefined
+
+    expect(component).toBeTruthy()
+    expect(component?.template).toBeUndefined()
+  })
+
+  it('redirects non-admin users away from public admin backoffice routes', async () => {
+    session.hasActiveSession.mockReturnValue(true)
+    session.syncSession.mockResolvedValue(activeUser)
+
+    const { createAppRouter } = await import('./index')
+    const router = createAppRouter(true)
+
+    for (const path of ['/admin/users', '/admin/settings', '/admin/audit-events']) {
+      await router.push(path)
+      await router.isReady()
+
+      expect(session.syncSession).toHaveBeenCalledWith(true)
+      expect(router.currentRoute.value.path).toBe('/chat')
+    }
+  })
+
   it('routes force password change users to profile security', async () => {
     session.hasActiveSession.mockReturnValue(true)
     session.syncSession.mockResolvedValue({

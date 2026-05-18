@@ -22,6 +22,125 @@ export interface AuthUser {
   required_actions: AuthRequiredAction[]
 }
 
+export interface UpdateUserProfileInput {
+  display_name: string
+}
+
+export interface ChangeUserPasswordInput {
+  current_password: string
+  password: string
+  confirm_password: string
+}
+
+export interface UserEmailVerificationStartInput {
+  email: string
+}
+
+export interface UserEmailVerificationConfirmInput {
+  email: string
+  code: string
+}
+
+export interface EmailVerificationSentResult {
+  sent: boolean
+}
+
+export interface AdminUserFilter {
+  q?: string
+  role?: UserRole | ''
+  status?: AuthUserStatus | ''
+}
+
+export interface AdminUserUpdateInput {
+  role?: UserRole
+  status?: AuthUserStatus
+  email?: string
+  display_name?: string
+  email_verified?: boolean
+  email_verified_at?: string
+  force_password_change?: boolean
+}
+
+export interface AdminPasswordResetInput {
+  password: string
+}
+
+export interface AdminSMTPSettings {
+  enabled: boolean
+  host: string
+  port: number
+  username: string
+  password: string
+  password_masked: string
+  from: string
+  use_tls: boolean
+  use_start_tls: boolean
+}
+
+export interface AdminSMTPSettingsInput {
+  enabled: boolean
+  host: string
+  port: number
+  username: string
+  password: string
+  clear_password: boolean
+  from: string
+  use_tls: boolean
+  use_start_tls: boolean
+}
+
+export interface AdminSMTPTestInput {
+  to: string
+}
+
+export interface AdminTurnstileSettings {
+  enabled: boolean
+  site_key: string
+  secret: string
+  secret_masked: string
+  protect_login: boolean
+  protect_registration: boolean
+  protect_verification: boolean
+}
+
+export interface AdminTurnstileSettingsInput {
+  enabled: boolean
+  site_key: string
+  secret: string
+  clear_secret: boolean
+  protect_login: boolean
+  protect_registration: boolean
+  protect_verification: boolean
+}
+
+export type AdminRegistrationSettings = PublicRegistrationSettings
+
+export interface AdminAuditEvent {
+  id: number
+  actor_id: number
+  actor_username: string
+  actor_email: string
+  target_kind: string
+  target_id: string
+  action: string
+  before_json?: unknown
+  after_json?: unknown
+  ip_address: string
+  user_agent: string
+  created_at: string
+}
+
+export interface AdminAuditEventFilter {
+  actor_id?: number
+  actor_username?: string
+  target_kind?: string
+  target_id?: string
+  action?: string
+  created_after?: string
+  created_before?: string
+  limit?: number
+}
+
 export interface RegistrationResult {
   user: AuthUser
   verification_required: boolean

@@ -3,10 +3,15 @@ import { createMemoryHistory, createRouter, createWebHashHistory } from 'vue-rou
 import { formatDocumentTitle } from '../lib/chat'
 import { syncSession } from '../lib/session'
 import { getRequiredActionProfileTarget } from '../lib/user-state'
+import AdminLayout from '../components/AdminLayout.vue'
 import AdminAuditView from '../views/AdminAuditView.vue'
+import AdminOperationAuditView from '../views/AdminOperationAuditView.vue'
 import AdminPromptView from '../views/AdminPromptView.vue'
+import AdminSettingsView from '../views/AdminSettingsView.vue'
+import AdminUsersView from '../views/AdminUsersView.vue'
 import ChatView from '../views/ChatView.vue'
 import LoginView from '../views/LoginView.vue'
+import ProfileView from '../views/ProfileView.vue'
 
 const routes = [
   {
@@ -33,31 +38,65 @@ const routes = [
   {
     path: '/profile',
     name: 'profile',
-    component: { template: '<main class="profile-placeholder"></main>' },
+    component: ProfileView,
     meta: {
       requiresSession: true,
       title: '个人设置',
     },
   },
   {
-    path: '/admin/audit',
-    name: 'admin-audit',
-    component: AdminAuditView,
+    path: '/admin',
+    component: AdminLayout,
     meta: {
       requiresSession: true,
       requiresAdmin: true,
-      title: '审计会话',
     },
-  },
-  {
-    path: '/admin/prompts',
-    name: 'admin-prompts',
-    component: AdminPromptView,
-    meta: {
-      requiresSession: true,
-      requiresAdmin: true,
-      title: '提示词管理',
-    },
+    children: [
+      {
+        path: '',
+        redirect: '/admin/users',
+      },
+      {
+        path: 'users',
+        name: 'admin-users',
+        component: AdminUsersView,
+        meta: {
+          title: '用户管理',
+        },
+      },
+      {
+        path: 'settings',
+        name: 'admin-settings',
+        component: AdminSettingsView,
+        meta: {
+          title: '系统设置',
+        },
+      },
+      {
+        path: 'audit-events',
+        name: 'admin-audit-events',
+        component: AdminOperationAuditView,
+        meta: {
+          title: '后台操作审计',
+        },
+      },
+      {
+        path: 'audit',
+        name: 'admin-audit',
+        component: AdminAuditView,
+        meta: {
+          title: '审计会话',
+        },
+      },
+      {
+        path: 'prompts',
+        name: 'admin-prompts',
+        component: AdminPromptView,
+        meta: {
+          title: '提示词管理',
+        },
+      },
+    ],
   },
 ]
 

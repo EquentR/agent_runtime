@@ -62,6 +62,170 @@ describe('auth normalization helpers', () => {
   })
 })
 
+describe('profile and admin backoffice API helpers', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    vi.stubGlobal('fetch', vi.fn())
+  })
+
+  it('exposes profile helpers and sends profile mutations to users/me endpoints', async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          code: 200,
+          message: 'OK',
+          data: {
+            id: 7,
+            username: 'legacy',
+            display_name: 'Legacy User',
+            email: '',
+            role: 'user',
+            status: 'needs_email_binding',
+            email_verified: false,
+            force_password_change: true,
+            required_actions: ['bind_email', 'change_password'],
+          },
+          time: '',
+        }),
+      } as Response)
+      .mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          code: 200,
+          message: 'OK',
+          data: {
+            id: 7,
+            username: 'legacy',
+            display_name: 'Legacy User',
+            email: 'bound@example.com',
+            role: 'user',
+            status: 'active',
+            email_verified: true,
+            force_password_change: false,
+            required_actions: [],
+          },
+          time: '',
+        }),
+      } as Response)
+
+    const api = (await import('./api')) as Record<string, any>
+
+    expect(typeof api.fetchUserProfile).toBe('function')
+    expect(typeof api.updateUserProfile).toBe('function')
+    expect(typeof api.changeUserPassword).toBe('function')
+    expect(typeof api.startUserEmailVerification).toBe('function')
+    expect(typeof api.confirmUserEmailVerification).toBe('function')
+
+    const profile = await api.fetchUserProfile()
+    await api.updateUserProfile({ display_name: 'Alice Doe' })
+    await api.changeUserPassword({
+      current_password: 'old-secret',
+      password: 'new-secret-123',
+      confirm_password: 'new-secret-123',
+    })
+    await api.startUserEmailVerification({ email: 'bound@example.com' })
+    await api.confirmUserEmailVerification({ email: 'bound@example.com', code: '123456' })
+
+    expect(profile.required_actions).toEqual(['bind_email', 'change_password'])
+    expect(fetch).toHaveBeenNthCalledWith(1, '/api/v1/users/me', expect.objectContaining({ credentials: 'include' }))
+    expect(fetch).toHaveBeenNthCalledWith(2, '/api/v1/users/me', expect.objectContaining({
+      method: 'PATCH',
+      body: JSON.stringify({ display_name: 'Alice Doe' }),
+    }))
+    expect(fetch).toHaveBeenNthCalledWith(3, '/api/v1/users/me/password', expect.objectContaining({
+      method: 'POST',
+    }))
+    expect(fetch).toHaveBeenNthCalledWith(4, '/api/v1/users/me/email-verification', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ email: 'bound@example.com' }),
+    }))
+    expect(fetch).toHaveBeenNthCalledWith(5, '/api/v1/users/me/email-verification/confirm', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ email: 'bound@example.com', code: '123456' }),
+    }))
+  })
+
+  it('exposes admin helpers for users settings and operation audit endpoints', async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          code: 200,
+          message: 'OK',
+          data: [{
+            id: 2,
+            username: 'alice',
+            email: 'alice@example.com',
+            display_name: 'Alice',
+            role: 'user',
+            status: 'active',
+            email_verified: true,
+            force_password_change: false,
+            required_actions: [],
+          }],
+          time: '',
+        }),
+      } as Response)
+      .mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          code: 200,
+          message: 'OK',
+          data: { sent: true },
+          time: '',
+        }),
+      } as Response)
+
+    const api = (await import('./api')) as Record<string, any>
+
+    for (const name of [
+      'fetchAdminUsers',
+      'updateAdminUser',
+      'resetAdminUserPassword',
+      'fetchAdminSMTPSettings',
+      'updateAdminSMTPSettings',
+      'testAdminSMTPSettings',
+      'fetchAdminTurnstileSettings',
+      'updateAdminTurnstileSettings',
+      'fetchAdminRegistrationSettings',
+      'updateAdminRegistrationSettings',
+      'fetchAdminAuditEvents',
+    ]) {
+      expect(typeof api[name]).toBe('function')
+    }
+
+    const users = await api.fetchAdminUsers({ q: 'alice', role: 'user', status: 'active' })
+    await api.updateAdminUser(2, { role: 'admin', status: 'disabled', email_verified: false })
+    await api.resetAdminUserPassword(2, { password: 'temporary-123' })
+    await api.fetchAdminSMTPSettings()
+    await api.updateAdminSMTPSettings({ enabled: true, host: 'smtp.example.com', port: 587, username: 'smtp-user', password: '', clear_password: false, from: 'noreply@example.com', use_tls: false, use_start_tls: true })
+    await api.testAdminSMTPSettings({ to: 'ops@example.com' })
+    await api.fetchAdminTurnstileSettings()
+    await api.updateAdminTurnstileSettings({ enabled: true, site_key: 'site-key', secret: '', clear_secret: true, protect_login: true, protect_registration: true, protect_verification: false })
+    await api.fetchAdminRegistrationSettings()
+    await api.updateAdminRegistrationSettings({ enabled: false })
+    await api.fetchAdminAuditEvents({ action: 'admin.users.update', target_kind: 'user', actor_username: 'admin', limit: 100 })
+
+    expect(users[0].username).toBe('alice')
+    expect(fetch).toHaveBeenNthCalledWith(1, '/api/v1/admin/users?q=alice&role=user&status=active', expect.objectContaining({ credentials: 'include' }))
+    expect(fetch).toHaveBeenNthCalledWith(2, '/api/v1/admin/users/2', expect.objectContaining({ method: 'PATCH' }))
+    expect(fetch).toHaveBeenNthCalledWith(3, '/api/v1/admin/users/2/reset-password', expect.objectContaining({ method: 'POST' }))
+    expect(fetch).toHaveBeenNthCalledWith(4, '/api/v1/admin/settings/smtp', expect.objectContaining({ credentials: 'include' }))
+    expect(fetch).toHaveBeenNthCalledWith(5, '/api/v1/admin/settings/smtp', expect.objectContaining({ method: 'PUT' }))
+    expect(fetch).toHaveBeenNthCalledWith(6, '/api/v1/admin/settings/smtp/test', expect.objectContaining({ method: 'POST' }))
+    expect(fetch).toHaveBeenNthCalledWith(7, '/api/v1/admin/settings/turnstile', expect.objectContaining({ credentials: 'include' }))
+    expect(fetch).toHaveBeenNthCalledWith(8, '/api/v1/admin/settings/turnstile', expect.objectContaining({ method: 'PUT' }))
+    expect(fetch).toHaveBeenNthCalledWith(9, '/api/v1/admin/settings/registration', expect.objectContaining({ credentials: 'include' }))
+    expect(fetch).toHaveBeenNthCalledWith(10, '/api/v1/admin/settings/registration', expect.objectContaining({ method: 'PUT' }))
+    expect(fetch).toHaveBeenNthCalledWith(11, '/api/v1/admin/audit-events?action=admin.users.update&target_kind=user&actor_username=admin&limit=100', expect.objectContaining({ credentials: 'include' }))
+  })
+})
+
 describe('conversation message normalization helpers', () => {
   it('normalizes stream-shaped assistant messages through the shared conversation normalizer', () => {
     expect(normalizeConversationMessage({

@@ -1,5 +1,16 @@
 import type {
   ApprovalDecision,
+  AdminAuditEvent,
+  AdminAuditEventFilter,
+  AdminPasswordResetInput,
+  AdminRegistrationSettings,
+  AdminSMTPSettings,
+  AdminSMTPSettingsInput,
+  AdminSMTPTestInput,
+  AdminTurnstileSettings,
+  AdminTurnstileSettingsInput,
+  AdminUserFilter,
+  AdminUserUpdateInput,
   ApiEnvelope,
   AuditEvent,
   AuditReplayBundle,
@@ -8,8 +19,10 @@ import type {
   AuthRequiredAction,
   AuthUserStatus,
   AuthUser,
+  ChangeUserPasswordInput,
   Conversation,
   ConversationMessage,
+  EmailVerificationSentResult,
   ModelCatalog,
   ModelCatalogEntry,
   ModelCatalogProvider,
@@ -32,6 +45,9 @@ import type {
   InteractionRecord,
   TranscriptTokenUsage,
   UpdatePromptDocumentInput,
+  UpdateUserProfileInput,
+  UserEmailVerificationConfirmInput,
+  UserEmailVerificationStartInput,
   UserRole,
   WorkspaceSkill,
   WorkspaceSkillListItem,
@@ -148,6 +164,65 @@ export function normalizeAuthUser(user: AuthUserPayload): AuthUser {
       forcePasswordChange,
     }),
   }
+}
+
+function normalizeAdminSMTPSettings(value: Partial<AdminSMTPSettings> & Record<string, unknown>): AdminSMTPSettings {
+  return {
+    enabled: normalizeBooleanValue(value.enabled) ?? false,
+    host: normalizeFirstStringValue(value.host),
+    port: normalizeIntegerValue(value.port) ?? 0,
+    username: normalizeFirstStringValue(value.username),
+    password: normalizeFirstStringValue(value.password),
+    password_masked: normalizeFirstStringValue(value.password_masked),
+    from: normalizeFirstStringValue(value.from),
+    use_tls: normalizeBooleanValue(value.use_tls) ?? false,
+    use_start_tls: normalizeBooleanValue(value.use_start_tls) ?? false,
+  }
+}
+
+function normalizeAdminTurnstileSettings(value: Partial<AdminTurnstileSettings> & Record<string, unknown>): AdminTurnstileSettings {
+  return {
+    enabled: normalizeBooleanValue(value.enabled) ?? false,
+    site_key: normalizeFirstStringValue(value.site_key),
+    secret: normalizeFirstStringValue(value.secret),
+    secret_masked: normalizeFirstStringValue(value.secret_masked),
+    protect_login: normalizeBooleanValue(value.protect_login) ?? false,
+    protect_registration: normalizeBooleanValue(value.protect_registration) ?? false,
+    protect_verification: normalizeBooleanValue(value.protect_verification) ?? false,
+  }
+}
+
+function normalizeAdminAuditEvent(value: Partial<AdminAuditEvent> & Record<string, unknown>): AdminAuditEvent {
+  return {
+    id: normalizeIntegerValue(value.id) ?? 0,
+    actor_id: normalizeIntegerValue(value.actor_id) ?? 0,
+    actor_username: normalizeFirstStringValue(value.actor_username),
+    actor_email: normalizeFirstStringValue(value.actor_email),
+    target_kind: normalizeFirstStringValue(value.target_kind),
+    target_id: normalizeFirstStringValue(value.target_id),
+    action: normalizeFirstStringValue(value.action),
+    before_json: value.before_json,
+    after_json: value.after_json,
+    ip_address: normalizeFirstStringValue(value.ip_address),
+    user_agent: normalizeFirstStringValue(value.user_agent),
+    created_at: normalizeFirstStringValue(value.created_at),
+  }
+}
+
+function appendQueryParam(params: URLSearchParams, key: string, value: unknown) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    params.set(key, String(value))
+    return
+  }
+  const normalized = normalizeStringValue(value)
+  if (normalized !== undefined) {
+    params.set(key, normalized)
+  }
+}
+
+function formatQuery(params: URLSearchParams) {
+  const encoded = params.toString()
+  return encoded ? `?${encoded}` : ''
 }
 
 export function buildRunTaskRequest(input: {
@@ -736,6 +811,133 @@ export async function fetchPublicTurnstileSettings() {
     protect_registration: normalizeBooleanValue(settings.protect_registration) ?? false,
     protect_verification: normalizeBooleanValue(settings.protect_verification) ?? false,
   } satisfies PublicTurnstileSettings
+}
+
+export async function fetchUserProfile() {
+  const user = await request<AuthUser>('/users/me')
+  return normalizeAuthUser(user)
+}
+
+export async function updateUserProfile(input: UpdateUserProfileInput) {
+  const user = await request<AuthUser>('/users/me', {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  })
+  return normalizeAuthUser(user)
+}
+
+export async function changeUserPassword(input: ChangeUserPasswordInput) {
+  const user = await request<AuthUser>('/users/me/password', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+  return normalizeAuthUser(user)
+}
+
+export async function startUserEmailVerification(input: UserEmailVerificationStartInput) {
+  return request<EmailVerificationSentResult>('/users/me/email-verification', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export async function confirmUserEmailVerification(input: UserEmailVerificationConfirmInput) {
+  const user = await request<AuthUser>('/users/me/email-verification/confirm', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+  return normalizeAuthUser(user)
+}
+
+export async function fetchAdminUsers(filter: AdminUserFilter = {}) {
+  const params = new URLSearchParams()
+  appendQueryParam(params, 'q', filter.q)
+  appendQueryParam(params, 'role', filter.role)
+  appendQueryParam(params, 'status', filter.status)
+  const users = await request<unknown>(`/admin/users${formatQuery(params)}`)
+  return Array.isArray(users) ? users.map((user) => normalizeAuthUser(user as Partial<AuthUser> & Record<string, unknown>)) : []
+}
+
+export async function updateAdminUser(userId: number, input: AdminUserUpdateInput) {
+  const user = await request<AuthUser>(`/admin/users/${userId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  })
+  return normalizeAuthUser(user)
+}
+
+export async function resetAdminUserPassword(userId: number, input: AdminPasswordResetInput) {
+  const user = await request<AuthUser>(`/admin/users/${userId}/reset-password`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+  return normalizeAuthUser(user)
+}
+
+export async function fetchAdminSMTPSettings() {
+  const settings = await request<Partial<AdminSMTPSettings> & Record<string, unknown>>('/admin/settings/smtp')
+  return normalizeAdminSMTPSettings(settings)
+}
+
+export async function updateAdminSMTPSettings(input: AdminSMTPSettingsInput) {
+  const settings = await request<Partial<AdminSMTPSettings> & Record<string, unknown>>('/admin/settings/smtp', {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  })
+  return normalizeAdminSMTPSettings(settings)
+}
+
+export async function testAdminSMTPSettings(input: AdminSMTPTestInput) {
+  return request<EmailVerificationSentResult>('/admin/settings/smtp/test', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export async function fetchAdminTurnstileSettings() {
+  const settings = await request<Partial<AdminTurnstileSettings> & Record<string, unknown>>('/admin/settings/turnstile')
+  return normalizeAdminTurnstileSettings(settings)
+}
+
+export async function updateAdminTurnstileSettings(input: AdminTurnstileSettingsInput) {
+  const settings = await request<Partial<AdminTurnstileSettings> & Record<string, unknown>>('/admin/settings/turnstile', {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  })
+  return normalizeAdminTurnstileSettings(settings)
+}
+
+export async function fetchAdminRegistrationSettings() {
+  const settings = await request<Partial<AdminRegistrationSettings> & Record<string, unknown>>('/admin/settings/registration')
+  return {
+    enabled: normalizeBooleanValue(settings.enabled) ?? true,
+  } satisfies AdminRegistrationSettings
+}
+
+export async function updateAdminRegistrationSettings(input: AdminRegistrationSettings) {
+  const settings = await request<Partial<AdminRegistrationSettings> & Record<string, unknown>>('/admin/settings/registration', {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  })
+  return {
+    enabled: normalizeBooleanValue(settings.enabled) ?? true,
+  } satisfies AdminRegistrationSettings
+}
+
+export async function fetchAdminAuditEvents(filter: AdminAuditEventFilter = {}) {
+  const params = new URLSearchParams()
+  appendQueryParam(params, 'action', filter.action)
+  appendQueryParam(params, 'target_kind', filter.target_kind)
+  appendQueryParam(params, 'actor_username', filter.actor_username)
+  appendQueryParam(params, 'actor_id', filter.actor_id)
+  appendQueryParam(params, 'target_id', filter.target_id)
+  appendQueryParam(params, 'created_after', filter.created_after)
+  appendQueryParam(params, 'created_before', filter.created_before)
+  appendQueryParam(params, 'limit', filter.limit)
+  const events = await request<unknown>(`/admin/audit-events${formatQuery(params)}`)
+  return Array.isArray(events)
+    ? events.map((event) => normalizeAdminAuditEvent(event as Partial<AdminAuditEvent> & Record<string, unknown>))
+    : []
 }
 
 export async function fetchConversations() {
