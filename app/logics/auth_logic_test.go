@@ -351,14 +351,17 @@ func TestAuthLogicLoginAcceptsUsernameOrEmail(t *testing.T) {
 	}
 }
 
-func TestAuthLogicLoginRejectsPendingDisabledAndNeedsBindingUsers(t *testing.T) {
+func TestAuthLogicLoginAllowsRestrictedSessionsForRequiredActions(t *testing.T) {
 	logic := newAuthLogicTestSubject(t)
 	ctx := context.Background()
 
 	seedAuthLoginUser(t, logic.db, "pending", "pending@example.com", models.UserStatusPendingEmailVerification, false, nil)
-	_, _, err := logic.Login(ctx, "pending", "secret-123")
-	if !errors.Is(err, ErrEmailVerificationRequired) {
-		t.Fatalf("Login(pending) error = %v, want %v", err, ErrEmailVerificationRequired)
+	pendingUser, pendingSession, err := logic.Login(ctx, "pending", "secret-123")
+	if err != nil {
+		t.Fatalf("Login(pending) error = %v, want restricted session", err)
+	}
+	if pendingUser.Status != models.UserStatusPendingEmailVerification || pendingSession.UserID != pendingUser.ID {
+		t.Fatalf("Login(pending) user=%#v session=%#v, want restricted session", pendingUser, pendingSession)
 	}
 
 	now := time.Now().UTC()

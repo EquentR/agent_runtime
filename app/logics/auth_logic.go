@@ -296,10 +296,11 @@ func validateUserCanLogin(user *models.User) error {
 	switch user.Status {
 	case models.UserStatusDisabled:
 		return ErrUserDisabled
-	case models.UserStatusPendingEmailVerification:
-		return ErrEmailVerificationRequired
 	}
-	if user.Status != "" && user.Status != models.UserStatusActive && user.Status != models.UserStatusNeedsEmailBinding {
+	if user.Status != "" &&
+		user.Status != models.UserStatusActive &&
+		user.Status != models.UserStatusNeedsEmailBinding &&
+		user.Status != models.UserStatusPendingEmailVerification {
 		return ErrEmailVerificationRequired
 	}
 	return nil

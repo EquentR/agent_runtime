@@ -1309,6 +1309,32 @@ definitions:
       per_tokens:
         type: integer
     type: object
+  handlers.UserEmailVerificationConfirmSwaggerRequest:
+    properties:
+      code:
+        type: string
+      email:
+        type: string
+    type: object
+  handlers.UserEmailVerificationStartSwaggerRequest:
+    properties:
+      email:
+        type: string
+    type: object
+  handlers.UserPasswordChangeSwaggerRequest:
+    properties:
+      confirm_password:
+        type: string
+      current_password:
+        type: string
+      password:
+        type: string
+    type: object
+  handlers.UserProfileUpdateSwaggerRequest:
+    properties:
+      display_name:
+        type: string
+    type: object
 info:
   contact: {}
   description: Agent Runtime 示例应用 API 文档。
@@ -2691,6 +2717,140 @@ paths:
       summary: 查询会话运行中任务
       tags:
       - tasks
+  /users/me:
+    get:
+      description: 返回当前 session 用户资料、邮箱验证状态和 required actions。
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.AuthUserSwaggerResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+      summary: 获取当前用户资料
+      tags:
+      - users
+    patch:
+      consumes:
+      - application/json
+      description: 更新当前用户 display_name。
+      parameters:
+      - description: 用户资料更新
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.UserProfileUpdateSwaggerRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.AuthUserSwaggerResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+      summary: 更新当前用户资料
+      tags:
+      - users
+  /users/me/email-verification:
+    post:
+      consumes:
+      - application/json
+      description: 为当前用户发送邮箱绑定或注册验证验证码。
+      parameters:
+      - description: 发送验证码请求
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.UserEmailVerificationStartSwaggerRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.AuthEmailVerificationSentSwaggerResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+      summary: 当前用户发送邮箱验证码
+      tags:
+      - users
+  /users/me/email-verification/confirm:
+    post:
+      consumes:
+      - application/json
+      description: 校验当前用户邮箱绑定或注册验证验证码。
+      parameters:
+      - description: 确认验证码请求
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.UserEmailVerificationConfirmSwaggerRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.AuthUserSwaggerResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+      summary: 当前用户确认邮箱验证码
+      tags:
+      - users
   /users/me/models:
     get:
       description: 返回当前用户拥有的自定义模型配置。
@@ -2821,4 +2981,38 @@ paths:
       summary: 当前用户测试自定义模型
       tags:
       - user-models
+  /users/me/password:
+    post:
+      consumes:
+      - application/json
+      description: 校验当前密码后修改密码，并清除 force_password_change。
+      parameters:
+      - description: 修改密码请求
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.UserPasswordChangeSwaggerRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.AuthUserSwaggerResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+      summary: 当前用户修改密码
+      tags:
+      - users
 swagger: "2.0"

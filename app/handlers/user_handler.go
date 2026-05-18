@@ -66,6 +66,13 @@ func (h *UserHandler) Register(rg *gin.RouterGroup) {
 	}, options...)
 }
 
+// @Summary 获取当前用户资料
+// @Description 返回当前 session 用户资料、邮箱验证状态和 required actions。
+// @Tags users
+// @Produce json
+// @Success 200 {object} AuthUserSwaggerResponse
+// @Failure 401 {object} ErrorSwaggerResponse
+// @Router /users/me [get]
 func (h *UserHandler) handleGetProfile() (method, relativePath string, wrapper resp.JsonOptionsResultWrapper, opts []resp.WrapperOption) {
 	return http.MethodGet, "", func(c *gin.Context) (any, []resp.ResOpt, error) {
 		user, err := h.currentUser(c)
@@ -76,6 +83,17 @@ func (h *UserHandler) handleGetProfile() (method, relativePath string, wrapper r
 	}, nil
 }
 
+// @Summary 更新当前用户资料
+// @Description 更新当前用户 display_name。
+// @Tags users
+// @Accept json
+// @Produce json
+// @Param request body UserProfileUpdateSwaggerRequest true "用户资料更新"
+// @Success 200 {object} AuthUserSwaggerResponse
+// @Failure 400 {object} ErrorSwaggerResponse
+// @Failure 401 {object} ErrorSwaggerResponse
+// @Failure 403 {object} ErrorSwaggerResponse
+// @Router /users/me [patch]
 func (h *UserHandler) handleUpdateProfile() (method, relativePath string, wrapper resp.JsonOptionsResultWrapper, opts []resp.WrapperOption) {
 	return http.MethodPatch, "", func(c *gin.Context) (any, []resp.ResOpt, error) {
 		user, err := h.currentUser(c)
@@ -103,6 +121,17 @@ func (h *UserHandler) handleUpdateProfile() (method, relativePath string, wrappe
 	}, nil
 }
 
+// @Summary 当前用户修改密码
+// @Description 校验当前密码后修改密码，并清除 force_password_change。
+// @Tags users
+// @Accept json
+// @Produce json
+// @Param request body UserPasswordChangeSwaggerRequest true "修改密码请求"
+// @Success 200 {object} AuthUserSwaggerResponse
+// @Failure 400 {object} ErrorSwaggerResponse
+// @Failure 401 {object} ErrorSwaggerResponse
+// @Failure 403 {object} ErrorSwaggerResponse
+// @Router /users/me/password [post]
 func (h *UserHandler) handleChangePassword() (method, relativePath string, wrapper resp.JsonOptionsResultWrapper, opts []resp.WrapperOption) {
 	return http.MethodPost, "/password", func(c *gin.Context) (any, []resp.ResOpt, error) {
 		user, err := h.currentUser(c)
@@ -132,6 +161,19 @@ func (h *UserHandler) handleChangePassword() (method, relativePath string, wrapp
 	}, nil
 }
 
+// @Summary 当前用户发送邮箱验证码
+// @Description 为当前用户发送邮箱绑定或注册验证验证码。
+// @Tags users
+// @Accept json
+// @Produce json
+// @Param request body UserEmailVerificationStartSwaggerRequest true "发送验证码请求"
+// @Success 200 {object} AuthEmailVerificationSentSwaggerResponse
+// @Failure 400 {object} ErrorSwaggerResponse
+// @Failure 401 {object} ErrorSwaggerResponse
+// @Failure 403 {object} ErrorSwaggerResponse
+// @Failure 429 {object} ErrorSwaggerResponse
+// @Failure 503 {object} ErrorSwaggerResponse
+// @Router /users/me/email-verification [post]
 func (h *UserHandler) handleStartEmailVerification() (method, relativePath string, wrapper resp.JsonOptionsResultWrapper, opts []resp.WrapperOption) {
 	return http.MethodPost, "/email-verification", func(c *gin.Context) (any, []resp.ResOpt, error) {
 		user, err := h.currentUser(c)
@@ -148,10 +190,11 @@ func (h *UserHandler) handleStartEmailVerification() (method, relativePath strin
 		if err := c.ShouldBindJSON(&request); err != nil {
 			return nil, []resp.ResOpt{resp.WithCode(http.StatusBadRequest)}, err
 		}
+		email := profileEmailVerificationEmail(user, request.Email)
 		if err := h.emailVerification.Send(c.Request.Context(), logics.SendEmailVerificationInput{
 			UserID:  user.ID,
-			Email:   request.Email,
-			Purpose: logics.EmailVerificationPurposeEmailBinding,
+			Email:   email,
+			Purpose: profileEmailVerificationPurpose(user),
 		}); err != nil {
 			return nil, []resp.ResOpt{resp.WithCode(authStatusCode(err, http.StatusBadRequest))}, err
 		}
@@ -159,6 +202,19 @@ func (h *UserHandler) handleStartEmailVerification() (method, relativePath strin
 	}, nil
 }
 
+// @Summary 当前用户确认邮箱验证码
+// @Description 校验当前用户邮箱绑定或注册验证验证码。
+// @Tags users
+// @Accept json
+// @Produce json
+// @Param request body UserEmailVerificationConfirmSwaggerRequest true "确认验证码请求"
+// @Success 200 {object} AuthUserSwaggerResponse
+// @Failure 400 {object} ErrorSwaggerResponse
+// @Failure 401 {object} ErrorSwaggerResponse
+// @Failure 403 {object} ErrorSwaggerResponse
+// @Failure 429 {object} ErrorSwaggerResponse
+// @Failure 503 {object} ErrorSwaggerResponse
+// @Router /users/me/email-verification/confirm [post]
 func (h *UserHandler) handleConfirmEmailVerification() (method, relativePath string, wrapper resp.JsonOptionsResultWrapper, opts []resp.WrapperOption) {
 	return http.MethodPost, "/email-verification/confirm", func(c *gin.Context) (any, []resp.ResOpt, error) {
 		user, err := h.currentUser(c)
@@ -175,10 +231,11 @@ func (h *UserHandler) handleConfirmEmailVerification() (method, relativePath str
 		if err := c.ShouldBindJSON(&request); err != nil {
 			return nil, []resp.ResOpt{resp.WithCode(http.StatusBadRequest)}, err
 		}
+		email := profileEmailVerificationEmail(user, request.Email)
 		verified, err := h.emailVerification.Verify(c.Request.Context(), logics.VerifyEmailInput{
 			UserID:  user.ID,
-			Email:   request.Email,
-			Purpose: logics.EmailVerificationPurposeEmailBinding,
+			Email:   email,
+			Purpose: profileEmailVerificationPurpose(user),
 			Code:    request.Code,
 		})
 		if err != nil {
@@ -227,6 +284,20 @@ func ensureProfileUserCanMutate(user *models.User) error {
 		return logics.ErrUserDisabled
 	}
 	return nil
+}
+
+func profileEmailVerificationPurpose(user *models.User) string {
+	if user != nil && user.Status == models.UserStatusPendingEmailVerification {
+		return logics.EmailVerificationPurposeRegistration
+	}
+	return logics.EmailVerificationPurposeEmailBinding
+}
+
+func profileEmailVerificationEmail(user *models.User, requestedEmail string) string {
+	if user != nil && user.Status == models.UserStatusPendingEmailVerification && strings.TrimSpace(requestedEmail) == "" {
+		return user.Email
+	}
+	return requestedEmail
 }
 
 func userProfileResponse(user *models.User) gin.H {

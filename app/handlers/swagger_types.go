@@ -444,6 +444,29 @@ type AuthEmailVerificationVerifySwaggerResponse struct {
 	Time    string             `json:"time"`
 }
 
+// UserProfileUpdateSwaggerRequest 描述当前用户资料更新请求。
+type UserProfileUpdateSwaggerRequest struct {
+	DisplayName *string `json:"display_name"`
+}
+
+// UserPasswordChangeSwaggerRequest 描述当前用户修改密码请求。
+type UserPasswordChangeSwaggerRequest struct {
+	CurrentPassword string `json:"current_password"`
+	Password        string `json:"password"`
+	ConfirmPassword string `json:"confirm_password"`
+}
+
+// UserEmailVerificationStartSwaggerRequest 描述当前用户发送邮箱验证码请求。
+type UserEmailVerificationStartSwaggerRequest struct {
+	Email string `json:"email"`
+}
+
+// UserEmailVerificationConfirmSwaggerRequest 描述当前用户确认邮箱验证码请求。
+type UserEmailVerificationConfirmSwaggerRequest struct {
+	Email string `json:"email"`
+	Code  string `json:"code"`
+}
+
 // PromptDocumentSwaggerDoc 描述提示词文档的文档结构。
 type PromptDocumentSwaggerDoc struct {
 	ID          string `json:"id"`

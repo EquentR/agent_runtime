@@ -154,6 +154,42 @@ func TestUserHandlerStartsAndVerifiesEmailBinding(t *testing.T) {
 	}
 }
 
+func TestUserHandlerStartsAndVerifiesPendingRegistrationEmail(t *testing.T) {
+	deps, server := newUserHandlerTestServer(t)
+	user := seedUserHandlerUser(t, deps.db, userHandlerSeedUser{
+		username: "pending",
+		email:    "pending@example.com",
+		status:   models.UserStatusPendingEmailVerification,
+		verified: false,
+	})
+	session := createUserHandlerSession(t, deps.db, user)
+
+	start := doUserRequest(t, http.MethodPost, server.URL+"/api/v1/users/me/email-verification", map[string]any{
+		"email": " pending@example.com ",
+	}, session)
+	defer start.Body.Close()
+	if !decodeEnvelope(t, start.Body).OK {
+		t.Fatal("start pending registration verification ok = false, want true")
+	}
+	if len(deps.mailer.messages) != 1 || deps.mailer.messages[0].To != "pending@example.com" {
+		t.Fatalf("sent messages = %#v, want registration verification to pending email", deps.mailer.messages)
+	}
+
+	confirm := doUserRequest(t, http.MethodPost, server.URL+"/api/v1/users/me/email-verification/confirm", map[string]any{
+		"email": "pending@example.com",
+		"code":  "123456",
+	}, session)
+	defer confirm.Body.Close()
+	profile := decodeUserProfileResponse(t, confirm.Body)
+
+	if profile.Status != models.UserStatusActive || !profile.EmailVerified {
+		t.Fatalf("profile after registration verification = %#v, want active verified user", profile)
+	}
+	if len(profile.RequiredActions) != 0 {
+		t.Fatalf("required actions after registration verification = %#v, want empty", profile.RequiredActions)
+	}
+}
+
 type userHandlerTestDeps struct {
 	db                *gorm.DB
 	authLogic         *logics.AuthLogic
