@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/EquentR/agent_runtime/app/logics"
 	"github.com/EquentR/agent_runtime/app/models"
@@ -43,6 +44,43 @@ func TestAdminAuditEventHandlerListsEventsForAdminOnly(t *testing.T) {
 	defer nonAdminResponse.Body.Close()
 	if decodeEnvelope(t, nonAdminResponse.Body).OK {
 		t.Fatal("non-admin audit events ok = true, want false")
+	}
+}
+
+func TestAdminAuditEventHandlerFiltersByCreatedAtRange(t *testing.T) {
+	deps, server := newAdminHandlerTestServer(t)
+	oldEvent := models.AdminAuditEvent{
+		ActorID:       1,
+		ActorUsername: "admin",
+		TargetKind:    "user",
+		TargetID:      "1",
+		Action:        "admin.users.old",
+		CreatedAt:     time.Date(2026, 5, 17, 12, 0, 0, 0, time.UTC),
+	}
+	newEvent := models.AdminAuditEvent{
+		ActorID:       1,
+		ActorUsername: "admin",
+		TargetKind:    "user",
+		TargetID:      "1",
+		Action:        "admin.users.new",
+		CreatedAt:     time.Date(2026, 5, 19, 12, 0, 0, 0, time.UTC),
+	}
+	if err := deps.db.Create(&oldEvent).Error; err != nil {
+		t.Fatalf("create old audit event: %v", err)
+	}
+	if err := deps.db.Create(&newEvent).Error; err != nil {
+		t.Fatalf("create new audit event: %v", err)
+	}
+
+	response := doAdminRequest(t, http.MethodGet, server.URL+"/api/v1/admin/audit-events?created_after=2026-05-18&created_before=2026-05-20", nil, deps.adminCookie)
+	defer response.Body.Close()
+	events := decodeAdminAuditEventListResponse(t, response.Body)
+
+	if len(events) != 1 {
+		t.Fatalf("len(events) = %d, want 1 filtered event", len(events))
+	}
+	if events[0].Action != "admin.users.new" {
+		t.Fatalf("events[0].Action = %q, want admin.users.new", events[0].Action)
 	}
 }
 

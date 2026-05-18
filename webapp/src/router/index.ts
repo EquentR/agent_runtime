@@ -65,6 +65,14 @@ const routes = [
         },
       },
       {
+        path: 'models',
+        name: 'admin-models',
+        component: { template: '<main class="admin-workbench admin-models-placeholder"></main>' },
+        meta: {
+          title: '模型管理',
+        },
+      },
+      {
         path: 'settings',
         name: 'admin-settings',
         component: AdminSettingsView,

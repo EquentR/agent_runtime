@@ -218,7 +218,7 @@ describe('app router session guard', () => {
     const { createAppRouter } = await import('./index')
     const router = createAppRouter(true)
 
-    for (const path of ['/admin/users', '/admin/settings', '/admin/audit-events']) {
+    for (const path of ['/admin/users', '/admin/models', '/admin/settings', '/admin/audit-events']) {
       await router.push(path)
       await router.isReady()
 

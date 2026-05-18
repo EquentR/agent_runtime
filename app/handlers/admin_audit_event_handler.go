@@ -60,12 +60,22 @@ func (h *AdminAuditEventHandler) handleListEvents() (method, relativePath string
 		if err != nil {
 			return nil, []resp.ResOpt{resp.WithCode(http.StatusBadRequest)}, err
 		}
+		createdAfter, err := parseOptionalDateQuery(c.Query("created_after"), false)
+		if err != nil {
+			return nil, []resp.ResOpt{resp.WithCode(http.StatusBadRequest)}, err
+		}
+		createdBefore, err := parseOptionalDateQuery(c.Query("created_before"), true)
+		if err != nil {
+			return nil, []resp.ResOpt{resp.WithCode(http.StatusBadRequest)}, err
+		}
 		events, err := h.audit.List(c.Request.Context(), logics.AdminAuditFilter{
 			ActorID:       actorID,
 			ActorUsername: c.Query("actor_username"),
 			TargetKind:    c.Query("target_kind"),
 			TargetID:      c.Query("target_id"),
 			Action:        c.Query("action"),
+			CreatedAfter:  createdAfter,
+			CreatedBefore: createdBefore,
 			Limit:         limit,
 		})
 		if err != nil {
@@ -110,4 +120,20 @@ func parseOptionalIntQuery(raw string) (int, error) {
 		return 0, nil
 	}
 	return strconv.Atoi(raw)
+}
+
+func parseOptionalDateQuery(raw string, endExclusive bool) (*time.Time, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	parsed, err := time.Parse("2006-01-02", raw)
+	if err != nil {
+		return nil, err
+	}
+	parsed = parsed.UTC()
+	if endExclusive {
+		parsed = parsed.AddDate(0, 0, 1)
+	}
+	return &parsed, nil
 }

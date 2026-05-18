@@ -33,6 +33,8 @@ type AdminAuditFilter struct {
 	TargetKind    string
 	TargetID      string
 	Action        string
+	CreatedAfter  *time.Time
+	CreatedBefore *time.Time
 	Limit         int
 }
 
@@ -110,6 +112,12 @@ func (l *AdminAuditLogic) List(ctx context.Context, filter AdminAuditFilter) ([]
 	}
 	if action := strings.TrimSpace(filter.Action); action != "" {
 		query = query.Where("action = ?", action)
+	}
+	if filter.CreatedAfter != nil {
+		query = query.Where("created_at >= ?", filter.CreatedAfter.UTC())
+	}
+	if filter.CreatedBefore != nil {
+		query = query.Where("created_at < ?", filter.CreatedBefore.UTC())
 	}
 	limit := filter.Limit
 	if limit <= 0 || limit > 500 {
