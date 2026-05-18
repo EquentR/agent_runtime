@@ -74,6 +74,19 @@ func TestSMTPConfigValidationRequiresHostFromAndCredentialsWhenEnabled(t *testin
 	}
 }
 
+func TestNewSMTPSenderDisabledConfigNoops(t *testing.T) {
+	sender, err := NewSMTPSender(SMTPConfig{})
+	if err != nil {
+		t.Fatalf("NewSMTPSender(disabled) error = %v", err)
+	}
+	if sender == nil {
+		t.Fatal("NewSMTPSender(disabled) = nil, want sender")
+	}
+	if err := sender.Send(context.Background(), Message{}); err != nil {
+		t.Fatalf("Send(disabled) error = %v", err)
+	}
+}
+
 func TestSMTPConfigValidationRejectsHeaderInjectionAndInvalidAddresses(t *testing.T) {
 	base := SMTPConfig{
 		Enabled:  true,

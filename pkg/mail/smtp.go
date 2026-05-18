@@ -62,6 +62,9 @@ func NewSMTPSender(config SMTPConfig) (Sender, error) {
 	if err := config.ValidateForSend(); err != nil {
 		return nil, err
 	}
+	if !config.Enabled {
+		return &smtpSender{config: config}, nil
+	}
 	config.Host = strings.TrimSpace(config.Host)
 	config.Username = strings.TrimSpace(config.Username)
 	from, err := validateEmailAddress(config.From, "smtp from")
