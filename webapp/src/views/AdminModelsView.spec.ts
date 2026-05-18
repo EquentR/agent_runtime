@@ -189,4 +189,24 @@ describe('AdminModelsView', () => {
     expect(wrapper.text()).toContain('正在测试其他用户的模型')
     expect(wrapper.text()).toContain('操作会写入后台审计')
   })
+
+  it('AdminModelsView clears base URL without changing owner when editing a custom model', async () => {
+    const wrapper = await mountAdminModelsView()
+
+    await wrapper.get('[data-admin-custom-row="custom_1"]').trigger('click')
+    await wrapper.get('[data-admin-model-owner-user-id]').setValue('')
+    await wrapper.get('[data-admin-model-base-url]').setValue('')
+    await wrapper.get('[data-admin-model-context-max]').setValue('32768')
+    await wrapper.get('[data-admin-model-form]').trigger('submit')
+    await flushPromises()
+
+    expect(api.updateAdminCustomModel).toHaveBeenCalledWith('custom_1', expect.objectContaining({
+      base_url: '',
+      clear_base_url: true,
+      context_max_tokens: 32768,
+    }))
+    expect(api.updateAdminCustomModel).toHaveBeenCalledWith('custom_1', expect.not.objectContaining({
+      owner_user_id: 0,
+    }))
+  })
 })

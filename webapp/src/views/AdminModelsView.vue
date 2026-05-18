@@ -10,7 +10,7 @@ import {
   updateAdminCustomModel,
   updateAdminYAMLModel,
 } from '../lib/api'
-import type { CustomLLMModel, ModelScope, YAMLModel, YAMLModelCatalog } from '../types/api'
+import type { CustomLLMModel, CustomLLMModelInput, ModelScope, YAMLModel, YAMLModelCatalog } from '../types/api'
 
 type YAMLModelRow = {
   providerId: string
@@ -173,13 +173,13 @@ async function updateYAML(row: YAMLModelRow, patch: { enabled?: boolean; scope?:
 }
 
 function buildCustomInput() {
-  return {
-    owner_user_id: Number(customDraft.ownerUserId) || 0,
+  const input: CustomLLMModelInput = {
     provider_type: customDraft.providerType.trim(),
     provider_id: customDraft.providerId.trim(),
     model_id: customDraft.modelId.trim(),
     display_name: customDraft.displayName.trim(),
     base_url: customDraft.baseURL.trim(),
+    clear_base_url: Boolean(selectedCustom.value && customDraft.baseURL.trim() === ''),
     api_key: customDraft.apiKey,
     scope: customDraft.scope,
     enabled: customDraft.enabled,
@@ -188,16 +188,21 @@ function buildCustomInput() {
       attachments: customDraft.attachments,
     },
   }
+  const ownerUserID = Number(customDraft.ownerUserId)
+  if (!selectedCustom.value || customDraft.ownerUserId.trim()) {
+    input.owner_user_id = Number.isFinite(ownerUserID) ? ownerUserID : 0
+  }
+  return input
 }
 
 function validateCustomInput(input: ReturnType<typeof buildCustomInput>) {
   if (!input.provider_type || !input.provider_id || !input.model_id || !input.display_name) {
     return 'Provider Type、Provider ID、Model ID 和显示名称必填'
   }
-  if (!selectedCustom.value && !input.api_key.trim()) {
+  if (!selectedCustom.value && !input.api_key?.trim()) {
     return '创建模型时必须填写 API Key'
   }
-  if (input.context_max_tokens < 4) {
+  if ((input.context_max_tokens ?? 0) < 4) {
     return '上下文上限不能小于 4 tokens'
   }
   return ''
@@ -383,7 +388,7 @@ onMounted(() => {
       <form class="admin-form-grid" data-admin-model-form @submit.prevent="submitCustomModel">
         <label>
           <span class="field-label">Owner User ID</span>
-          <input v-model="customDraft.ownerUserId" class="text-input" inputmode="numeric" placeholder="留空则使用当前管理员">
+          <input v-model="customDraft.ownerUserId" class="text-input" data-admin-model-owner-user-id inputmode="numeric" placeholder="留空则使用当前管理员">
         </label>
         <label>
           <span class="field-label">Provider Type</span>

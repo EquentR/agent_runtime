@@ -105,6 +105,7 @@ describe('ProfileView', () => {
     await flushPromises()
 
     expect(api.fetchUserProfile).toHaveBeenCalledTimes(1)
+    expect(wrapper.findAll('h1').filter((heading) => heading.text() === '个人设置')).toHaveLength(1)
     expect(wrapper.text()).toContain('必须绑定邮箱')
     expect(wrapper.text()).toContain('必须修改密码')
     expect(wrapper.find('[data-profile-models-link]').exists()).toBe(true)
@@ -186,11 +187,14 @@ describe('ProfileView', () => {
     expect(api.testUserCustomModel).toHaveBeenCalledWith('custom_me')
 
     await wrapper.get('[data-user-model-row="custom_me"]').trigger('click')
+    await wrapper.get('[data-user-model-base-url]').setValue('')
     await wrapper.get('[data-user-model-context-max]').setValue('32768')
     await wrapper.get('[data-user-model-form]').trigger('submit')
     await flushPromises()
 
     expect(api.updateUserCustomModel).toHaveBeenCalledWith('custom_me', expect.objectContaining({
+      base_url: '',
+      clear_base_url: true,
       scope: 'owner',
       context_max_tokens: 32768,
     }))

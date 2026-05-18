@@ -14,7 +14,7 @@ import {
   updateUserCustomModel,
   updateUserProfile,
 } from '../lib/api'
-import type { AuthUser, CustomLLMModel } from '../types/api'
+import type { AuthUser, CustomLLMModel, CustomLLMModelInput } from '../types/api'
 
 const loading = ref(false)
 const savingProfile = ref(false)
@@ -204,12 +204,13 @@ async function confirmEmailVerification() {
 }
 
 function buildModelInput() {
-  return {
+  const input: CustomLLMModelInput = {
     provider_type: modelDraft.providerType.trim(),
     provider_id: modelDraft.providerId.trim(),
     model_id: modelDraft.modelId.trim(),
     display_name: modelDraft.displayName.trim(),
     base_url: modelDraft.baseURL.trim(),
+    clear_base_url: Boolean(selectedModel.value && modelDraft.baseURL.trim() === ''),
     api_key: modelDraft.apiKey,
     scope: 'owner' as const,
     enabled: modelDraft.enabled,
@@ -218,6 +219,7 @@ function buildModelInput() {
       attachments: modelDraft.attachments,
     },
   }
+  return input
 }
 
 function modelNeedsBaseURL(providerType: string) {
@@ -231,10 +233,10 @@ function validateModelInput(input: ReturnType<typeof buildModelInput>) {
   if (modelNeedsBaseURL(input.provider_type) && !input.base_url) {
     return '当前 Provider Type 需要填写 Base URL'
   }
-  if (!selectedModel.value && !input.api_key.trim()) {
+  if (!selectedModel.value && !input.api_key?.trim()) {
     return '创建模型时必须填写 API Key'
   }
-  if (input.context_max_tokens < 4) {
+  if ((input.context_max_tokens ?? 0) < 4) {
     return '上下文上限不能小于 4 tokens'
   }
   return ''

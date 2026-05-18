@@ -451,6 +451,44 @@ describe('ChatView', () => {
     expect(wrapper.get('.composer-submit').attributes()).toHaveProperty('disabled')
   })
 
+  it('keeps existing conversation history visible when there are no usable models', async () => {
+    api.fetchModelCatalog.mockResolvedValueOnce({
+      default_provider_id: '',
+      default_model_id: '',
+      providers: [],
+    })
+    api.fetchConversations.mockResolvedValue([
+      {
+        id: 'conv_1',
+        title: 'Saved chat',
+        last_message: 'historical answer',
+        message_count: 1,
+        provider_id: 'openai',
+        model_id: 'gpt-5.4',
+        created_by: 'demo-user',
+        created_at: '',
+        updated_at: '',
+      },
+    ])
+    api.fetchConversationMessages.mockResolvedValue([{ role: 'assistant', content: 'historical answer' }])
+
+    const router = makeRouter()
+    await router.push('/chat/conv_1')
+    await router.isReady()
+
+    const wrapper = mount(ChatView, {
+      global: {
+        plugins: [router],
+      },
+    })
+
+    await flushPromises()
+
+    expect(wrapper.find('[data-no-model-empty]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('historical answer')
+    expect(wrapper.get('.composer-submit').attributes()).toHaveProperty('disabled')
+  })
+
   it('shows admin links only inside the user menu', async () => {
     localStorage.setItem('agent-runtime.user', JSON.stringify({ username: 'demo-user', role: 'admin' }))
     api.fetchConversations.mockResolvedValue([])
