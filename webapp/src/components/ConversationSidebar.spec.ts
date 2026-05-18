@@ -198,6 +198,34 @@ describe('ConversationSidebar', () => {
     expect(wrapper.emitted('logout')).toHaveLength(1)
   })
 
+  it('shows profile settings in the user menu for regular users', async () => {
+    const wrapper = mount(ConversationSidebar, {
+      global: {
+        stubs: {
+          RouterLink: {
+            props: ['to'],
+            template: '<a :href="to"><slot /></a>',
+          },
+        },
+      },
+      props: {
+        activeConversationId: '',
+        loading: false,
+        username: 'demo-user',
+        conversations: [],
+        isAdmin: false,
+      },
+    })
+
+    await wrapper.find('.sidebar-user-menu-trigger').trigger('click')
+    await nextTick()
+
+    const profileLink = document.body.querySelector('.sidebar-profile-link') as HTMLAnchorElement | null
+    expect(profileLink).not.toBeNull()
+    expect(profileLink?.getAttribute('href')).toBe('/profile')
+    expect(profileLink?.textContent).toContain('个人设置')
+  })
+
   it('does not show approval management in the user menu', async () => {
     const wrapper = mount(ConversationSidebar, {
       global: {

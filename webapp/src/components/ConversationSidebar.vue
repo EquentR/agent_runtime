@@ -5,8 +5,9 @@ import {
   Close,
   DataAnalysis,
   Delete,
-  Fold, Memo,
+  Fold,
   Menu,
+  Memo,
   Plus,
   Remove
 } from '@element-plus/icons-vue'
@@ -235,6 +236,11 @@ onBeforeUnmount(() => {
     <Teleport to="body">
       <transition name="model-menu-fade">
         <div v-if="userMenuOpen" ref="userMenuPanel" class="sidebar-user-menu-panel upward" :class="{ compact }" :style="userMenuStyle">
+          <RouterLink class="sidebar-user-menu-option sidebar-profile-link" to="/profile" @click="closeUserMenu">
+            <span class="sidebar-user-menu-option-check" aria-hidden="true"></span>
+            <Menu />
+            <span class="sidebar-user-menu-option-label">个人设置</span>
+          </RouterLink>
           <RouterLink v-if="isAdmin" class="sidebar-user-menu-option sidebar-admin-link" to="/admin/audit" @click="closeUserMenu">
             <span class="sidebar-user-menu-option-check" aria-hidden="true"></span>
             <DataAnalysis />

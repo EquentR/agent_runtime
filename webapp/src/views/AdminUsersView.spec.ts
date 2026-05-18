@@ -49,7 +49,7 @@ describe('AdminUsersView', () => {
     ])
     api.updateAdminUser.mockResolvedValue(buildUser({
       role: 'admin',
-      status: 'disabled',
+      status: 'active',
       email_verified: false,
     }))
     api.resetAdminUserPassword.mockResolvedValue(buildUser({ force_password_change: true }))
@@ -134,5 +134,31 @@ describe('AdminUsersView', () => {
     expect(api.updateAdminUser).toHaveBeenCalledWith(4, expect.not.objectContaining({
       email: '',
     }))
+  })
+
+  it('removes an updated user that no longer matches the active status filter', async () => {
+    const AdminUsersView = await loadAdminUsersView()
+    const wrapper = mount(AdminUsersView)
+    await flushPromises()
+
+    api.updateAdminUser.mockResolvedValueOnce(buildUser({
+      status: 'disabled',
+      email_verified: true,
+    }))
+
+    await wrapper.get('[data-user-status-filter]').setValue('active')
+    await wrapper.get('[data-user-search-form]').trigger('submit')
+    await flushPromises()
+
+    await wrapper.get('[data-user-row="2"]').trigger('click')
+    await wrapper.get('[data-user-status-select]').setValue('disabled')
+    await wrapper.get('[data-user-detail-form]').trigger('submit')
+    await flushPromises()
+
+    expect(api.updateAdminUser).toHaveBeenCalledWith(2, expect.objectContaining({
+      status: 'disabled',
+    }))
+    expect(wrapper.find('[data-user-row="2"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('从左侧选择一个用户。')
   })
 })

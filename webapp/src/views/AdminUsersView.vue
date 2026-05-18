@@ -32,6 +32,7 @@ const resetDraft = reactive({
 })
 
 const selectedTitle = computed(() => selectedUser.value ? `${selectedUser.value.username} · ${selectedUser.value.email}` : '选择用户')
+const hasActiveFilters = computed(() => Boolean(filters.q.trim() || filters.role || filters.status))
 
 function buildFilter(): AdminUserFilter {
   return {
@@ -83,9 +84,31 @@ function selectUser(user: AuthUser) {
 }
 
 function replaceUser(nextUser: AuthUser) {
+  if (hasActiveFilters.value && !userMatchesActiveFilters(nextUser)) {
+    users.value = users.value.filter((user) => user.id !== nextUser.id)
+    clearSelection()
+    return
+  }
   users.value = users.value.map((user) => user.id === nextUser.id ? nextUser : user)
   selectedUser.value = nextUser
   syncDraft(nextUser)
+}
+
+function userMatchesActiveFilters(user: AuthUser) {
+  const q = filters.q.trim().toLowerCase()
+  if (q) {
+    const text = [user.username, user.email, user.display_name].join('\n').toLowerCase()
+    if (!text.includes(q)) {
+      return false
+    }
+  }
+  if (filters.role && user.role !== filters.role) {
+    return false
+  }
+  if (filters.status && user.status !== filters.status) {
+    return false
+  }
+  return true
 }
 
 async function submitUserUpdate() {
