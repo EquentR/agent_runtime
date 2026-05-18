@@ -3501,6 +3501,9 @@ const docTemplate = `{
                 "clear_api_key": {
                     "type": "boolean"
                 },
+                "clear_base_url": {
+                    "type": "boolean"
+                },
                 "context_max_tokens": {
                     "type": "integer"
                 },

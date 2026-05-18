@@ -26,10 +26,12 @@ const (
 )
 
 var (
-	ErrModelNotFound         = errors.New("模型不存在")
-	ErrModelUnauthorized     = errors.New("无权使用该模型")
-	ErrModelContextTooSmall  = errors.New("模型 context 上限不能小于 4")
-	ErrModelProviderConflict = errors.New("自定义模型 provider_id 不能与配置文件 provider 冲突")
+	ErrModelNotFound          = errors.New("模型不存在")
+	ErrModelUnauthorized      = errors.New("无权使用该模型")
+	ErrModelContextTooSmall   = errors.New("模型 context 上限不能小于 4")
+	ErrModelProviderConflict  = errors.New("自定义模型 provider_id 不能与配置文件 provider 冲突")
+	ErrModelSelectionConflict = errors.New("自定义模型 provider_id/model_id 与已启用共享模型冲突")
+	ErrModelInvalidScope      = errors.New("模型 scope 无效")
 )
 
 type ModelLogic struct {
@@ -61,6 +63,7 @@ type UpdateCustomModelInput struct {
 	ProviderType     string
 	BaseURL          string
 	APIKey           string
+	ClearBaseURL     bool
 	ClearAPIKey      bool
 	Scope            string
 	Enabled          *bool
@@ -199,6 +202,14 @@ func (l *ModelLogic) UpdateYAMLModelOverride(ctx context.Context, input UpdateYA
 	if provider == nil || model == nil {
 		return YAMLModelResponse{}, ErrModelNotFound
 	}
+	inputScope := ""
+	if strings.TrimSpace(input.Scope) != "" {
+		var scopeErr error
+		inputScope, scopeErr = parseModelScope(input.Scope, ModelScopeAdmin)
+		if scopeErr != nil {
+			return YAMLModelResponse{}, scopeErr
+		}
+	}
 	scope := normalizeScope(model.EffectiveScope(), ModelScopeAdmin)
 	enabled := model.IsEnabled()
 	now := time.Now().UTC()
@@ -218,8 +229,8 @@ func (l *ModelLogic) UpdateYAMLModelOverride(ctx context.Context, input UpdateYA
 			scope = normalizeScope(existing.Scope, scope)
 			enabled = existing.Enabled
 		}
-		if strings.TrimSpace(input.Scope) != "" {
-			scope = normalizeScope(input.Scope, ModelScopeAdmin)
+		if inputScope != "" {
+			scope = inputScope
 		}
 		if input.Enabled != nil {
 			enabled = *input.Enabled
@@ -278,6 +289,9 @@ func (l *ModelLogic) CreateCustomModel(ctx context.Context, input CreateCustomMo
 	if err != nil {
 		return CustomModelResponse{}, err
 	}
+	if err := l.ensureCustomSelectionAvailable(ctx, "", row.ProviderID, row.ModelID, row.Scope, row.Enabled); err != nil {
+		return CustomModelResponse{}, err
+	}
 	if err := l.db.WithContext(ctx).Create(&row).Error; err != nil {
 		return CustomModelResponse{}, err
 	}
@@ -303,6 +317,13 @@ func (l *ModelLogic) UpdateCustomModel(ctx context.Context, id string, input Upd
 	}
 	if strings.TrimSpace(input.ProviderID) != "" && l.yamlProviderIDExists(input.ProviderID) {
 		return CustomModelResponse{}, ErrModelProviderConflict
+	}
+	providerID, modelID, scope, enabled, err := effectiveCustomSelection(existing, input)
+	if err != nil {
+		return CustomModelResponse{}, err
+	}
+	if err := l.ensureCustomSelectionAvailable(ctx, existing.ID, providerID, modelID, scope, enabled); err != nil {
+		return CustomModelResponse{}, err
 	}
 	updates, err := l.customUpdatesFromInput(existing, input)
 	if err != nil {
@@ -603,6 +624,10 @@ func (l *ModelLogic) yamlProviderIDExists(providerID string) bool {
 
 func (l *ModelLogic) customRowFromCreateInput(input CreateCustomModelInput, encryptedAPIKey string) (models.CustomLLMModel, error) {
 	now := time.Now().UTC()
+	scope, err := parseModelScope(input.Scope, ModelScopeOwner)
+	if err != nil {
+		return models.CustomLLMModel{}, err
+	}
 	capabilitiesJSON, err := json.Marshal(input.Capabilities)
 	if err != nil {
 		return models.CustomLLMModel{}, err
@@ -620,7 +645,7 @@ func (l *ModelLogic) customRowFromCreateInput(input CreateCustomModelInput, encr
 		ProviderType:     strings.TrimSpace(input.ProviderType),
 		BaseURL:          strings.TrimSpace(input.BaseURL),
 		EncryptedAPIKey:  encryptedAPIKey,
-		Scope:            normalizeScope(input.Scope, ModelScopeOwner),
+		Scope:            scope,
 		Enabled:          input.Enabled,
 		ContextMaxTokens: input.ContextMaxTokens,
 		CapabilitiesJSON: capabilitiesJSON,
@@ -647,7 +672,9 @@ func (l *ModelLogic) customUpdatesFromInput(existing models.CustomLLMModel, inpu
 	if strings.TrimSpace(input.ProviderType) != "" {
 		updates["provider_type"] = strings.TrimSpace(input.ProviderType)
 	}
-	if strings.TrimSpace(input.BaseURL) != "" {
+	if input.ClearBaseURL {
+		updates["base_url"] = ""
+	} else if strings.TrimSpace(input.BaseURL) != "" {
 		updates["base_url"] = strings.TrimSpace(input.BaseURL)
 	}
 	if input.ClearAPIKey {
@@ -660,7 +687,11 @@ func (l *ModelLogic) customUpdatesFromInput(existing models.CustomLLMModel, inpu
 		updates["encrypted_api_key"] = encrypted
 	}
 	if strings.TrimSpace(input.Scope) != "" {
-		updates["scope"] = normalizeScope(input.Scope, ModelScopeOwner)
+		scope, err := parseModelScope(input.Scope, ModelScopeOwner)
+		if err != nil {
+			return nil, err
+		}
+		updates["scope"] = scope
 	}
 	if input.Enabled != nil {
 		updates["enabled"] = *input.Enabled
@@ -857,6 +888,69 @@ func cloneLLMProviders(providers []coretypes.LLMProvider) []coretypes.LLMProvide
 		out[i].Models = append([]coretypes.LLMModel(nil), providers[i].Models...)
 	}
 	return out
+}
+
+func (l *ModelLogic) ensureCustomSelectionAvailable(ctx context.Context, excludeID string, providerID string, modelID string, scope string, enabled bool) error {
+	if l == nil || l.db == nil || !enabled {
+		return nil
+	}
+	providerID = strings.TrimSpace(providerID)
+	modelID = strings.TrimSpace(modelID)
+	if providerID == "" || modelID == "" {
+		return nil
+	}
+	query := l.db.WithContext(ctx).Model(&models.CustomLLMModel{}).
+		Where("enabled = ?", true).
+		Where("LOWER(provider_id) = ? AND LOWER(model_id) = ?", strings.ToLower(providerID), strings.ToLower(modelID))
+	if strings.TrimSpace(excludeID) != "" {
+		query = query.Where("id <> ?", strings.TrimSpace(excludeID))
+	}
+	if normalizeScope(scope, ModelScopeOwner) == ModelScopeOwner {
+		query = query.Where("LOWER(scope) IN ?", []string{ModelScopeAdmin, ModelScopeGlobal})
+	}
+
+	var count int64
+	if err := query.Count(&count).Error; err != nil {
+		return err
+	}
+	if count > 0 {
+		return ErrModelSelectionConflict
+	}
+	return nil
+}
+
+func effectiveCustomSelection(existing models.CustomLLMModel, input UpdateCustomModelInput) (string, string, string, bool, error) {
+	providerID := firstNonEmptyString(input.ProviderID, existing.ProviderID)
+	modelID := firstNonEmptyString(input.ModelID, existing.ModelID)
+	scope := normalizeScope(existing.Scope, ModelScopeOwner)
+	if strings.TrimSpace(input.Scope) != "" {
+		parsedScope, err := parseModelScope(input.Scope, ModelScopeOwner)
+		if err != nil {
+			return "", "", "", false, err
+		}
+		scope = parsedScope
+	}
+	enabled := existing.Enabled
+	if input.Enabled != nil {
+		enabled = *input.Enabled
+	}
+	return providerID, modelID, scope, enabled, nil
+}
+
+func parseModelScope(scope string, fallback string) (string, error) {
+	if strings.TrimSpace(scope) == "" {
+		return fallback, nil
+	}
+	switch strings.ToLower(strings.TrimSpace(scope)) {
+	case ModelScopeAdmin:
+		return ModelScopeAdmin, nil
+	case ModelScopeGlobal:
+		return ModelScopeGlobal, nil
+	case ModelScopeOwner:
+		return ModelScopeOwner, nil
+	default:
+		return "", fmt.Errorf("%w: %s", ErrModelInvalidScope, strings.TrimSpace(scope))
+	}
 }
 
 func normalizeScope(scope string, fallback string) string {

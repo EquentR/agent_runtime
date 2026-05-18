@@ -281,6 +281,7 @@ type CustomModelUpdateSwaggerRequest struct {
 	ProviderType     string                      `json:"provider_type,omitempty"`
 	BaseURL          string                      `json:"base_url,omitempty"`
 	APIKey           string                      `json:"api_key,omitempty"`
+	ClearBaseURL     bool                        `json:"clear_base_url,omitempty"`
 	ClearAPIKey      bool                        `json:"clear_api_key,omitempty"`
 	Scope            string                      `json:"scope,omitempty"`
 	Enabled          *bool                       `json:"enabled,omitempty"`

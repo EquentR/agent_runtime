@@ -215,6 +215,103 @@ func TestAdminModelHandlerDefaultsCreatedCustomModelOwnerToActor(t *testing.T) {
 	}
 }
 
+func TestAdminModelHandlerRejectsInvalidCustomModelScopeWithBadRequest(t *testing.T) {
+	deps, _ := newAdminHandlerTestServer(t)
+	if err := deps.db.AutoMigrate(&models.LLMModelOverride{}, &models.CustomLLMModel{}); err != nil {
+		t.Fatalf("AutoMigrate(model tables) error = %v", err)
+	}
+	codec, err := secret.NewCodec("test-secret")
+	if err != nil {
+		t.Fatalf("NewCodec() error = %v", err)
+	}
+	modelLogic, err := logics.NewModelLogic(deps.db, nil, codec)
+	if err != nil {
+		t.Fatalf("NewModelLogic() error = %v", err)
+	}
+
+	engine := rest.Init()
+	authMiddleware := NewAuthMiddleware(deps.authLogic)
+	NewAdminModelHandler(modelLogic, deps.auditLogic, fakeModelTester{}, authMiddleware.RequireAdmin()).Register(engine.Group("/api/v1"))
+	server := httptest.NewServer(engine)
+	defer server.Close()
+
+	response := doAdminRequest(t, http.MethodPost, server.URL+"/api/v1/admin/models/custom", map[string]any{
+		"provider_id":        "invalid-handler-scope-provider",
+		"model_id":           "invalid-handler-scope-model",
+		"display_name":       "Invalid Scope",
+		"provider_type":      coretypes.LLMTypeOpenAICompletions,
+		"api_key":            "admin-secret",
+		"scope":              "public",
+		"context_max_tokens": int64(32768),
+	}, deps.adminCookie)
+	defer response.Body.Close()
+	envelope := decodeEnvelope(t, response.Body)
+	if envelope.Code != http.StatusBadRequest {
+		t.Fatalf("envelope.Code = %d, want 400", envelope.Code)
+	}
+	if envelope.OK {
+		t.Fatalf("response OK = true, want invalid scope failure")
+	}
+}
+
+func TestAdminModelHandlerCanClearCustomModelBaseURL(t *testing.T) {
+	deps, _ := newAdminHandlerTestServer(t)
+	if err := deps.db.AutoMigrate(&models.LLMModelOverride{}, &models.CustomLLMModel{}); err != nil {
+		t.Fatalf("AutoMigrate(model tables) error = %v", err)
+	}
+	codec, err := secret.NewCodec("test-secret")
+	if err != nil {
+		t.Fatalf("NewCodec() error = %v", err)
+	}
+	modelLogic, err := logics.NewModelLogic(deps.db, nil, codec)
+	if err != nil {
+		t.Fatalf("NewModelLogic() error = %v", err)
+	}
+	var admin models.User
+	if err := deps.db.Take(&admin, "username = ?", "root").Error; err != nil {
+		t.Fatalf("load admin: %v", err)
+	}
+	custom, err := modelLogic.CreateCustomModel(t.Context(), logics.CreateCustomModelInput{
+		OwnerUserID:      admin.ID,
+		ProviderID:       "base-url-handler-provider",
+		ModelID:          "base-url-handler-model",
+		DisplayName:      "Base URL Handler",
+		ProviderType:     coretypes.LLMTypeOpenAICompletions,
+		BaseURL:          "https://api.example.com/v1",
+		APIKey:           "admin-secret",
+		Scope:            logics.ModelScopeAdmin,
+		Enabled:          true,
+		ContextMaxTokens: 32768,
+	})
+	if err != nil {
+		t.Fatalf("CreateCustomModel() error = %v", err)
+	}
+
+	engine := rest.Init()
+	authMiddleware := NewAuthMiddleware(deps.authLogic)
+	NewAdminModelHandler(modelLogic, deps.auditLogic, fakeModelTester{}, authMiddleware.RequireAdmin()).Register(engine.Group("/api/v1"))
+	server := httptest.NewServer(engine)
+	defer server.Close()
+
+	response := doAdminRequest(t, http.MethodPut, server.URL+"/api/v1/admin/models/custom/"+custom.ID, map[string]any{
+		"clear_base_url": true,
+	}, deps.adminCookie)
+	defer response.Body.Close()
+	envelope := decodeEnvelope(t, response.Body)
+	if !envelope.OK {
+		t.Fatalf("update response OK = false, message = %s, data = %s", envelope.Message, string(envelope.Data))
+	}
+	var payload struct {
+		BaseURL string `json:"base_url"`
+	}
+	if err := json.Unmarshal(envelope.Data, &payload); err != nil {
+		t.Fatalf("Unmarshal payload error = %v", err)
+	}
+	if payload.BaseURL != "" {
+		t.Fatalf("BaseURL = %q, want empty", payload.BaseURL)
+	}
+}
+
 func TestAdminModelHandlerRollsBackCustomCreateWhenAuditFails(t *testing.T) {
 	deps, _ := newAdminHandlerTestServerWithoutAuditTable(t)
 	if err := deps.db.AutoMigrate(&models.LLMModelOverride{}, &models.CustomLLMModel{}); err != nil {

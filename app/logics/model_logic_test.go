@@ -178,6 +178,15 @@ func TestModelLogicYAMLOverridePatchPreservesUnspecifiedFields(t *testing.T) {
 	if scopeOnly.Scope != ModelScopeGlobal || !scopeOnly.Enabled {
 		t.Fatalf("scope-only update = %#v, want scope=global preserved enabled=true", scopeOnly)
 	}
+
+	_, err = logic.UpdateYAMLModelOverride(context.Background(), UpdateYAMLModelOverrideInput{
+		ProviderID: "yaml",
+		ModelID:    "shared",
+		Scope:      "public",
+	})
+	if !errors.Is(err, ErrModelInvalidScope) {
+		t.Fatalf("UpdateYAMLModelOverride(invalid scope) error = %v, want ErrModelInvalidScope", err)
+	}
 }
 
 func TestModelLogicCustomModelContextBudgetDefaultsOutputToQuarterCappedAt8192(t *testing.T) {
@@ -298,6 +307,150 @@ func TestModelLogicRejectsCustomProviderIDCollidingWithYAMLProvider(t *testing.T
 	})
 	if !errors.Is(err, ErrModelProviderConflict) {
 		t.Fatalf("UpdateCustomModel() error = %v, want ErrModelProviderConflict", err)
+	}
+}
+
+func TestModelLogicRejectsSharedCustomModelSelectionCollisions(t *testing.T) {
+	logic := newModelLogicForTest(t, nil)
+	_, err := logic.CreateCustomModel(context.Background(), CreateCustomModelInput{
+		OwnerUserID:      1,
+		ProviderID:       "shared-provider",
+		ModelID:          "shared-model",
+		DisplayName:      "Shared One",
+		ProviderType:     coretypes.LLMTypeOpenAICompletions,
+		APIKey:           "secret-one",
+		Scope:            ModelScopeGlobal,
+		Enabled:          true,
+		ContextMaxTokens: 32768,
+	})
+	if err != nil {
+		t.Fatalf("CreateCustomModel(first shared) error = %v", err)
+	}
+
+	_, err = logic.CreateCustomModel(context.Background(), CreateCustomModelInput{
+		OwnerUserID:      2,
+		ProviderID:       " SHARED-PROVIDER ",
+		ModelID:          " Shared-Model ",
+		DisplayName:      "Shared Two",
+		ProviderType:     coretypes.LLMTypeOpenAICompletions,
+		APIKey:           "secret-two",
+		Scope:            ModelScopeAdmin,
+		Enabled:          true,
+		ContextMaxTokens: 32768,
+	})
+	if !errors.Is(err, ErrModelSelectionConflict) {
+		t.Fatalf("CreateCustomModel(second shared same provider/model) error = %v, want ErrModelSelectionConflict", err)
+	}
+
+	_, err = logic.CreateCustomModel(context.Background(), CreateCustomModelInput{
+		OwnerUserID:      2,
+		ProviderID:       "shared-provider",
+		ModelID:          "shared-model",
+		DisplayName:      "Owner Collision",
+		ProviderType:     coretypes.LLMTypeOpenAICompletions,
+		APIKey:           "secret-owner",
+		Scope:            ModelScopeOwner,
+		Enabled:          true,
+		ContextMaxTokens: 32768,
+	})
+	if !errors.Is(err, ErrModelSelectionConflict) {
+		t.Fatalf("CreateCustomModel(owner same provider/model as shared) error = %v, want ErrModelSelectionConflict", err)
+	}
+
+	ownerOnly, err := logic.CreateCustomModel(context.Background(), CreateCustomModelInput{
+		OwnerUserID:      2,
+		ProviderID:       "owner-provider",
+		ModelID:          "owner-model",
+		DisplayName:      "Owner Only",
+		ProviderType:     coretypes.LLMTypeOpenAICompletions,
+		APIKey:           "secret-three",
+		Scope:            ModelScopeOwner,
+		Enabled:          true,
+		ContextMaxTokens: 32768,
+	})
+	if err != nil {
+		t.Fatalf("CreateCustomModel(owner) error = %v", err)
+	}
+	_, err = logic.UpdateCustomModel(context.Background(), ownerOnly.ID, UpdateCustomModelInput{
+		ProviderID: "shared-provider",
+		ModelID:    "shared-model",
+		Scope:      ModelScopeGlobal,
+	})
+	if !errors.Is(err, ErrModelSelectionConflict) {
+		t.Fatalf("UpdateCustomModel(owner to colliding global) error = %v, want ErrModelSelectionConflict", err)
+	}
+}
+
+func TestModelLogicRejectsInvalidCustomModelScope(t *testing.T) {
+	logic := newModelLogicForTest(t, nil)
+	_, err := logic.CreateCustomModel(context.Background(), CreateCustomModelInput{
+		OwnerUserID:      1,
+		ProviderID:       "invalid-scope-provider",
+		ModelID:          "invalid-scope-model",
+		DisplayName:      "Invalid Scope",
+		ProviderType:     coretypes.LLMTypeOpenAICompletions,
+		APIKey:           "secret",
+		Scope:            "public",
+		Enabled:          true,
+		ContextMaxTokens: 32768,
+	})
+	if !errors.Is(err, ErrModelInvalidScope) {
+		t.Fatalf("CreateCustomModel(invalid scope) error = %v, want ErrModelInvalidScope", err)
+	}
+
+	created, err := logic.CreateCustomModel(context.Background(), CreateCustomModelInput{
+		OwnerUserID:      1,
+		ProviderID:       "valid-scope-provider",
+		ModelID:          "valid-scope-model",
+		DisplayName:      "Valid Scope",
+		ProviderType:     coretypes.LLMTypeOpenAICompletions,
+		APIKey:           "secret",
+		Scope:            ModelScopeOwner,
+		Enabled:          true,
+		ContextMaxTokens: 32768,
+	})
+	if err != nil {
+		t.Fatalf("CreateCustomModel(valid) error = %v", err)
+	}
+	_, err = logic.UpdateCustomModel(context.Background(), created.ID, UpdateCustomModelInput{Scope: "public"})
+	if !errors.Is(err, ErrModelInvalidScope) {
+		t.Fatalf("UpdateCustomModel(invalid scope) error = %v, want ErrModelInvalidScope", err)
+	}
+}
+
+func TestModelLogicUpdateCustomModelCanClearBaseURL(t *testing.T) {
+	logic := newModelLogicForTest(t, nil)
+	created, err := logic.CreateCustomModel(context.Background(), CreateCustomModelInput{
+		OwnerUserID:      1,
+		ProviderID:       "base-url-provider",
+		ModelID:          "base-url-model",
+		DisplayName:      "Base URL",
+		ProviderType:     coretypes.LLMTypeOpenAICompletions,
+		BaseURL:          "https://api.example.com/v1",
+		APIKey:           "secret",
+		Scope:            ModelScopeOwner,
+		Enabled:          true,
+		ContextMaxTokens: 32768,
+	})
+	if err != nil {
+		t.Fatalf("CreateCustomModel() error = %v", err)
+	}
+	updated, err := logic.UpdateCustomModel(context.Background(), created.ID, UpdateCustomModelInput{
+		ClearBaseURL: true,
+	})
+	if err != nil {
+		t.Fatalf("UpdateCustomModel(ClearBaseURL) error = %v", err)
+	}
+	if updated.BaseURL != "" {
+		t.Fatalf("updated.BaseURL = %q, want empty", updated.BaseURL)
+	}
+
+	var stored models.CustomLLMModel
+	if err := logic.DB().Take(&stored, "id = ?", created.ID).Error; err != nil {
+		t.Fatalf("load stored custom model: %v", err)
+	}
+	if stored.BaseURL != "" {
+		t.Fatalf("stored.BaseURL = %q, want empty", stored.BaseURL)
 	}
 }
 

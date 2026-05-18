@@ -60,6 +60,7 @@ type updateCustomModelRequest struct {
 	ProviderType     string                      `json:"provider_type"`
 	BaseURL          string                      `json:"base_url"`
 	APIKey           string                      `json:"api_key"`
+	ClearBaseURL     bool                        `json:"clear_base_url"`
 	ClearAPIKey      bool                        `json:"clear_api_key"`
 	Scope            string                      `json:"scope"`
 	Enabled          *bool                       `json:"enabled"`
@@ -513,6 +514,7 @@ func updateCustomInputFromRequest(request updateCustomModelRequest) logics.Updat
 		ProviderType:     request.ProviderType,
 		BaseURL:          request.BaseURL,
 		APIKey:           request.APIKey,
+		ClearBaseURL:     request.ClearBaseURL,
 		ClearAPIKey:      request.ClearAPIKey,
 		Scope:            request.Scope,
 		Enabled:          request.Enabled,
@@ -536,7 +538,10 @@ func modelErrorOptions(err error) []resp.ResOpt {
 		return []resp.ResOpt{resp.WithCode(resp.NotFound)}
 	case errors.Is(err, logics.ErrModelUnauthorized):
 		return []resp.ResOpt{resp.WithCode(http.StatusUnauthorized)}
-	case errors.Is(err, logics.ErrModelContextTooSmall), errors.Is(err, logics.ErrModelProviderConflict):
+	case errors.Is(err, logics.ErrModelContextTooSmall),
+		errors.Is(err, logics.ErrModelProviderConflict),
+		errors.Is(err, logics.ErrModelSelectionConflict),
+		errors.Is(err, logics.ErrModelInvalidScope):
 		return []resp.ResOpt{resp.WithCode(http.StatusBadRequest)}
 	default:
 		return nil

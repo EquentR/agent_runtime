@@ -44,7 +44,7 @@ func TestOpenAiResponsesClient_TimesOutWhenHeadersArriveButFirstEventDoesNot(t *
 		w.Header().Set("Content-Type", "text/event-stream")
 		if flusher, ok := w.(http.Flusher); ok {
 			flusher.Flush()
-			time.Sleep(150 * time.Millisecond)
+			<-r.Context().Done()
 		}
 	}))
 	defer server.Close()

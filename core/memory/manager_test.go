@@ -27,7 +27,7 @@ func TestNewManagerDefaultsToHundredKContextWindow(t *testing.T) {
 	}
 }
 
-func TestNewManagerUsesProviderContextWindow(t *testing.T) {
+func TestNewManagerUsesProviderDefaultedInputBudget(t *testing.T) {
 	mgr, err := NewManager(Options{
 		Model: &coretypes.LLMModel{
 			BaseModel: coretypes.BaseModel{ID: "gpt54", Name: "gpt-5.4"},
@@ -40,14 +40,14 @@ func TestNewManagerUsesProviderContextWindow(t *testing.T) {
 		t.Fatalf("NewManager() error = %v", err)
 	}
 
-	if got := mgr.MaxContextTokens(); got != 32_000 {
-		t.Fatalf("MaxContextTokens() = %d, want 32000", got)
+	if got := mgr.MaxContextTokens(); got != 24_000 {
+		t.Fatalf("MaxContextTokens() = %d, want 24000 effective input budget", got)
 	}
-	if got := mgr.ShortTermLimitTokens(); got != 22_400 {
-		t.Fatalf("ShortTermLimitTokens() = %d, want 22400", got)
+	if got := mgr.ShortTermLimitTokens(); got != 16_800 {
+		t.Fatalf("ShortTermLimitTokens() = %d, want 16800", got)
 	}
-	if got := mgr.SummaryLimitTokens(); got != 9_600 {
-		t.Fatalf("SummaryLimitTokens() = %d, want 9600", got)
+	if got := mgr.SummaryLimitTokens(); got != 7_200 {
+		t.Fatalf("SummaryLimitTokens() = %d, want 7200", got)
 	}
 }
 
