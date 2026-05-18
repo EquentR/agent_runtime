@@ -183,6 +183,103 @@ func TestSettingsLogicDBOverrideMasksSecretsAndPreservesEncryptedValues(t *testi
 	}
 }
 
+func TestSettingsLogicClearsSMTPPasswordAndTurnstileSecret(t *testing.T) {
+	logic, db, _ := newSettingsLogicTestSubject(t, SettingsDefaults{})
+
+	if _, err := logic.UpdateSMTP(context.Background(), UpdateSMTPInput{
+		Enabled:  true,
+		Host:     "smtp.example.com",
+		Port:     587,
+		Username: "smtp-user",
+		Password: "stored-password",
+		From:     "noreply@example.com",
+	}); err != nil {
+		t.Fatalf("UpdateSMTP(seed) error = %v", err)
+	}
+	preservedSMTP, err := logic.UpdateSMTP(context.Background(), UpdateSMTPInput{
+		Enabled:  true,
+		Host:     "smtp.example.com",
+		Port:     587,
+		Username: "smtp-user",
+		From:     "noreply@example.com",
+	})
+	if err != nil {
+		t.Fatalf("UpdateSMTP(preserve) error = %v", err)
+	}
+	if preservedSMTP.PasswordMasked == "" {
+		t.Fatal("UpdateSMTP(preserve) PasswordMasked = empty, want preserved password mask")
+	}
+	clearedSMTP, err := logic.UpdateSMTP(context.Background(), UpdateSMTPInput{
+		Enabled:       true,
+		Host:          "smtp.example.com",
+		Port:          587,
+		Username:      "smtp-user",
+		From:          "noreply@example.com",
+		ClearPassword: true,
+	})
+	if err != nil {
+		t.Fatalf("UpdateSMTP(clear) error = %v", err)
+	}
+	if clearedSMTP.PasswordMasked != "" || clearedSMTP.Password != "" {
+		t.Fatalf("UpdateSMTP(clear) returned secret fields: %#v", clearedSMTP)
+	}
+	storedSMTP := loadSettingsTestSetting(t, db, "smtp")
+	if storedSMTP.Encrypted {
+		t.Fatal("cleared smtp setting Encrypted = true, want false")
+	}
+	var storedSMTPPayload struct {
+		Password string `json:"password"`
+	}
+	if err := json.Unmarshal(storedSMTP.ValueJSON, &storedSMTPPayload); err != nil {
+		t.Fatalf("unmarshal cleared smtp payload: %v", err)
+	}
+	if storedSMTPPayload.Password != "" {
+		t.Fatalf("cleared smtp password = %q, want empty", storedSMTPPayload.Password)
+	}
+
+	if _, err := logic.UpdateTurnstile(context.Background(), UpdateTurnstileInput{
+		Enabled: true,
+		SiteKey: "site-key",
+		Secret:  "stored-secret",
+	}); err != nil {
+		t.Fatalf("UpdateTurnstile(seed) error = %v", err)
+	}
+	preservedTurnstile, err := logic.UpdateTurnstile(context.Background(), UpdateTurnstileInput{
+		Enabled: true,
+		SiteKey: "site-key",
+	})
+	if err != nil {
+		t.Fatalf("UpdateTurnstile(preserve) error = %v", err)
+	}
+	if preservedTurnstile.SecretMasked == "" {
+		t.Fatal("UpdateTurnstile(preserve) SecretMasked = empty, want preserved secret mask")
+	}
+	clearedTurnstile, err := logic.UpdateTurnstile(context.Background(), UpdateTurnstileInput{
+		Enabled:     true,
+		SiteKey:     "site-key",
+		ClearSecret: true,
+	})
+	if err != nil {
+		t.Fatalf("UpdateTurnstile(clear) error = %v", err)
+	}
+	if clearedTurnstile.SecretMasked != "" || clearedTurnstile.Secret != "" {
+		t.Fatalf("UpdateTurnstile(clear) returned secret fields: %#v", clearedTurnstile)
+	}
+	storedTurnstile := loadSettingsTestSetting(t, db, "turnstile")
+	if storedTurnstile.Encrypted {
+		t.Fatal("cleared turnstile setting Encrypted = true, want false")
+	}
+	var storedTurnstilePayload struct {
+		Secret string `json:"secret"`
+	}
+	if err := json.Unmarshal(storedTurnstile.ValueJSON, &storedTurnstilePayload); err != nil {
+		t.Fatalf("unmarshal cleared turnstile payload: %v", err)
+	}
+	if storedTurnstilePayload.Secret != "" {
+		t.Fatalf("cleared turnstile secret = %q, want empty", storedTurnstilePayload.Secret)
+	}
+}
+
 func TestSettingsLogicPublicRegistrationDefaultsToEnabled(t *testing.T) {
 	logic, _, _ := newSettingsLogicTestSubject(t, SettingsDefaults{})
 
@@ -213,6 +310,21 @@ func TestSettingsLogicPublicRegistrationDefaultsToEnabled(t *testing.T) {
 	}
 }
 
+func TestSettingsLogicPublicRegistrationExplicitFalseDefaultStaysDisabled(t *testing.T) {
+	logic, _, _ := newSettingsLogicTestSubject(t, SettingsDefaults{
+		PublicRegistrationConfigured: true,
+		PublicRegistration:           PublicRegistrationSettings{Enabled: false},
+	})
+
+	settings, err := logic.GetPublicRegistration(context.Background())
+	if err != nil {
+		t.Fatalf("GetPublicRegistration() error = %v", err)
+	}
+	if settings.Enabled {
+		t.Fatal("explicit false public registration default Enabled = true, want false")
+	}
+}
+
 func newSettingsLogicTestSubject(t *testing.T, defaults SettingsDefaults) (*SettingsLogic, *gorm.DB, *secret.Codec) {
 	t.Helper()
 
@@ -234,4 +346,14 @@ func newSettingsLogicTestSubject(t *testing.T, defaults SettingsDefaults) (*Sett
 		t.Fatalf("NewSettingsLogic() error = %v", err)
 	}
 	return logic, db, codec
+}
+
+func loadSettingsTestSetting(t *testing.T, db *gorm.DB, key string) models.SystemSetting {
+	t.Helper()
+
+	var setting models.SystemSetting
+	if err := db.Where("key = ?", key).Take(&setting).Error; err != nil {
+		t.Fatalf("load setting %q: %v", key, err)
+	}
+	return setting
 }

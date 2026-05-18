@@ -20,9 +20,10 @@ const (
 )
 
 type SettingsDefaults struct {
-	PublicRegistration PublicRegistrationSettings
-	SMTP               SMTPSettings
-	Turnstile          TurnstileSettings
+	PublicRegistrationConfigured bool
+	PublicRegistration           PublicRegistrationSettings
+	SMTP                         SMTPSettings
+	Turnstile                    TurnstileSettings
 }
 
 type PublicRegistrationSettings struct {
@@ -47,15 +48,16 @@ type SMTPSettings struct {
 }
 
 type UpdateSMTPInput struct {
-	Enabled     bool
-	Host        string
-	Port        int
-	Username    string
-	Password    string
-	From        string
-	UseTLS      bool
-	UseStartTLS bool
-	UpdatedBy   string
+	Enabled       bool
+	Host          string
+	Port          int
+	Username      string
+	Password      string
+	ClearPassword bool
+	From          string
+	UseTLS        bool
+	UseStartTLS   bool
+	UpdatedBy     string
 }
 
 type TurnstileSettings struct {
@@ -72,6 +74,7 @@ type UpdateTurnstileInput struct {
 	Enabled             bool
 	SiteKey             string
 	Secret              string
+	ClearSecret         bool
 	ProtectLogin        bool
 	ProtectRegistration bool
 	ProtectVerification bool
@@ -111,7 +114,7 @@ func NewSettingsLogic(db *gorm.DB, defaults SettingsDefaults, codec *secret.Code
 	if codec == nil {
 		return nil, fmt.Errorf("settings secret codec is required")
 	}
-	if defaults == (SettingsDefaults{}) {
+	if !defaults.PublicRegistrationConfigured {
 		defaults.PublicRegistration.Enabled = true
 	}
 	return &SettingsLogic{db: db, defaults: defaults, codec: codec}, nil
@@ -160,7 +163,9 @@ func (l *SettingsLogic) UpdateSMTP(ctx context.Context, input UpdateSMTPInput) (
 		UseStartTLS: input.UseStartTLS,
 		Password:    current.Password,
 	}
-	if input.Password != "" {
+	if input.ClearPassword {
+		settings.Password = ""
+	} else if input.Password != "" {
 		settings.Password = input.Password
 	}
 	payload, err := l.encryptSMTP(settings)
@@ -194,7 +199,9 @@ func (l *SettingsLogic) UpdateTurnstile(ctx context.Context, input UpdateTurnsti
 		ProtectVerification: input.ProtectVerification,
 		Secret:              current.Secret,
 	}
-	if input.Secret != "" {
+	if input.ClearSecret {
+		settings.Secret = ""
+	} else if input.Secret != "" {
 		settings.Secret = input.Secret
 	}
 	payload, err := l.encryptTurnstile(settings)

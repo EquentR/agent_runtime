@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net"
+	netmail "net/mail"
 	"net/smtp"
 	"strings"
 )
@@ -45,6 +46,9 @@ func (c SMTPConfig) ValidateForSend() error {
 	if strings.TrimSpace(c.From) == "" {
 		return fmt.Errorf("smtp from is required")
 	}
+	if _, err := validateEmailAddress(c.From, "smtp from"); err != nil {
+		return err
+	}
 	if strings.TrimSpace(c.Username) == "" || c.Password == "" {
 		return fmt.Errorf("smtp username and password are required")
 	}
@@ -60,7 +64,11 @@ func NewSMTPSender(config SMTPConfig) (Sender, error) {
 	}
 	config.Host = strings.TrimSpace(config.Host)
 	config.Username = strings.TrimSpace(config.Username)
-	config.From = strings.TrimSpace(config.From)
+	from, err := validateEmailAddress(config.From, "smtp from")
+	if err != nil {
+		return nil, err
+	}
+	config.From = from.String()
 	return &smtpSender{
 		config: config,
 		addr:   net.JoinHostPort(config.Host, fmt.Sprintf("%d", config.Port)),
@@ -78,15 +86,18 @@ func (s *smtpSender) Send(ctx context.Context, message Message) error {
 		return err
 	}
 
-	to := strings.TrimSpace(message.To)
-	if to == "" {
-		return fmt.Errorf("message recipient is required")
+	to, err := validateEmailAddress(message.To, "message recipient")
+	if err != nil {
+		return err
 	}
-	subject := strings.TrimSpace(message.Subject)
+	subject, err := validateHeaderValue(message.Subject, "message subject")
+	if err != nil {
+		return err
+	}
 	body := message.Body
 	payload := strings.Join([]string{
 		"From: " + s.config.From,
-		"To: " + to,
+		"To: " + to.String(),
 		"Subject: " + subject,
 		"MIME-Version: 1.0",
 		"Content-Type: text/plain; charset=UTF-8",
@@ -95,9 +106,9 @@ func (s *smtpSender) Send(ctx context.Context, message Message) error {
 	}, "\r\n")
 
 	if s.config.UseTLS {
-		return s.sendTLS(ctx, to, []byte(payload))
+		return s.sendTLS(ctx, to.Address, []byte(payload))
 	}
-	return s.sendPlain(ctx, to, []byte(payload))
+	return s.sendPlain(ctx, to.Address, []byte(payload))
 }
 
 func (s *smtpSender) sendPlain(ctx context.Context, to string, payload []byte) error {
@@ -112,10 +123,11 @@ func (s *smtpSender) sendPlain(ctx context.Context, to string, payload []byte) e
 	}
 	if s.config.UseStartTLS {
 		tlsConfig := &tls.Config{ServerName: s.config.Host, MinVersion: tls.VersionTLS12}
-		if ok, _ := client.Extension("STARTTLS"); ok {
-			if err := client.StartTLS(tlsConfig); err != nil {
-				return fmt.Errorf("start tls: %w", err)
-			}
+		if ok, _ := client.Extension("STARTTLS"); !ok {
+			return fmt.Errorf("smtp server does not support STARTTLS")
+		}
+		if err := client.StartTLS(tlsConfig); err != nil {
+			return fmt.Errorf("start tls: %w", err)
 		}
 	}
 	return s.sendWithClient(ctx, client, to, payload)
@@ -165,4 +177,27 @@ func (s *smtpSender) sendWithClient(ctx context.Context, client *smtp.Client, to
 		return fmt.Errorf("smtp quit: %w", err)
 	}
 	return nil
+}
+
+func validateEmailAddress(value, field string) (*netmail.Address, error) {
+	value, err := validateHeaderValue(value, field)
+	if err != nil {
+		return nil, err
+	}
+	address, err := netmail.ParseAddress(value)
+	if err != nil {
+		return nil, fmt.Errorf("%s is invalid: %w", field, err)
+	}
+	return address, nil
+}
+
+func validateHeaderValue(value, field string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", fmt.Errorf("%s is required", field)
+	}
+	if strings.ContainsAny(value, "\r\n") {
+		return "", fmt.Errorf("%s must not contain line breaks", field)
+	}
+	return value, nil
 }

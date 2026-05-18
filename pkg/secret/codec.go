@@ -75,16 +75,9 @@ func (c *Codec) DecryptString(ciphertext string) (string, error) {
 }
 
 func MaskSecret(value string) string {
-	if len(value) < 8 {
+	if len(value) < 12 {
 		return "****"
 	}
 
-	prefixLen := 4
-	if hyphen := strings.Index(value, "-"); hyphen >= 0 && hyphen < prefixLen {
-		prefixLen = hyphen + 1
-	}
-	if len(value) < prefixLen+4 {
-		return "****"
-	}
-	return value[:prefixLen] + "****" + value[len(value)-4:]
+	return value[:4] + "****" + value[len(value)-4:]
 }
