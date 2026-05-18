@@ -2440,6 +2440,69 @@ func TestAgentExecutorAllowsConversationModelSwitchAndUsesSelectedModelMemory(t 
 	}
 }
 
+func TestAgentExecutorUsesResolvedCustomModelContextBudget(t *testing.T) {
+	store := newConversationStoreForTest(t)
+	client := &stubClient{streams: []model.Stream{newStubStream(
+		[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "custom"}}},
+		model.Message{Role: model.RoleAssistant, Content: "custom"},
+		nil,
+	)}}
+	resolver := &ModelResolver{
+		ResolveFunc: func(ctx context.Context, providerID string, modelID string) (*ResolvedModel, error) {
+			if providerID != "custom-provider" || modelID != "custom-model" {
+				t.Fatalf("ResolveFunc(%q, %q), want custom-provider/custom-model", providerID, modelID)
+			}
+			provider := &coretypes.LLMProvider{
+				BaseProvider: coretypes.BaseProvider{Name: "custom-provider", BaseUrl: "https://custom.example/v1", APIKey: "custom-key"},
+				Models: []coretypes.LLMModel{{
+					BaseModel: coretypes.BaseModel{ID: "custom-model", Name: "Custom Model"},
+					Type:      coretypes.LLMTypeOpenAICompletions,
+					Context:   coretypes.LLMContextConfig{Max: 100000, Input: 91808, Output: 8192},
+				}},
+			}
+			return &ResolvedModel{Provider: provider, Model: &provider.Models[0]}, nil
+		},
+	}
+	memoryBudgets := make([]int64, 0, 1)
+	executor := newTaskExecutorForTest(t, ExecutorDependencies{
+		Resolver:          resolver,
+		ConversationStore: store,
+		ClientFactory: func(provider *coretypes.LLMProvider, llmModel *coretypes.LLMModel) (model.LlmClient, error) {
+			if provider.ProviderName() != "custom-provider" || provider.AuthKey() != "custom-key" {
+				t.Fatalf("resolved provider = %#v, want custom provider with decrypted key", provider)
+			}
+			if llmModel.ContextWindow().Max != 100000 || llmModel.ContextWindow().Output != 8192 {
+				t.Fatalf("resolved model context = %#v, want custom budget", llmModel.ContextWindow())
+			}
+			return client, nil
+		},
+		MemoryFactory: func(llmModel *coretypes.LLMModel) (*memory.Manager, error) {
+			mgr, err := memory.NewManager(memory.Options{Model: llmModel, Counter: fakeTokenCounter{}})
+			if err != nil {
+				return nil, err
+			}
+			memoryBudgets = append(memoryBudgets, mgr.MaxContextTokens())
+			return mgr, nil
+		},
+	})
+
+	payload := marshalExecutorTaskInput(t, map[string]any{
+		"provider_id": "custom-provider",
+		"model_id":    "custom-model",
+		"message":     "hello",
+	})
+	_, err := executor(context.Background(), &coretasks.Task{ID: "task_custom_context", TaskType: "agent.run", InputJSON: payload}, nil)
+	if err != nil {
+		t.Fatalf("executor() error = %v", err)
+	}
+	if len(memoryBudgets) != 1 || memoryBudgets[0] != 91808 {
+		t.Fatalf("memoryBudgets = %#v, want input budget 91808", memoryBudgets)
+	}
+	if len(client.streamRequests) != 1 || client.streamRequests[0].MaxTokens != 8192 {
+		t.Fatalf("streamRequests = %#v, want MaxTokens 8192", client.streamRequests)
+	}
+}
+
 func TestAgentExecutorUsesTaskRuntimeSink(t *testing.T) {
 	store := newConversationStoreForTest(t)
 	resolver := &ModelResolver{Providers: []coretypes.LLMProvider{{

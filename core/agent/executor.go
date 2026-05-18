@@ -26,7 +26,9 @@ import (
 )
 
 type ModelResolver struct {
-	Providers []coretypes.LLMProvider
+	Providers       []coretypes.LLMProvider
+	ResolveFunc     func(ctx context.Context, providerID string, modelID string) (*ResolvedModel, error)
+	ResolveTaskFunc func(ctx context.Context, input RunTaskInput) (*ResolvedModel, error)
 }
 
 type ResolvedModel struct {
@@ -118,6 +120,13 @@ const (
 )
 
 func (r *ModelResolver) Resolve(providerID, modelID string) (*ResolvedModel, error) {
+	return r.ResolveContext(context.Background(), providerID, modelID)
+}
+
+func (r *ModelResolver) ResolveContext(ctx context.Context, providerID, modelID string) (*ResolvedModel, error) {
+	if r != nil && r.ResolveFunc != nil {
+		return r.ResolveFunc(ctx, providerID, modelID)
+	}
 	if r == nil || len(r.Providers) == 0 {
 		return nil, fmt.Errorf("llm provider is not configured")
 	}
@@ -130,6 +139,13 @@ func (r *ModelResolver) Resolve(providerID, modelID string) (*ResolvedModel, err
 		return nil, fmt.Errorf("llm model %q is not configured under provider %q", modelID, providerID)
 	}
 	return &ResolvedModel{Provider: provider, Model: llmModel}, nil
+}
+
+func (r *ModelResolver) ResolveTask(ctx context.Context, input RunTaskInput) (*ResolvedModel, error) {
+	if r != nil && r.ResolveTaskFunc != nil {
+		return r.ResolveTaskFunc(ctx, input)
+	}
+	return r.ResolveContext(ctx, input.ProviderID, input.ModelID)
 }
 
 func (r *ModelResolver) Catalog() ModelCatalog {
@@ -256,7 +272,7 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 		input.Skills = coreskills.NormalizeNames(input.Skills)
 		auditor.setInput(input)
 
-		resolved, err := deps.Resolver.Resolve(input.ProviderID, input.ModelID)
+		resolved, err := deps.Resolver.ResolveTask(ctx, input)
 		if err != nil {
 			return nil, err
 		}

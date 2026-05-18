@@ -13,12 +13,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/EquentR/agent_runtime/app/logics"
+	"github.com/EquentR/agent_runtime/app/models"
 	coreagent "github.com/EquentR/agent_runtime/core/agent"
 	coreprompt "github.com/EquentR/agent_runtime/core/prompt"
 	model "github.com/EquentR/agent_runtime/core/providers/types"
 	coretasks "github.com/EquentR/agent_runtime/core/tasks"
 	coretypes "github.com/EquentR/agent_runtime/core/types"
 	"github.com/EquentR/agent_runtime/pkg/rest"
+	"github.com/EquentR/agent_runtime/pkg/secret"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 )
@@ -228,6 +231,95 @@ func TestTaskHandlerCreateAgentRunTaskCreatesConversationWhenMissing(t *testing.
 	}
 	if conversation.CreatedBy != "demo-user" {
 		t.Fatalf("conversation created_by = %q, want demo-user", conversation.CreatedBy)
+	}
+}
+
+func TestTaskHandlerRejectsUnauthorizedModelSelection(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.AutoMigrate(&models.User{}, &models.UserSession{}, &models.LLMModelOverride{}, &models.CustomLLMModel{}); err != nil {
+		t.Fatalf("AutoMigrate() error = %v", err)
+	}
+	authLogic, err := logics.NewAuthLogic(db, logics.AuthConfig{CookieName: authSessionCookieName})
+	if err != nil {
+		t.Fatalf("NewAuthLogic() error = %v", err)
+	}
+	owner := seedAdminHandlerUser(t, db, "model-owner", "model-owner@example.com", models.UserRoleUser, models.UserStatusActive, true)
+	other := seedAdminHandlerUser(t, db, "model-other", "model-other@example.com", models.UserRoleUser, models.UserStatusActive, true)
+	_, otherSession, err := authLogic.Login(context.Background(), other.Username, "secret-123")
+	if err != nil {
+		t.Fatalf("Login(other) error = %v", err)
+	}
+	codec, err := secret.NewCodec("test-secret")
+	if err != nil {
+		t.Fatalf("NewCodec() error = %v", err)
+	}
+	modelLogic, err := logics.NewModelLogic(db, nil, codec)
+	if err != nil {
+		t.Fatalf("NewModelLogic() error = %v", err)
+	}
+	_, err = modelLogic.CreateCustomModel(context.Background(), logics.CreateCustomModelInput{
+		OwnerUserID:      owner.ID,
+		ProviderID:       "owner-provider",
+		ModelID:          "owner-model",
+		DisplayName:      "Owner Model",
+		ProviderType:     coretypes.LLMTypeOpenAICompletions,
+		APIKey:           "owner-secret",
+		ContextMaxTokens: 32768,
+	})
+	if err != nil {
+		t.Fatalf("CreateCustomModel() error = %v", err)
+	}
+	taskStore := coretasks.NewStore(db)
+	if err := taskStore.AutoMigrate(); err != nil {
+		t.Fatalf("task AutoMigrate() error = %v", err)
+	}
+	conversationStore := coreagent.NewConversationStore(db)
+	if err := conversationStore.AutoMigrate(); err != nil {
+		t.Fatalf("conversation AutoMigrate() error = %v", err)
+	}
+	manager := coretasks.NewManager(taskStore, coretasks.ManagerOptions{})
+	engine := rest.Init()
+	authMiddleware := NewAuthMiddleware(authLogic)
+	NewTaskHandler(manager, conversationStore, authMiddleware.RequireActiveUser()).WithModelLogic(modelLogic).Register(engine.Group("/api/v1"))
+	server := httptest.NewServer(engine)
+	defer server.Close()
+
+	payload := map[string]any{
+		"task_type": "agent.run",
+		"input": map[string]any{
+			"provider_id": "owner-provider",
+			"model_id":    "owner-model",
+			"message":     "hello",
+		},
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	request, err := http.NewRequest(http.MethodPost, server.URL+"/api/v1/tasks", bytes.NewReader(raw))
+	if err != nil {
+		t.Fatalf("NewRequest() error = %v", err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.AddCookie(&http.Cookie{Name: authSessionCookieName, Value: otherSession.ID})
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("Do() error = %v", err)
+	}
+	defer response.Body.Close()
+
+	var envelope taskTestResponse
+	if err := json.NewDecoder(response.Body).Decode(&envelope); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if envelope.OK {
+		t.Fatalf("response OK = true, want unauthorized model selection rejected")
+	}
+	if envelope.Code != http.StatusUnauthorized {
+		t.Fatalf("response code = %d, want %d", envelope.Code, http.StatusUnauthorized)
 	}
 }
 

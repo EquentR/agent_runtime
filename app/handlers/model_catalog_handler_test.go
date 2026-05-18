@@ -6,9 +6,12 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/EquentR/agent_runtime/app/logics"
+	"github.com/EquentR/agent_runtime/app/models"
 	coreagent "github.com/EquentR/agent_runtime/core/agent"
 	coretypes "github.com/EquentR/agent_runtime/core/types"
 	"github.com/EquentR/agent_runtime/pkg/rest"
+	"github.com/EquentR/agent_runtime/pkg/secret"
 )
 
 func TestModelCatalogHandlerReturnsConfiguredProvidersAndDefaultSelection(t *testing.T) {
@@ -152,4 +155,122 @@ func TestModelCatalogHandlerDoesNotExposeTaskTwoMemoryContextWindowOverreach(t *
 	if got := input["amount_usd"].(float64); got != inputCost {
 		t.Fatalf("cost.input.amount_usd = %v, want %v", got, inputCost)
 	}
+}
+
+func TestModelCatalogHandlerReturnsOnlyCurrentUserUsableModels(t *testing.T) {
+	deps, _ := newAdminHandlerTestServer(t)
+	if err := deps.db.AutoMigrate(&models.LLMModelOverride{}, &models.CustomLLMModel{}); err != nil {
+		t.Fatalf("AutoMigrate(model tables) error = %v", err)
+	}
+	codec, err := secret.NewCodec("test-secret")
+	if err != nil {
+		t.Fatalf("NewCodec() error = %v", err)
+	}
+	modelLogic, err := logics.NewModelLogic(deps.db, []coretypes.LLMProvider{{
+		BaseProvider: coretypes.BaseProvider{Name: "yaml"},
+		Models: []coretypes.LLMModel{
+			{BaseModel: coretypes.BaseModel{ID: "admin-only", Name: "Admin Only"}, Type: coretypes.LLMTypeOpenAIResponses},
+			{BaseModel: coretypes.BaseModel{ID: "global", Name: "Global"}, Type: coretypes.LLMTypeOpenAIResponses, Scope: "global"},
+		},
+	}}, codec)
+	if err != nil {
+		t.Fatalf("NewModelLogic() error = %v", err)
+	}
+	alice := seedAdminHandlerUser(t, deps.db, "catalog-alice", "catalog-alice@example.com", models.UserRoleUser, models.UserStatusActive, true)
+	bob := seedAdminHandlerUser(t, deps.db, "catalog-bob", "catalog-bob@example.com", models.UserRoleUser, models.UserStatusActive, true)
+	_, err = modelLogic.CreateCustomModel(t.Context(), logics.CreateCustomModelInput{
+		OwnerUserID:      alice.ID,
+		ProviderID:       "alice-provider",
+		ModelID:          "alice-model",
+		DisplayName:      "Alice Model",
+		ProviderType:     coretypes.LLMTypeOpenAICompletions,
+		APIKey:           "alice-secret",
+		ContextMaxTokens: 32768,
+	})
+	if err != nil {
+		t.Fatalf("CreateCustomModel(alice) error = %v", err)
+	}
+	_, err = modelLogic.CreateCustomModel(t.Context(), logics.CreateCustomModelInput{
+		OwnerUserID:      bob.ID,
+		ProviderID:       "bob-provider",
+		ModelID:          "bob-model",
+		DisplayName:      "Bob Model",
+		ProviderType:     coretypes.LLMTypeOpenAICompletions,
+		APIKey:           "bob-secret",
+		ContextMaxTokens: 32768,
+	})
+	if err != nil {
+		t.Fatalf("CreateCustomModel(bob) error = %v", err)
+	}
+	_, session, err := deps.authLogic.Login(t.Context(), alice.Username, "secret-123")
+	if err != nil {
+		t.Fatalf("Login(alice) error = %v", err)
+	}
+
+	engine := rest.Init()
+	authMiddleware := NewAuthMiddleware(deps.authLogic)
+	NewModelCatalogHandler(nil, authMiddleware.RequireActiveUser()).WithModelLogic(modelLogic).Register(engine.Group("/api/v1"))
+	catalogServer := httptest.NewServer(engine)
+	defer catalogServer.Close()
+
+	request, err := http.NewRequest(http.MethodGet, catalogServer.URL+"/api/v1/models", nil)
+	if err != nil {
+		t.Fatalf("NewRequest() error = %v", err)
+	}
+	request.AddCookie(&http.Cookie{Name: authSessionCookieName, Value: session.ID})
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("Do() error = %v", err)
+	}
+	defer response.Body.Close()
+
+	var envelope taskTestResponse
+	if err := json.NewDecoder(response.Body).Decode(&envelope); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if !envelope.OK {
+		t.Fatalf("response ok = false, message = %s", envelope.Message)
+	}
+	var payload struct {
+		Providers []struct {
+			ID     string `json:"id"`
+			Models []struct {
+				ID string `json:"id"`
+			} `json:"models"`
+		} `json:"providers"`
+	}
+	if err := json.Unmarshal(envelope.Data, &payload); err != nil {
+		t.Fatalf("Unmarshal() payload error = %v", err)
+	}
+	if !catalogPayloadHas(payload.Providers, "yaml", "global") {
+		t.Fatalf("payload = %#v, want yaml/global", payload)
+	}
+	if catalogPayloadHas(payload.Providers, "yaml", "admin-only") {
+		t.Fatalf("payload = %#v, want no yaml/admin-only", payload)
+	}
+	if !catalogPayloadHas(payload.Providers, "alice-provider", "alice-model") {
+		t.Fatalf("payload = %#v, want alice custom model", payload)
+	}
+	if catalogPayloadHas(payload.Providers, "bob-provider", "bob-model") {
+		t.Fatalf("payload = %#v, want no bob custom model", payload)
+	}
+}
+
+func catalogPayloadHas(providers []struct {
+	ID     string `json:"id"`
+	Models []struct {
+		ID string `json:"id"`
+	} `json:"models"`
+}, providerID string, modelID string) bool {
+	for _, provider := range providers {
+		if provider.ID != providerID {
+			continue
+		}
+		for _, model := range provider.Models {
+			if model.ID == modelID {
+				return true
+			}
+		}
+	}
+	return false
 }

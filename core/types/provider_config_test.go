@@ -227,6 +227,44 @@ llmProvider:
 	}
 }
 
+func TestLLMModelYAMLScopeDefaultsToAdmin(t *testing.T) {
+	provider := mustLoadLLMProvider(t, `
+llmProvider:
+  name: openai
+  models:
+    - id: gpt54
+      name: gpt-5.4
+      type: openai_responses
+    - id: global
+      name: global model
+      type: openai_responses
+      scope: global
+      enabled: false
+`)
+
+	adminModel := provider.FindModel("gpt54")
+	if adminModel == nil {
+		t.Fatal("FindModel(gpt54) = nil, want model")
+	}
+	if adminModel.EffectiveScope() != "admin" {
+		t.Fatalf("EffectiveScope() = %q, want admin", adminModel.EffectiveScope())
+	}
+	if !adminModel.IsEnabled() {
+		t.Fatal("IsEnabled() = false, want true when enabled is omitted")
+	}
+
+	globalModel := provider.FindModel("global")
+	if globalModel == nil {
+		t.Fatal("FindModel(global) = nil, want model")
+	}
+	if globalModel.EffectiveScope() != "global" {
+		t.Fatalf("EffectiveScope() = %q, want global", globalModel.EffectiveScope())
+	}
+	if globalModel.IsEnabled() {
+		t.Fatal("IsEnabled() = true, want false from YAML enabled:false")
+	}
+}
+
 func TestLLMProviderRejectsUnknownModelTypeAtYAMLLoad(t *testing.T) {
 	var cfg struct {
 		LLM LLMProvider `yaml:"llmProvider"`

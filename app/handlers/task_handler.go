@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/EquentR/agent_runtime/app/logics"
 	coreagent "github.com/EquentR/agent_runtime/core/agent"
 	coretasks "github.com/EquentR/agent_runtime/core/tasks"
 	resp "github.com/EquentR/agent_runtime/pkg/rest"
@@ -22,6 +23,7 @@ var errConversationAccessDenied = errors.New("无权访问该会话")
 type TaskHandler struct {
 	manager       *coretasks.Manager
 	conversations *coreagent.ConversationStore
+	modelLogic    *logics.ModelLogic
 	middlewares   []gin.HandlerFunc
 	authRequired  bool
 }
@@ -39,6 +41,11 @@ type CreateTaskRequest struct {
 // NewTaskHandler 创建任务接口处理器。
 func NewTaskHandler(manager *coretasks.Manager, conversations *coreagent.ConversationStore, middlewares ...gin.HandlerFunc) *TaskHandler {
 	return &TaskHandler{manager: manager, conversations: conversations, middlewares: middlewares, authRequired: len(middlewares) > 0}
+}
+
+func (h *TaskHandler) WithModelLogic(modelLogic *logics.ModelLogic) *TaskHandler {
+	h.modelLogic = modelLogic
+	return h
 }
 
 // Register 注册任务相关 REST 路由。
@@ -83,6 +90,9 @@ func (h *TaskHandler) handleCreateTask() (method, relativePath string, wrapper r
 		}
 		request.CreatedBy = h.resolveCreatedBy(c, request.CreatedBy)
 		h.canonicalizeTaskInputCreatedBy(request.Input, request.CreatedBy)
+		if err := h.ensureModelAuthorized(c, &request); err != nil {
+			return gin.H{}, modelAuthorizationErrorOptions(err), err
+		}
 		if err := h.ensureAgentRunConversation(c.Request.Context(), &request); err != nil {
 			return nil, nil, err
 		}
@@ -107,6 +117,31 @@ func (h *TaskHandler) handleCreateTask() (method, relativePath string, wrapper r
 		}
 		return task, nil, nil
 	}, nil
+}
+
+func (h *TaskHandler) ensureModelAuthorized(c *gin.Context, request *CreateTaskRequest) error {
+	if h == nil || h.modelLogic == nil || request == nil || request.TaskType != "agent.run" {
+		return nil
+	}
+	user := currentAuthUser(c)
+	if user == nil {
+		return logics.ErrUnauthorized
+	}
+	providerID, _ := request.Input["provider_id"].(string)
+	modelID, _ := request.Input["model_id"].(string)
+	_, err := h.modelLogic.ResolveForUse(c.Request.Context(), *user, providerID, modelID)
+	return err
+}
+
+func modelAuthorizationErrorOptions(err error) []resp.ResOpt {
+	switch {
+	case errors.Is(err, logics.ErrUnauthorized), errors.Is(err, logics.ErrModelUnauthorized):
+		return []resp.ResOpt{resp.WithCode(http.StatusUnauthorized)}
+	case errors.Is(err, logics.ErrModelNotFound):
+		return []resp.ResOpt{resp.WithCode(http.StatusNotFound)}
+	default:
+		return nil
+	}
 }
 
 func (h *TaskHandler) ensureAgentRunConversation(ctx context.Context, request *CreateTaskRequest) error {

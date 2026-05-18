@@ -28,6 +28,10 @@ func TestRouterInitRegistersAdminBackofficeRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSettingsLogic() error = %v", err)
 	}
+	modelLogic, err := logics.NewModelLogic(db, nil, codec)
+	if err != nil {
+		t.Fatalf("NewModelLogic() error = %v", err)
+	}
 
 	engine := rest.Init()
 	Init(engine, "/api/v1", nil, Dependencies{
@@ -35,6 +39,7 @@ func TestRouterInitRegistersAdminBackofficeRoutes(t *testing.T) {
 		UserDB:          db,
 		AuthSettings:    settings,
 		AdminAuditLogic: logics.NewAdminAuditLogic(db),
+		ModelLogic:      modelLogic,
 	})
 
 	recorder := httptest.NewRecorder()
@@ -63,6 +68,16 @@ func TestRouterInitRegistersAdminBackofficeRoutes(t *testing.T) {
 	if created.Username != "managed" || created.Status != models.UserStatusPendingEmailVerification || !created.ForcePasswordChange {
 		t.Fatalf("created user = %#v, want managed pending forced user", created)
 	}
+
+	modelRecorder := httptest.NewRecorder()
+	modelRequest := httptest.NewRequest(http.MethodGet, "/api/v1/admin/models/custom", nil)
+	modelRequest.AddCookie(&http.Cookie{Name: logics.DefaultAuthSessionCookieName, Value: sessionID})
+	engine.ServeHTTP(modelRecorder, modelRequest)
+
+	modelEnvelope := decodeRouterAuthEnvelope(t, modelRecorder)
+	if !modelEnvelope.OK {
+		t.Fatalf("/admin/models/custom OK = false, code = %d, body = %s", modelEnvelope.Code, modelRecorder.Body.String())
+	}
 }
 
 func newRouterAdminRouteSubject(t *testing.T) (*gorm.DB, *logics.AuthLogic, string) {
@@ -72,7 +87,7 @@ func newRouterAdminRouteSubject(t *testing.T) (*gorm.DB, *logics.AuthLogic, stri
 	if err != nil {
 		t.Fatalf("gorm.Open() error = %v", err)
 	}
-	if err := db.AutoMigrate(&models.User{}, &models.UserSession{}, &models.SystemSetting{}, &models.AdminAuditEvent{}); err != nil {
+	if err := db.AutoMigrate(&models.User{}, &models.UserSession{}, &models.SystemSetting{}, &models.AdminAuditEvent{}, &models.LLMModelOverride{}, &models.CustomLLMModel{}); err != nil {
 		t.Fatalf("AutoMigrate() error = %v", err)
 	}
 	authLogic, err := logics.NewAuthLogic(db, logics.AuthConfig{})

@@ -70,6 +70,8 @@ func (p *LLMProvider) UnmarshalYAML(value *yaml.Node) error {
 type LLMModel struct {
 	BaseModel    `yaml:",inline"`
 	Type         string            `yaml:"type"`
+	Scope        string            `yaml:"scope" json:"scope"`
+	Enabled      *bool             `yaml:"enabled" json:"enabled"`
 	Cost         LLMCostConfig     `yaml:"cost"`
 	Context      LLMContextConfig  `yaml:"context"`
 	Capabilities ModelCapabilities `yaml:"capabilities" json:"capabilities"`
@@ -119,6 +121,20 @@ func (m LLMModel) Validate() error {
 
 func (m *LLMModel) SupportsAttachments() bool {
 	return m != nil && m.Capabilities.Attachments
+}
+
+func (m *LLMModel) EffectiveScope() string {
+	if m == nil {
+		return "admin"
+	}
+	if scope := strings.TrimSpace(m.Scope); scope != "" {
+		return scope
+	}
+	return "admin"
+}
+
+func (m *LLMModel) IsEnabled() bool {
+	return m == nil || m.Enabled == nil || *m.Enabled
 }
 
 func (p *LLMProvider) FindModel(query string) *LLMModel {

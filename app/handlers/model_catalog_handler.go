@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/EquentR/agent_runtime/app/logics"
 	coreagent "github.com/EquentR/agent_runtime/core/agent"
 	resp "github.com/EquentR/agent_runtime/pkg/rest"
 	"github.com/gin-gonic/gin"
@@ -11,6 +12,7 @@ import (
 
 type ModelCatalogHandler struct {
 	resolver     *coreagent.ModelResolver
+	modelLogic   *logics.ModelLogic
 	middlewares  []gin.HandlerFunc
 	authRequired bool
 }
@@ -19,8 +21,13 @@ func NewModelCatalogHandler(resolver *coreagent.ModelResolver, middlewares ...gi
 	return &ModelCatalogHandler{resolver: resolver, middlewares: middlewares, authRequired: len(middlewares) > 0}
 }
 
+func (h *ModelCatalogHandler) WithModelLogic(modelLogic *logics.ModelLogic) *ModelCatalogHandler {
+	h.modelLogic = modelLogic
+	return h
+}
+
 func (h *ModelCatalogHandler) Register(rg *gin.RouterGroup) {
-	if h.resolver == nil {
+	if h.resolver == nil && h.modelLogic == nil {
 		return
 	}
 	options := []resp.WrapperOption{}
@@ -43,6 +50,14 @@ func (h *ModelCatalogHandler) Register(rg *gin.RouterGroup) {
 // @Router /models [get]
 func (h *ModelCatalogHandler) handleGetModelCatalog() (method, relativePath string, wrapper resp.JsonOptionsResultWrapper, opts []resp.WrapperOption) {
 	return http.MethodGet, "", func(c *gin.Context) (any, []resp.ResOpt, error) {
+		if h.modelLogic != nil {
+			user := currentAuthUser(c)
+			if user == nil {
+				return nil, []resp.ResOpt{resp.WithCode(http.StatusUnauthorized)}, logics.ErrUnauthorized
+			}
+			catalog, err := h.modelLogic.CatalogForUser(c.Request.Context(), *user)
+			return catalog, nil, err
+		}
 		if h.resolver == nil {
 			return nil, nil, fmt.Errorf("model resolver is not configured")
 		}

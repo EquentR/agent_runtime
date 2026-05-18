@@ -152,6 +152,45 @@ func TestBuildRouterDependenciesExposeApprovalStore(t *testing.T) {
 	}
 }
 
+func TestBuildRouterDependenciesExposeModelLogicAndResolver(t *testing.T) {
+	db := newServeTestDB(t)
+	if err := db.AutoMigrate(&models.SystemSetting{}, &models.LLMModelOverride{}, &models.CustomLLMModel{}); err != nil {
+		t.Fatalf("AutoMigrate() error = %v", err)
+	}
+	runtime, err := initAuthRuntime(db, config.SecurityConfig{AppSecret: "test-secret"})
+	if err != nil {
+		t.Fatalf("initAuthRuntime() error = %v", err)
+	}
+	resolver := &coreagent.ModelResolver{Providers: []coretypes.LLMProvider{{
+		BaseProvider: coretypes.BaseProvider{Name: "yaml"},
+		Models: []coretypes.LLMModel{{
+			BaseModel: coretypes.BaseModel{ID: "global", Name: "Global"},
+			Type:      coretypes.LLMTypeOpenAIResponses,
+			Scope:     "global",
+		}},
+	}}}
+
+	deps := buildRouterDependencies(nil, nil, nil, nil, 0, nil, nil, resolver, nil, nil, nil, runtime.AuthLogic, runtime)
+	if deps.ModelLogic == nil {
+		t.Fatal("deps.ModelLogic = nil, want runtime model logic")
+	}
+	if deps.ModelResolver == resolver {
+		t.Fatal("deps.ModelResolver still equals raw resolver, want model logic resolver")
+	}
+	if deps.ModelResolver == nil {
+		t.Fatal("deps.ModelResolver = nil, want model logic resolver")
+	}
+	if len(deps.ModelResolver.Providers) != 1 || deps.ModelResolver.Providers[0].ProviderName() != "yaml" {
+		t.Fatalf("deps.ModelResolver providers = %#v, want yaml provider passthrough", deps.ModelResolver.Providers)
+	}
+	tester := &serveFakeModelTester{}
+	runtime.ModelTester = tester
+	deps = buildRouterDependencies(nil, nil, nil, nil, 0, nil, nil, resolver, nil, nil, nil, runtime.AuthLogic, runtime)
+	if deps.ModelTester != tester {
+		t.Fatalf("deps.ModelTester = %#v, want configured tester", deps.ModelTester)
+	}
+}
+
 func TestInitAuthRuntimeWiresSettingsVerificationAndTurnstile(t *testing.T) {
 	db := newServeTestDB(t)
 	if err := db.AutoMigrate(&models.SystemSetting{}); err != nil {
@@ -719,6 +758,12 @@ func TestRegisterAgentRunExecutorPromptWiringKeepsAuditRecorder(t *testing.T) {
 }
 
 type serveStubClient struct{ answer string }
+
+type serveFakeModelTester struct{}
+
+func (serveFakeModelTester) TestModel(context.Context, *coreagent.ResolvedModel) error {
+	return nil
+}
 
 func (s *serveStubClient) Chat(context.Context, model.ChatRequest) (model.ChatResponse, error) {
 	panic("unexpected Chat call")

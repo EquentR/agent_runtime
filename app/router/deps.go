@@ -28,6 +28,8 @@ type Dependencies struct {
 	ConversationStore  *coreagent.ConversationStore
 	AuditStore         *coreaudit.Store
 	ModelResolver      *coreagent.ModelResolver
+	ModelLogic         *logics.ModelLogic
+	ModelTester        ModelTester
 	PromptStore        *coreprompt.Store
 	PromptResolver     *coreprompt.Resolver
 	SkillLoader        *coreskills.Loader
@@ -42,4 +44,8 @@ type Dependencies struct {
 
 type AdminSMTPTester interface {
 	Send(ctx context.Context, message mail.Message) error
+}
+
+type ModelTester interface {
+	TestModel(ctx context.Context, resolved *coreagent.ResolvedModel) error
 }

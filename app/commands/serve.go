@@ -82,11 +82,18 @@ func Serve(c *config.Config, version, commit string) {
 	if err != nil {
 		log.Panicf("Failed to init auth runtime: %v", err)
 	}
+	resolver := &coreagent.ModelResolver{Providers: c.LLM}
+	modelLogic, err := logics.NewModelLogic(db.DB(), c.LLM, authRuntime.SecretCodec)
+	if err != nil {
+		log.Panicf("Failed to init model logic: %v", err)
+	}
+	authRuntime.ModelLogic = modelLogic
+	authRuntime.ModelTester = &modelConnectionTester{clientFactory: buildConfiguredLLMClientFactory(c)}
+	resolver = modelLogic.Resolver()
 	toolRegistry, err := newDefaultToolRegistry(workspaceRoot, c.Tools.WebSearch.BuiltinOptions(), c.Tools.ImageGen.BuiltinOptions(), attachmentStore, attachmentStorage, c.Attachments.ResolvedSentRetention())
 	if err != nil {
 		log.Panicf("Failed to register builtin tools: %v", err)
 	}
-	resolver := &coreagent.ModelResolver{Providers: c.LLM}
 	if err := registerAgentRunExecutor(taskManager, approvalStore, interactionStore, attachmentStore, attachmentStorage, resolver, conversationStore, toolRegistry, promptRuntime.Resolver, workspaceRoot, buildConfiguredLLMClientFactory(c), auditRuntime.RunRecorder); err != nil {
 		log.Panicf("Failed to register agent.run executor: %v", err)
 	}
@@ -148,9 +155,12 @@ func registerAgentRunExecutor(taskManager *coretasks.Manager, approvalStore *app
 type authRuntime struct {
 	AuthLogic         *logics.AuthLogic
 	Database          *gorm.DB
+	SecretCodec       *secret.Codec
 	Settings          *logics.SettingsLogic
 	EmailVerification *logics.EmailVerificationLogic
 	TurnstileVerifier logics.TurnstileVerifier
+	ModelLogic        *logics.ModelLogic
+	ModelTester       router.ModelTester
 }
 
 func initAuthRuntime(database *gorm.DB, cfg config.SecurityConfig) (*authRuntime, error) {
@@ -182,6 +192,7 @@ func initAuthRuntime(database *gorm.DB, cfg config.SecurityConfig) (*authRuntime
 	return &authRuntime{
 		AuthLogic:         authLogic,
 		Database:          database,
+		SecretCodec:       codec,
 		Settings:          settings,
 		EmailVerification: emailVerification,
 		TurnstileVerifier: turnstileVerifier,
@@ -277,11 +288,24 @@ func buildRouterDependencies(taskManager *coretasks.Manager, approvalStore *appr
 	var turnstileVerifier logics.TurnstileVerifier
 	var adminAuditLogic *logics.AdminAuditLogic
 	var adminSMTPTester router.AdminSMTPTester
+	var modelLogic *logics.ModelLogic
+	var modelTester router.ModelTester
+	modelResolver := resolver
 	if authRuntime != nil {
 		userDB = authRuntime.Database
 		authSettings = authRuntime.Settings
 		emailVerification = authRuntime.EmailVerification
 		turnstileVerifier = authRuntime.TurnstileVerifier
+		modelLogic = authRuntime.ModelLogic
+		modelTester = authRuntime.ModelTester
+		if modelLogic == nil && authRuntime.Database != nil && authRuntime.SecretCodec != nil {
+			if initialized, err := logics.NewModelLogic(authRuntime.Database, resolverProviders(resolver), authRuntime.SecretCodec); err == nil {
+				modelLogic = initialized
+			}
+		}
+		if modelLogic != nil {
+			modelResolver = modelLogic.Resolver()
+		}
 		if authRuntime.Database != nil {
 			adminAuditLogic = logics.NewAdminAuditLogic(authRuntime.Database)
 		}
@@ -298,7 +322,9 @@ func buildRouterDependencies(taskManager *coretasks.Manager, approvalStore *appr
 		InteractionStore:   interactionStore,
 		ConversationStore:  conversationStore,
 		AuditStore:         auditStore,
-		ModelResolver:      resolver,
+		ModelResolver:      modelResolver,
+		ModelLogic:         modelLogic,
+		ModelTester:        modelTester,
 		PromptStore:        promptStore,
 		PromptResolver:     promptResolver,
 		SkillLoader:        skillLoader,
@@ -310,6 +336,36 @@ func buildRouterDependencies(taskManager *coretasks.Manager, approvalStore *appr
 		AdminAuditLogic:    adminAuditLogic,
 		AdminSMTPTester:    adminSMTPTester,
 	}
+}
+
+type modelConnectionTester struct {
+	clientFactory coreagent.ClientFactory
+}
+
+func (t *modelConnectionTester) TestModel(ctx context.Context, resolved *coreagent.ResolvedModel) error {
+	if t == nil || t.clientFactory == nil {
+		return fmt.Errorf("model tester is not configured")
+	}
+	if resolved == nil || resolved.Provider == nil || resolved.Model == nil {
+		return fmt.Errorf("model is not resolved")
+	}
+	client, err := t.clientFactory(resolved.Provider, resolved.Model)
+	if err != nil {
+		return err
+	}
+	_, err = client.Chat(ctx, model.ChatRequest{
+		Model:     resolved.Model.ModelID(),
+		Messages:  []model.Message{{Role: model.RoleUser, Content: "Reply with OK."}},
+		MaxTokens: 1,
+	})
+	return err
+}
+
+func resolverProviders(resolver *coreagent.ModelResolver) []coretypes.LLMProvider {
+	if resolver == nil {
+		return nil
+	}
+	return resolver.Providers
 }
 
 func initAttachmentStorage(cfg config.AttachmentStorageConfig) (attachments.Storage, error) {
