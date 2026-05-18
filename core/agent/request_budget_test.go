@@ -140,6 +140,33 @@ func TestBuildBudgetedRequestReturnsErrContextBudgetExceededWhenStillUnsafe(t *t
 	}
 }
 
+func TestBuildBudgetedRequestLimitsPromptToModelInputBudget(t *testing.T) {
+	mgr, err := memory.NewManager(memory.Options{
+		MaxContextTokens: 75,
+		Counter:          &fixedCounter{count: 80},
+	})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	runner, err := NewRunner(&stubClient{}, nil, Options{
+		Model:                "test-model",
+		LLMModel:             &coretypes.LLMModel{Context: coretypes.LLMContextConfig{Max: 100, Input: 75, Output: 25}},
+		Memory:               mgr,
+		RuntimePromptBuilder: runtimeprompt.NewBuilder(nil),
+	})
+	if err != nil {
+		t.Fatalf("NewRunner() error = %v", err)
+	}
+	if got := runner.requestMaxContextTokens(); got != 75 {
+		t.Fatalf("requestMaxContextTokens() = %d, want input budget 75", got)
+	}
+
+	_, _, decision, err := runner.buildBudgetedRequestFromContext(context.Background(), memory.RuntimeContext{Tail: []model.Message{{Role: model.RoleUser, Content: strings.Repeat("x", 80)}}}, false)
+	if !errors.Is(err, ErrContextBudgetExceeded) {
+		t.Fatalf("buildBudgetedRequestFromContext() error = %v, decision = %#v, want ErrContextBudgetExceeded when prompt exceeds input budget", err, decision)
+	}
+}
+
 func TestBuildBudgetedRequestFromContextCountsRenderedPromptOverhead(t *testing.T) {
 	runner, err := NewRunner(&stubClient{}, nil, Options{
 		Model:                "test-model",
@@ -172,7 +199,7 @@ func TestBuildBudgetedRequestUsesReserveAwareCompressionBeforeTrim(t *testing.T)
 
 	runner, err := NewRunner(&stubClient{}, nil, Options{
 		Model:                "test-model",
-		LLMModel:             &coretypes.LLMModel{Context: coretypes.LLMContextConfig{Max: 100}},
+		LLMModel:             &coretypes.LLMModel{Context: coretypes.LLMContextConfig{Max: 125, Input: 100, Output: 25}},
 		Memory:               mgr,
 		RuntimePromptBuilder: runtimeprompt.NewBuilder(nil),
 		SystemPrompt:         strings.Repeat("p", 50),
@@ -630,7 +657,7 @@ func TestBuildBudgetedRequestEmitsMemoryCompressedOnPathB(t *testing.T) {
 		t.Fatalf("NewManager() error = %v", err)
 	}
 	// Two messages of 30 chars each = 60 total, within shortTermLimit (70) for first pass,
-	// but the system prompt (50 chars) pushes the request over Max=100 → ErrContextBudgetExceeded.
+	// but the system prompt (50 chars) pushes the request over the model input budget.
 	// The reserve-aware second call then triggers compression.
 	mgr.AddMessages([]model.Message{
 		{Role: model.RoleUser, Content: strings.Repeat("a", 30)},
@@ -640,7 +667,7 @@ func TestBuildBudgetedRequestEmitsMemoryCompressedOnPathB(t *testing.T) {
 	runtime := &recordingTaskRuntime{}
 	runner, err := NewRunner(&stubClient{}, nil, Options{
 		Model:                "test-model",
-		LLMModel:             &coretypes.LLMModel{Context: coretypes.LLMContextConfig{Max: 100}},
+		LLMModel:             &coretypes.LLMModel{Context: coretypes.LLMContextConfig{Max: 125, Input: 100, Output: 25}},
 		Memory:               mgr,
 		RuntimePromptBuilder: runtimeprompt.NewBuilder(nil),
 		SystemPrompt:         strings.Repeat("p", 50),

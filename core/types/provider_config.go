@@ -204,10 +204,12 @@ func (c LLMContextConfig) Normalized() LLMContextConfig {
 	if normalized.Max <= 0 {
 		return normalized
 	}
-	if normalized.Input <= 0 && normalized.Output <= 0 {
+	outputDefaulted := false
+	if normalized.Output <= 0 || normalized.Output > defaultOutputBudgetLimit || normalized.Output >= normalized.Max {
 		normalized.Output = defaultOutputBudget(normalized.Max)
+		outputDefaulted = true
 	}
-	if normalized.Input <= 0 && normalized.Output >= 0 && normalized.Max >= normalized.Output {
+	if (normalized.Input <= 0 || outputDefaulted || normalized.Input+normalized.Output > normalized.Max) && normalized.Max >= normalized.Output {
 		normalized.Input = normalized.Max - normalized.Output
 	}
 	if normalized.Output <= 0 && normalized.Input >= 0 && normalized.Max >= normalized.Input {

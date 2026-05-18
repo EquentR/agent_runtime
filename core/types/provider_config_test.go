@@ -138,6 +138,13 @@ llmProvider:
       type: openai_responses
       context:
         max: 100
+    - id: legacy
+      name: legacy-context
+      type: openai_responses
+      context:
+        max: 1050000
+        input: 922000
+        output: 128000
 `)
 
 	large := provider.FindModel("large").ContextWindow()
@@ -148,6 +155,11 @@ llmProvider:
 	small := provider.FindModel("small").ContextWindow()
 	if small.Max != 100 || small.Input != 75 || small.Output != 25 {
 		t.Fatalf("small ContextWindow() = %#v, want max=100 input=75 output=25", small)
+	}
+
+	legacy := provider.FindModel("legacy").ContextWindow()
+	if legacy.Max != 1050000 || legacy.Input != 1041808 || legacy.Output != 8192 {
+		t.Fatalf("legacy ContextWindow() = %#v, want max=1050000 input=1041808 output=8192", legacy)
 	}
 }
 

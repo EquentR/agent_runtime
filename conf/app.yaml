@@ -101,8 +101,6 @@ llmProviders:
         attachments: true
       context:
         max: 258000
-        input: 235712
-        output: 16288
       cost:
         input: 6
         cachedInput: 0.6
@@ -114,8 +112,6 @@ llmProviders:
         attachments: true
       context:
         max: 1050000
-        input: 922000
-        output: 128000
       cost:
         input: 3
         cachedInput: 0.3

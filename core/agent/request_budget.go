@@ -178,7 +178,14 @@ func (r *Runner) requestTokenCounter() memory.TokenCounter {
 
 func (r *Runner) requestMaxContextTokens() int64 {
 	if r.options.LLMModel != nil {
-		return r.options.LLMModel.ContextWindow().Max
+		contextWindow := r.options.LLMModel.ContextWindow()
+		if contextWindow.Input > 0 {
+			return contextWindow.Input
+		}
+		if contextWindow.Max > 0 && contextWindow.Output > 0 && contextWindow.Max > contextWindow.Output {
+			return contextWindow.Max - contextWindow.Output
+		}
+		return contextWindow.Max
 	}
 	return 0
 }
