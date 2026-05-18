@@ -69,7 +69,7 @@ export function createAppRouter(memory = false) {
 
   router.beforeEach(async (to) => {
     const session = to.meta.requiresSession ? await syncSession(true) : await syncSession()
-    const active = Boolean(session?.username)
+    const active = Boolean(session?.username && session.status !== 'disabled')
 
     if (to.meta.requiresSession && !active) {
       return { path: '/login' }

@@ -20,12 +20,14 @@ function parseSessionValue(raw: string | null): SessionUser | null {
       return null
     }
 
-    return normalizeAuthUser(parsed)
+    const normalized = normalizeAuthUser(parsed)
+    return normalized.status === 'disabled' ? null : normalized
   } catch {
-    return normalizeAuthUser({
+    const normalized = normalizeAuthUser({
       username: value,
       role: 'user',
     })
+    return normalized.status === 'disabled' ? null : normalized
   }
 }
 
@@ -41,6 +43,10 @@ function setSessionUser(session: SessionUser | null) {
     username,
     role: normalizeSessionRole(session?.role),
   })
+  if (normalized.status === 'disabled') {
+    clearSession()
+    return null
+  }
 
   localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(normalized))
   return normalized
@@ -48,6 +54,11 @@ function setSessionUser(session: SessionUser | null) {
 
 async function requestAuth<T>(path: string, init?: RequestInit) {
   return requestJSON<T>('/api/v1/auth', path, init)
+}
+
+function optionalTurnstilePayload(turnstileToken?: string) {
+  const token = turnstileToken?.trim() ?? ''
+  return token ? { turnstile_token: token } : {}
 }
 
 export function saveSession(name: string) {
@@ -74,16 +85,20 @@ export function hasActiveSession() {
   return getSessionUser() !== null
 }
 
-export async function login(username: string, password: string) {
+export async function login(username: string, password: string, turnstileToken?: string) {
   const user = normalizeAuthUser(await requestAuth<AuthUser>('/login', {
     method: 'POST',
-    body: JSON.stringify({ username, password }),
+    body: JSON.stringify({
+      username,
+      password,
+      ...optionalTurnstilePayload(turnstileToken),
+    }),
   }))
   setSessionUser(user)
   return user
 }
 
-export async function register(username: string, email: string, password: string, confirmPassword: string): Promise<RegistrationResult> {
+export async function register(username: string, email: string, password: string, confirmPassword: string, turnstileToken?: string): Promise<RegistrationResult> {
   const user = normalizeAuthUser(await requestAuth<AuthUser>('/register', {
     method: 'POST',
     body: JSON.stringify({
@@ -91,6 +106,7 @@ export async function register(username: string, email: string, password: string
       email,
       password,
       confirm_password: confirmPassword,
+      ...optionalTurnstilePayload(turnstileToken),
     }),
   }))
 
@@ -100,7 +116,7 @@ export async function register(username: string, email: string, password: string
     return { user, verification_required: true }
   }
 
-  return { user: await login(username, password), verification_required: false }
+  return { user: await login(username, password, turnstileToken), verification_required: false }
 }
 
 export async function verifyRegistrationEmail(userId: number, email: string, code: string) {

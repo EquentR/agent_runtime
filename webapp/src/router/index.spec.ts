@@ -94,6 +94,23 @@ describe('app router session guard', () => {
     expect(router.currentRoute.value.path).toBe('/login')
   })
 
+  it('redirects disabled sessions to login', async () => {
+    session.hasActiveSession.mockReturnValue(true)
+    session.syncSession.mockResolvedValue({
+      ...activeUser,
+      status: 'disabled',
+    })
+
+    const { createAppRouter } = await import('./index')
+    const router = createAppRouter(true)
+
+    await router.push('/chat')
+    await router.isReady()
+
+    expect(session.syncSession).toHaveBeenCalledWith(true)
+    expect(router.currentRoute.value.path).toBe('/login')
+  })
+
   it('redirects unauthenticated users away from the admin audit route', async () => {
     session.hasActiveSession.mockReturnValue(false)
     session.syncSession.mockResolvedValue(null)

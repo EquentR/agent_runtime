@@ -6,6 +6,7 @@ import LoginView from './LoginView.vue'
 
 const api = vi.hoisted(() => ({
   fetchPublicRegistrationSettings: vi.fn(),
+  fetchPublicTurnstileSettings: vi.fn(),
 }))
 
 const session = vi.hoisted(() => ({
@@ -55,9 +56,17 @@ describe('LoginView', () => {
   beforeEach(() => {
     vi.resetAllMocks()
     api.fetchPublicRegistrationSettings.mockResolvedValue({ enabled: true })
+    api.fetchPublicTurnstileSettings.mockResolvedValue({
+      enabled: false,
+      site_key: '',
+      protect_login: false,
+      protect_registration: false,
+      protect_verification: false,
+    })
     session.login.mockResolvedValue(activeUser)
     session.register.mockResolvedValue({ user: activeUser, verification_required: false })
     session.verifyRegistrationEmail.mockResolvedValue(activeUser)
+    Reflect.deleteProperty(window, 'turnstile')
   })
 
   it('renders compact Chinese login and register entry points', async () => {
@@ -132,5 +141,89 @@ describe('LoginView', () => {
     expect(session.verifyRegistrationEmail).toHaveBeenCalledWith(2, 'bob@example.com', '123456')
     expect(session.login).toHaveBeenCalledWith('bob', 'secret-123')
     expect(router.currentRoute.value.path).toBe('/chat')
+  })
+
+  it('renders protected login turnstile and submits its token', async () => {
+    api.fetchPublicTurnstileSettings.mockResolvedValue({
+      enabled: true,
+      site_key: 'site-key',
+      protect_login: true,
+      protect_registration: false,
+      protect_verification: false,
+    })
+    const render = vi.fn((_element: HTMLElement, options: { callback?: (token: string) => void }) => {
+      options.callback?.('login-token')
+      return 'widget-1'
+    })
+    Object.defineProperty(window, 'turnstile', {
+      configurable: true,
+      value: {
+        render,
+        reset: vi.fn(),
+        remove: vi.fn(),
+      },
+    })
+    const router = makeRouter()
+    await router.push('/login')
+    await router.isReady()
+
+    const wrapper = mount(LoginView, {
+      global: {
+        plugins: [router],
+      },
+    })
+    await flushPromises()
+
+    expect(render).toHaveBeenCalledWith(expect.any(HTMLElement), expect.objectContaining({ sitekey: 'site-key' }))
+    await wrapper.find('#username').setValue('alice')
+    await wrapper.find('#password').setValue('secret-123')
+    await wrapper.find('.primary-button').trigger('click')
+    await flushPromises()
+
+    expect(session.login).toHaveBeenCalledWith('alice', 'secret-123', 'login-token')
+  })
+
+  it('renders protected registration turnstile and submits its token', async () => {
+    api.fetchPublicTurnstileSettings.mockResolvedValue({
+      enabled: true,
+      site_key: 'site-key',
+      protect_login: false,
+      protect_registration: true,
+      protect_verification: false,
+    })
+    const render = vi.fn((_element: HTMLElement, options: { callback?: (token: string) => void }) => {
+      options.callback?.('register-token')
+      return 'widget-1'
+    })
+    Object.defineProperty(window, 'turnstile', {
+      configurable: true,
+      value: {
+        render,
+        reset: vi.fn(),
+        remove: vi.fn(),
+      },
+    })
+    const router = makeRouter()
+    await router.push('/login')
+    await router.isReady()
+
+    const wrapper = mount(LoginView, {
+      global: {
+        plugins: [router],
+      },
+    })
+    await flushPromises()
+
+    await wrapper.findAll('.auth-switch-button')[1].trigger('click')
+    await flushPromises()
+    await wrapper.find('#username').setValue('bob')
+    await wrapper.find('#email').setValue('bob@example.com')
+    await wrapper.find('#password').setValue('secret-123')
+    await wrapper.find('#confirmPassword').setValue('secret-123')
+    await wrapper.find('.primary-button').trigger('click')
+    await flushPromises()
+
+    expect(render).toHaveBeenCalledWith(expect.any(HTMLElement), expect.objectContaining({ sitekey: 'site-key' }))
+    expect(session.register).toHaveBeenCalledWith('bob', 'bob@example.com', 'secret-123', 'secret-123', 'register-token')
   })
 })

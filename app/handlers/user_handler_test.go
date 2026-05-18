@@ -154,6 +154,47 @@ func TestUserHandlerStartsAndVerifiesEmailBinding(t *testing.T) {
 	}
 }
 
+func TestUserHandlerStartsAndVerifiesActiveEmailChange(t *testing.T) {
+	deps, server := newUserHandlerTestServer(t)
+	user := seedUserHandlerUser(t, deps.db, userHandlerSeedUser{
+		username: "active",
+		email:    "active@example.com",
+		status:   models.UserStatusActive,
+		verified: true,
+	})
+	session := createUserHandlerSession(t, deps.db, user)
+
+	start := doUserRequest(t, http.MethodPost, server.URL+"/api/v1/users/me/email-verification", map[string]any{
+		"email": " New@Example.COM ",
+	}, session)
+	defer start.Body.Close()
+	envelope := decodeEnvelope(t, start.Body)
+	if !envelope.OK {
+		t.Fatalf("start active email change ok = false, message = %s", envelope.Message)
+	}
+	if len(deps.mailer.messages) != 1 || deps.mailer.messages[0].To != "new@example.com" {
+		t.Fatalf("sent messages = %#v, want one normalized active email change verification", deps.mailer.messages)
+	}
+
+	confirm := doUserRequest(t, http.MethodPost, server.URL+"/api/v1/users/me/email-verification/confirm", map[string]any{
+		"email": "new@example.com",
+		"code":  "123456",
+	}, session)
+	defer confirm.Body.Close()
+	profile := decodeUserProfileResponse(t, confirm.Body)
+
+	if profile.Email != "new@example.com" || profile.Status != models.UserStatusActive {
+		t.Fatalf("profile after email change = %#v, want active user with new email", profile)
+	}
+	if !profile.EmailVerified || profile.EmailVerifiedAt == nil {
+		t.Fatalf("profile email verification = %v/%v, want verified timestamp", profile.EmailVerified, profile.EmailVerifiedAt)
+	}
+	reloaded := loadUserHandlerUser(t, deps.db, user.ID)
+	if reloaded.Email != "new@example.com" || reloaded.EmailVerifiedAt == nil {
+		t.Fatalf("reloaded email = %q verified_at = %v, want new verified email", reloaded.Email, reloaded.EmailVerifiedAt)
+	}
+}
+
 func TestUserHandlerStartsAndVerifiesPendingRegistrationEmail(t *testing.T) {
 	deps, server := newUserHandlerTestServer(t)
 	user := seedUserHandlerUser(t, deps.db, userHandlerSeedUser{

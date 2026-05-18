@@ -169,6 +169,44 @@ func TestPublicSettingsHandlerReturnsRegistrationWithoutSession(t *testing.T) {
 	}
 }
 
+func TestPublicSettingsHandlerReturnsTurnstileWithoutSecrets(t *testing.T) {
+	deps, server := newAdminHandlerTestServer(t)
+
+	updateTurnstile := doAdminRequest(t, http.MethodPut, server.URL+"/api/v1/admin/settings/turnstile", map[string]any{
+		"enabled":              true,
+		"site_key":             "site-key",
+		"secret":               "turnstile-secret-value",
+		"protect_login":        true,
+		"protect_registration": true,
+		"protect_verification": true,
+	}, deps.adminCookie)
+	defer updateTurnstile.Body.Close()
+	_ = decodeAdminTurnstileSettingsResponse(t, updateTurnstile.Body)
+
+	publicResponse, err := http.Get(server.URL + "/api/v1/settings/turnstile")
+	if err != nil {
+		t.Fatalf("http.Get(public turnstile settings) error = %v", err)
+	}
+	defer publicResponse.Body.Close()
+	envelope := decodeEnvelope(t, publicResponse.Body)
+	if !envelope.OK {
+		t.Fatalf("public turnstile response ok = false, message = %s", envelope.Message)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(envelope.Data, &payload); err != nil {
+		t.Fatalf("Unmarshal(public turnstile settings) error = %v", err)
+	}
+	if payload["enabled"] != true || payload["site_key"] != "site-key" || payload["protect_login"] != true || payload["protect_registration"] != true || payload["protect_verification"] != true {
+		t.Fatalf("public turnstile payload = %#v, want enabled site key and protection flags", payload)
+	}
+	if _, ok := payload["secret"]; ok {
+		t.Fatalf("public turnstile payload leaked secret field: %#v", payload)
+	}
+	if _, ok := payload["secret_masked"]; ok {
+		t.Fatalf("public turnstile payload leaked secret mask field: %#v", payload)
+	}
+}
+
 type adminSMTPSettingsTestResponse struct {
 	Enabled        bool   `json:"enabled"`
 	Host           string `json:"host"`

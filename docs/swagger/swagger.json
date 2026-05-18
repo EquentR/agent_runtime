@@ -1633,6 +1633,58 @@
                 }
             }
         },
+        "/settings/registration": {
+            "get": {
+                "description": "返回无需登录即可读取的公开注册开关。",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "settings"
+                ],
+                "summary": "获取公开注册配置",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.PublicRegistrationSettingsSwaggerResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/settings/turnstile": {
+            "get": {
+                "description": "返回无需登录即可读取的 Cloudflare Turnstile 站点密钥和保护范围，不包含 secret。",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "settings"
+                ],
+                "summary": "获取公开 Turnstile 配置",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.PublicTurnstileSettingsSwaggerResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/skills": {
             "get": {
                 "description": "返回当前 workspace 下全部非 hidden 的技能列表，不包含 content。",
@@ -4324,6 +4376,74 @@
                     "type": "string"
                 },
                 "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.PublicRegistrationSettingsSwaggerDoc": {
+            "type": "object",
+            "properties": {
+                "enabled": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "handlers.PublicRegistrationSettingsSwaggerResponse": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "integer"
+                },
+                "data": {
+                    "$ref": "#/definitions/handlers.PublicRegistrationSettingsSwaggerDoc"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "ok": {
+                    "type": "boolean"
+                },
+                "time": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.PublicTurnstileSettingsSwaggerDoc": {
+            "type": "object",
+            "properties": {
+                "enabled": {
+                    "type": "boolean"
+                },
+                "protect_login": {
+                    "type": "boolean"
+                },
+                "protect_registration": {
+                    "type": "boolean"
+                },
+                "protect_verification": {
+                    "type": "boolean"
+                },
+                "site_key": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.PublicTurnstileSettingsSwaggerResponse": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "integer"
+                },
+                "data": {
+                    "$ref": "#/definitions/handlers.PublicTurnstileSettingsSwaggerDoc"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "ok": {
+                    "type": "boolean"
+                },
+                "time": {
                     "type": "string"
                 }
             }

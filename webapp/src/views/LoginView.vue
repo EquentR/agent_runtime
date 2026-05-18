@@ -1,10 +1,73 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 
-import { fetchPublicRegistrationSettings } from '../lib/api'
+import { fetchPublicRegistrationSettings, fetchPublicTurnstileSettings } from '../lib/api'
 import { login, register, verifyRegistrationEmail } from '../lib/session'
-import type { AuthUser } from '../types/api'
+import type { AuthUser, PublicTurnstileSettings } from '../types/api'
+
+interface TurnstileRenderOptions {
+  sitekey: string
+  callback: (token: string) => void
+  'expired-callback': () => void
+  'error-callback': () => void
+}
+
+interface TurnstileClient {
+  render: (element: HTMLElement, options: TurnstileRenderOptions) => string
+  reset?: (widgetId?: string) => void
+  remove?: (widgetId: string) => void
+}
+
+declare global {
+  interface Window {
+    turnstile?: TurnstileClient
+  }
+}
+
+let turnstileScriptPromise: Promise<void> | null = null
+
+function loadTurnstileScript() {
+  if (window.turnstile) {
+    return Promise.resolve()
+  }
+  if (!turnstileScriptPromise) {
+    turnstileScriptPromise = new Promise((resolve, reject) => {
+      const existing = document.querySelector<HTMLScriptElement>('script[data-agent-runtime-turnstile]')
+      if (existing) {
+        if (existing.dataset.loaded === 'true') {
+          if (window.turnstile) {
+            resolve()
+          } else {
+            reject(new Error('turnstile script loaded without client'))
+          }
+          return
+        }
+        existing.addEventListener('load', () => resolve(), { once: true })
+        existing.addEventListener('error', () => {
+          turnstileScriptPromise = null
+          reject(new Error('turnstile script failed to load'))
+        }, { once: true })
+        return
+      }
+      const script = document.createElement('script')
+      script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit'
+      script.async = true
+      script.defer = true
+      script.dataset.agentRuntimeTurnstile = 'true'
+      script.addEventListener('load', () => {
+        script.dataset.loaded = 'true'
+        resolve()
+      }, { once: true })
+      script.addEventListener('error', () => {
+        turnstileScriptPromise = null
+        reject(new Error('turnstile script failed to load'))
+      }, { once: true })
+      document.head.appendChild(script)
+    })
+  }
+  return turnstileScriptPromise
+}
 
 const router = useRouter()
 const mode = ref<'login' | 'register' | 'verify'>('login')
@@ -17,9 +80,30 @@ const pendingRegistrationUser = ref<AuthUser | null>(null)
 const publicRegistrationEnabled = ref(true)
 const submitting = ref(false)
 const errorMessage = ref('')
+const turnstileSettings = ref<PublicTurnstileSettings>({
+  enabled: false,
+  site_key: '',
+  protect_login: false,
+  protect_registration: false,
+  protect_verification: false,
+})
+const turnstileToken = ref('')
+const turnstileLoadError = ref('')
+const turnstileElement = ref<HTMLElement | null>(null)
+const turnstileWidgetId = ref<string | null>(null)
+const turnstileRequired = computed(() => {
+  const settings = turnstileSettings.value
+  if (!settings.enabled || !settings.site_key) {
+    return false
+  }
+  if (mode.value === 'login' || mode.value === 'verify') {
+    return settings.protect_login
+  }
+  return settings.protect_registration
+})
 const canSubmit = computed(() => {
   if (mode.value === 'verify') {
-    return Boolean(pendingRegistrationUser.value?.id && pendingRegistrationUser.value.email && verificationCode.value.trim())
+    return Boolean(pendingRegistrationUser.value?.id && pendingRegistrationUser.value.email && verificationCode.value.trim() && (!turnstileRequired.value || turnstileToken.value))
   }
 
   if (!username.value.trim() || !password.value) {
@@ -27,23 +111,40 @@ const canSubmit = computed(() => {
   }
 
   if (mode.value === 'register') {
-    return Boolean(email.value.trim() && confirmPassword.value.length > 0)
+    return Boolean(email.value.trim() && confirmPassword.value.length > 0 && (!turnstileRequired.value || turnstileToken.value))
   }
 
-  return true
+  return Boolean(!turnstileRequired.value || turnstileToken.value)
 })
 
 onMounted(async () => {
   try {
-    const settings = await fetchPublicRegistrationSettings()
-    publicRegistrationEnabled.value = settings.enabled
-    if (!settings.enabled && mode.value === 'register') {
+    const [registration, turnstile] = await Promise.allSettled([
+      fetchPublicRegistrationSettings(),
+      fetchPublicTurnstileSettings(),
+    ])
+    if (registration.status === 'fulfilled') {
+      publicRegistrationEnabled.value = registration.value.enabled
+    }
+    if (turnstile.status === 'fulfilled') {
+      turnstileSettings.value = turnstile.value
+    }
+    if (!publicRegistrationEnabled.value && mode.value === 'register') {
       mode.value = 'login'
     }
   } catch {
     publicRegistrationEnabled.value = true
   }
 })
+
+onBeforeUnmount(() => {
+  removeTurnstileWidget()
+})
+
+watch([mode, turnstileRequired, () => turnstileSettings.value.site_key], async () => {
+  turnstileToken.value = ''
+  await renderTurnstile()
+}, { flush: 'post' })
 
 async function handleLogin() {
   if (!canSubmit.value || submitting.value) {
@@ -55,7 +156,11 @@ async function handleLogin() {
 
   try {
     if (mode.value === 'login') {
-      await login(username.value, password.value)
+      if (turnstileRequired.value) {
+        await login(username.value, password.value, turnstileToken.value)
+      } else {
+        await login(username.value, password.value)
+      }
       await router.push('/chat')
       return
     }
@@ -66,12 +171,18 @@ async function handleLogin() {
         throw new Error('注册信息已失效，请重新注册')
       }
       await verifyRegistrationEmail(user.id, user.email, verificationCode.value)
-      await login(user.username, password.value)
+      if (turnstileRequired.value) {
+        await login(user.username, password.value, turnstileToken.value)
+      } else {
+        await login(user.username, password.value)
+      }
       await router.push('/chat')
       return
     }
 
-    const result = await register(username.value, email.value, password.value, confirmPassword.value)
+    const result = turnstileRequired.value
+      ? await register(username.value, email.value, password.value, confirmPassword.value, turnstileToken.value)
+      : await register(username.value, email.value, password.value, confirmPassword.value)
     if (result.verification_required) {
       pendingRegistrationUser.value = result.user
       verificationCode.value = ''
@@ -83,6 +194,7 @@ async function handleLogin() {
     }
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '请求失败，请稍后重试'
+    resetTurnstileWidget()
   } finally {
     submitting.value = false
   }
@@ -95,6 +207,65 @@ function switchMode(nextMode: 'login' | 'register') {
     pendingRegistrationUser.value = null
     verificationCode.value = ''
   }
+}
+
+async function renderTurnstile() {
+  if (!turnstileRequired.value) {
+    removeTurnstileWidget()
+    turnstileLoadError.value = ''
+    return
+  }
+  await nextTick()
+  const element = turnstileElement.value
+  if (!element) {
+    return
+  }
+  removeTurnstileWidget()
+  turnstileLoadError.value = ''
+  try {
+    await loadTurnstileScript()
+    if (!window.turnstile) {
+      throw new Error('turnstile is unavailable')
+    }
+    turnstileWidgetId.value = window.turnstile.render(element, {
+      sitekey: turnstileSettings.value.site_key,
+      callback: (token: string) => {
+        turnstileToken.value = token
+        turnstileLoadError.value = ''
+      },
+      'expired-callback': () => {
+        turnstileToken.value = ''
+      },
+      'error-callback': () => {
+        turnstileToken.value = ''
+        turnstileLoadError.value = '人机验证失败，请重试'
+      },
+    })
+  } catch {
+    turnstileToken.value = ''
+    turnstileLoadError.value = '人机验证加载失败，请刷新后重试'
+  }
+}
+
+function removeTurnstileWidget() {
+  const widgetId = turnstileWidgetId.value
+  if (!widgetId) {
+    return
+  }
+  if (window.turnstile?.remove) {
+    window.turnstile.remove(widgetId)
+  } else {
+    window.turnstile?.reset?.(widgetId)
+  }
+  turnstileWidgetId.value = null
+}
+
+function resetTurnstileWidget() {
+  if (!turnstileRequired.value || !turnstileWidgetId.value) {
+    return
+  }
+  turnstileToken.value = ''
+  window.turnstile?.reset?.(turnstileWidgetId.value)
 }
 </script>
 
@@ -148,6 +319,8 @@ function switchMode(nextMode: 'login' | 'register') {
         <input id="verificationCode" v-model="verificationCode" class="text-input" inputmode="numeric" placeholder="请输入 6 位验证码" autocomplete="one-time-code" />
       </template>
 
+      <div v-if="turnstileRequired" ref="turnstileElement" class="turnstile-widget" aria-label="Cloudflare Turnstile"></div>
+      <p v-if="turnstileLoadError" class="error-banner auth-error">{{ turnstileLoadError }}</p>
       <p v-if="errorMessage" class="error-banner auth-error">{{ errorMessage }}</p>
 
       <button class="primary-button wide" type="button" :disabled="!canSubmit || submitting" @click="handleLogin">

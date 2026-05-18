@@ -178,6 +178,14 @@ p {
   border-radius: 12px;
 }
 
+.turnstile-widget {
+  min-height: 65px;
+  display: grid;
+  align-items: center;
+  justify-items: start;
+  overflow: hidden;
+}
+
 .login-card h1,
 .messages-header h1 {
   font-family: Georgia, 'Times New Roman', serif;

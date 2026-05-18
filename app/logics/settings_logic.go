@@ -71,6 +71,14 @@ type TurnstileSettings struct {
 	ProtectVerification bool   `json:"protect_verification"`
 }
 
+type PublicTurnstileSettings struct {
+	Enabled             bool   `json:"enabled"`
+	SiteKey             string `json:"site_key"`
+	ProtectLogin        bool   `json:"protect_login"`
+	ProtectRegistration bool   `json:"protect_registration"`
+	ProtectVerification bool   `json:"protect_verification"`
+}
+
 type UpdateTurnstileInput struct {
 	Enabled             bool
 	SiteKey             string
@@ -214,6 +222,20 @@ func (l *SettingsLogic) GetTurnstile(ctx context.Context) (TurnstileSettings, er
 		return TurnstileSettings{}, err
 	}
 	return maskTurnstile(settings), nil
+}
+
+func (l *SettingsLogic) GetPublicTurnstile(ctx context.Context) (PublicTurnstileSettings, error) {
+	settings, err := l.loadTurnstile(ctx)
+	if err != nil {
+		return PublicTurnstileSettings{}, err
+	}
+	return PublicTurnstileSettings{
+		Enabled:             settings.Enabled,
+		SiteKey:             settings.SiteKey,
+		ProtectLogin:        settings.ProtectLogin,
+		ProtectRegistration: settings.ProtectRegistration,
+		ProtectVerification: settings.ProtectVerification,
+	}, nil
 }
 
 func (l *SettingsLogic) GetTurnstileForVerify(ctx context.Context) (TurnstileSettings, error) {

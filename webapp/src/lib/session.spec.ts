@@ -67,6 +67,30 @@ describe('session helpers', () => {
     expect(hasActiveSession()).toBe(true)
   })
 
+  it('sends a turnstile token with protected login requests', async () => {
+    vi.mocked(fetch).mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        code: 200,
+        message: 'OK',
+        data: activeAdminUser,
+        time: '2026-03-19 10:00:00',
+      }),
+    } as Response)
+
+    await login('alice', 'secret-123', 'login-token')
+
+    expect(fetch).toHaveBeenCalledWith('/api/v1/auth/login', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({
+        username: 'alice',
+        password: 'secret-123',
+        turnstile_token: 'login-token',
+      }),
+    }))
+  })
+
   it('registers a verified first admin with email and then keeps the full auth user active', async () => {
     vi.mocked(fetch)
       .mockResolvedValueOnce({
@@ -98,6 +122,26 @@ describe('session helpers', () => {
     expect(fetch).toHaveBeenCalledTimes(1)
     expect(result).toEqual({ user: pendingUser, verification_required: true })
     expect(localStorage.getItem(SESSION_STORAGE_KEY)).toBeNull()
+  })
+
+  it('sends a turnstile token with protected registration requests', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ ok: true, code: 200, message: 'OK', data: pendingUser, time: '' }),
+    } as Response)
+
+    await register('bob', 'bob@example.com', 'secret-123', 'secret-123', 'register-token')
+
+    expect(fetch).toHaveBeenCalledWith('/api/v1/auth/register', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({
+        username: 'bob',
+        email: 'bob@example.com',
+        password: 'secret-123',
+        confirm_password: 'secret-123',
+        turnstile_token: 'register-token',
+      }),
+    }))
   })
 
   it('verifies a registration email without caching a session cookie-backed user', async () => {
@@ -133,6 +177,26 @@ describe('session helpers', () => {
     expect(session).toEqual(activeAdminUser)
     expect(JSON.parse(localStorage.getItem(SESSION_STORAGE_KEY) ?? '{}')).toEqual(activeAdminUser)
     expect(getSessionName()).toBe('alice')
+  })
+
+  it('clears a disabled cookie session instead of caching it as active', async () => {
+    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(activeAdminUser))
+    vi.mocked(fetch).mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        code: 200,
+        message: 'OK',
+        data: { ...activeAdminUser, status: 'disabled' },
+        time: '',
+      }),
+    } as Response)
+
+    const session = await syncSession(true)
+
+    expect(session).toBeNull()
+    expect(getSessionName()).toBe('')
+    expect(hasActiveSession()).toBe(false)
   })
 
   it('clears stale local cache when forced session validation fails', async () => {

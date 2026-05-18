@@ -118,6 +118,34 @@ func TestSwaggerUIRoutesExposeModelManagementPathsInGeneratedDocs(t *testing.T) 
 	}
 }
 
+func TestSwaggerUIRoutesExposePublicSettingsAndProfilePathsInGeneratedDocs(t *testing.T) {
+	engine := rest.Init()
+	NewSwaggerHandler().Register(engine.Group("/api/v1"))
+	server := httptest.NewServer(engine)
+	t.Cleanup(server.Close)
+
+	response, err := http.Get(server.URL + "/api/v1/swagger/swagger.json")
+	if err != nil {
+		t.Fatalf("GET /swagger/swagger.json error = %v", err)
+	}
+	defer response.Body.Close()
+
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("ReadAll(json) error = %v", err)
+	}
+	document := string(body)
+	for _, path := range []string{
+		"/settings/registration",
+		"/settings/turnstile",
+		"/users/me",
+	} {
+		if !strings.Contains(document, path) {
+			t.Fatalf("swagger json missing %s", path)
+		}
+	}
+}
+
 func TestSwaggerUIRoutesExposeAuditStatusEnumInGeneratedDocs(t *testing.T) {
 	engine := rest.Init()
 	NewSwaggerHandler().Register(engine.Group("/api/v1"))

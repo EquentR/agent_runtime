@@ -594,6 +594,44 @@ describe('public settings helpers', () => {
     }))
     expect(settings).toEqual({ enabled: false })
   })
+
+  it('fetches public turnstile settings without exposing secrets', async () => {
+    vi.mocked(fetch).mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        code: 200,
+        message: 'OK',
+        data: {
+          enabled: true,
+          site_key: 'site-key',
+          protect_login: true,
+          protect_registration: false,
+          protect_verification: true,
+          secret: 'server-secret',
+          secret_masked: 'serv****cret',
+        },
+        time: '',
+      }),
+    } as Response)
+
+    const api = await import('./api')
+    const settings = await api.fetchPublicTurnstileSettings()
+
+    expect(fetch).toHaveBeenCalledWith('/api/v1/settings/turnstile', expect.objectContaining({
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    expect(settings).toEqual({
+      enabled: true,
+      site_key: 'site-key',
+      protect_login: true,
+      protect_registration: false,
+      protect_verification: true,
+    })
+    expect(settings).not.toHaveProperty('secret')
+    expect(settings).not.toHaveProperty('secret_masked')
+  })
 })
 
 describe('task normalization', () => {

@@ -352,6 +352,38 @@ type ErrorSwaggerResponse struct {
 	Time    string `json:"time"`
 }
 
+// PublicRegistrationSettingsSwaggerDoc 描述公开注册配置。
+type PublicRegistrationSettingsSwaggerDoc struct {
+	Enabled bool `json:"enabled"`
+}
+
+// PublicRegistrationSettingsSwaggerResponse 描述公开注册配置接口的成功响应。
+type PublicRegistrationSettingsSwaggerResponse struct {
+	Code    int                                  `json:"code"`
+	Message string                               `json:"message"`
+	Data    PublicRegistrationSettingsSwaggerDoc `json:"data"`
+	OK      bool                                 `json:"ok"`
+	Time    string                               `json:"time"`
+}
+
+// PublicTurnstileSettingsSwaggerDoc 描述公开 Turnstile 配置。
+type PublicTurnstileSettingsSwaggerDoc struct {
+	Enabled             bool   `json:"enabled"`
+	SiteKey             string `json:"site_key"`
+	ProtectLogin        bool   `json:"protect_login"`
+	ProtectRegistration bool   `json:"protect_registration"`
+	ProtectVerification bool   `json:"protect_verification"`
+}
+
+// PublicTurnstileSettingsSwaggerResponse 描述公开 Turnstile 配置接口的成功响应。
+type PublicTurnstileSettingsSwaggerResponse struct {
+	Code    int                               `json:"code"`
+	Message string                            `json:"message"`
+	Data    PublicTurnstileSettingsSwaggerDoc `json:"data"`
+	OK      bool                              `json:"ok"`
+	Time    string                            `json:"time"`
+}
+
 // AuthUserSwaggerDoc 描述登录态用户信息的文档结构。
 type AuthUserSwaggerDoc struct {
 	ID                  uint64   `json:"id"`

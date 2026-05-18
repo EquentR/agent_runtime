@@ -1165,6 +1165,50 @@ definitions:
       status:
         type: string
     type: object
+  handlers.PublicRegistrationSettingsSwaggerDoc:
+    properties:
+      enabled:
+        type: boolean
+    type: object
+  handlers.PublicRegistrationSettingsSwaggerResponse:
+    properties:
+      code:
+        type: integer
+      data:
+        $ref: '#/definitions/handlers.PublicRegistrationSettingsSwaggerDoc'
+      message:
+        type: string
+      ok:
+        type: boolean
+      time:
+        type: string
+    type: object
+  handlers.PublicTurnstileSettingsSwaggerDoc:
+    properties:
+      enabled:
+        type: boolean
+      protect_login:
+        type: boolean
+      protect_registration:
+        type: boolean
+      protect_verification:
+        type: boolean
+      site_key:
+        type: string
+    type: object
+  handlers.PublicTurnstileSettingsSwaggerResponse:
+    properties:
+      code:
+        type: integer
+      data:
+        $ref: '#/definitions/handlers.PublicTurnstileSettingsSwaggerDoc'
+      message:
+        type: string
+      ok:
+        type: boolean
+      time:
+        type: string
+    type: object
   handlers.RunTaskResultSwaggerDoc:
     properties:
       conversation_id:
@@ -2413,6 +2457,40 @@ paths:
       summary: 更新提示词文档
       tags:
       - prompts
+  /settings/registration:
+    get:
+      description: 返回无需登录即可读取的公开注册开关。
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.PublicRegistrationSettingsSwaggerResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+      summary: 获取公开注册配置
+      tags:
+      - settings
+  /settings/turnstile:
+    get:
+      description: 返回无需登录即可读取的 Cloudflare Turnstile 站点密钥和保护范围，不包含 secret。
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.PublicTurnstileSettingsSwaggerResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+      summary: 获取公开 Turnstile 配置
+      tags:
+      - settings
   /skills:
     get:
       description: 返回当前 workspace 下全部非 hidden 的技能列表，不包含 content。

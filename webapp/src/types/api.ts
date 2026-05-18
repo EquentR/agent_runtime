@@ -31,6 +31,14 @@ export interface PublicRegistrationSettings {
   enabled: boolean
 }
 
+export interface PublicTurnstileSettings {
+  enabled: boolean
+  site_key: string
+  protect_login: boolean
+  protect_registration: boolean
+  protect_verification: boolean
+}
+
 export type PromptStatus = 'active' | 'disabled'
 export type PromptPhase = 'session' | 'step_pre_model' | 'tool_result'
 

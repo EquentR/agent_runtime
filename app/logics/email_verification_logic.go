@@ -335,7 +335,7 @@ func canApplyEmailVerificationPurpose(status string, purpose string) bool {
 	case EmailVerificationPurposeRegistration:
 		return status == models.UserStatusPendingEmailVerification
 	case EmailVerificationPurposeEmailBinding:
-		return status == models.UserStatusNeedsEmailBinding
+		return status == models.UserStatusNeedsEmailBinding || status == models.UserStatusActive
 	default:
 		return false
 	}

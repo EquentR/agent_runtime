@@ -21,6 +21,7 @@ import type {
   PromptDeleteResult,
   PromptDocument,
   PublicRegistrationSettings,
+  PublicTurnstileSettings,
   TaskDetails,
   RunTaskRequest,
   RunTaskResult,
@@ -724,6 +725,17 @@ export async function fetchPublicRegistrationSettings() {
   return {
     enabled: normalizeBooleanValue(settings.enabled) ?? true,
   } satisfies PublicRegistrationSettings
+}
+
+export async function fetchPublicTurnstileSettings() {
+  const settings = await request<Partial<PublicTurnstileSettings> & Record<string, unknown>>('/settings/turnstile')
+  return {
+    enabled: normalizeBooleanValue(settings.enabled) ?? false,
+    site_key: normalizeStringValue(settings.site_key) ?? '',
+    protect_login: normalizeBooleanValue(settings.protect_login) ?? false,
+    protect_registration: normalizeBooleanValue(settings.protect_registration) ?? false,
+    protect_verification: normalizeBooleanValue(settings.protect_verification) ?? false,
+  } satisfies PublicTurnstileSettings
 }
 
 export async function fetchConversations() {
