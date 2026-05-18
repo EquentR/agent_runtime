@@ -1,6 +1,7 @@
 package router
 
 import (
+	"context"
 	"time"
 
 	"github.com/EquentR/agent_runtime/app/logics"
@@ -12,6 +13,8 @@ import (
 	coreprompt "github.com/EquentR/agent_runtime/core/prompt"
 	coreskills "github.com/EquentR/agent_runtime/core/skills"
 	coretasks "github.com/EquentR/agent_runtime/core/tasks"
+	"github.com/EquentR/agent_runtime/pkg/mail"
+	"gorm.io/gorm"
 )
 
 // Dependencies 汇总路由层需要的跨模块依赖。
@@ -29,7 +32,14 @@ type Dependencies struct {
 	PromptResolver     *coreprompt.Resolver
 	SkillLoader        *coreskills.Loader
 	AuthLogic          *logics.AuthLogic
-	AuthSettings       logics.TurnstileSettingsReader
+	UserDB             *gorm.DB
+	AuthSettings       *logics.SettingsLogic
 	EmailVerification  *logics.EmailVerificationLogic
 	TurnstileVerifier  logics.TurnstileVerifier
+	AdminAuditLogic    *logics.AdminAuditLogic
+	AdminSMTPTester    AdminSMTPTester
+}
+
+type AdminSMTPTester interface {
+	Send(ctx context.Context, message mail.Message) error
 }

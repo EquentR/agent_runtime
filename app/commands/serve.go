@@ -147,6 +147,7 @@ func registerAgentRunExecutor(taskManager *coretasks.Manager, approvalStore *app
 
 type authRuntime struct {
 	AuthLogic         *logics.AuthLogic
+	Database          *gorm.DB
 	Settings          *logics.SettingsLogic
 	EmailVerification *logics.EmailVerificationLogic
 	TurnstileVerifier logics.TurnstileVerifier
@@ -180,6 +181,7 @@ func initAuthRuntime(database *gorm.DB, cfg config.SecurityConfig) (*authRuntime
 	}
 	return &authRuntime{
 		AuthLogic:         authLogic,
+		Database:          database,
 		Settings:          settings,
 		EmailVerification: emailVerification,
 		TurnstileVerifier: turnstileVerifier,
@@ -269,13 +271,23 @@ func buildRouterDependencies(taskManager *coretasks.Manager, approvalStore *appr
 	if len(interactionStores) > 0 {
 		interactionStore = interactionStores[0]
 	}
-	var authSettings logics.TurnstileSettingsReader
+	var userDB *gorm.DB
+	var authSettings *logics.SettingsLogic
 	var emailVerification *logics.EmailVerificationLogic
 	var turnstileVerifier logics.TurnstileVerifier
+	var adminAuditLogic *logics.AdminAuditLogic
+	var adminSMTPTester router.AdminSMTPTester
 	if authRuntime != nil {
+		userDB = authRuntime.Database
 		authSettings = authRuntime.Settings
 		emailVerification = authRuntime.EmailVerification
 		turnstileVerifier = authRuntime.TurnstileVerifier
+		if authRuntime.Database != nil {
+			adminAuditLogic = logics.NewAdminAuditLogic(authRuntime.Database)
+		}
+		if authRuntime.Settings != nil {
+			adminSMTPTester = &settingsBackedMailSender{settings: authRuntime.Settings}
+		}
 	}
 	return router.Dependencies{
 		TaskManager:        taskManager,
@@ -291,9 +303,12 @@ func buildRouterDependencies(taskManager *coretasks.Manager, approvalStore *appr
 		PromptResolver:     promptResolver,
 		SkillLoader:        skillLoader,
 		AuthLogic:          authLogic,
+		UserDB:             userDB,
 		AuthSettings:       authSettings,
 		EmailVerification:  emailVerification,
 		TurnstileVerifier:  turnstileVerifier,
+		AdminAuditLogic:    adminAuditLogic,
+		AdminSMTPTester:    adminSMTPTester,
 	}
 }
 

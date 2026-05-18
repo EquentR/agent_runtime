@@ -216,6 +216,15 @@ func TestInitAuthRuntimeWiresSettingsVerificationAndTurnstile(t *testing.T) {
 	if deps.TurnstileVerifier != runtime.TurnstileVerifier {
 		t.Fatalf("deps.TurnstileVerifier = %#v, want runtime turnstile verifier", deps.TurnstileVerifier)
 	}
+	if deps.UserDB != db {
+		t.Fatalf("deps.UserDB = %#v, want auth runtime db", deps.UserDB)
+	}
+	if deps.AdminAuditLogic == nil {
+		t.Fatal("deps.AdminAuditLogic = nil, want admin audit logic")
+	}
+	if deps.AdminSMTPTester == nil {
+		t.Fatal("deps.AdminSMTPTester = nil, want settings-backed SMTP tester")
+	}
 }
 
 func TestSettingsBackedMailSenderRejectsDisabledSMTP(t *testing.T) {

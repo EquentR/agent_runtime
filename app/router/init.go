@@ -21,9 +21,13 @@ func Init(e *gin.Engine, baseUrl string, staticPath []rest.Static, deps Dependen
 		authHandlerOptions = append(authHandlerOptions, handlers.WithAuthHandlerTurnstileVerifier(deps.TurnstileVerifier))
 	}
 	activeUser := authMiddleware.RequireActiveUser()
+	adminUser := authMiddleware.RequireAdmin()
 	registers := []Register{
 		handlers.NewAuthHandler(deps.AuthLogic, authHandlerOptions...),
 		handlers.NewExampleHandler(),
+		handlers.NewAdminUserHandler(deps.UserDB, deps.AdminAuditLogic, deps.EmailVerification, adminUser),
+		handlers.NewAdminSettingsHandler(deps.AuthSettings, deps.AdminAuditLogic, deps.AdminSMTPTester, adminUser),
+		handlers.NewAdminAuditEventHandler(deps.AdminAuditLogic, adminUser),
 		handlers.NewModelCatalogHandler(deps.ModelResolver, activeUser),
 		handlers.NewAttachmentHandler(deps.AttachmentStore, deps.AttachmentStorage, deps.AttachmentDraftTTL, activeUser),
 		handlers.NewSkillHandler(deps.SkillLoader, activeUser),
