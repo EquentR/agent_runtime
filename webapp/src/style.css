@@ -2654,6 +2654,27 @@ p {
   transition: width 240ms ease;
 }
 
+.chat-no-model-empty {
+  min-height: 100%;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 0.85rem;
+  padding: 2rem 1rem;
+  text-align: center;
+  color: #28454e;
+}
+
+.chat-no-model-empty h2 {
+  font-size: 1.35rem;
+  line-height: 1.2;
+}
+
+.chat-no-model-empty p {
+  max-width: 32rem;
+  color: rgba(25, 50, 59, 0.62);
+}
+
 /* Empty-state: composer centered, narrowed */
 .chat-stage.composer-centered .chat-composer-dock {
   flex: 1 1 auto;

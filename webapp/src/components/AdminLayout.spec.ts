@@ -35,21 +35,20 @@ describe('AdminLayout', () => {
     })
 
     const text = wrapper.text()
-    for (const label of ['仪表盘', '用户管理', '系统设置', '提示词管理', '审计会话', '后台操作审计']) {
+    for (const label of ['仪表盘', '用户管理', '模型管理', '系统设置', '提示词管理', '审计会话', '后台操作审计']) {
       expect(text).toContain(label)
     }
-    expect(text).not.toContain('模型管理')
 
     const hrefs = wrapper.findAll('[data-admin-nav-link]').map((link) => link.attributes('href'))
     expect(hrefs).toEqual(expect.arrayContaining([
       '/chat',
       '/admin/users',
+      '/admin/models',
       '/admin/settings',
       '/admin/prompts',
       '/admin/audit',
       '/admin/audit-events',
     ]))
-    expect(hrefs).not.toContain('/admin/models')
     expect(wrapper.find('[data-admin-layout-outlet]').exists()).toBe(true)
   })
 

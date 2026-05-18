@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { Close, Menu } from '@element-plus/icons-vue'
 
 import ConversationSidebar from '../components/ConversationSidebar.vue'
@@ -27,7 +27,7 @@ import {
 } from '../lib/api'
 import { clearChatState, loadChatState, saveChatState, scheduleChatStateSave } from '../lib/chat-state'
 import { formatConversationTitle, formatDocumentTitle } from '../lib/chat'
-import { resolveModelSelection } from '../lib/model-selection'
+import { filterUsableModelProviders, resolveModelSelection } from '../lib/model-selection'
 import { getSessionName, getSessionRole, logout } from '../lib/session'
 import {
   buildApprovalEntriesFromList,
@@ -121,7 +121,7 @@ const chatShellClass = computed(() => ({
   'sidebar-open': sidebarMobile.value && sidebarDrawerOpen.value,
 }))
 const sidebarDesktopHidden = computed(() => !sidebarMobile.value && sidebarCollapsed.value)
-const availableProviders = computed(() => modelCatalog.value?.providers ?? [])
+const availableProviders = computed(() => filterUsableModelProviders(modelCatalog.value?.providers ?? []))
 const selectedProvider = computed(
   () => availableProviders.value.find((provider) => provider.id === selectedProviderId.value) ?? availableProviders.value[0] ?? null,
 )
@@ -147,7 +147,8 @@ const currentConversationBusy = computed(() => {
   return sendingConversationKey.value === currentKey
 })
 const modelMenuDisabled = computed(() => currentConversationBusy.value || catalogLoading.value || availableProviders.value.length === 0)
-const composerDisabled = computed(() => catalogLoading.value || !selectedProviderId.value || !selectedModelId.value)
+const noUsableModels = computed(() => !catalogLoading.value && availableProviders.value.length === 0)
+const composerDisabled = computed(() => catalogLoading.value || noUsableModels.value || !selectedProviderId.value || !selectedModelId.value)
 const stoppingTask = ref(false)
 const currentConversationEntries = computed(() => {
   const conversationId = activeConversationId.value || routeConversationId.value
@@ -401,9 +402,7 @@ async function loadCatalog() {
   catalogLoading.value = true
   try {
     modelCatalog.value = await fetchModelCatalog()
-    if (!selectedProviderId.value || !selectedModelId.value) {
-      applyDefaultSelection()
-    }
+    applySelection(selectedProviderId.value || modelCatalog.value.default_provider_id, selectedModelId.value || modelCatalog.value.default_model_id)
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '加载模型目录失败'
   } finally {
@@ -1211,7 +1210,7 @@ onBeforeUnmount(() => {
       @toggle-collapse="toggleSidebarCollapsed"
     />
 
-    <section class="chat-stage" :class="{ 'composer-centered': entries.length === 0 }">
+    <section class="chat-stage" :class="{ 'composer-centered': entries.length === 0 && !noUsableModels }">
       <header class="topbar">
         <button
           v-if="sidebarMobile || sidebarCollapsed"
@@ -1373,7 +1372,13 @@ onBeforeUnmount(() => {
       <p v-if="errorMessage" class="error-banner">{{ errorMessage }}</p>
 
       <div class="chat-main">
+        <div v-if="noUsableModels" class="chat-no-model-empty" data-no-model-empty>
+          <h2>当前没有可用模型</h2>
+          <p>请在个人设置中添加自定义模型，或联系管理员开启全局模型。</p>
+          <RouterLink class="primary-button" to="/profile" data-no-model-profile-link>打开个人设置</RouterLink>
+        </div>
         <MessageList
+          v-else
           :loading="messagesLoading || currentConversationBusy"
           :entries="entries.filter(e => !e.memory_context_state)"
           :show-thinking-and-tools="showThinkingAndTools"
@@ -1384,7 +1389,7 @@ onBeforeUnmount(() => {
         />
       </div>
       <div class="chat-composer-dock">
-        <p class="composer-welcome">请尽情使唤 ~</p>
+        <p v-if="!noUsableModels" class="composer-welcome">请尽情使唤 ~</p>
         <MessageComposer
           ref="composerRef"
           :disabled="composerDisabled"

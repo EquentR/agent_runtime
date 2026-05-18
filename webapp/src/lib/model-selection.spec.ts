@@ -57,4 +57,36 @@ describe('resolveModelSelection', () => {
       modelId: '',
     })
   })
+
+  it('model selection ignores unavailable models', () => {
+    expect(resolveModelSelection({
+      default_provider_id: 'openai',
+      default_model_id: 'disabled-default',
+      providers: [
+        {
+          id: 'empty',
+          name: 'Empty',
+          models: [],
+        },
+        {
+          id: 'openai',
+          name: 'OpenAI',
+          models: [
+            { id: 'disabled-default', name: 'Disabled Default', type: 'chat', enabled: false },
+            { id: 'unavailable', name: 'Unavailable', type: 'chat', available: false },
+          ],
+        },
+        {
+          id: 'google',
+          name: 'Google',
+          models: [
+            { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', type: 'chat', enabled: true },
+          ],
+        },
+      ],
+    }, 'openai', 'disabled-default')).toMatchObject({
+      providerId: 'google',
+      modelId: 'gemini-2.5-flash',
+    })
+  })
 })

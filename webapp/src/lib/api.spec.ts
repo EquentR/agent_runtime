@@ -224,6 +224,195 @@ describe('profile and admin backoffice API helpers', () => {
     expect(fetch).toHaveBeenNthCalledWith(10, '/api/v1/admin/settings/registration', expect.objectContaining({ method: 'PUT' }))
     expect(fetch).toHaveBeenNthCalledWith(11, '/api/v1/admin/audit-events?action=admin.users.update&target_kind=user&actor_username=admin&limit=100', expect.objectContaining({ credentials: 'include' }))
   })
+
+  it('normalizes custom model context max tokens and masked api key', async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          code: 200,
+          message: 'OK',
+          data: [
+            {
+              id: 'custom_1',
+              owner_user_id: '42',
+              provider_id: 'team-openai',
+              model_id: 'gpt-custom',
+              display_name: 'Team GPT',
+              provider_type: 'openai_completions',
+              base_url: 'https://llm.example.com/v1',
+              api_key_masked: 'sk-****abcd',
+              scope: 'global',
+              enabled: 'true',
+              context_max_tokens: '32768',
+              context: { max: '32768', input: '24576', output: '8192' },
+              capabilities: { attachments: 'true' },
+              created_at: '2026-05-18T10:00:00Z',
+              updated_at: '2026-05-18T10:00:00Z',
+            },
+          ],
+          time: '',
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          code: 200,
+          message: 'OK',
+          data: [
+            {
+              id: 'custom_me',
+              owner_user_id: 7,
+              provider_id: 'me-openai',
+              model_id: 'gpt-me',
+              display_name: '我的 GPT',
+              provider_type: 'openai_responses',
+              api_key_masked: 'sk-****mine',
+              scope: '',
+              enabled: true,
+              context_max_tokens: 65536,
+              context: { max: 65536, input: 57344, output: 8192 },
+              capabilities: {},
+            },
+          ],
+          time: '',
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          code: 200,
+          message: 'OK',
+          data: {
+            default_provider_id: 'yaml',
+            default_model_id: 'admin-only',
+            providers: [{
+              id: 'yaml',
+              name: 'yaml',
+              models: [{
+                id: 'admin-only',
+                name: 'Admin Only',
+                type: 'openai_responses',
+                context: { max: 128000, input: 120000, output: 8000 },
+                capabilities: { attachments: true },
+                scope: 'admin',
+                enabled: true,
+                scope_overridden: false,
+                enabled_overridden: false,
+              }],
+            }],
+          },
+          time: '',
+        }),
+      } as Response)
+      .mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          code: 200,
+          message: 'OK',
+          data: { ok: true, deleted: true },
+          time: '',
+        }),
+      } as Response)
+
+    const api = (await import('./api')) as Record<string, any>
+
+    for (const name of [
+      'fetchAdminModels',
+      'updateAdminYAMLModel',
+      'fetchAdminCustomModels',
+      'createAdminCustomModel',
+      'updateAdminCustomModel',
+      'deleteAdminCustomModel',
+      'testAdminCustomModel',
+      'fetchUserCustomModels',
+      'createUserCustomModel',
+      'updateUserCustomModel',
+      'deleteUserCustomModel',
+      'testUserCustomModel',
+    ]) {
+      expect(typeof api[name]).toBe('function')
+    }
+
+    const adminModels = await api.fetchAdminCustomModels()
+    const userModels = await api.fetchUserCustomModels()
+    const yamlCatalog = await api.fetchAdminModels()
+    await api.updateAdminYAMLModel('yaml', 'admin-only', { enabled: false, scope: 'global' })
+    await api.createAdminCustomModel({
+      owner_user_id: 0,
+      provider_id: 'team-openai',
+      model_id: 'gpt-custom',
+      display_name: 'Team GPT',
+      provider_type: 'openai_completions',
+      base_url: 'https://llm.example.com/v1',
+      api_key: 'sk-secret',
+      scope: 'global',
+      enabled: true,
+      context_max_tokens: 32768,
+      capabilities: { attachments: true },
+    })
+    await api.updateAdminCustomModel('custom_1', { enabled: false, context_max_tokens: 65536 })
+    await api.deleteAdminCustomModel('custom_1')
+    await api.testAdminCustomModel('custom_1')
+    await api.createUserCustomModel({
+      provider_id: 'me-openai',
+      model_id: 'gpt-me',
+      display_name: '我的 GPT',
+      provider_type: 'openai_responses',
+      api_key: 'sk-secret',
+      scope: 'owner',
+      enabled: true,
+      context_max_tokens: 65536,
+      capabilities: { attachments: false },
+    })
+    await api.updateUserCustomModel('custom_me', { display_name: '我的 GPT 2', context_max_tokens: 131072, scope: 'owner' })
+    await api.deleteUserCustomModel('custom_me')
+    await api.testUserCustomModel('custom_me')
+
+    expect(adminModels[0]).toMatchObject({
+      id: 'custom_1',
+      owner_user_id: 42,
+      provider_id: 'team-openai',
+      api_key_masked: 'sk-****abcd',
+      scope: 'global',
+      enabled: true,
+      context_max_tokens: 32768,
+      context: { max: 32768, input: 24576, output: 8192 },
+      capabilities: { attachments: true },
+    })
+    expect(userModels[0]).toMatchObject({
+      id: 'custom_me',
+      scope: 'owner',
+      context_max_tokens: 65536,
+      context: { max: 65536, input: 57344, output: 8192 },
+      capabilities: { attachments: false },
+    })
+    expect(yamlCatalog.providers[0].models[0]).toMatchObject({
+      id: 'admin-only',
+      scope: 'admin',
+      enabled: true,
+      context: { max: 128000, input: 120000, output: 8000 },
+    })
+    expect(fetch).toHaveBeenNthCalledWith(1, '/api/v1/admin/models/custom', expect.objectContaining({ credentials: 'include' }))
+    expect(fetch).toHaveBeenNthCalledWith(2, '/api/v1/users/me/models', expect.objectContaining({ credentials: 'include' }))
+    expect(fetch).toHaveBeenNthCalledWith(3, '/api/v1/admin/models', expect.objectContaining({ credentials: 'include' }))
+    expect(fetch).toHaveBeenNthCalledWith(4, '/api/v1/admin/models/yaml/yaml/admin-only', expect.objectContaining({
+      method: 'PATCH',
+      body: JSON.stringify({ enabled: false, scope: 'global' }),
+    }))
+    expect(fetch).toHaveBeenNthCalledWith(5, '/api/v1/admin/models/custom', expect.objectContaining({ method: 'POST' }))
+    expect(fetch).toHaveBeenNthCalledWith(6, '/api/v1/admin/models/custom/custom_1', expect.objectContaining({ method: 'PUT' }))
+    expect(fetch).toHaveBeenNthCalledWith(7, '/api/v1/admin/models/custom/custom_1', expect.objectContaining({ method: 'DELETE' }))
+    expect(fetch).toHaveBeenNthCalledWith(8, '/api/v1/admin/models/custom/custom_1/test', expect.objectContaining({ method: 'POST' }))
+    expect(fetch).toHaveBeenNthCalledWith(9, '/api/v1/users/me/models', expect.objectContaining({ method: 'POST' }))
+    expect(fetch).toHaveBeenNthCalledWith(10, '/api/v1/users/me/models/custom_me', expect.objectContaining({ method: 'PUT' }))
+    expect(fetch).toHaveBeenNthCalledWith(11, '/api/v1/users/me/models/custom_me', expect.objectContaining({ method: 'DELETE' }))
+    expect(fetch).toHaveBeenNthCalledWith(12, '/api/v1/users/me/models/custom_me/test', expect.objectContaining({ method: 'POST' }))
+  })
 })
 
 describe('conversation message normalization helpers', () => {

@@ -22,7 +22,12 @@ import type {
   ChangeUserPasswordInput,
   Conversation,
   ConversationMessage,
+  CustomLLMModel,
+  CustomLLMModelDeleteResult,
+  CustomLLMModelInput,
   EmailVerificationSentResult,
+  ModelScope,
+  ModelTestResult,
   ModelCatalog,
   ModelCatalogEntry,
   ModelCatalogProvider,
@@ -51,6 +56,9 @@ import type {
   UserRole,
   WorkspaceSkill,
   WorkspaceSkillListItem,
+  YAMLModel,
+  YAMLModelCatalog,
+  YAMLModelOverrideInput,
 } from '../types/api'
 
 const API_BASE = '/api/v1'
@@ -396,35 +404,62 @@ function normalizeBooleanValue(value: unknown) {
   return undefined
 }
 
+function normalizeModelScope(value: unknown, fallback: ModelScope): ModelScope {
+  switch (typeof value === 'string' ? value.trim().toLowerCase() : '') {
+    case 'admin':
+      return 'admin'
+    case 'global':
+      return 'global'
+    case 'owner':
+      return 'owner'
+    default:
+      return fallback
+  }
+}
+
+function normalizeModelCapabilities(value: unknown) {
+  const raw = value && typeof value === 'object' ? (value as Record<string, unknown>) : {}
+  return {
+    attachments: normalizeBooleanValue(raw.attachments ?? raw.Attachments) ?? false,
+  }
+}
+
+function normalizeModelContextBudget(value: unknown) {
+  if (!value || typeof value !== 'object') {
+    return undefined
+  }
+
+  const raw = value as Record<string, unknown>
+  const budget = {
+    max: normalizeIntegerValue(raw.max ?? raw.Max),
+    input: normalizeIntegerValue(raw.input ?? raw.Input),
+    output: normalizeIntegerValue(raw.output ?? raw.Output),
+    short_term_limit: normalizeIntegerValue(raw.short_term_limit ?? raw.shortTermLimit ?? raw.ShortTermLimit),
+  }
+
+  if (Object.values(budget).every((field) => field === undefined)) {
+    return undefined
+  }
+
+  return budget
+}
+
 function normalizeModelCatalogEntry(
-  entry: Partial<ModelCatalogEntry> & {
-    ID?: string
-    Name?: string
-    Type?: string
-    Context?: Record<string, unknown>
-    context?: Record<string, unknown>
-    capabilities?: Record<string, unknown>
-    Capabilities?: Record<string, unknown>
-  },
+  entry: Partial<ModelCatalogEntry> & Record<string, unknown>,
 ): ModelCatalogEntry {
   const rawContext = entry.context_window ?? entry.context ?? entry.Context
   const rawCapabilities = entry.capabilities ?? entry.Capabilities ?? {}
+  const context = normalizeModelContextBudget(rawContext)
   return {
     id: normalizeFirstStringValue(entry.id, entry.ID),
     name: normalizeFirstStringValue(entry.name, entry.Name),
     type: normalizeFirstStringValue(entry.type, entry.Type),
-    context_window:
-      rawContext && typeof rawContext === 'object'
-        ? {
-            max: normalizeIntegerValue(rawContext.max),
-            input: normalizeIntegerValue(rawContext.input),
-            output: normalizeIntegerValue(rawContext.output),
-            short_term_limit: normalizeIntegerValue(rawContext.short_term_limit),
-          }
-        : undefined,
-    capabilities: {
-      attachments: normalizeBooleanValue(rawCapabilities.attachments) ?? false,
-    },
+    enabled: normalizeBooleanValue(entry.enabled),
+    available: normalizeBooleanValue(entry.available),
+    scope: normalizeStringValue(entry.scope),
+    context,
+    context_window: context,
+    capabilities: normalizeModelCapabilities(rawCapabilities),
   }
 }
 
@@ -432,11 +467,11 @@ function normalizeModelCatalogProvider(
   provider: Partial<ModelCatalogProvider> & {
     ID?: string
     Name?: string
-    Models?: Array<Partial<ModelCatalogEntry>>
+    Models?: Array<Partial<ModelCatalogEntry> & Record<string, unknown>>
   },
 ): ModelCatalogProvider {
-  const models: Array<Partial<ModelCatalogEntry>> = Array.isArray(provider.models ?? provider.Models)
-    ? ((provider.models ?? provider.Models) as Array<Partial<ModelCatalogEntry>>)
+  const models: Array<Partial<ModelCatalogEntry> & Record<string, unknown>> = Array.isArray(provider.models ?? provider.Models)
+    ? ((provider.models ?? provider.Models) as Array<Partial<ModelCatalogEntry> & Record<string, unknown>>)
     : []
   return {
     id: normalizeFirstStringValue(provider.id, provider.ID),
@@ -459,6 +494,105 @@ function normalizeModelCatalog(
     default_provider_id: normalizeFirstStringValue(catalog.default_provider_id, catalog.DefaultProviderID),
     default_model_id: normalizeFirstStringValue(catalog.default_model_id, catalog.DefaultModelID),
     providers: providers.map((provider) => normalizeModelCatalogProvider(provider)),
+  }
+}
+
+function normalizeYAMLModel(
+  model: Partial<YAMLModel> & Record<string, unknown>,
+): YAMLModel {
+  return {
+    id: normalizeFirstStringValue(model.id, model.ID),
+    name: normalizeFirstStringValue(model.name, model.Name),
+    type: normalizeFirstStringValue(model.type, model.Type),
+    context: normalizeModelContextBudget(model.context ?? model.Context),
+    cost: model.cost,
+    capabilities: normalizeModelCapabilities(model.capabilities ?? model.Capabilities),
+    scope: normalizeModelScope(model.scope, 'admin'),
+    enabled: normalizeBooleanValue(model.enabled) ?? true,
+    scope_overridden: normalizeBooleanValue(model.scope_overridden ?? model.ScopeOverridden) ?? false,
+    enabled_overridden: normalizeBooleanValue(model.enabled_overridden ?? model.EnabledOverridden) ?? false,
+  }
+}
+
+function normalizeYAMLModelCatalog(
+  catalog: Partial<YAMLModelCatalog> & {
+    DefaultProviderID?: string
+    DefaultModelID?: string
+    Providers?: Array<Record<string, unknown>>
+  },
+): YAMLModelCatalog {
+  const providers = Array.isArray(catalog.providers ?? catalog.Providers)
+    ? ((catalog.providers ?? catalog.Providers ?? []) as Array<Record<string, unknown>>)
+    : []
+  return {
+    default_provider_id: normalizeFirstStringValue(catalog.default_provider_id, catalog.DefaultProviderID),
+    default_model_id: normalizeFirstStringValue(catalog.default_model_id, catalog.DefaultModelID),
+    providers: providers.map((provider) => {
+      const rawModels = Array.isArray(provider.models ?? provider.Models)
+        ? ((provider.models ?? provider.Models ?? []) as unknown[])
+        : []
+      return {
+        id: normalizeFirstStringValue(provider.id, provider.ID),
+        name: normalizeFirstStringValue(provider.name, provider.Name),
+        models: rawModels.map((model) =>
+          normalizeYAMLModel(model && typeof model === 'object' ? model as Partial<YAMLModel> & Record<string, unknown> : {}),
+        ),
+      }
+    }),
+  }
+}
+
+export function normalizeCustomLLMModel(
+  model: Partial<CustomLLMModel> & {
+    ID?: string
+    OwnerUserID?: number | string
+    ProviderID?: string
+    ModelID?: string
+    DisplayName?: string
+    ProviderType?: string
+    BaseURL?: string
+    APIKeyMasked?: string
+    ContextMaxTokens?: number | string
+    Context?: Record<string, unknown>
+    Capabilities?: Record<string, unknown>
+    CreatedAt?: string
+    UpdatedAt?: string
+  },
+): CustomLLMModel {
+  return {
+    id: normalizeFirstStringValue(model.id, model.ID),
+    owner_user_id: normalizeIntegerValue(model.owner_user_id ?? model.OwnerUserID) ?? 0,
+    provider_id: normalizeFirstStringValue(model.provider_id, model.ProviderID),
+    model_id: normalizeFirstStringValue(model.model_id, model.ModelID),
+    display_name: normalizeFirstStringValue(model.display_name, model.DisplayName),
+    provider_type: normalizeFirstStringValue(model.provider_type, model.ProviderType),
+    base_url: normalizeFirstStringValue(model.base_url, model.BaseURL),
+    api_key: normalizeFirstOptionalStringValue(model.api_key),
+    api_key_masked: normalizeFirstStringValue(model.api_key_masked, model.APIKeyMasked),
+    scope: normalizeModelScope(model.scope, 'owner'),
+    enabled: normalizeBooleanValue(model.enabled) ?? true,
+    context_max_tokens: normalizeIntegerValue(model.context_max_tokens ?? model.ContextMaxTokens) ?? 0,
+    context: normalizeModelContextBudget(model.context ?? model.Context),
+    capabilities: normalizeModelCapabilities(model.capabilities ?? model.Capabilities),
+    cost: model.cost,
+    created_at: normalizeFirstStringValue(model.created_at, model.CreatedAt),
+    updated_at: normalizeFirstStringValue(model.updated_at, model.UpdatedAt),
+  }
+}
+
+function normalizeCustomLLMModels(value: unknown) {
+  return Array.isArray(value)
+    ? value.map((model) =>
+      normalizeCustomLLMModel(model && typeof model === 'object' ? model as Partial<CustomLLMModel> & Record<string, unknown> : {}),
+    )
+    : []
+}
+
+function normalizeModelTestResult(value: unknown): ModelTestResult {
+  const raw = value && typeof value === 'object' ? value as Record<string, unknown> : {}
+  return {
+    ok: normalizeBooleanValue(raw.ok) ?? false,
+    error: normalizeFirstOptionalStringValue(raw.error),
   }
 }
 
@@ -938,6 +1072,90 @@ export async function fetchAdminAuditEvents(filter: AdminAuditEventFilter = {}) 
   return Array.isArray(events)
     ? events.map((event) => normalizeAdminAuditEvent(event as Partial<AdminAuditEvent> & Record<string, unknown>))
     : []
+}
+
+export async function fetchAdminModels() {
+  const catalog = await request<Partial<YAMLModelCatalog> & Record<string, unknown>>('/admin/models')
+  return normalizeYAMLModelCatalog(catalog)
+}
+
+export async function updateAdminYAMLModel(providerId: string, modelId: string, input: YAMLModelOverrideInput) {
+  const model = await request<Partial<YAMLModel> & Record<string, unknown>>(
+    `/admin/models/yaml/${encodeURIComponent(providerId)}/${encodeURIComponent(modelId)}`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify(input),
+    },
+  )
+  return normalizeYAMLModel(model)
+}
+
+export async function fetchAdminCustomModels() {
+  const models = await request<unknown>('/admin/models/custom')
+  return normalizeCustomLLMModels(models)
+}
+
+export async function createAdminCustomModel(input: CustomLLMModelInput) {
+  const model = await request<Partial<CustomLLMModel> & Record<string, unknown>>('/admin/models/custom', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+  return normalizeCustomLLMModel(model)
+}
+
+export async function updateAdminCustomModel(modelId: string, input: CustomLLMModelInput) {
+  const model = await request<Partial<CustomLLMModel> & Record<string, unknown>>(`/admin/models/custom/${encodeURIComponent(modelId)}`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  })
+  return normalizeCustomLLMModel(model)
+}
+
+export async function deleteAdminCustomModel(modelId: string) {
+  return request<CustomLLMModelDeleteResult>(`/admin/models/custom/${encodeURIComponent(modelId)}`, {
+    method: 'DELETE',
+  })
+}
+
+export async function testAdminCustomModel(modelId: string) {
+  const result = await request<unknown>(`/admin/models/custom/${encodeURIComponent(modelId)}/test`, {
+    method: 'POST',
+  })
+  return normalizeModelTestResult(result)
+}
+
+export async function fetchUserCustomModels() {
+  const models = await request<unknown>('/users/me/models')
+  return normalizeCustomLLMModels(models)
+}
+
+export async function createUserCustomModel(input: CustomLLMModelInput) {
+  const model = await request<Partial<CustomLLMModel> & Record<string, unknown>>('/users/me/models', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+  return normalizeCustomLLMModel(model)
+}
+
+export async function updateUserCustomModel(modelId: string, input: CustomLLMModelInput) {
+  const model = await request<Partial<CustomLLMModel> & Record<string, unknown>>(`/users/me/models/${encodeURIComponent(modelId)}`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  })
+  return normalizeCustomLLMModel(model)
+}
+
+export async function deleteUserCustomModel(modelId: string) {
+  return request<CustomLLMModelDeleteResult>(`/users/me/models/${encodeURIComponent(modelId)}`, {
+    method: 'DELETE',
+  })
+}
+
+export async function testUserCustomModel(modelId: string) {
+  const result = await request<unknown>(`/users/me/models/${encodeURIComponent(modelId)}/test`, {
+    method: 'POST',
+  })
+  return normalizeModelTestResult(result)
 }
 
 export async function fetchConversations() {

@@ -5,6 +5,7 @@ import { syncSession } from '../lib/session'
 import { getRequiredActionProfileTarget } from '../lib/user-state'
 import AdminLayout from '../components/AdminLayout.vue'
 import AdminAuditView from '../views/AdminAuditView.vue'
+import AdminModelsView from '../views/AdminModelsView.vue'
 import AdminOperationAuditView from '../views/AdminOperationAuditView.vue'
 import AdminPromptView from '../views/AdminPromptView.vue'
 import AdminSettingsView from '../views/AdminSettingsView.vue'
@@ -67,7 +68,7 @@ const routes = [
       {
         path: 'models',
         name: 'admin-models',
-        component: { template: '<main class="admin-workbench admin-models-placeholder"></main>' },
+        component: AdminModelsView,
         meta: {
           title: '模型管理',
         },

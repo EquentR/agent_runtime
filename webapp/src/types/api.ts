@@ -387,19 +387,105 @@ export interface ModelCatalogProvider {
   models: ModelCatalogEntry[]
 }
 
+export type ModelScope = 'owner' | 'admin' | 'global'
+
+export interface ModelCapabilities {
+  attachments: boolean
+}
+
+export interface ModelContextBudget {
+  max?: number
+  input?: number
+  output?: number
+  short_term_limit?: number
+}
+
 export interface ModelCatalogEntry {
   id: string
   name: string
   type: string
-  capabilities?: {
-    attachments: boolean
-  }
-  context_window?: {
-    max?: number
-    input?: number
-    output?: number
-    short_term_limit?: number
-  }
+  enabled?: boolean
+  available?: boolean
+  scope?: ModelScope | string
+  capabilities?: ModelCapabilities
+  context?: ModelContextBudget
+  context_window?: ModelContextBudget
+}
+
+export interface YAMLModelCatalog {
+  default_provider_id: string
+  default_model_id: string
+  providers: YAMLModelProvider[]
+}
+
+export interface YAMLModelProvider {
+  id: string
+  name: string
+  models: YAMLModel[]
+}
+
+export interface YAMLModel {
+  id: string
+  name: string
+  type: string
+  context?: ModelContextBudget
+  cost?: unknown
+  capabilities: ModelCapabilities
+  scope: ModelScope
+  enabled: boolean
+  scope_overridden: boolean
+  enabled_overridden: boolean
+}
+
+export interface YAMLModelOverrideInput {
+  enabled?: boolean
+  scope?: ModelScope
+}
+
+export interface CustomLLMModel {
+  id: string
+  owner_user_id: number
+  provider_id: string
+  model_id: string
+  display_name: string
+  provider_type: string
+  base_url: string
+  api_key?: string
+  api_key_masked: string
+  scope: ModelScope
+  enabled: boolean
+  context_max_tokens: number
+  context?: ModelContextBudget
+  capabilities: ModelCapabilities
+  cost?: unknown
+  created_at: string
+  updated_at: string
+}
+
+export interface CustomLLMModelInput {
+  owner_user_id?: number
+  provider_id?: string
+  model_id?: string
+  display_name?: string
+  provider_type?: string
+  base_url?: string
+  api_key?: string
+  clear_base_url?: boolean
+  clear_api_key?: boolean
+  scope?: ModelScope
+  enabled?: boolean
+  context_max_tokens?: number
+  capabilities?: Partial<ModelCapabilities>
+  cost?: unknown
+}
+
+export interface CustomLLMModelDeleteResult {
+  deleted: boolean
+}
+
+export interface ModelTestResult {
+  ok: boolean
+  error?: string
 }
 
 export type TaskStatus =

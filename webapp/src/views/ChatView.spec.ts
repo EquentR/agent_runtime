@@ -95,7 +95,10 @@ function setViewportWidth(width: number) {
 function makeRouter() {
   return createRouter({
     history: createMemoryHistory(),
-    routes: [{ path: '/chat/:conversationId?', component: ChatView }],
+    routes: [
+      { path: '/chat/:conversationId?', component: ChatView },
+      { path: '/profile', component: { template: '<main />' } },
+    ],
   })
 }
 
@@ -414,6 +417,38 @@ describe('ChatView', () => {
     expect(wrapper.text()).toContain('First chat')
     expect(wrapper.text()).toContain('当前账号')
     expect(wrapper.find('.topbar .status-pill').text()).toContain('就绪')
+  })
+
+  it('ChatView shows no-model empty state with profile link', async () => {
+    api.fetchModelCatalog.mockResolvedValueOnce({
+      default_provider_id: '',
+      default_model_id: '',
+      providers: [],
+    })
+    api.fetchConversations.mockResolvedValue([])
+
+    const router = makeRouter()
+    await router.push('/chat')
+    await router.isReady()
+
+    const wrapper = mount(ChatView, {
+      global: {
+        plugins: [router],
+      },
+    })
+
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('当前没有可用模型')
+    expect(wrapper.text()).toContain('在个人设置中添加自定义模型')
+    expect(wrapper.get('[data-no-model-profile-link]').attributes('href')).toBe('/profile')
+
+    await wrapper.get('.composer-input').setValue('hello')
+    await wrapper.get('.composer-panel').trigger('submit')
+    await flushPromises()
+
+    expect(api.createRunTask).not.toHaveBeenCalled()
+    expect(wrapper.get('.composer-submit').attributes()).toHaveProperty('disabled')
   })
 
   it('shows admin links only inside the user menu', async () => {

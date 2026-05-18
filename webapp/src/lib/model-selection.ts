@@ -13,8 +13,22 @@ export function findModelProvider(providers: ModelCatalogProvider[], providerId:
   return providers.find((provider) => provider.id === providerId) ?? null
 }
 
+export function isUsableModel(model: ModelCatalogProvider['models'][number]) {
+  return model.enabled !== false && model.available !== false
+}
+
+export function filterUsableModelProviders(providers: ModelCatalogProvider[]) {
+  return providers
+    .map((provider) => ({
+      ...provider,
+      models: provider.models.filter((model) => isUsableModel(model)),
+    }))
+    .filter((provider) => provider.models.length > 0)
+}
+
 function resolveProviders(source: ModelSelectionSource) {
-  return Array.isArray(source) ? source : source?.providers ?? []
+  const providers = Array.isArray(source) ? source : source?.providers ?? []
+  return filterUsableModelProviders(providers)
 }
 
 function resolveConfiguredDefaultProvider(source: ModelSelectionSource, providers: ModelCatalogProvider[]) {

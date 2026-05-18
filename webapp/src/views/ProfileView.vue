@@ -5,18 +5,26 @@ import { RouterLink } from 'vue-router'
 import {
   changeUserPassword,
   confirmUserEmailVerification,
+  createUserCustomModel,
+  deleteUserCustomModel,
+  fetchUserCustomModels,
   fetchUserProfile,
   startUserEmailVerification,
+  testUserCustomModel,
+  updateUserCustomModel,
   updateUserProfile,
 } from '../lib/api'
-import type { AuthUser } from '../types/api'
+import type { AuthUser, CustomLLMModel } from '../types/api'
 
 const loading = ref(false)
 const savingProfile = ref(false)
 const savingPassword = ref(false)
 const sendingEmailCode = ref(false)
 const confirmingEmail = ref(false)
+const modelSaving = ref('')
 const profile = ref<AuthUser | null>(null)
+const customModels = ref<CustomLLMModel[]>([])
+const selectedModelId = ref('')
 const statusMessage = ref('')
 const errorMessage = ref('')
 
@@ -35,18 +43,73 @@ const emailDraft = reactive({
   code: '',
 })
 
+const modelDraft = reactive({
+  providerType: 'openai_responses',
+  providerId: '',
+  modelId: '',
+  displayName: '',
+  baseURL: '',
+  apiKey: '',
+  enabled: true,
+  contextMaxTokens: 32768,
+  attachments: false,
+})
+
 const requiredActions = computed(() => profile.value?.required_actions ?? [])
 const needsEmail = computed(() => requiredActions.value.includes('bind_email') || requiredActions.value.includes('verify_email'))
 const needsPassword = computed(() => requiredActions.value.includes('change_password'))
+const selectedModel = computed(() => customModels.value.find((model) => model.id === selectedModelId.value) ?? null)
+const modelFormTitle = computed(() => selectedModel.value ? `编辑模型：${selectedModel.value.display_name}` : '新增我的模型')
 const emailStatus = computed(() => {
   if (!profile.value?.email) return '未绑定'
   return profile.value.email_verified ? '已验证' : '待验证'
 })
 
+function formatNumber(value: number | undefined) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return '-'
+  }
+  return value.toLocaleString('en-US')
+}
+
 function syncProfile(nextProfile: AuthUser) {
   profile.value = nextProfile
   profileDraft.displayName = nextProfile.display_name
   emailDraft.email = nextProfile.email
+}
+
+function syncModelDraft(model: CustomLLMModel) {
+  selectedModelId.value = model.id
+  modelDraft.providerType = model.provider_type || 'openai_responses'
+  modelDraft.providerId = model.provider_id
+  modelDraft.modelId = model.model_id
+  modelDraft.displayName = model.display_name
+  modelDraft.baseURL = model.base_url
+  modelDraft.apiKey = ''
+  modelDraft.enabled = model.enabled
+  modelDraft.contextMaxTokens = model.context_max_tokens || 32768
+  modelDraft.attachments = model.capabilities.attachments
+}
+
+function resetModelDraft() {
+  selectedModelId.value = ''
+  modelDraft.providerType = 'openai_responses'
+  modelDraft.providerId = ''
+  modelDraft.modelId = ''
+  modelDraft.displayName = ''
+  modelDraft.baseURL = ''
+  modelDraft.apiKey = ''
+  modelDraft.enabled = true
+  modelDraft.contextMaxTokens = 32768
+  modelDraft.attachments = false
+}
+
+function upsertCustomModel(model: CustomLLMModel) {
+  const exists = customModels.value.some((item) => item.id === model.id)
+  customModels.value = exists
+    ? customModels.value.map((item) => item.id === model.id ? model : item)
+    : [model, ...customModels.value]
+  syncModelDraft(model)
 }
 
 async function loadProfile() {
@@ -58,6 +121,14 @@ async function loadProfile() {
     errorMessage.value = error instanceof Error ? error.message : '加载个人资料失败'
   } finally {
     loading.value = false
+  }
+}
+
+async function loadUserModels() {
+  try {
+    customModels.value = await fetchUserCustomModels()
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '加载我的模型失败'
   }
 }
 
@@ -132,8 +203,102 @@ async function confirmEmailVerification() {
   }
 }
 
+function buildModelInput() {
+  return {
+    provider_type: modelDraft.providerType.trim(),
+    provider_id: modelDraft.providerId.trim(),
+    model_id: modelDraft.modelId.trim(),
+    display_name: modelDraft.displayName.trim(),
+    base_url: modelDraft.baseURL.trim(),
+    api_key: modelDraft.apiKey,
+    scope: 'owner' as const,
+    enabled: modelDraft.enabled,
+    context_max_tokens: Number(modelDraft.contextMaxTokens) || 0,
+    capabilities: {
+      attachments: modelDraft.attachments,
+    },
+  }
+}
+
+function modelNeedsBaseURL(providerType: string) {
+  return providerType === 'openai_completions'
+}
+
+function validateModelInput(input: ReturnType<typeof buildModelInput>) {
+  if (!input.provider_type || !input.provider_id || !input.model_id || !input.display_name) {
+    return 'Provider Type、Provider ID、Model ID 和显示名称必填'
+  }
+  if (modelNeedsBaseURL(input.provider_type) && !input.base_url) {
+    return '当前 Provider Type 需要填写 Base URL'
+  }
+  if (!selectedModel.value && !input.api_key.trim()) {
+    return '创建模型时必须填写 API Key'
+  }
+  if (input.context_max_tokens < 4) {
+    return '上下文上限不能小于 4 tokens'
+  }
+  return ''
+}
+
+async function submitUserModel() {
+  const input = buildModelInput()
+  const validationError = validateModelInput(input)
+  if (validationError) {
+    errorMessage.value = validationError
+    return
+  }
+
+  modelSaving.value = selectedModel.value ? 'model-update' : 'model-create'
+  errorMessage.value = ''
+  statusMessage.value = ''
+  try {
+    const saved = selectedModel.value
+      ? await updateUserCustomModel(selectedModel.value.id, input)
+      : await createUserCustomModel(input)
+    upsertCustomModel(saved)
+    statusMessage.value = selectedModel.value ? '模型已更新' : '模型已创建'
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '保存模型失败'
+  } finally {
+    modelSaving.value = ''
+  }
+}
+
+async function testUserModel(model: CustomLLMModel) {
+  modelSaving.value = `model-test:${model.id}`
+  errorMessage.value = ''
+  statusMessage.value = ''
+  try {
+    await testUserCustomModel(model.id)
+    statusMessage.value = '模型连通性测试通过'
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '模型连通性测试失败'
+  } finally {
+    modelSaving.value = ''
+  }
+}
+
+async function removeUserModel(model: CustomLLMModel) {
+  modelSaving.value = `model-delete:${model.id}`
+  errorMessage.value = ''
+  statusMessage.value = ''
+  try {
+    await deleteUserCustomModel(model.id)
+    customModels.value = customModels.value.filter((item) => item.id !== model.id)
+    if (selectedModelId.value === model.id) {
+      resetModelDraft()
+    }
+    statusMessage.value = '模型已删除'
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '删除模型失败'
+  } finally {
+    modelSaving.value = ''
+  }
+}
+
 onMounted(() => {
   void loadProfile()
+  void loadUserModels()
 })
 </script>
 
@@ -144,7 +309,10 @@ onMounted(() => {
         <p class="eyebrow">Profile</p>
         <h1>个人设置</h1>
       </div>
-      <RouterLink class="ghost-button" to="/chat">返回聊天</RouterLink>
+      <div class="profile-header-actions">
+        <a class="ghost-button" href="#profile-models" data-profile-models-link>我的模型</a>
+        <RouterLink class="ghost-button" to="/chat">返回聊天</RouterLink>
+      </div>
     </header>
 
     <p v-if="errorMessage" class="error-banner">{{ errorMessage }}</p>
@@ -240,5 +408,133 @@ onMounted(() => {
         </div>
       </form>
     </section>
+
+    <section id="profile-models" class="admin-section">
+      <div class="admin-section-heading">
+        <h2>我的模型</h2>
+        <button class="ghost-button" type="button" @click="resetModelDraft">新增模型</button>
+      </div>
+
+      <div class="admin-table profile-model-table">
+        <div class="admin-table-row profile-model-row profile-model-head">
+          <span>名称</span>
+          <span>Provider</span>
+          <span>Context Max</span>
+          <span>API Key</span>
+          <span>状态</span>
+          <span>操作</span>
+        </div>
+        <div
+          v-for="model in customModels"
+          :key="model.id"
+          class="admin-table-row profile-model-row"
+          :class="{ active: selectedModelId === model.id }"
+        >
+          <button class="profile-model-name" type="button" :data-user-model-row="model.id" @click="syncModelDraft(model)">
+            {{ model.display_name }}
+          </button>
+          <span>{{ model.provider_type }} · {{ model.provider_id }} / {{ model.model_id }}</span>
+          <span>{{ formatNumber(model.context_max_tokens) }}</span>
+          <span>{{ model.api_key_masked || '未保存' }}</span>
+          <span>{{ model.enabled ? '启用' : '停用' }}</span>
+          <span class="profile-model-actions">
+            <button class="ghost-button small" type="button" :data-user-model-test="model.id" @click="testUserModel(model)">测试</button>
+            <button class="ghost-button small" type="button" :disabled="modelSaving === `model-delete:${model.id}`" @click="removeUserModel(model)">删除</button>
+          </span>
+        </div>
+      </div>
+
+      <form class="admin-form-grid" data-user-model-form @submit.prevent="submitUserModel">
+        <label>
+          <span class="field-label">Provider Type</span>
+          <select v-model="modelDraft.providerType" class="text-input" data-user-model-provider-type required>
+            <option value="openai_responses">OpenAI Responses</option>
+            <option value="openai_completions">OpenAI Completions</option>
+            <option value="google">Google</option>
+          </select>
+        </label>
+        <label>
+          <span class="field-label">Provider ID</span>
+          <input v-model="modelDraft.providerId" class="text-input" data-user-model-provider-id required>
+        </label>
+        <label>
+          <span class="field-label">Model ID</span>
+          <input v-model="modelDraft.modelId" class="text-input" data-user-model-model-id required>
+        </label>
+        <label>
+          <span class="field-label">显示名称</span>
+          <input v-model="modelDraft.displayName" class="text-input" data-user-model-display-name required>
+        </label>
+        <label>
+          <span class="field-label">Base URL</span>
+          <input v-model="modelDraft.baseURL" class="text-input" data-user-model-base-url :required="modelNeedsBaseURL(modelDraft.providerType)">
+        </label>
+        <label>
+          <span class="field-label">API Key</span>
+          <input v-model="modelDraft.apiKey" class="text-input" type="password" data-user-model-api-key :required="!selectedModel">
+        </label>
+        <label>
+          <span class="field-label">Context Max Tokens</span>
+          <input v-model.number="modelDraft.contextMaxTokens" class="text-input" type="number" min="4" data-user-model-context-max required>
+        </label>
+        <label class="admin-check-row">
+          <input v-model="modelDraft.enabled" type="checkbox">
+          <span>启用</span>
+        </label>
+        <label class="admin-check-row">
+          <input v-model="modelDraft.attachments" type="checkbox">
+          <span>支持附件</span>
+        </label>
+        <div class="admin-form-actions">
+          <span class="admin-current-value">{{ modelFormTitle }}</span>
+          <button class="primary-button" type="submit" :disabled="modelSaving === 'model-create' || modelSaving === 'model-update'">
+            {{ selectedModel ? '保存模型' : '创建模型' }}
+          </button>
+        </div>
+      </form>
+    </section>
   </main>
 </template>
+
+<style scoped>
+.profile-header-actions,
+.profile-model-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.profile-model-head {
+  font-weight: 700;
+  color: #36535c;
+}
+
+.profile-model-row {
+  grid-template-columns: minmax(120px, 0.9fr) minmax(170px, 1.4fr) minmax(100px, 0.65fr) minmax(110px, 0.7fr) minmax(70px, 0.45fr) minmax(140px, 0.8fr);
+}
+
+.profile-model-row.active {
+  border-color: rgba(196, 88, 63, 0.24);
+  background: linear-gradient(135deg, rgba(255, 238, 221, 0.94), rgba(238, 247, 249, 0.96));
+}
+
+.profile-model-name {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: #203840;
+  font: inherit;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ghost-button.small {
+  min-height: 2rem;
+  padding: 0.38rem 0.58rem;
+}
+</style>

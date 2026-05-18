@@ -5,8 +5,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const api = vi.hoisted(() => ({
   changeUserPassword: vi.fn(),
   confirmUserEmailVerification: vi.fn(),
+  createUserCustomModel: vi.fn(),
+  deleteUserCustomModel: vi.fn(),
+  fetchUserCustomModels: vi.fn(),
   fetchUserProfile: vi.fn(),
   startUserEmailVerification: vi.fn(),
+  testUserCustomModel: vi.fn(),
+  updateUserCustomModel: vi.fn(),
   updateUserProfile: vi.fn(),
 }))
 
@@ -23,6 +28,27 @@ function buildProfile(overrides: Record<string, unknown> = {}) {
     email_verified: false,
     force_password_change: true,
     required_actions: ['bind_email', 'change_password'],
+    ...overrides,
+  }
+}
+
+function buildCustomModel(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'custom_me',
+    owner_user_id: 7,
+    provider_id: 'me-openai',
+    model_id: 'gpt-me',
+    display_name: 'GPT Me',
+    provider_type: 'openai_responses',
+    base_url: '',
+    api_key_masked: 'sk-****mine',
+    scope: 'owner',
+    enabled: true,
+    context_max_tokens: 65536,
+    context: { max: 65536, input: 57344, output: 8192 },
+    capabilities: { attachments: false },
+    created_at: '2026-05-18T10:00:00Z',
+    updated_at: '2026-05-18T10:00:00Z',
     ...overrides,
   }
 }
@@ -67,6 +93,11 @@ describe('ProfileView', () => {
       force_password_change: false,
       required_actions: [],
     }))
+    api.fetchUserCustomModels.mockResolvedValue([buildCustomModel()])
+    api.createUserCustomModel.mockResolvedValue(buildCustomModel({ id: 'custom_created', display_name: 'Created GPT' }))
+    api.updateUserCustomModel.mockResolvedValue(buildCustomModel({ context_max_tokens: 32768 }))
+    api.deleteUserCustomModel.mockResolvedValue({ deleted: true })
+    api.testUserCustomModel.mockResolvedValue({ ok: true })
   })
 
   it('updates display name and password while showing required action states', async () => {
@@ -76,8 +107,8 @@ describe('ProfileView', () => {
     expect(api.fetchUserProfile).toHaveBeenCalledTimes(1)
     expect(wrapper.text()).toContain('必须绑定邮箱')
     expect(wrapper.text()).toContain('必须修改密码')
-    expect(wrapper.find('[data-profile-models-link]').exists()).toBe(false)
-    expect(wrapper.text()).not.toContain('我的模型')
+    expect(wrapper.find('[data-profile-models-link]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('我的模型')
 
     await wrapper.get('[data-profile-display-name-input]').setValue(' Alice Doe ')
     await wrapper.get('[data-profile-form]').trigger('submit')
@@ -117,5 +148,52 @@ describe('ProfileView', () => {
       code: '123456',
     })
     expect(wrapper.text()).toContain('bound@example.com')
+  })
+
+  it('ProfileView manages owner-scoped custom models', async () => {
+    const wrapper = await mountProfileView()
+    await flushPromises()
+
+    expect(api.fetchUserCustomModels).toHaveBeenCalledTimes(1)
+    expect(wrapper.text()).toContain('我的模型')
+    expect(wrapper.text()).toContain('GPT Me')
+    expect(wrapper.text()).toContain('65,536')
+    expect(wrapper.text()).toContain('sk-****mine')
+
+    await wrapper.get('[data-user-model-provider-type]').setValue('openai_responses')
+    await wrapper.get('[data-user-model-provider-id]').setValue(' me-openai-2 ')
+    await wrapper.get('[data-user-model-model-id]').setValue(' gpt-me-2 ')
+    await wrapper.get('[data-user-model-display-name]').setValue(' Created GPT ')
+    await wrapper.get('[data-user-model-api-key]').setValue('sk-secret')
+    await wrapper.get('[data-user-model-context-max]').setValue('65536')
+    await wrapper.get('[data-user-model-form]').trigger('submit')
+    await flushPromises()
+
+    expect(api.createUserCustomModel).toHaveBeenCalledWith(expect.objectContaining({
+      provider_id: 'me-openai-2',
+      model_id: 'gpt-me-2',
+      display_name: 'Created GPT',
+      provider_type: 'openai_responses',
+      api_key: 'sk-secret',
+      scope: 'owner',
+      enabled: true,
+      context_max_tokens: 65536,
+    }))
+
+    await wrapper.get('[data-user-model-test="custom_me"]').trigger('click')
+    await flushPromises()
+
+    expect(api.testUserCustomModel).toHaveBeenCalledWith('custom_me')
+
+    await wrapper.get('[data-user-model-row="custom_me"]').trigger('click')
+    await wrapper.get('[data-user-model-context-max]').setValue('32768')
+    await wrapper.get('[data-user-model-form]').trigger('submit')
+    await flushPromises()
+
+    expect(api.updateUserCustomModel).toHaveBeenCalledWith('custom_me', expect.objectContaining({
+      scope: 'owner',
+      context_max_tokens: 32768,
+    }))
+    expect(wrapper.find('[data-user-model-scope]').exists()).toBe(false)
   })
 })
