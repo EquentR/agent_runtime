@@ -378,9 +378,12 @@ func TestAuthLogicLoginRejectsPendingDisabledAndNeedsBindingUsers(t *testing.T) 
 	}
 
 	seedAuthLoginUser(t, logic.db, "force", "force@example.com", models.UserStatusActive, true, &now)
-	_, _, err = logic.Login(ctx, "force", "secret-123")
-	if !errors.Is(err, ErrPasswordChangeRequired) {
-		t.Fatalf("Login(force password change) error = %v, want %v", err, ErrPasswordChangeRequired)
+	forceUser, forceSession, err := logic.Login(ctx, "force", "secret-123")
+	if err != nil {
+		t.Fatalf("Login(force password change) error = %v, want restricted session", err)
+	}
+	if !forceUser.ForcePasswordChange || forceSession.UserID != forceUser.ID {
+		t.Fatalf("Login(force password change) user=%#v session=%#v, want restricted session", forceUser, forceSession)
 	}
 }
 

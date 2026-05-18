@@ -523,12 +523,18 @@ definitions:
         type: string
       email:
         type: string
+      email_verified:
+        type: boolean
       email_verified_at:
         type: string
       force_password_change:
         type: boolean
       id:
         type: integer
+      required_actions:
+        items:
+          type: string
+        type: array
       role:
         type: string
       status:

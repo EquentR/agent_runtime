@@ -354,14 +354,16 @@ type ErrorSwaggerResponse struct {
 
 // AuthUserSwaggerDoc 描述登录态用户信息的文档结构。
 type AuthUserSwaggerDoc struct {
-	ID                  uint64  `json:"id"`
-	Username            string  `json:"username"`
-	Email               string  `json:"email"`
-	DisplayName         string  `json:"display_name"`
-	Role                string  `json:"role"`
-	Status              string  `json:"status"`
-	EmailVerifiedAt     *string `json:"email_verified_at"`
-	ForcePasswordChange bool    `json:"force_password_change"`
+	ID                  uint64   `json:"id"`
+	Username            string   `json:"username"`
+	Email               string   `json:"email"`
+	DisplayName         string   `json:"display_name"`
+	Role                string   `json:"role"`
+	Status              string   `json:"status"`
+	EmailVerified       bool     `json:"email_verified"`
+	EmailVerifiedAt     *string  `json:"email_verified_at"`
+	ForcePasswordChange bool     `json:"force_password_change"`
+	RequiredActions     []string `json:"required_actions"`
 }
 
 // AuthUserSwaggerResponse 描述登录、注册、当前用户接口的成功响应结构。

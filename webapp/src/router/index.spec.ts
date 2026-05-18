@@ -11,6 +11,23 @@ const session = vi.hoisted(() => ({
 vi.mock('../lib/session', () => session)
 
 describe('app router session guard', () => {
+  const activeUser = {
+    id: 1,
+    username: 'alice',
+    email: 'alice@example.com',
+    display_name: 'Alice',
+    role: 'user',
+    status: 'active',
+    email_verified: true,
+    force_password_change: false,
+    required_actions: [],
+  }
+
+  const adminUser = {
+    ...activeUser,
+    role: 'admin',
+  }
+
   beforeEach(() => {
     vi.resetModules()
     session.hasActiveSession.mockReset()
@@ -26,7 +43,7 @@ describe('app router session guard', () => {
 
   it('updates the browser title when the route changes', async () => {
     session.hasActiveSession.mockReturnValue(true)
-    session.syncSession.mockResolvedValue({ username: 'alice', role: 'admin' })
+    session.syncSession.mockResolvedValue(adminUser)
 
     const { createAppRouter } = await import('./index')
     const router = createAppRouter(true)
@@ -51,7 +68,7 @@ describe('app router session guard', () => {
 
   it('forces backend session validation before entering protected pages', async () => {
     session.hasActiveSession.mockReturnValue(true)
-    session.syncSession.mockResolvedValue({ username: 'alice', role: 'user' })
+    session.syncSession.mockResolvedValue(activeUser)
 
     const { createAppRouter } = await import('./index')
     const router = createAppRouter(true)
@@ -93,7 +110,7 @@ describe('app router session guard', () => {
 
   it('allows admin users to enter the admin audit route', async () => {
     session.hasActiveSession.mockReturnValue(true)
-    session.syncSession.mockResolvedValue({ username: 'alice', role: 'admin' })
+    session.syncSession.mockResolvedValue(adminUser)
 
     const { createAppRouter } = await import('./index')
     const router = createAppRouter(true)
@@ -107,7 +124,7 @@ describe('app router session guard', () => {
 
   it('redirects non-admin users away from the admin audit route', async () => {
     session.hasActiveSession.mockReturnValue(true)
-    session.syncSession.mockResolvedValue({ username: 'alice', role: 'user' })
+    session.syncSession.mockResolvedValue(activeUser)
 
     const { createAppRouter } = await import('./index')
     const router = createAppRouter(true)
@@ -121,7 +138,7 @@ describe('app router session guard', () => {
 
   it('does not register a standalone approval route', async () => {
     session.hasActiveSession.mockReturnValue(true)
-    session.syncSession.mockResolvedValue({ username: 'alice', role: 'user' })
+    session.syncSession.mockResolvedValue(activeUser)
 
     const { createAppRouter } = await import('./index')
     const router = createAppRouter(true)
@@ -135,7 +152,7 @@ describe('app router session guard', () => {
 
   it('allows admin users to enter the admin prompts route', async () => {
     session.hasActiveSession.mockReturnValue(true)
-    session.syncSession.mockResolvedValue({ username: 'alice', role: 'admin' })
+    session.syncSession.mockResolvedValue(adminUser)
 
     const { createAppRouter } = await import('./index')
     const router = createAppRouter(true)
@@ -151,7 +168,7 @@ describe('app router session guard', () => {
 
   it('redirects non-admin users away from the admin prompts route', async () => {
     session.hasActiveSession.mockReturnValue(true)
-    session.syncSession.mockResolvedValue({ username: 'alice', role: 'user' })
+    session.syncSession.mockResolvedValue(activeUser)
 
     const { createAppRouter } = await import('./index')
     const router = createAppRouter(true)
@@ -161,5 +178,45 @@ describe('app router session guard', () => {
 
     expect(session.syncSession).toHaveBeenCalledWith(true)
     expect(router.currentRoute.value.path).toBe('/chat')
+  })
+
+  it('routes force password change users to profile security', async () => {
+    session.hasActiveSession.mockReturnValue(true)
+    session.syncSession.mockResolvedValue({
+      ...activeUser,
+      force_password_change: true,
+      required_actions: ['change_password'],
+    })
+
+    const { createAppRouter } = await import('./index')
+    const router = createAppRouter(true)
+
+    await router.push('/chat')
+    await router.isReady()
+
+    expect(session.syncSession).toHaveBeenCalledWith(true)
+    expect(router.currentRoute.value.path).toBe('/profile')
+    expect(router.currentRoute.value.query).toEqual({ section: 'security' })
+  })
+
+  it('routes needs email binding users to profile email', async () => {
+    session.hasActiveSession.mockReturnValue(true)
+    session.syncSession.mockResolvedValue({
+      ...activeUser,
+      email: '',
+      status: 'needs_email_binding',
+      email_verified: false,
+      required_actions: ['bind_email'],
+    })
+
+    const { createAppRouter } = await import('./index')
+    const router = createAppRouter(true)
+
+    await router.push('/chat')
+    await router.isReady()
+
+    expect(session.syncSession).toHaveBeenCalledWith(true)
+    expect(router.currentRoute.value.path).toBe('/profile')
+    expect(router.currentRoute.value.query).toEqual({ section: 'email' })
   })
 })

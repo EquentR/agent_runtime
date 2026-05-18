@@ -5,6 +5,8 @@ import type {
   AuditReplayBundle,
   AuditRun,
   AttachmentRef,
+  AuthRequiredAction,
+  AuthUserStatus,
   AuthUser,
   Conversation,
   ConversationMessage,
@@ -18,6 +20,7 @@ import type {
   PromptBindingInput,
   PromptDeleteResult,
   PromptDocument,
+  PublicRegistrationSettings,
   TaskDetails,
   RunTaskRequest,
   RunTaskResult,
@@ -64,11 +67,85 @@ function normalizeRole(value: unknown): UserRole {
   return value === 'admin' ? 'admin' : 'user'
 }
 
-export function normalizeAuthUser(user: Partial<AuthUser>): AuthUser {
+function normalizeAuthUserStatus(value: unknown): AuthUserStatus {
+  switch (value) {
+    case 'pending_email_verification':
+    case 'disabled':
+    case 'needs_email_binding':
+      return value
+    default:
+      return 'active'
+  }
+}
+
+function normalizeAuthRequiredAction(value: unknown): AuthRequiredAction | undefined {
+  switch (value) {
+    case 'verify_email':
+    case 'bind_email':
+    case 'change_password':
+      return value
+    default:
+      return undefined
+  }
+}
+
+interface AuthUserPayload extends Omit<Partial<AuthUser>, 'required_actions'> {
+  displayName?: unknown
+  emailVerifiedAt?: unknown
+  email_verified_at?: unknown
+  required_actions?: unknown
+}
+
+function normalizeAuthRequiredActions(raw: Pick<AuthUserPayload, 'required_actions'>, fallback: {
+  email: string
+  status: AuthUserStatus
+  emailVerified: boolean
+  forcePasswordChange: boolean
+}) {
+  if (Array.isArray(raw.required_actions)) {
+    return raw.required_actions.flatMap((item) => {
+      const action = normalizeAuthRequiredAction(item)
+      return action ? [action] : []
+    })
+  }
+
+  const actions: AuthRequiredAction[] = []
+  if (fallback.status === 'pending_email_verification') {
+    actions.push('verify_email')
+  }
+  if (fallback.status === 'needs_email_binding' || !fallback.email.trim()) {
+    actions.push('bind_email')
+  }
+  if (fallback.forcePasswordChange) {
+    actions.push('change_password')
+  }
+  return actions
+}
+
+export function normalizeAuthUser(user: AuthUserPayload): AuthUser {
+  const username = typeof user.username === 'string' ? user.username.trim() : ''
+  const email = normalizeStringValue(user.email) ?? ''
+  const displayName = normalizeStringValue(user.display_name) ?? normalizeStringValue(user.displayName) ?? username
+  const status = normalizeAuthUserStatus(user.status)
+  const emailVerifiedAt = user.email_verified_at ?? user.emailVerifiedAt
+  const emailVerified = normalizeBooleanValue(user.email_verified) ?? Boolean(emailVerifiedAt)
+  const forcePasswordChange = normalizeBooleanValue(user.force_password_change) ?? false
+
   return {
     id: typeof user.id === 'number' && Number.isFinite(user.id) ? user.id : 0,
-    username: typeof user.username === 'string' ? user.username.trim() : '',
+    username,
+    email,
+    display_name: displayName || username,
     role: normalizeRole(user.role),
+    status,
+    email_verified: emailVerified,
+    force_password_change: forcePasswordChange,
+    required_actions: normalizeAuthRequiredActions(user, {
+      email,
+      status,
+      emailVerified,
+      forcePasswordChange,
+    }),
   }
 }
 
@@ -640,6 +717,13 @@ async function request<T>(path: string, init?: RequestInit) {
 
   const payload = (await response.json()) as ApiEnvelope<T>
   return unwrapEnvelope(payload)
+}
+
+export async function fetchPublicRegistrationSettings() {
+  const settings = await request<Partial<PublicRegistrationSettings> & Record<string, unknown>>('/settings/registration')
+  return {
+    enabled: normalizeBooleanValue(settings.enabled) ?? true,
+  } satisfies PublicRegistrationSettings
 }
 
 export async function fetchConversations() {

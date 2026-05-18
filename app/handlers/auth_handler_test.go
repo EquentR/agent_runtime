@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -33,12 +34,14 @@ type authTestUser struct {
 }
 
 type authTestUserDetails struct {
-	ID                uint64  `json:"id"`
-	Username          string  `json:"username"`
-	Email             string  `json:"email"`
-	Status            string  `json:"status"`
-	EmailVerifiedAt   *string `json:"email_verified_at"`
-	ForcePasswordFlag bool    `json:"force_password_change"`
+	ID                uint64   `json:"id"`
+	Username          string   `json:"username"`
+	Email             string   `json:"email"`
+	Status            string   `json:"status"`
+	EmailVerified     bool     `json:"email_verified"`
+	EmailVerifiedAt   *string  `json:"email_verified_at"`
+	ForcePasswordFlag bool     `json:"force_password_change"`
+	RequiredActions   []string `json:"required_actions"`
 }
 
 func TestAuthHandlerRegisterLoginLogoutFlow(t *testing.T) {
@@ -170,6 +173,32 @@ func TestAuthMiddlewareRejectsAnonymousTaskAndConversationRequests(t *testing.T)
 	defer conversationResponse.Body.Close()
 	if decodeEnvelope(t, conversationResponse.Body).OK {
 		t.Fatal("anonymous conversation list ok = true, want false")
+	}
+}
+
+func TestAuthHandlerResponsesIncludeVerificationAndRequiredActions(t *testing.T) {
+	deps, server := newAuthHandlerTestServerWithDeps(t)
+
+	legacy := seedAuthHandlerUser(t, deps.db, "legacy", "", models.UserStatusNeedsEmailBinding, true, nil)
+	session := createUserHandlerSession(t, deps.db, legacy)
+	request, err := http.NewRequest(http.MethodGet, server.URL+"/api/v1/auth/me", nil)
+	if err != nil {
+		t.Fatalf("NewRequest(auth me) error = %v", err)
+	}
+	request.AddCookie(session)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("Do(auth me) error = %v", err)
+	}
+	defer response.Body.Close()
+	user := decodeAuthUserDetailsResponse(t, response.Body)
+
+	if user.EmailVerified {
+		t.Fatal("EmailVerified = true, want false for unverified legacy user")
+	}
+	wantActions := []string{"bind_email", "change_password"}
+	if !reflect.DeepEqual(user.RequiredActions, wantActions) {
+		t.Fatalf("RequiredActions = %#v, want %#v", user.RequiredActions, wantActions)
 	}
 }
 

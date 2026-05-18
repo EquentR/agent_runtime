@@ -1,5 +1,5 @@
 import { normalizeAuthUser, requestJSON } from './api'
-import type { AuthUser, SessionUser, UserRole } from '../types/api'
+import type { AuthUser, RegistrationResult, SessionUser, UserRole } from '../types/api'
 
 export const SESSION_STORAGE_KEY = 'agent-runtime.user'
 
@@ -14,21 +14,18 @@ function parseSessionValue(raw: string | null): SessionUser | null {
   }
 
   try {
-    const parsed = JSON.parse(value) as Partial<SessionUser>
+    const parsed = JSON.parse(value) as Partial<SessionUser> & Record<string, unknown>
     const username = typeof parsed.username === 'string' ? parsed.username.trim() : ''
     if (!username) {
       return null
     }
 
-    return {
-      username,
-      role: normalizeSessionRole(parsed.role),
-    }
+    return normalizeAuthUser(parsed)
   } catch {
-    return {
+    return normalizeAuthUser({
       username: value,
       role: 'user',
-    }
+    })
   }
 }
 
@@ -39,10 +36,11 @@ function setSessionUser(session: SessionUser | null) {
     return null
   }
 
-  const normalized = {
+  const normalized = normalizeAuthUser({
+    ...session,
     username,
     role: normalizeSessionRole(session?.role),
-  } satisfies SessionUser
+  })
 
   localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(normalized))
   return normalized
@@ -53,7 +51,7 @@ async function requestAuth<T>(path: string, init?: RequestInit) {
 }
 
 export function saveSession(name: string) {
-  return setSessionUser({ username: name, role: 'user' })
+  return setSessionUser(normalizeAuthUser({ username: name, role: 'user' }))
 }
 
 export function clearSession() {
@@ -81,21 +79,40 @@ export async function login(username: string, password: string) {
     method: 'POST',
     body: JSON.stringify({ username, password }),
   }))
-  setSessionUser({ username: user.username, role: user.role })
+  setSessionUser(user)
   return user
 }
 
-export async function register(username: string, password: string, confirmPassword: string) {
-  await requestAuth<AuthUser>('/register', {
+export async function register(username: string, email: string, password: string, confirmPassword: string): Promise<RegistrationResult> {
+  const user = normalizeAuthUser(await requestAuth<AuthUser>('/register', {
     method: 'POST',
     body: JSON.stringify({
       username,
+      email,
       password,
       confirm_password: confirmPassword,
     }),
-  })
+  }))
 
-  return login(username, password)
+  const verificationRequired = user.required_actions.includes('verify_email') || user.status === 'pending_email_verification'
+  if (verificationRequired) {
+    clearSession()
+    return { user, verification_required: true }
+  }
+
+  return { user: await login(username, password), verification_required: false }
+}
+
+export async function verifyRegistrationEmail(userId: number, email: string, code: string) {
+  return normalizeAuthUser(await requestAuth<AuthUser>('/email-verification/verify', {
+    method: 'POST',
+    body: JSON.stringify({
+      user_id: userId,
+      email,
+      purpose: 'registration',
+      code,
+    }),
+  }))
 }
 
 export async function syncSession(force = false) {
@@ -107,7 +124,7 @@ export async function syncSession(force = false) {
     const user = normalizeAuthUser(await requestAuth<AuthUser>('/me', {
       method: 'GET',
     }))
-    return setSessionUser({ username: user.username, role: user.role })
+    return setSessionUser(user)
   } catch {
     clearSession()
     return null

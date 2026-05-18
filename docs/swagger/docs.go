@@ -3097,6 +3097,9 @@ const docTemplate = `{
                 "email": {
                     "type": "string"
                 },
+                "email_verified": {
+                    "type": "boolean"
+                },
                 "email_verified_at": {
                     "type": "string"
                 },
@@ -3105,6 +3108,12 @@ const docTemplate = `{
                 },
                 "id": {
                     "type": "integer"
+                },
+                "required_actions": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 },
                 "role": {
                     "type": "string"

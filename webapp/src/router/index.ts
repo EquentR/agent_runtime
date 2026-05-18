@@ -1,7 +1,8 @@
-import {createMemoryHistory, createRouter, createWebHashHistory} from 'vue-router'
+import { createMemoryHistory, createRouter, createWebHashHistory } from 'vue-router'
 
 import { formatDocumentTitle } from '../lib/chat'
 import { syncSession } from '../lib/session'
+import { getRequiredActionProfileTarget } from '../lib/user-state'
 import AdminAuditView from '../views/AdminAuditView.vue'
 import AdminPromptView from '../views/AdminPromptView.vue'
 import ChatView from '../views/ChatView.vue'
@@ -27,6 +28,15 @@ const routes = [
     meta: {
       requiresSession: true,
       title: '聊天',
+    },
+  },
+  {
+    path: '/profile',
+    name: 'profile',
+    component: { template: '<main class="profile-placeholder"></main>' },
+    meta: {
+      requiresSession: true,
+      title: '个人设置',
     },
   },
   {
@@ -65,12 +75,17 @@ export function createAppRouter(memory = false) {
       return { path: '/login' }
     }
 
+    const requiredActionTarget = getRequiredActionProfileTarget(session)
+    if (active && requiredActionTarget && to.path !== '/profile') {
+      return requiredActionTarget
+    }
+
     if (to.meta.requiresAdmin && session?.role !== 'admin') {
       return { path: '/chat' }
     }
 
     if (to.path === '/login' && active) {
-      return { path: '/chat' }
+      return requiredActionTarget ?? { path: '/chat' }
     }
 
     return true

@@ -5,6 +5,7 @@ import {
   cancelTask,
   extractStreamText,
   formatTaskError,
+  normalizeAuthUser,
   normalizeToolApproval,
   normalizeConversationMessage,
   normalizeRunTaskResult,
@@ -25,7 +26,38 @@ describe('auth normalization helpers', () => {
     expect(api.normalizeAuthUser({ id: 7, username: ' admin ', role: 'admin' })).toEqual({
       id: 7,
       username: 'admin',
+      email: '',
+      display_name: 'admin',
       role: 'admin',
+      status: 'active',
+      email_verified: false,
+      force_password_change: false,
+      required_actions: ['bind_email'],
+    })
+  })
+
+  it('normalizes auth user status and required actions', () => {
+    expect(
+      normalizeAuthUser({
+        id: 8,
+        username: ' legacy ',
+        email: ' Legacy@Example.COM ',
+        display_name: ' Legacy User ',
+        role: 'user',
+        status: 'pending_email_verification',
+        email_verified_at: null,
+        force_password_change: true,
+      } as any),
+    ).toEqual({
+      id: 8,
+      username: 'legacy',
+      email: 'Legacy@Example.COM',
+      display_name: 'Legacy User',
+      role: 'user',
+      status: 'pending_email_verification',
+      email_verified: false,
+      force_password_change: true,
+      required_actions: ['verify_email', 'change_password'],
     })
   })
 })
@@ -532,6 +564,35 @@ describe('model catalog normalization', () => {
 
     expect(catalog.providers[0].models[0].capabilities?.attachments).toBe(false)
     expect(catalog.providers[0].models[1].capabilities?.attachments).toBe(true)
+  })
+})
+
+describe('public settings helpers', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    vi.stubGlobal('fetch', vi.fn())
+  })
+
+  it('fetches public registration settings without using the admin route', async () => {
+    vi.mocked(fetch).mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        code: 200,
+        message: 'OK',
+        data: { enabled: false },
+        time: '',
+      }),
+    } as Response)
+
+    const api = await import('./api')
+    const settings = await api.fetchPublicRegistrationSettings()
+
+    expect(fetch).toHaveBeenCalledWith('/api/v1/settings/registration', expect.objectContaining({
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    expect(settings).toEqual({ enabled: false })
   })
 })
 

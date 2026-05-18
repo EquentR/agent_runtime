@@ -308,6 +308,7 @@ func newAdminHandlerTestServerWithAuditTable(t *testing.T, migrateAuditTable boo
 	authMiddleware := NewAuthMiddleware(authLogic)
 	engine := rest.Init()
 	group := engine.Group("/api/v1")
+	NewSettingsHandler(settings).Register(group)
 	NewAdminUserHandler(db, auditLogic, emailVerification, authMiddleware.RequireAdmin()).Register(group)
 	NewAdminSettingsHandler(settings, auditLogic, &fakeAdminSettingsSMTPTester{}, authMiddleware.RequireAdmin()).Register(group)
 	NewAdminAuditEventHandler(auditLogic, authMiddleware.RequireAdmin()).Register(group)

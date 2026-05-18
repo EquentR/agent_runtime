@@ -323,15 +323,18 @@ func (h *AuthHandler) clearSessionCookie(c *gin.Context) {
 }
 
 func authUserResponse(user *models.User) gin.H {
+	emailVerified := user != nil && user.EmailVerifiedAt != nil
 	return gin.H{
 		"id":                    user.ID,
 		"username":              user.Username,
 		"email":                 user.Email,
-		"display_name":          user.DisplayName,
+		"display_name":          displayNameOrUsername(user),
 		"role":                  user.Role,
 		"status":                user.Status,
+		"email_verified":        emailVerified,
 		"email_verified_at":     user.EmailVerifiedAt,
 		"force_password_change": user.ForcePasswordChange,
+		"required_actions":      userRequiredActions(user),
 	}
 }
 

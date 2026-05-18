@@ -7,11 +7,28 @@ export interface ApiEnvelope<T> {
 }
 
 export type UserRole = 'admin' | 'user'
+export type AuthUserStatus = 'pending_email_verification' | 'active' | 'disabled' | 'needs_email_binding'
+export type AuthRequiredAction = 'verify_email' | 'bind_email' | 'change_password'
 
 export interface AuthUser {
   id: number
   username: string
+  email: string
+  display_name: string
   role: UserRole
+  status: AuthUserStatus
+  email_verified: boolean
+  force_password_change: boolean
+  required_actions: AuthRequiredAction[]
+}
+
+export interface RegistrationResult {
+  user: AuthUser
+  verification_required: boolean
+}
+
+export interface PublicRegistrationSettings {
+  enabled: boolean
 }
 
 export type PromptStatus = 'active' | 'disabled'
@@ -78,10 +95,7 @@ export interface PromptDeleteResult {
   deleted: boolean
 }
 
-export interface SessionUser {
-  username: string
-  role: UserRole
-}
+export type SessionUser = AuthUser
 
 export interface Conversation {
   id: string

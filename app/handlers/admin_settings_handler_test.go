@@ -149,6 +149,26 @@ func TestAdminSettingsMutationRollsBackWhenAuditFails(t *testing.T) {
 	}
 }
 
+func TestPublicSettingsHandlerReturnsRegistrationWithoutSession(t *testing.T) {
+	deps, server := newAdminHandlerTestServer(t)
+
+	registrationResponse := doAdminRequest(t, http.MethodPut, server.URL+"/api/v1/admin/settings/registration", map[string]any{
+		"enabled": false,
+	}, deps.adminCookie)
+	defer registrationResponse.Body.Close()
+	_ = decodeAdminRegistrationSettingsResponse(t, registrationResponse.Body)
+
+	publicResponse, err := http.Get(server.URL + "/api/v1/settings/registration")
+	if err != nil {
+		t.Fatalf("http.Get(public registration settings) error = %v", err)
+	}
+	defer publicResponse.Body.Close()
+	settings := decodeAdminRegistrationSettingsResponse(t, publicResponse.Body)
+	if settings.Enabled {
+		t.Fatal("public registration Enabled = true, want false without requiring admin session")
+	}
+}
+
 type adminSMTPSettingsTestResponse struct {
 	Enabled        bool   `json:"enabled"`
 	Host           string `json:"host"`

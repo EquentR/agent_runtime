@@ -9,9 +9,34 @@ import {
   register,
   SESSION_STORAGE_KEY,
   syncSession,
+  verifyRegistrationEmail,
 } from './session'
 
 describe('session helpers', () => {
+  const activeAdminUser = {
+    id: 1,
+    username: 'alice',
+    email: 'alice@example.com',
+    display_name: 'Alice',
+    role: 'admin' as const,
+    status: 'active' as const,
+    email_verified: true,
+    force_password_change: false,
+    required_actions: [],
+  }
+
+  const pendingUser = {
+    id: 2,
+    username: 'bob',
+    email: 'bob@example.com',
+    display_name: 'Bob',
+    role: 'user' as const,
+    status: 'pending_email_verification' as const,
+    email_verified: false,
+    force_password_change: false,
+    required_actions: ['verify_email' as const],
+  }
+
   beforeEach(() => {
     localStorage.clear()
     vi.restoreAllMocks()
@@ -25,7 +50,7 @@ describe('session helpers', () => {
         ok: true,
         code: 200,
         message: 'OK',
-        data: { id: 1, username: 'alice', role: 'admin' },
+        data: activeAdminUser,
         time: '2026-03-19 10:00:00',
       }),
     } as Response)
@@ -36,42 +61,77 @@ describe('session helpers', () => {
       method: 'POST',
       credentials: 'include',
     }))
-    expect(user).toEqual({ id: 1, username: 'alice', role: 'admin' })
-    expect(localStorage.getItem(SESSION_STORAGE_KEY)).toBe('{"username":"alice","role":"admin"}')
+    expect(user).toEqual(activeAdminUser)
+    expect(JSON.parse(localStorage.getItem(SESSION_STORAGE_KEY) ?? '{}')).toEqual(activeAdminUser)
     expect(getSessionName()).toBe('alice')
     expect(hasActiveSession()).toBe(true)
   })
 
-  it('registers with username and two passwords then keeps username plus role active', async () => {
+  it('registers a verified first admin with email and then keeps the full auth user active', async () => {
     vi.mocked(fetch)
       .mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ ok: true, code: 200, message: 'OK', data: { id: 1, username: 'alice', role: 'admin' }, time: '' }),
+        json: async () => ({ ok: true, code: 200, message: 'OK', data: activeAdminUser, time: '' }),
       } as Response)
       .mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ ok: true, code: 200, message: 'OK', data: { id: 1, username: 'alice', role: 'admin' }, time: '' }),
+        json: async () => ({ ok: true, code: 200, message: 'OK', data: activeAdminUser, time: '' }),
       } as Response)
 
-    await register('alice', 'secret-123', 'secret-123')
+    const result = await register('alice', 'alice@example.com', 'secret-123', 'secret-123')
 
     expect(fetch).toHaveBeenNthCalledWith(1, '/api/v1/auth/register', expect.objectContaining({ method: 'POST' }))
     expect(fetch).toHaveBeenNthCalledWith(2, '/api/v1/auth/login', expect.objectContaining({ method: 'POST' }))
-    expect(localStorage.getItem(SESSION_STORAGE_KEY)).toBe('{"username":"alice","role":"admin"}')
+    expect(result).toEqual({ user: activeAdminUser, verification_required: false })
+    expect(JSON.parse(localStorage.getItem(SESSION_STORAGE_KEY) ?? '{}')).toEqual(activeAdminUser)
     expect(getSessionName()).toBe('alice')
+  })
+
+  it('keeps pending registration out of local session until email verification finishes', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ ok: true, code: 200, message: 'OK', data: pendingUser, time: '' }),
+    } as Response)
+
+    const result = await register('bob', 'bob@example.com', 'secret-123', 'secret-123')
+
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(result).toEqual({ user: pendingUser, verification_required: true })
+    expect(localStorage.getItem(SESSION_STORAGE_KEY)).toBeNull()
+  })
+
+  it('verifies a registration email without caching a session cookie-backed user', async () => {
+    vi.mocked(fetch).mockResolvedValue({
+      ok: true,
+      json: async () => ({ ok: true, code: 200, message: 'OK', data: activeAdminUser, time: '' }),
+    } as Response)
+
+    const user = await verifyRegistrationEmail(1, 'alice@example.com', '123456')
+
+    expect(fetch).toHaveBeenCalledWith('/api/v1/auth/email-verification/verify', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({
+        user_id: 1,
+        email: 'alice@example.com',
+        purpose: 'registration',
+        code: '123456',
+      }),
+    }))
+    expect(user).toEqual(activeAdminUser)
+    expect(localStorage.getItem(SESSION_STORAGE_KEY)).toBeNull()
   })
 
   it('syncs an existing cookie session back into local cache with username and role', async () => {
     vi.mocked(fetch).mockResolvedValue({
       ok: true,
-      json: async () => ({ ok: true, code: 200, message: 'OK', data: { id: 1, username: 'alice', role: 'admin' }, time: '' }),
+      json: async () => ({ ok: true, code: 200, message: 'OK', data: activeAdminUser, time: '' }),
     } as Response)
 
     const session = await syncSession()
 
     expect(fetch).toHaveBeenCalledWith('/api/v1/auth/me', expect.objectContaining({ credentials: 'include' }))
-    expect(session).toEqual({ username: 'alice', role: 'admin' })
-    expect(localStorage.getItem(SESSION_STORAGE_KEY)).toBe('{"username":"alice","role":"admin"}')
+    expect(session).toEqual(activeAdminUser)
+    expect(JSON.parse(localStorage.getItem(SESSION_STORAGE_KEY) ?? '{}')).toEqual(activeAdminUser)
     expect(getSessionName()).toBe('alice')
   })
 
@@ -91,7 +151,7 @@ describe('session helpers', () => {
   })
 
   it('clears local cache after logout', async () => {
-    localStorage.setItem(SESSION_STORAGE_KEY, '{"username":"alice","role":"admin"}')
+    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(activeAdminUser))
     vi.mocked(fetch).mockResolvedValue({
       ok: true,
       json: async () => ({ ok: true, code: 200, message: 'OK', data: { logged_out: true }, time: '' }),
@@ -108,7 +168,7 @@ describe('session helpers', () => {
   })
 
   it('clearSession removes the cached username immediately', () => {
-    localStorage.setItem(SESSION_STORAGE_KEY, '{"username":"alice","role":"admin"}')
+    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(activeAdminUser))
 
     clearSession()
 

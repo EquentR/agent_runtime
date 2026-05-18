@@ -299,9 +299,6 @@ func validateUserCanLogin(user *models.User) error {
 	case models.UserStatusPendingEmailVerification:
 		return ErrEmailVerificationRequired
 	}
-	if user.ForcePasswordChange {
-		return ErrPasswordChangeRequired
-	}
 	if user.Status != "" && user.Status != models.UserStatusActive && user.Status != models.UserStatusNeedsEmailBinding {
 		return ErrEmailVerificationRequired
 	}
