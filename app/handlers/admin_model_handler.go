@@ -319,14 +319,23 @@ func (h *AdminModelHandler) handleTestCustomModel() (method, relativePath string
 			return nil, modelErrorOptions(err), err
 		}
 		if h.tester == nil {
-			return nil, []resp.ResOpt{resp.WithCode(http.StatusServiceUnavailable)}, fmt.Errorf("model tester is not configured")
+			testErr := fmt.Errorf("model tester is not configured")
+			after := gin.H{"ok": false, "error": testErr.Error()}
+			if auditErr := h.recordAudit(c, *actor, "model", c.Param("id"), "admin.models.custom.test", nil, after); auditErr != nil {
+				return nil, nil, auditErr
+			}
+			return nil, []resp.ResOpt{resp.WithCode(http.StatusServiceUnavailable)}, testErr
 		}
-		if err := h.tester.TestModel(c.Request.Context(), resolved); err != nil {
-			return nil, []resp.ResOpt{resp.WithCode(http.StatusServiceUnavailable)}, err
+		testErr := h.tester.TestModel(c.Request.Context(), resolved)
+		after := gin.H{"ok": testErr == nil}
+		if testErr != nil {
+			after["error"] = testErr.Error()
 		}
-		after := gin.H{"ok": true}
 		if err := h.recordAudit(c, *actor, "model", c.Param("id"), "admin.models.custom.test", nil, after); err != nil {
 			return nil, nil, err
+		}
+		if testErr != nil {
+			return nil, []resp.ResOpt{resp.WithCode(http.StatusServiceUnavailable)}, testErr
 		}
 		return after, nil, nil
 	}, nil

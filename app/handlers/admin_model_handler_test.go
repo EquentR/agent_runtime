@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -74,6 +75,58 @@ func TestAdminModelHandlerAllowsAdminToTestOtherUserModelAndWritesAudit(t *testi
 	}
 	if len(events) != 1 {
 		t.Fatalf("audit events = %d, want 1", len(events))
+	}
+}
+
+func TestAdminModelHandlerAuditsFailedModelTest(t *testing.T) {
+	deps, _ := newAdminHandlerTestServer(t)
+	if err := deps.db.AutoMigrate(&models.LLMModelOverride{}, &models.CustomLLMModel{}); err != nil {
+		t.Fatalf("AutoMigrate(model tables) error = %v", err)
+	}
+	codec, err := secret.NewCodec("test-secret")
+	if err != nil {
+		t.Fatalf("NewCodec() error = %v", err)
+	}
+	modelLogic, err := logics.NewModelLogic(deps.db, nil, codec)
+	if err != nil {
+		t.Fatalf("NewModelLogic() error = %v", err)
+	}
+	owner := seedAdminHandlerUser(t, deps.db, "failed-owner", "failed-owner@example.com", models.UserRoleUser, models.UserStatusActive, true)
+	custom, err := modelLogic.CreateCustomModel(t.Context(), logics.CreateCustomModelInput{
+		OwnerUserID:      owner.ID,
+		ProviderID:       "failed-provider",
+		ModelID:          "failed-model",
+		DisplayName:      "Failed Model",
+		ProviderType:     coretypes.LLMTypeOpenAICompletions,
+		APIKey:           "owner-secret",
+		Scope:            "owner",
+		Enabled:          true,
+		ContextMaxTokens: 32768,
+	})
+	if err != nil {
+		t.Fatalf("CreateCustomModel() error = %v", err)
+	}
+
+	engine := rest.Init()
+	authMiddleware := NewAuthMiddleware(deps.authLogic)
+	NewAdminModelHandler(modelLogic, deps.auditLogic, failingModelTester{err: errors.New("dial failed")}, authMiddleware.RequireAdmin()).Register(engine.Group("/api/v1"))
+	server := httptest.NewServer(engine)
+	defer server.Close()
+
+	response := doAdminRequest(t, http.MethodPost, server.URL+"/api/v1/admin/models/custom/"+custom.ID+"/test", nil, deps.adminCookie)
+	defer response.Body.Close()
+	envelope := decodeEnvelope(t, response.Body)
+	if envelope.OK {
+		t.Fatal("test response OK = true, want tester failure")
+	}
+
+	var event models.AdminAuditEvent
+	if err := deps.db.Where("target_kind = ? AND target_id = ? AND action = ?", "model", custom.ID, "admin.models.custom.test").Take(&event).Error; err != nil {
+		t.Fatalf("load audit event error = %v", err)
+	}
+	afterJSON := string(event.AfterJSON)
+	if !strings.Contains(afterJSON, `"ok":false`) || !strings.Contains(afterJSON, "dial failed") {
+		t.Fatalf("audit after_json = %s, want failed test result", afterJSON)
 	}
 }
 
@@ -254,4 +307,12 @@ type fakeModelTester struct{}
 
 func (fakeModelTester) TestModel(ctx context.Context, resolved *coreagent.ResolvedModel) error {
 	return nil
+}
+
+type failingModelTester struct {
+	err error
+}
+
+func (t failingModelTester) TestModel(context.Context, *coreagent.ResolvedModel) error {
+	return t.err
 }

@@ -128,10 +128,12 @@ func (r *Runner) buildBudgetedRequestFromContext(_ context.Context, runtimeConte
 	trimmed, changed := trimMessagesForBudget(requestMessages, maxTokens, counter)
 	decision.TrimApplied = changed
 	if changed {
-		decision.FinalPath = "trimmed"
 		decision.TokenCount = memory.CountMessageTokens(counter, trimmed)
 		decision.MessageCount = len(trimmed)
-		return buildResult, trimmed, decision, nil
+		if maxTokens <= 0 || decision.TokenCount <= maxTokens {
+			decision.FinalPath = "trimmed"
+			return buildResult, trimmed, decision, nil
+		}
 	}
 
 	decision.FinalPath = "blocked"

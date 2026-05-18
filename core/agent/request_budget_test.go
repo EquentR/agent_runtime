@@ -167,6 +167,37 @@ func TestBuildBudgetedRequestLimitsPromptToModelInputBudget(t *testing.T) {
 	}
 }
 
+func TestBuildBudgetedRequestRejectsTrimmedRequestStillOverInputBudget(t *testing.T) {
+	mgr, err := memory.NewManager(memory.Options{
+		MaxContextTokens: 75,
+		Counter:          fakeTokenCounter{},
+	})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	runner, err := NewRunner(&stubClient{}, nil, Options{
+		Model:                "test-model",
+		LLMModel:             &coretypes.LLMModel{Context: coretypes.LLMContextConfig{Max: 100, Input: 75, Output: 25}},
+		Memory:               mgr,
+		RuntimePromptBuilder: runtimeprompt.NewBuilder(nil),
+	})
+	if err != nil {
+		t.Fatalf("NewRunner() error = %v", err)
+	}
+
+	runtimeContext := memory.RuntimeContext{Tail: []model.Message{
+		{Role: model.RoleUser, Content: strings.Repeat("x", 80)},
+		{Role: model.RoleTool, ToolCallId: "call_1", Content: strings.Repeat("tool", 100)},
+	}}
+	_, _, decision, err := runner.buildBudgetedRequestFromContext(context.Background(), runtimeContext, false)
+	if !errors.Is(err, ErrContextBudgetExceeded) {
+		t.Fatalf("buildBudgetedRequestFromContext() error = %v, decision = %#v, want ErrContextBudgetExceeded after trim remains over input budget", err, decision)
+	}
+	if !decision.TrimApplied {
+		t.Fatalf("budget decision = %#v, want trim attempted before blocked result", decision)
+	}
+}
+
 func TestBuildBudgetedRequestFromContextCountsRenderedPromptOverhead(t *testing.T) {
 	runner, err := NewRunner(&stubClient{}, nil, Options{
 		Model:                "test-model",

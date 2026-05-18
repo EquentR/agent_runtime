@@ -74,6 +74,65 @@ func TestModelLogicFiltersCatalogByUserRoleAndOwnership(t *testing.T) {
 	assertModelCatalogNotContains(t, aliceCatalog, "bob-provider", "bob-model")
 }
 
+func TestModelLogicSharesCustomModelsByScope(t *testing.T) {
+	logic := newModelLogicForTest(t, nil)
+	ownerAdmin := models.User{ID: 1, Username: "root", Role: models.UserRoleAdmin}
+	otherAdmin := models.User{ID: 2, Username: "ops", Role: models.UserRoleAdmin}
+	alice := models.User{ID: 3, Username: "alice", Role: models.UserRoleUser}
+
+	_, err := logic.CreateCustomModel(context.Background(), CreateCustomModelInput{
+		OwnerUserID:      ownerAdmin.ID,
+		ProviderID:       "shared-global",
+		ModelID:          "global-model",
+		DisplayName:      "Shared Global",
+		ProviderType:     coretypes.LLMTypeOpenAICompletions,
+		APIKey:           "global-secret",
+		Scope:            ModelScopeGlobal,
+		Enabled:          true,
+		ContextMaxTokens: 32768,
+	})
+	if err != nil {
+		t.Fatalf("CreateCustomModel(global) error = %v", err)
+	}
+	_, err = logic.CreateCustomModel(context.Background(), CreateCustomModelInput{
+		OwnerUserID:      ownerAdmin.ID,
+		ProviderID:       "shared-admin",
+		ModelID:          "admin-model",
+		DisplayName:      "Shared Admin",
+		ProviderType:     coretypes.LLMTypeOpenAICompletions,
+		APIKey:           "admin-secret",
+		Scope:            ModelScopeAdmin,
+		Enabled:          true,
+		ContextMaxTokens: 32768,
+	})
+	if err != nil {
+		t.Fatalf("CreateCustomModel(admin) error = %v", err)
+	}
+
+	aliceCatalog, err := logic.CatalogForUser(context.Background(), alice)
+	if err != nil {
+		t.Fatalf("CatalogForUser(alice) error = %v", err)
+	}
+	assertModelCatalogContains(t, aliceCatalog, "shared-global", "global-model")
+	assertModelCatalogNotContains(t, aliceCatalog, "shared-admin", "admin-model")
+	if _, err := logic.ResolveForUse(context.Background(), alice, "shared-global", "global-model"); err != nil {
+		t.Fatalf("ResolveForUse(alice global) error = %v", err)
+	}
+	if _, err := logic.ResolveForUse(context.Background(), alice, "shared-admin", "admin-model"); !errors.Is(err, ErrModelUnauthorized) {
+		t.Fatalf("ResolveForUse(alice admin) error = %v, want ErrModelUnauthorized", err)
+	}
+
+	adminCatalog, err := logic.CatalogForUser(context.Background(), otherAdmin)
+	if err != nil {
+		t.Fatalf("CatalogForUser(otherAdmin) error = %v", err)
+	}
+	assertModelCatalogContains(t, adminCatalog, "shared-global", "global-model")
+	assertModelCatalogContains(t, adminCatalog, "shared-admin", "admin-model")
+	if _, err := logic.ResolveForUse(context.Background(), otherAdmin, "shared-admin", "admin-model"); err != nil {
+		t.Fatalf("ResolveForUse(otherAdmin admin) error = %v", err)
+	}
+}
+
 func TestModelLogicCustomModelContextBudgetDefaultsOutputToQuarterCappedAt8192(t *testing.T) {
 	logic := newModelLogicForTest(t, nil)
 	created, err := logic.CreateCustomModel(context.Background(), CreateCustomModelInput{

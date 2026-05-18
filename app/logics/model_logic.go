@@ -16,6 +16,7 @@ import (
 	coretypes "github.com/EquentR/agent_runtime/core/types"
 	"github.com/EquentR/agent_runtime/pkg/secret"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const (
@@ -500,14 +501,8 @@ func (l *ModelLogic) customProvidersForUse(ctx context.Context, user models.User
 	if l == nil || l.db == nil || user.ID == 0 {
 		return nil, nil
 	}
-	query := l.db.WithContext(ctx).Where("enabled = ?", true)
-	if isAdminModelUser(user) {
-		query = query.Where("owner_user_id = ? AND scope IN ?", user.ID, []string{ModelScopeOwner, ModelScopeAdmin, ModelScopeGlobal})
-	} else {
-		query = query.Where("owner_user_id = ? AND scope = ?", user.ID, ModelScopeOwner)
-	}
 	var rows []models.CustomLLMModel
-	if err := query.Order("provider_id asc").Find(&rows).Error; err != nil {
+	if err := l.customUseQuery(ctx, user).Order(ownerPreferredOrder(user.ID)).Order("provider_id asc").Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	providers := make([]coretypes.LLMProvider, 0, len(rows))
@@ -522,21 +517,28 @@ func (l *ModelLogic) customProvidersForUse(ctx context.Context, user models.User
 }
 
 func (l *ModelLogic) resolveCustomForUse(ctx context.Context, user models.User, providerID string, modelID string) (*coreagent.ResolvedModel, error) {
-	query := l.db.WithContext(ctx).
+	query := l.customUseQuery(ctx, user).
 		Where("provider_id = ? AND model_id = ? AND enabled = ?", strings.TrimSpace(providerID), strings.TrimSpace(modelID), true)
-	if isAdminModelUser(user) {
-		query = query.Where("owner_user_id = ?", user.ID)
-	} else {
-		query = query.Where("owner_user_id = ? AND scope = ?", user.ID, ModelScopeOwner)
-	}
 	var row models.CustomLLMModel
-	if err := query.Take(&row).Error; err != nil {
+	if err := query.Order(ownerPreferredOrder(user.ID)).Take(&row).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrModelUnauthorized
 		}
 		return nil, err
 	}
 	return l.resolvedCustom(row)
+}
+
+func (l *ModelLogic) customUseQuery(ctx context.Context, user models.User) *gorm.DB {
+	query := l.db.WithContext(ctx).Where("enabled = ?", true)
+	if isAdminModelUser(user) {
+		return query.Where("(owner_user_id = ? AND scope IN ?) OR scope IN ?", user.ID, []string{ModelScopeOwner, ModelScopeAdmin, ModelScopeGlobal}, []string{ModelScopeAdmin, ModelScopeGlobal})
+	}
+	return query.Where("(owner_user_id = ? AND scope = ?) OR scope = ?", user.ID, ModelScopeOwner, ModelScopeGlobal)
+}
+
+func ownerPreferredOrder(ownerUserID uint64) clause.Expr {
+	return clause.Expr{SQL: "CASE WHEN owner_user_id = ? THEN 0 ELSE 1 END", Vars: []any{ownerUserID}}
 }
 
 func (l *ModelLogic) resolvedCustom(row models.CustomLLMModel) (*coreagent.ResolvedModel, error) {
