@@ -32,13 +32,24 @@ type Sender interface {
 }
 
 type smtpSender struct {
-	config SMTPConfig
-	addr   string
+	config       SMTPConfig
+	addr         string
+	fromHeader   string
+	envelopeFrom string
+}
+
+type smtpPreparedMessage struct {
+	envelopeFrom string
+	envelopeTo   string
+	payload      []byte
 }
 
 func (c SMTPConfig) ValidateForSend() error {
 	if !c.Enabled {
 		return nil
+	}
+	if c.UseTLS && c.UseStartTLS {
+		return fmt.Errorf("smtp useTLS and useStartTLS are mutually exclusive")
 	}
 	if strings.TrimSpace(c.Host) == "" {
 		return fmt.Errorf("smtp host is required")
@@ -67,14 +78,16 @@ func NewSMTPSender(config SMTPConfig) (Sender, error) {
 	}
 	config.Host = strings.TrimSpace(config.Host)
 	config.Username = strings.TrimSpace(config.Username)
-	from, err := validateEmailAddress(config.From, "smtp from")
+	fromHeader, from, err := parseEmailAddress(config.From, "smtp from")
 	if err != nil {
 		return nil, err
 	}
-	config.From = from.String()
+	config.From = fromHeader
 	return &smtpSender{
-		config: config,
-		addr:   net.JoinHostPort(config.Host, fmt.Sprintf("%d", config.Port)),
+		config:       config,
+		addr:         net.JoinHostPort(config.Host, fmt.Sprintf("%d", config.Port)),
+		fromHeader:   fromHeader,
+		envelopeFrom: from.Address,
 	}, nil
 }
 
@@ -89,18 +102,34 @@ func (s *smtpSender) Send(ctx context.Context, message Message) error {
 		return err
 	}
 
-	to, err := validateEmailAddress(message.To, "message recipient")
+	prepared, err := s.prepareMessage(message)
 	if err != nil {
 		return err
+	}
+
+	if s.config.UseTLS {
+		return s.sendTLS(ctx, prepared.envelopeFrom, prepared.envelopeTo, prepared.payload)
+	}
+	return s.sendPlain(ctx, prepared.envelopeFrom, prepared.envelopeTo, prepared.payload)
+}
+
+func (s *smtpSender) prepareMessage(message Message) (smtpPreparedMessage, error) {
+	toHeader, to, err := parseEmailAddress(message.To, "message recipient")
+	if err != nil {
+		return smtpPreparedMessage{}, err
 	}
 	subject, err := validateHeaderValue(message.Subject, "message subject")
 	if err != nil {
-		return err
+		return smtpPreparedMessage{}, err
 	}
 	body := message.Body
+	fromHeader := s.fromHeader
+	if fromHeader == "" {
+		fromHeader = s.config.From
+	}
 	payload := strings.Join([]string{
-		"From: " + s.config.From,
-		"To: " + to.String(),
+		"From: " + fromHeader,
+		"To: " + toHeader,
 		"Subject: " + subject,
 		"MIME-Version: 1.0",
 		"Content-Type: text/plain; charset=UTF-8",
@@ -108,13 +137,22 @@ func (s *smtpSender) Send(ctx context.Context, message Message) error {
 		body,
 	}, "\r\n")
 
-	if s.config.UseTLS {
-		return s.sendTLS(ctx, to.Address, []byte(payload))
+	envelopeFrom := s.envelopeFrom
+	if envelopeFrom == "" {
+		_, from, err := parseEmailAddress(s.config.From, "smtp from")
+		if err != nil {
+			return smtpPreparedMessage{}, err
+		}
+		envelopeFrom = from.Address
 	}
-	return s.sendPlain(ctx, to.Address, []byte(payload))
+	return smtpPreparedMessage{
+		envelopeFrom: envelopeFrom,
+		envelopeTo:   to.Address,
+		payload:      []byte(payload),
+	}, nil
 }
 
-func (s *smtpSender) sendPlain(ctx context.Context, to string, payload []byte) error {
+func (s *smtpSender) sendPlain(ctx context.Context, from string, to string, payload []byte) error {
 	client, err := smtp.Dial(s.addr)
 	if err != nil {
 		return fmt.Errorf("dial smtp: %w", err)
@@ -133,10 +171,10 @@ func (s *smtpSender) sendPlain(ctx context.Context, to string, payload []byte) e
 			return fmt.Errorf("start tls: %w", err)
 		}
 	}
-	return s.sendWithClient(ctx, client, to, payload)
+	return s.sendWithClient(ctx, client, from, to, payload)
 }
 
-func (s *smtpSender) sendTLS(ctx context.Context, to string, payload []byte) error {
+func (s *smtpSender) sendTLS(ctx context.Context, from string, to string, payload []byte) error {
 	conn, err := tls.Dial("tcp", s.addr, &tls.Config{ServerName: s.config.Host, MinVersion: tls.VersionTLS12})
 	if err != nil {
 		return fmt.Errorf("dial smtp tls: %w", err)
@@ -148,10 +186,10 @@ func (s *smtpSender) sendTLS(ctx context.Context, to string, payload []byte) err
 	}
 	defer client.Close()
 
-	return s.sendWithClient(ctx, client, to, payload)
+	return s.sendWithClient(ctx, client, from, to, payload)
 }
 
-func (s *smtpSender) sendWithClient(ctx context.Context, client *smtp.Client, to string, payload []byte) error {
+func (s *smtpSender) sendWithClient(ctx context.Context, client *smtp.Client, from string, to string, payload []byte) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -159,7 +197,7 @@ func (s *smtpSender) sendWithClient(ctx context.Context, client *smtp.Client, to
 	if err := client.Auth(auth); err != nil {
 		return fmt.Errorf("smtp auth: %w", err)
 	}
-	if err := client.Mail(s.config.From); err != nil {
+	if err := client.Mail(from); err != nil {
 		return fmt.Errorf("smtp mail from: %w", err)
 	}
 	if err := client.Rcpt(to); err != nil {
@@ -183,15 +221,23 @@ func (s *smtpSender) sendWithClient(ctx context.Context, client *smtp.Client, to
 }
 
 func validateEmailAddress(value, field string) (*netmail.Address, error) {
-	value, err := validateHeaderValue(value, field)
+	_, address, err := parseEmailAddress(value, field)
 	if err != nil {
 		return nil, err
 	}
+	return address, nil
+}
+
+func parseEmailAddress(value, field string) (string, *netmail.Address, error) {
+	value, err := validateHeaderValue(value, field)
+	if err != nil {
+		return "", nil, err
+	}
 	address, err := netmail.ParseAddress(value)
 	if err != nil {
-		return nil, fmt.Errorf("%s is invalid: %w", field, err)
+		return "", nil, fmt.Errorf("%s is invalid: %w", field, err)
 	}
-	return address, nil
+	return value, address, nil
 }
 
 func validateHeaderValue(value, field string) (string, error) {

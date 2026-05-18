@@ -263,8 +263,11 @@ security:
 	if cfg.Security.AppSecret != "${APP_SECRET}" {
 		t.Fatalf("security.appSecret = %q, want placeholder", cfg.Security.AppSecret)
 	}
-	if cfg.Security.PublicRegistration.Enabled {
-		t.Fatal("security.publicRegistration.enabled = true, want false")
+	if !cfg.Security.PublicRegistration.Configured() {
+		t.Fatal("security.publicRegistration.Configured() = false, want true")
+	}
+	if cfg.Security.PublicRegistration.ResolvedEnabled() {
+		t.Fatal("security.publicRegistration.ResolvedEnabled() = true, want false")
 	}
 	if cfg.Security.SMTP.Host != "smtp.example.com" {
 		t.Fatalf("security.smtp.host = %q, want smtp.example.com", cfg.Security.SMTP.Host)
@@ -290,6 +293,59 @@ security:
 			cfg.Security.Turnstile.ProtectRegistration,
 			cfg.Security.Turnstile.ProtectVerification,
 		)
+	}
+}
+
+func TestPublicRegistrationConfigDistinguishesOmittedAndExplicitValues(t *testing.T) {
+	tests := []struct {
+		name           string
+		yamlInput      string
+		wantConfigured bool
+		wantEnabled    bool
+	}{
+		{
+			name: "omitted",
+			yamlInput: `
+security:
+  publicRegistration: {}
+`,
+			wantEnabled: true,
+		},
+		{
+			name: "explicit false",
+			yamlInput: `
+security:
+  publicRegistration:
+    enabled: false
+`,
+			wantConfigured: true,
+		},
+		{
+			name: "explicit true",
+			yamlInput: `
+security:
+  publicRegistration:
+    enabled: true
+`,
+			wantConfigured: true,
+			wantEnabled:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var cfg Config
+			if err := yaml.Unmarshal([]byte(tt.yamlInput), &cfg); err != nil {
+				t.Fatalf("yaml.Unmarshal() error = %v", err)
+			}
+
+			if got := cfg.Security.PublicRegistration.Configured(); got != tt.wantConfigured {
+				t.Fatalf("Configured() = %v, want %v", got, tt.wantConfigured)
+			}
+			if got := cfg.Security.PublicRegistration.ResolvedEnabled(); got != tt.wantEnabled {
+				t.Fatalf("ResolvedEnabled() = %v, want %v", got, tt.wantEnabled)
+			}
+		})
 	}
 }
 

@@ -60,6 +60,12 @@ func TestSMTPConfigValidationRequiresHostFromAndCredentialsWhenEnabled(t *testin
 	if err := config.ValidateForSend(); err != nil {
 		t.Fatalf("valid ValidateForSend() error = %v", err)
 	}
+	bothTLSModes := config
+	bothTLSModes.UseTLS = true
+	bothTLSModes.UseStartTLS = true
+	if err := bothTLSModes.ValidateForSend(); err == nil {
+		t.Fatal("UseTLS and UseStartTLS ValidateForSend() error = nil, want error")
+	}
 	sender, err := NewSMTPSender(config)
 	if err != nil {
 		t.Fatalf("NewSMTPSender() error = %v", err)
@@ -84,6 +90,47 @@ func TestNewSMTPSenderDisabledConfigNoops(t *testing.T) {
 	}
 	if err := sender.Send(context.Background(), Message{}); err != nil {
 		t.Fatalf("Send(disabled) error = %v", err)
+	}
+}
+
+func TestNewSMTPSenderDisplayNameFromUsesRawEnvelopeAddress(t *testing.T) {
+	addr, captures, closeServer := startCapturingSMTPServer(t)
+	defer closeServer()
+
+	_, portText, err := net.SplitHostPort(addr)
+	if err != nil {
+		t.Fatalf("SplitHostPort() error = %v", err)
+	}
+	var port int
+	if _, err := fmt.Sscanf(portText, "%d", &port); err != nil {
+		t.Fatalf("parse port %q: %v", portText, err)
+	}
+
+	sender, err := NewSMTPSender(SMTPConfig{
+		Enabled:  true,
+		Host:     "localhost",
+		Port:     port,
+		Username: "smtp-user",
+		Password: "smtp-password",
+		From:     "Agent Runtime <noreply@example.com>",
+	})
+	if err != nil {
+		t.Fatalf("NewSMTPSender() error = %v", err)
+	}
+	if err := sender.Send(context.Background(), Message{To: "user@example.com", Subject: "Subject", Body: "body"}); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+
+	select {
+	case capture := <-captures:
+		if capture.mailFrom != "MAIL FROM:<noreply@example.com>" {
+			t.Fatalf("MAIL FROM command = %q, want raw mailbox address", capture.mailFrom)
+		}
+		if !strings.Contains(capture.data, "From: Agent Runtime <noreply@example.com>\r\n") {
+			t.Fatalf("message data = %q, want display-name From header", capture.data)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("fake SMTP server did not capture message")
 	}
 }
 
@@ -214,4 +261,88 @@ func startSMTPServerWithoutStartTLS(t *testing.T) (string, <-chan error, func())
 	}()
 
 	return listener.Addr().String(), done, func() { _ = listener.Close() }
+}
+
+type smtpCapture struct {
+	mailFrom string
+	data     string
+}
+
+func startCapturingSMTPServer(t *testing.T) (string, <-chan smtpCapture, func()) {
+	t.Helper()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen() error = %v", err)
+	}
+	captures := make(chan smtpCapture, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		reader := bufio.NewReader(conn)
+		if _, err := fmt.Fprint(conn, "220 localhost ESMTP\r\n"); err != nil {
+			return
+		}
+		var capture smtpCapture
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				return
+			}
+			command := strings.TrimSpace(line)
+			upperCommand := strings.ToUpper(command)
+			switch {
+			case strings.HasPrefix(upperCommand, "EHLO"):
+				if _, err := fmt.Fprint(conn, "250-localhost\r\n250 AUTH PLAIN\r\n"); err != nil {
+					return
+				}
+			case strings.HasPrefix(upperCommand, "AUTH"):
+				if _, err := fmt.Fprint(conn, "235 authenticated\r\n"); err != nil {
+					return
+				}
+			case strings.HasPrefix(upperCommand, "MAIL FROM:"):
+				capture.mailFrom = command
+				if _, err := fmt.Fprint(conn, "250 ok\r\n"); err != nil {
+					return
+				}
+			case strings.HasPrefix(upperCommand, "RCPT TO:"):
+				if _, err := fmt.Fprint(conn, "250 ok\r\n"); err != nil {
+					return
+				}
+			case upperCommand == "DATA":
+				if _, err := fmt.Fprint(conn, "354 end with dot\r\n"); err != nil {
+					return
+				}
+				var builder strings.Builder
+				for {
+					dataLine, err := reader.ReadString('\n')
+					if err != nil {
+						return
+					}
+					if strings.TrimSpace(dataLine) == "." {
+						break
+					}
+					builder.WriteString(dataLine)
+				}
+				capture.data = builder.String()
+				captures <- capture
+				if _, err := fmt.Fprint(conn, "250 accepted\r\n"); err != nil {
+					return
+				}
+			case upperCommand == "QUIT":
+				_, _ = fmt.Fprint(conn, "221 bye\r\n")
+				return
+			default:
+				if _, err := fmt.Fprint(conn, "250 ok\r\n"); err != nil {
+					return
+				}
+			}
+		}
+	}()
+
+	return listener.Addr().String(), captures, func() { _ = listener.Close() }
 }

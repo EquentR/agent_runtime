@@ -49,7 +49,18 @@ type SecurityConfig struct {
 }
 
 type PublicRegistrationConfig struct {
-	Enabled bool `yaml:"enabled"`
+	Enabled *bool `yaml:"enabled"`
+}
+
+func (c PublicRegistrationConfig) Configured() bool {
+	return c.Enabled != nil
+}
+
+func (c PublicRegistrationConfig) ResolvedEnabled() bool {
+	if c.Enabled == nil {
+		return true
+	}
+	return *c.Enabled
 }
 
 type SMTPConfig struct {
