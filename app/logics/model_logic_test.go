@@ -133,6 +133,53 @@ func TestModelLogicSharesCustomModelsByScope(t *testing.T) {
 	}
 }
 
+func TestModelLogicYAMLOverridePatchPreservesUnspecifiedFields(t *testing.T) {
+	enabled := true
+	logic := newModelLogicForTest(t, []coretypes.LLMProvider{{
+		BaseProvider: coretypes.BaseProvider{Name: "yaml"},
+		Models: []coretypes.LLMModel{{
+			BaseModel: coretypes.BaseModel{ID: "shared", Name: "Shared"},
+			Type:      coretypes.LLMTypeOpenAIResponses,
+			Scope:     ModelScopeGlobal,
+			Enabled:   &enabled,
+		}},
+	}})
+	disabled := false
+	if _, err := logic.UpdateYAMLModelOverride(context.Background(), UpdateYAMLModelOverrideInput{
+		ProviderID: "yaml",
+		ModelID:    "shared",
+		Scope:      ModelScopeAdmin,
+		Enabled:    &disabled,
+	}); err != nil {
+		t.Fatalf("UpdateYAMLModelOverride(initial) error = %v", err)
+	}
+
+	reEnabled := true
+	enabledOnly, err := logic.UpdateYAMLModelOverride(context.Background(), UpdateYAMLModelOverrideInput{
+		ProviderID: "yaml",
+		ModelID:    "shared",
+		Enabled:    &reEnabled,
+	})
+	if err != nil {
+		t.Fatalf("UpdateYAMLModelOverride(enabled-only) error = %v", err)
+	}
+	if enabledOnly.Scope != ModelScopeAdmin || !enabledOnly.Enabled {
+		t.Fatalf("enabled-only update = %#v, want preserved scope=admin enabled=true", enabledOnly)
+	}
+
+	scopeOnly, err := logic.UpdateYAMLModelOverride(context.Background(), UpdateYAMLModelOverrideInput{
+		ProviderID: "yaml",
+		ModelID:    "shared",
+		Scope:      ModelScopeGlobal,
+	})
+	if err != nil {
+		t.Fatalf("UpdateYAMLModelOverride(scope-only) error = %v", err)
+	}
+	if scopeOnly.Scope != ModelScopeGlobal || !scopeOnly.Enabled {
+		t.Fatalf("scope-only update = %#v, want scope=global preserved enabled=true", scopeOnly)
+	}
+}
+
 func TestModelLogicCustomModelContextBudgetDefaultsOutputToQuarterCappedAt8192(t *testing.T) {
 	logic := newModelLogicForTest(t, nil)
 	created, err := logic.CreateCustomModel(context.Background(), CreateCustomModelInput{

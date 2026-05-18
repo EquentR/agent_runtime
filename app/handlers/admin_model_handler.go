@@ -316,6 +316,10 @@ func (h *AdminModelHandler) handleTestCustomModel() (method, relativePath string
 		}
 		resolved, err := h.models.ResolveCustomForAdmin(c.Request.Context(), c.Param("id"))
 		if err != nil {
+			after := gin.H{"ok": false, "error": err.Error()}
+			if auditErr := h.recordAudit(c, *actor, "model", c.Param("id"), "admin.models.custom.test", nil, after); auditErr != nil {
+				return nil, nil, auditErr
+			}
 			return nil, modelErrorOptions(err), err
 		}
 		if h.tester == nil {

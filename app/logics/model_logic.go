@@ -199,11 +199,8 @@ func (l *ModelLogic) UpdateYAMLModelOverride(ctx context.Context, input UpdateYA
 	if provider == nil || model == nil {
 		return YAMLModelResponse{}, ErrModelNotFound
 	}
-	scope := normalizeScope(firstNonEmptyString(input.Scope, model.EffectiveScope()), ModelScopeAdmin)
+	scope := normalizeScope(model.EffectiveScope(), ModelScopeAdmin)
 	enabled := model.IsEnabled()
-	if input.Enabled != nil {
-		enabled = *input.Enabled
-	}
 	now := time.Now().UTC()
 	row := models.LLMModelOverride{
 		ProviderID: providerID,
@@ -217,6 +214,18 @@ func (l *ModelLogic) UpdateYAMLModelOverride(ctx context.Context, input UpdateYA
 	err := l.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var existing models.LLMModelOverride
 		err := tx.Where("provider_id = ? AND model_id = ?", providerID, modelID).Take(&existing).Error
+		if err == nil {
+			scope = normalizeScope(existing.Scope, scope)
+			enabled = existing.Enabled
+		}
+		if strings.TrimSpace(input.Scope) != "" {
+			scope = normalizeScope(input.Scope, ModelScopeAdmin)
+		}
+		if input.Enabled != nil {
+			enabled = *input.Enabled
+		}
+		row.Enabled = enabled
+		row.Scope = scope
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return tx.Create(&row).Error
 		}

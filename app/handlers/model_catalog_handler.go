@@ -42,7 +42,7 @@ func (h *ModelCatalogHandler) Register(rg *gin.RouterGroup) {
 // handleGetModelCatalog 返回当前已配置的 provider/model 目录。
 //
 // @Summary 获取模型目录
-// @Description 返回当前服务启动时注入的全部 LLM provider/model 配置，以及前端可直接使用的默认 provider/model。
+// @Description 返回当前用户可用的 LLM provider/model 目录，以及前端可直接使用的默认 provider/model。
 // @Tags models
 // @Produce json
 // @Success 200 {object} ModelCatalogSwaggerResponse

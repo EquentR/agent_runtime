@@ -1126,7 +1126,7 @@ const docTemplate = `{
         },
         "/models": {
             "get": {
-                "description": "返回当前服务启动时注入的全部 LLM provider/model 配置，以及前端可直接使用的默认 provider/model。",
+                "description": "返回当前用户可用的 LLM provider/model 目录，以及前端可直接使用的默认 provider/model。",
                 "produces": [
                     "application/json"
                 ],

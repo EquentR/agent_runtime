@@ -130,6 +130,42 @@ func TestAdminModelHandlerAuditsFailedModelTest(t *testing.T) {
 	}
 }
 
+func TestAdminModelHandlerAuditsModelTestResolveFailure(t *testing.T) {
+	deps, _ := newAdminHandlerTestServer(t)
+	if err := deps.db.AutoMigrate(&models.LLMModelOverride{}, &models.CustomLLMModel{}); err != nil {
+		t.Fatalf("AutoMigrate(model tables) error = %v", err)
+	}
+	codec, err := secret.NewCodec("test-secret")
+	if err != nil {
+		t.Fatalf("NewCodec() error = %v", err)
+	}
+	modelLogic, err := logics.NewModelLogic(deps.db, nil, codec)
+	if err != nil {
+		t.Fatalf("NewModelLogic() error = %v", err)
+	}
+
+	engine := rest.Init()
+	authMiddleware := NewAuthMiddleware(deps.authLogic)
+	NewAdminModelHandler(modelLogic, deps.auditLogic, fakeModelTester{}, authMiddleware.RequireAdmin()).Register(engine.Group("/api/v1"))
+	server := httptest.NewServer(engine)
+	defer server.Close()
+
+	response := doAdminRequest(t, http.MethodPost, server.URL+"/api/v1/admin/models/custom/missing-model/test", nil, deps.adminCookie)
+	defer response.Body.Close()
+	envelope := decodeEnvelope(t, response.Body)
+	if envelope.OK {
+		t.Fatal("test response OK = true, want resolve failure")
+	}
+
+	var event models.AdminAuditEvent
+	if err := deps.db.Where("target_kind = ? AND target_id = ? AND action = ?", "model", "missing-model", "admin.models.custom.test").Take(&event).Error; err != nil {
+		t.Fatalf("load audit event error = %v", err)
+	}
+	if afterJSON := string(event.AfterJSON); !strings.Contains(afterJSON, `"ok":false`) || !strings.Contains(afterJSON, "模型不存在") {
+		t.Fatalf("audit after_json = %s, want resolve failure result", afterJSON)
+	}
+}
+
 func TestAdminModelHandlerDefaultsCreatedCustomModelOwnerToActor(t *testing.T) {
 	deps, _ := newAdminHandlerTestServer(t)
 	if err := deps.db.AutoMigrate(&models.LLMModelOverride{}, &models.CustomLLMModel{}); err != nil {
