@@ -202,9 +202,14 @@ type ErrorSwaggerResponse struct {
 
 // AuthUserSwaggerDoc 描述登录态用户信息的文档结构。
 type AuthUserSwaggerDoc struct {
-	ID       uint64 `json:"id"`
-	Username string `json:"username"`
-	Role     string `json:"role"`
+	ID                  uint64  `json:"id"`
+	Username            string  `json:"username"`
+	Email               string  `json:"email"`
+	DisplayName         string  `json:"display_name"`
+	Role                string  `json:"role"`
+	Status              string  `json:"status"`
+	EmailVerifiedAt     *string `json:"email_verified_at"`
+	ForcePasswordChange bool    `json:"force_password_change"`
 }
 
 // AuthUserSwaggerResponse 描述登录、注册、当前用户接口的成功响应结构。
@@ -233,14 +238,47 @@ type AuthLogoutSwaggerData struct {
 // AuthRegisterSwaggerRequest 描述注册接口请求结构。
 type AuthRegisterSwaggerRequest struct {
 	Username        string `json:"username"`
+	Email           string `json:"email"`
 	Password        string `json:"password"`
 	ConfirmPassword string `json:"confirm_password"`
+	TurnstileToken  string `json:"turnstile_token"`
 }
 
 // AuthLoginSwaggerRequest 描述登录接口请求结构。
 type AuthLoginSwaggerRequest struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
+	Username       string `json:"username"`
+	Password       string `json:"password"`
+	TurnstileToken string `json:"turnstile_token"`
+}
+
+// AuthEmailVerificationSendSwaggerRequest 描述发送邮箱验证码接口请求结构。
+type AuthEmailVerificationSendSwaggerRequest struct {
+	UserID         uint64 `json:"user_id"`
+	Email          string `json:"email"`
+	Purpose        string `json:"purpose"`
+	TurnstileToken string `json:"turnstile_token"`
+}
+
+// AuthEmailVerificationSentSwaggerResponse 描述发送邮箱验证码接口的成功响应结构。
+type AuthEmailVerificationSentSwaggerResponse struct {
+	Code    int                                  `json:"code"`
+	Message string                               `json:"message"`
+	Data    AuthEmailVerificationSentSwaggerData `json:"data"`
+	OK      bool                                 `json:"ok"`
+	Time    string                               `json:"time"`
+}
+
+// AuthEmailVerificationSentSwaggerData 描述发送邮箱验证码结果。
+type AuthEmailVerificationSentSwaggerData struct {
+	Sent bool `json:"sent"`
+}
+
+// AuthEmailVerificationVerifySwaggerRequest 描述校验邮箱验证码接口请求结构。
+type AuthEmailVerificationVerifySwaggerRequest struct {
+	UserID  uint64 `json:"user_id"`
+	Email   string `json:"email"`
+	Purpose string `json:"purpose"`
+	Code    string `json:"code"`
 }
 
 // PromptDocumentSwaggerDoc 描述提示词文档的文档结构。

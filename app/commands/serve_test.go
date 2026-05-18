@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,6 +15,8 @@ import (
 	"time"
 
 	"github.com/EquentR/agent_runtime/app/config"
+	"github.com/EquentR/agent_runtime/app/logics"
+	"github.com/EquentR/agent_runtime/app/models"
 	"github.com/EquentR/agent_runtime/app/router"
 	coreagent "github.com/EquentR/agent_runtime/core/agent"
 	"github.com/EquentR/agent_runtime/core/approvals"
@@ -26,6 +29,7 @@ import (
 	builtin "github.com/EquentR/agent_runtime/core/tools/builtin"
 	coretypes "github.com/EquentR/agent_runtime/core/types"
 	"github.com/EquentR/agent_runtime/pkg/rest"
+	"github.com/EquentR/agent_runtime/pkg/secret"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -130,7 +134,7 @@ func TestPromptBuildRouterDependenciesExposePromptRuntime(t *testing.T) {
 		t.Fatalf("initPromptRuntime() error = %v", err)
 	}
 
-	deps := buildRouterDependencies(nil, nil, nil, nil, 0, nil, nil, nil, promptRuntime.Store, promptRuntime.Resolver, nil, nil)
+	deps := buildRouterDependencies(nil, nil, nil, nil, 0, nil, nil, nil, promptRuntime.Store, promptRuntime.Resolver, nil, nil, nil)
 	if deps.PromptStore != promptRuntime.Store {
 		t.Fatalf("PromptStore = %#v, want %#v", deps.PromptStore, promptRuntime.Store)
 	}
@@ -142,9 +146,92 @@ func TestPromptBuildRouterDependenciesExposePromptRuntime(t *testing.T) {
 func TestBuildRouterDependenciesExposeApprovalStore(t *testing.T) {
 	db := newServeTestDB(t)
 	approvalStore := approvals.NewStore(db)
-	deps := buildRouterDependencies(nil, approvalStore, nil, nil, 0, nil, nil, nil, nil, nil, nil, nil)
+	deps := buildRouterDependencies(nil, approvalStore, nil, nil, 0, nil, nil, nil, nil, nil, nil, nil, nil)
 	if deps.ApprovalStore != approvalStore {
 		t.Fatalf("ApprovalStore = %#v, want %#v", deps.ApprovalStore, approvalStore)
+	}
+}
+
+func TestInitAuthRuntimeWiresSettingsVerificationAndTurnstile(t *testing.T) {
+	db := newServeTestDB(t)
+	if err := db.AutoMigrate(&models.SystemSetting{}); err != nil {
+		t.Fatalf("settings AutoMigrate() error = %v", err)
+	}
+	publicRegistrationEnabled := true
+
+	runtime, err := initAuthRuntime(db, config.SecurityConfig{
+		AppSecret: "test-secret",
+		PublicRegistration: config.PublicRegistrationConfig{
+			Enabled: &publicRegistrationEnabled,
+		},
+		SMTP: config.SMTPConfig{
+			Enabled:     false,
+			Host:        "smtp.example.com",
+			Port:        587,
+			Username:    "smtp-user",
+			Password:    "smtp-password",
+			From:        "noreply@example.com",
+			UseStartTLS: true,
+		},
+		Turnstile: config.TurnstileConfig{
+			Enabled:             true,
+			SiteKey:             "site-key",
+			Secret:              "turnstile-secret",
+			ProtectLogin:        true,
+			ProtectRegistration: true,
+			ProtectVerification: true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("initAuthRuntime() error = %v", err)
+	}
+	if runtime.AuthLogic == nil {
+		t.Fatal("runtime.AuthLogic = nil, want auth logic")
+	}
+	if runtime.Settings == nil {
+		t.Fatal("runtime.Settings = nil, want settings logic")
+	}
+	if runtime.EmailVerification == nil {
+		t.Fatal("runtime.EmailVerification = nil, want email verification logic")
+	}
+	if runtime.TurnstileVerifier == nil {
+		t.Fatal("runtime.TurnstileVerifier = nil, want turnstile verifier")
+	}
+
+	registration, err := runtime.Settings.GetPublicRegistration(context.Background())
+	if err != nil {
+		t.Fatalf("GetPublicRegistration() error = %v", err)
+	}
+	if !registration.Enabled {
+		t.Fatal("public registration enabled = false, want YAML default propagated")
+	}
+
+	deps := buildRouterDependencies(nil, nil, nil, nil, 0, nil, nil, nil, nil, nil, nil, runtime.AuthLogic, runtime)
+	if deps.AuthSettings != runtime.Settings {
+		t.Fatalf("deps.AuthSettings = %#v, want runtime settings", deps.AuthSettings)
+	}
+	if deps.EmailVerification != runtime.EmailVerification {
+		t.Fatalf("deps.EmailVerification = %#v, want runtime email verification", deps.EmailVerification)
+	}
+	if deps.TurnstileVerifier != runtime.TurnstileVerifier {
+		t.Fatalf("deps.TurnstileVerifier = %#v, want runtime turnstile verifier", deps.TurnstileVerifier)
+	}
+}
+
+func TestSettingsBackedMailSenderRejectsDisabledSMTP(t *testing.T) {
+	db := newServeTestDB(t)
+	if err := db.AutoMigrate(&models.SystemSetting{}); err != nil {
+		t.Fatalf("settings AutoMigrate() error = %v", err)
+	}
+	settings, err := logics.NewSettingsLogic(db, logics.SettingsDefaults{
+		SMTP: logics.SMTPSettings{Enabled: false},
+	}, mustServeTestSecretCodec(t))
+	if err != nil {
+		t.Fatalf("NewSettingsLogic() error = %v", err)
+	}
+	sender := &settingsBackedMailSender{settings: settings}
+	if err := sender.Available(context.Background()); !errors.Is(err, logics.ErrMailServiceUnavailable) {
+		t.Fatalf("Available() error = %v, want %v", err, logics.ErrMailServiceUnavailable)
 	}
 }
 
@@ -667,6 +754,15 @@ func newServeTestDB(t *testing.T) *gorm.DB {
 		t.Fatalf("open db error = %v", err)
 	}
 	return db
+}
+
+func mustServeTestSecretCodec(t *testing.T) *secret.Codec {
+	t.Helper()
+	codec, err := secret.NewCodec("test-secret")
+	if err != nil {
+		t.Fatalf("secret.NewCodec() error = %v", err)
+	}
+	return codec
 }
 
 func waitForServeTestTaskStatus(t *testing.T, ctx context.Context, manager *coretasks.Manager, taskID string, want coretasks.Status) *coretasks.Task {

@@ -17,7 +17,7 @@ type AuthHandler struct {
 	middleware        *AuthMiddleware
 	settings          AuthHandlerSettingsReader
 	emailVerification *logics.EmailVerificationLogic
-	turnstileVerifier TurnstileVerifier
+	turnstileVerifier logics.TurnstileVerifier
 }
 
 type registerRequest struct {
@@ -48,10 +48,6 @@ type emailVerificationVerifyRequest struct {
 	Code    string `json:"code"`
 }
 
-type TurnstileVerifier interface {
-	Verify(ctx context.Context, token string, remoteIP string) error
-}
-
 type AuthHandlerSettingsReader interface {
 	GetTurnstile(ctx context.Context) (logics.TurnstileSettings, error)
 }
@@ -70,7 +66,7 @@ func WithAuthHandlerEmailVerification(verification *logics.EmailVerificationLogi
 	}
 }
 
-func WithAuthHandlerTurnstileVerifier(verifier TurnstileVerifier) AuthHandlerOption {
+func WithAuthHandlerTurnstileVerifier(verifier logics.TurnstileVerifier) AuthHandlerOption {
 	return func(h *AuthHandler) {
 		h.turnstileVerifier = verifier
 	}
@@ -309,7 +305,8 @@ func authStatusCode(err error, fallback int) int {
 		errors.Is(err, logics.ErrUserDisabled),
 		errors.Is(err, logics.ErrEmailVerificationRequired),
 		errors.Is(err, logics.ErrEmailBindingRequired),
-		errors.Is(err, logics.ErrPasswordChangeRequired):
+		errors.Is(err, logics.ErrPasswordChangeRequired),
+		errors.Is(err, logics.ErrEmailVerificationInvalidState):
 		return http.StatusForbidden
 	case errors.Is(err, logics.ErrMailServiceUnavailable):
 		return http.StatusServiceUnavailable

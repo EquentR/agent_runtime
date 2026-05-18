@@ -27,6 +27,7 @@ var (
 	ErrEmailVerificationExpired         = errors.New("验证码已过期")
 	ErrEmailVerificationTooManyAttempts = errors.New("验证码尝试次数过多")
 	ErrEmailVerificationCooldown        = errors.New("验证码发送过于频繁")
+	ErrEmailVerificationInvalidState    = errors.New("当前用户状态不能验证邮箱")
 )
 
 type EmailVerificationConfig struct {
@@ -100,9 +101,23 @@ func (l *EmailVerificationLogic) CanSend() bool {
 	return l != nil && l.sender != nil
 }
 
-func (l *EmailVerificationLogic) Send(ctx context.Context, input SendEmailVerificationInput) error {
-	if l == nil || l.sender == nil {
+func (l *EmailVerificationLogic) CanSendFor(ctx context.Context) error {
+	if !l.CanSend() {
 		return ErrMailServiceUnavailable
+	}
+	if checker, ok := l.sender.(interface {
+		Available(context.Context) error
+	}); ok {
+		if err := checker.Available(ctx); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (l *EmailVerificationLogic) Send(ctx context.Context, input SendEmailVerificationInput) error {
+	if err := l.CanSendFor(ctx); err != nil {
+		return err
 	}
 	email := normalizeAuthEmail(input.Email)
 	if email == "" {
@@ -228,6 +243,13 @@ func (l *EmailVerificationLogic) Verify(ctx context.Context, input VerifyEmailIn
 			return nil
 		}
 
+		if err := tx.First(&user, input.UserID).Error; err != nil {
+			return err
+		}
+		if !canApplyEmailVerificationPurpose(user.Status, purpose) {
+			return ErrEmailVerificationInvalidState
+		}
+
 		consumedAt := now
 		if err := tx.Model(&models.EmailVerification{}).Where("id = ?", verification.ID).Updates(map[string]any{
 			"consumed_at": &consumedAt,
@@ -236,9 +258,6 @@ func (l *EmailVerificationLogic) Verify(ctx context.Context, input VerifyEmailIn
 			return err
 		}
 
-		if err := tx.First(&user, input.UserID).Error; err != nil {
-			return err
-		}
 		user.Email = email
 		user.EmailVerifiedAt = &consumedAt
 		switch purpose {
@@ -281,4 +300,15 @@ func isSixDigitCode(code string) bool {
 		}
 	}
 	return true
+}
+
+func canApplyEmailVerificationPurpose(status string, purpose string) bool {
+	switch purpose {
+	case EmailVerificationPurposeRegistration:
+		return status == models.UserStatusPendingEmailVerification
+	case EmailVerificationPurposeEmailBinding:
+		return status == models.UserStatusNeedsEmailBinding
+	default:
+		return false
+	}
 }

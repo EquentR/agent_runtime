@@ -169,8 +169,8 @@ func (l *AuthLogic) register(ctx context.Context, input RegisterInput, legacyCom
 					return ErrPublicRegistrationDisabled
 				}
 			}
-			if l.emailVerification == nil || !l.emailVerification.CanSend() {
-				return ErrMailServiceUnavailable
+			if err := l.emailVerification.CanSendFor(ctx); err != nil {
+				return err
 			}
 		}
 

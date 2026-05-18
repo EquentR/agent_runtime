@@ -10,18 +10,29 @@ import (
 func Init(e *gin.Engine, baseUrl string, staticPath []rest.Static, deps Dependencies) {
 	// 统一在这里汇总路由注册器，保持启动链清晰。
 	authMiddleware := handlers.NewAuthMiddleware(deps.AuthLogic)
+	authHandlerOptions := []handlers.AuthHandlerOption{}
+	if deps.AuthSettings != nil {
+		authHandlerOptions = append(authHandlerOptions, handlers.WithAuthHandlerSettings(deps.AuthSettings))
+	}
+	if deps.EmailVerification != nil {
+		authHandlerOptions = append(authHandlerOptions, handlers.WithAuthHandlerEmailVerification(deps.EmailVerification))
+	}
+	if deps.TurnstileVerifier != nil {
+		authHandlerOptions = append(authHandlerOptions, handlers.WithAuthHandlerTurnstileVerifier(deps.TurnstileVerifier))
+	}
+	activeUser := authMiddleware.RequireActiveUser()
 	registers := []Register{
-		handlers.NewAuthHandler(deps.AuthLogic),
+		handlers.NewAuthHandler(deps.AuthLogic, authHandlerOptions...),
 		handlers.NewExampleHandler(),
-		handlers.NewModelCatalogHandler(deps.ModelResolver, authMiddleware.RequireSession()),
-		handlers.NewAttachmentHandler(deps.AttachmentStore, deps.AttachmentStorage, deps.AttachmentDraftTTL, authMiddleware.RequireSession()),
+		handlers.NewModelCatalogHandler(deps.ModelResolver, activeUser),
+		handlers.NewAttachmentHandler(deps.AttachmentStore, deps.AttachmentStorage, deps.AttachmentDraftTTL, activeUser),
 		handlers.NewSkillHandler(deps.SkillLoader),
-		handlers.NewPromptHandler(deps.PromptStore, authMiddleware.RequireSession()),
-		handlers.NewTaskHandler(deps.TaskManager, deps.ConversationStore, authMiddleware.RequireSession()),
-		handlers.NewInteractionHandler(deps.TaskManager, deps.InteractionStore, deps.ConversationStore, authMiddleware.RequireSession()),
-		handlers.NewApprovalHandler(deps.TaskManager, deps.ApprovalStore, deps.ConversationStore, authMiddleware.RequireSession()).WithInteractionStore(deps.InteractionStore),
-		handlers.NewConversationHandler(deps.ConversationStore, deps.AuditStore, authMiddleware.RequireSession()),
-		handlers.NewAuditHandler(deps.AuditStore, authMiddleware.RequireSession()),
+		handlers.NewPromptHandler(deps.PromptStore, activeUser),
+		handlers.NewTaskHandler(deps.TaskManager, deps.ConversationStore, activeUser),
+		handlers.NewInteractionHandler(deps.TaskManager, deps.InteractionStore, deps.ConversationStore, activeUser),
+		handlers.NewApprovalHandler(deps.TaskManager, deps.ApprovalStore, deps.ConversationStore, activeUser).WithInteractionStore(deps.InteractionStore),
+		handlers.NewConversationHandler(deps.ConversationStore, deps.AuditStore, activeUser),
+		handlers.NewAuditHandler(deps.AuditStore, activeUser),
 		handlers.NewSwaggerHandler(),
 	}
 	InitRouter(e, registers, baseUrl, staticPath)

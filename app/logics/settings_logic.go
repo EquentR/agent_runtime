@@ -149,6 +149,10 @@ func (l *SettingsLogic) GetSMTP(ctx context.Context) (SMTPSettings, error) {
 	return maskSMTP(settings), nil
 }
 
+func (l *SettingsLogic) GetSMTPForSend(ctx context.Context) (SMTPSettings, error) {
+	return l.loadSMTP(ctx)
+}
+
 func (l *SettingsLogic) UpdateSMTP(ctx context.Context, input UpdateSMTPInput) (SMTPSettings, error) {
 	settings := SMTPSettings{
 		Enabled:     input.Enabled,
@@ -189,6 +193,10 @@ func (l *SettingsLogic) GetTurnstile(ctx context.Context) (TurnstileSettings, er
 		return TurnstileSettings{}, err
 	}
 	return maskTurnstile(settings), nil
+}
+
+func (l *SettingsLogic) GetTurnstileForVerify(ctx context.Context) (TurnstileSettings, error) {
+	return l.loadTurnstile(ctx)
 }
 
 func (l *SettingsLogic) UpdateTurnstile(ctx context.Context, input UpdateTurnstileInput) (TurnstileSettings, error) {

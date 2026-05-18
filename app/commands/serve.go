@@ -31,7 +31,9 @@ import (
 	coretypes "github.com/EquentR/agent_runtime/core/types"
 	"github.com/EquentR/agent_runtime/pkg/db"
 	"github.com/EquentR/agent_runtime/pkg/log"
+	"github.com/EquentR/agent_runtime/pkg/mail"
 	"github.com/EquentR/agent_runtime/pkg/rest"
+	"github.com/EquentR/agent_runtime/pkg/secret"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
@@ -76,9 +78,9 @@ func Serve(c *config.Config, version, commit string) {
 		log.Panicf("Failed to resolve workspace root: %v", err)
 	}
 	skillLoader := coreskills.NewLoader(workspaceRoot)
-	authLogic, err := logics.NewAuthLogic(db.DB(), logics.AuthConfig{})
+	authRuntime, err := initAuthRuntime(db.DB(), c.Security)
 	if err != nil {
-		log.Panicf("Failed to init auth logic: %v", err)
+		log.Panicf("Failed to init auth runtime: %v", err)
 	}
 	toolRegistry, err := newDefaultToolRegistry(workspaceRoot, c.Tools.WebSearch.BuiltinOptions(), c.Tools.ImageGen.BuiltinOptions(), attachmentStore, attachmentStorage, c.Attachments.ResolvedSentRetention())
 	if err != nil {
@@ -90,7 +92,7 @@ func Serve(c *config.Config, version, commit string) {
 	}
 	taskManager.Start(globalCtx)
 
-	router.Init(engine, c.Server.ApiBasePath, c.Server.StaticPaths, buildRouterDependencies(taskManager, approvalStore, attachmentStore, attachmentStorage, c.Attachments.ResolvedDraftTTL(), conversationStore, auditRuntime.Store, resolver, promptRuntime.Store, promptRuntime.Resolver, skillLoader, authLogic, interactionStore))
+	router.Init(engine, c.Server.ApiBasePath, c.Server.StaticPaths, buildRouterDependencies(taskManager, approvalStore, attachmentStore, attachmentStorage, c.Attachments.ResolvedDraftTTL(), conversationStore, auditRuntime.Store, resolver, promptRuntime.Store, promptRuntime.Resolver, skillLoader, authRuntime.AuthLogic, authRuntime, interactionStore))
 
 	addr := fmt.Sprintf("%s:%d", c.Server.Host, c.Server.Port)
 	ln, err := net.Listen("tcp", addr)
@@ -143,10 +145,137 @@ func registerAgentRunExecutor(taskManager *coretasks.Manager, approvalStore *app
 	return taskManager.RegisterExecutor("agent.run", coreagent.NewTaskExecutor(buildAgentRunExecutorDependencies(resolver, conversationStore, attachmentStore, attachmentStorage, toolRegistry, approvalStore, interactionStore, promptResolver, workspaceRoot, clientFactory, auditRecorder)))
 }
 
-func buildRouterDependencies(taskManager *coretasks.Manager, approvalStore *approvals.Store, attachmentStore *attachments.Store, attachmentStorage attachments.Storage, attachmentDraftTTL time.Duration, conversationStore *coreagent.ConversationStore, auditStore *coreaudit.Store, resolver *coreagent.ModelResolver, promptStore *coreprompt.Store, promptResolver *coreprompt.Resolver, skillLoader *coreskills.Loader, authLogic *logics.AuthLogic, interactionStores ...*interactions.Store) router.Dependencies {
+type authRuntime struct {
+	AuthLogic         *logics.AuthLogic
+	Settings          *logics.SettingsLogic
+	EmailVerification *logics.EmailVerificationLogic
+	TurnstileVerifier logics.TurnstileVerifier
+}
+
+func initAuthRuntime(database *gorm.DB, cfg config.SecurityConfig) (*authRuntime, error) {
+	if database == nil {
+		return nil, fmt.Errorf("auth runtime db is required")
+	}
+	codec, err := secret.NewCodec(cfg.AppSecret)
+	if err != nil {
+		return nil, err
+	}
+	settings, err := logics.NewSettingsLogic(database, settingsDefaultsFromConfig(cfg), codec)
+	if err != nil {
+		return nil, err
+	}
+	emailVerification, err := logics.NewEmailVerificationLogic(database, logics.EmailVerificationConfig{
+		Sender: &settingsBackedMailSender{settings: settings},
+	})
+	if err != nil {
+		return nil, err
+	}
+	turnstileVerifier, err := logics.NewCloudflareTurnstileVerifier(settings)
+	if err != nil {
+		return nil, err
+	}
+	authLogic, err := logics.NewAuthLogic(database, logics.AuthConfig{}, logics.WithAuthSettings(settings), logics.WithAuthEmailVerification(emailVerification))
+	if err != nil {
+		return nil, err
+	}
+	return &authRuntime{
+		AuthLogic:         authLogic,
+		Settings:          settings,
+		EmailVerification: emailVerification,
+		TurnstileVerifier: turnstileVerifier,
+	}, nil
+}
+
+func settingsDefaultsFromConfig(cfg config.SecurityConfig) logics.SettingsDefaults {
+	return logics.SettingsDefaults{
+		PublicRegistrationConfigured: cfg.PublicRegistration.Configured(),
+		PublicRegistration: logics.PublicRegistrationSettings{
+			Enabled: cfg.PublicRegistration.ResolvedEnabled(),
+		},
+		SMTP: logics.SMTPSettings{
+			Enabled:     cfg.SMTP.Enabled,
+			Host:        cfg.SMTP.Host,
+			Port:        cfg.SMTP.Port,
+			Username:    cfg.SMTP.Username,
+			Password:    cfg.SMTP.Password,
+			From:        cfg.SMTP.From,
+			UseTLS:      cfg.SMTP.UseTLS,
+			UseStartTLS: cfg.SMTP.UseStartTLS,
+		},
+		Turnstile: logics.TurnstileSettings{
+			Enabled:             cfg.Turnstile.Enabled,
+			SiteKey:             cfg.Turnstile.SiteKey,
+			Secret:              cfg.Turnstile.Secret,
+			ProtectLogin:        cfg.Turnstile.ProtectLogin,
+			ProtectRegistration: cfg.Turnstile.ProtectRegistration,
+			ProtectVerification: cfg.Turnstile.ProtectVerification,
+		},
+	}
+}
+
+type settingsBackedMailSender struct {
+	settings *logics.SettingsLogic
+}
+
+func (s *settingsBackedMailSender) Available(ctx context.Context) error {
+	if s == nil || s.settings == nil {
+		return logics.ErrMailServiceUnavailable
+	}
+	settings, err := s.settings.GetSMTPForSend(ctx)
+	if err != nil {
+		return err
+	}
+	if !settings.Enabled {
+		return logics.ErrMailServiceUnavailable
+	}
+	return (mail.SMTPConfig{
+		Enabled:     settings.Enabled,
+		Host:        settings.Host,
+		Port:        settings.Port,
+		Username:    settings.Username,
+		Password:    settings.Password,
+		From:        settings.From,
+		UseTLS:      settings.UseTLS,
+		UseStartTLS: settings.UseStartTLS,
+	}).ValidateForSend()
+}
+
+func (s *settingsBackedMailSender) Send(ctx context.Context, message mail.Message) error {
+	if err := s.Available(ctx); err != nil {
+		return err
+	}
+	settings, err := s.settings.GetSMTPForSend(ctx)
+	if err != nil {
+		return err
+	}
+	sender, err := mail.NewSMTPSender(mail.SMTPConfig{
+		Enabled:     settings.Enabled,
+		Host:        settings.Host,
+		Port:        settings.Port,
+		Username:    settings.Username,
+		Password:    settings.Password,
+		From:        settings.From,
+		UseTLS:      settings.UseTLS,
+		UseStartTLS: settings.UseStartTLS,
+	})
+	if err != nil {
+		return err
+	}
+	return sender.Send(ctx, message)
+}
+
+func buildRouterDependencies(taskManager *coretasks.Manager, approvalStore *approvals.Store, attachmentStore *attachments.Store, attachmentStorage attachments.Storage, attachmentDraftTTL time.Duration, conversationStore *coreagent.ConversationStore, auditStore *coreaudit.Store, resolver *coreagent.ModelResolver, promptStore *coreprompt.Store, promptResolver *coreprompt.Resolver, skillLoader *coreskills.Loader, authLogic *logics.AuthLogic, authRuntime *authRuntime, interactionStores ...*interactions.Store) router.Dependencies {
 	var interactionStore *interactions.Store
 	if len(interactionStores) > 0 {
 		interactionStore = interactionStores[0]
+	}
+	var authSettings logics.TurnstileSettingsReader
+	var emailVerification *logics.EmailVerificationLogic
+	var turnstileVerifier logics.TurnstileVerifier
+	if authRuntime != nil {
+		authSettings = authRuntime.Settings
+		emailVerification = authRuntime.EmailVerification
+		turnstileVerifier = authRuntime.TurnstileVerifier
 	}
 	return router.Dependencies{
 		TaskManager:        taskManager,
@@ -162,6 +291,9 @@ func buildRouterDependencies(taskManager *coretasks.Manager, approvalStore *appr
 		PromptResolver:     promptResolver,
 		SkillLoader:        skillLoader,
 		AuthLogic:          authLogic,
+		AuthSettings:       authSettings,
+		EmailVerification:  emailVerification,
+		TurnstileVerifier:  turnstileVerifier,
 	}
 }
 

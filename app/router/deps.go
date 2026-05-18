@@ -1,6 +1,8 @@
 package router
 
 import (
+	"time"
+
 	"github.com/EquentR/agent_runtime/app/logics"
 	coreagent "github.com/EquentR/agent_runtime/core/agent"
 	"github.com/EquentR/agent_runtime/core/approvals"
@@ -10,7 +12,6 @@ import (
 	coreprompt "github.com/EquentR/agent_runtime/core/prompt"
 	coreskills "github.com/EquentR/agent_runtime/core/skills"
 	coretasks "github.com/EquentR/agent_runtime/core/tasks"
-	"time"
 )
 
 // Dependencies 汇总路由层需要的跨模块依赖。
@@ -28,4 +29,7 @@ type Dependencies struct {
 	PromptResolver     *coreprompt.Resolver
 	SkillLoader        *coreskills.Loader
 	AuthLogic          *logics.AuthLogic
+	AuthSettings       logics.TurnstileSettingsReader
+	EmailVerification  *logics.EmailVerificationLogic
+	TurnstileVerifier  logics.TurnstileVerifier
 }

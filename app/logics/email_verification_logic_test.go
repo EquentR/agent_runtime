@@ -146,6 +146,41 @@ func TestEmailVerificationRejectsExpiredCodeAndTooManyAttempts(t *testing.T) {
 	}
 }
 
+func TestEmailVerificationDoesNotActivateDisabledUser(t *testing.T) {
+	now := time.Date(2026, 5, 18, 10, 0, 0, 0, time.UTC)
+	subject := newEmailVerificationTestSubject(t, now, "123456")
+	user := seedEmailVerificationUser(t, subject.db, "disabled", "disabled@example.com", models.UserStatusDisabled)
+
+	if err := subject.logic.Send(context.Background(), SendEmailVerificationInput{
+		UserID:  user.ID,
+		Email:   user.Email,
+		Purpose: EmailVerificationPurposeRegistration,
+	}); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+
+	_, err := subject.logic.Verify(context.Background(), VerifyEmailInput{
+		UserID:  user.ID,
+		Email:   user.Email,
+		Purpose: EmailVerificationPurposeRegistration,
+		Code:    "123456",
+	})
+	if !errors.Is(err, ErrEmailVerificationInvalidState) {
+		t.Fatalf("Verify(disabled) error = %v, want %v", err, ErrEmailVerificationInvalidState)
+	}
+
+	var stored models.User
+	if err := subject.db.First(&stored, user.ID).Error; err != nil {
+		t.Fatalf("reload disabled user: %v", err)
+	}
+	if stored.Status != models.UserStatusDisabled {
+		t.Fatalf("disabled user status = %q, want %q", stored.Status, models.UserStatusDisabled)
+	}
+	if stored.EmailVerifiedAt != nil {
+		t.Fatalf("disabled user EmailVerifiedAt = %v, want nil", stored.EmailVerifiedAt)
+	}
+}
+
 func TestEmailVerificationEnforcesResendCooldown(t *testing.T) {
 	now := time.Date(2026, 5, 18, 10, 0, 0, 0, time.UTC)
 	subject := newEmailVerificationTestSubject(t, now, "123456")
