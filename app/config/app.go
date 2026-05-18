@@ -24,6 +24,7 @@ type Config struct {
 	Server            rest.Config                 `yaml:"server"`
 	Sqlite            db.Database                 `yaml:"sqlite"`
 	Log               log.Config                  `yaml:"log"`
+	Security          SecurityConfig              `yaml:"security"`
 	Tasks             TaskManagerConfig           `yaml:"tasks"`
 	Tools             ToolsConfig                 `yaml:"tools"`
 	Attachments       AttachmentStorageConfig     `yaml:"attachments"`
@@ -38,6 +39,37 @@ func (c Config) ResolvedLLMRequestTimeout() time.Duration {
 		return c.LLMRequestTimeout
 	}
 	return defaultLLMRequestTimeout
+}
+
+type SecurityConfig struct {
+	AppSecret          string                   `yaml:"appSecret"`
+	PublicRegistration PublicRegistrationConfig `yaml:"publicRegistration"`
+	SMTP               SMTPConfig               `yaml:"smtp"`
+	Turnstile          TurnstileConfig          `yaml:"turnstile"`
+}
+
+type PublicRegistrationConfig struct {
+	Enabled bool `yaml:"enabled"`
+}
+
+type SMTPConfig struct {
+	Enabled     bool   `yaml:"enabled"`
+	Host        string `yaml:"host"`
+	Port        int    `yaml:"port"`
+	Username    string `yaml:"username"`
+	Password    string `yaml:"password"`
+	From        string `yaml:"from"`
+	UseTLS      bool   `yaml:"useTLS"`
+	UseStartTLS bool   `yaml:"useStartTLS"`
+}
+
+type TurnstileConfig struct {
+	Enabled             bool   `yaml:"enabled"`
+	SiteKey             string `yaml:"siteKey"`
+	Secret              string `yaml:"secret"`
+	ProtectLogin        bool   `yaml:"protectLogin"`
+	ProtectRegistration bool   `yaml:"protectRegistration"`
+	ProtectVerification bool   `yaml:"protectVerification"`
 }
 
 type TaskManagerConfig struct {

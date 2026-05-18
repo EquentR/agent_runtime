@@ -28,6 +28,27 @@ log:
   maxBackups: 7
   compress: true
 
+security:
+  appSecret: ${APP_SECRET}
+  publicRegistration:
+    enabled: true
+  smtp:
+    enabled: false
+    host: ${SMTP_HOST}
+    port: 587
+    username: ${SMTP_USERNAME}
+    password: ${SMTP_PASSWORD}
+    from: ${SMTP_FROM}
+    useTLS: false
+    useStartTLS: true
+  turnstile:
+    enabled: false
+    siteKey: ${TURNSTILE_SITE_KEY}
+    secret: ${TURNSTILE_SECRET}
+    protectLogin: true
+    protectRegistration: true
+    protectVerification: true
+
 tasks:
   workerCount: 16
   runnerId: example-agent

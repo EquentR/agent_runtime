@@ -233,6 +233,66 @@ func TestConfigResolvedLLMRequestTimeoutPreservesConfiguredValue(t *testing.T) {
 	}
 }
 
+func TestConfigParsesSMTPAndTurnstileDefaults(t *testing.T) {
+	var cfg Config
+	if err := yaml.Unmarshal([]byte(`
+security:
+  appSecret: ${APP_SECRET}
+  publicRegistration:
+    enabled: false
+  smtp:
+    enabled: true
+    host: smtp.example.com
+    port: 587
+    username: smtp-user
+    password: ${SMTP_PASSWORD}
+    from: Agent Runtime <noreply@example.com>
+    useTLS: false
+    useStartTLS: true
+  turnstile:
+    enabled: true
+    siteKey: site-key
+    secret: ${TURNSTILE_SECRET}
+    protectLogin: true
+    protectRegistration: true
+    protectVerification: false
+`), &cfg); err != nil {
+		t.Fatalf("yaml.Unmarshal() error = %v", err)
+	}
+
+	if cfg.Security.AppSecret != "${APP_SECRET}" {
+		t.Fatalf("security.appSecret = %q, want placeholder", cfg.Security.AppSecret)
+	}
+	if cfg.Security.PublicRegistration.Enabled {
+		t.Fatal("security.publicRegistration.enabled = true, want false")
+	}
+	if cfg.Security.SMTP.Host != "smtp.example.com" {
+		t.Fatalf("security.smtp.host = %q, want smtp.example.com", cfg.Security.SMTP.Host)
+	}
+	if cfg.Security.SMTP.Port != 587 {
+		t.Fatalf("security.smtp.port = %d, want 587", cfg.Security.SMTP.Port)
+	}
+	if cfg.Security.SMTP.Password != "${SMTP_PASSWORD}" {
+		t.Fatalf("security.smtp.password = %q, want placeholder", cfg.Security.SMTP.Password)
+	}
+	if !cfg.Security.SMTP.UseStartTLS || cfg.Security.SMTP.UseTLS {
+		t.Fatalf("security.smtp TLS flags = useTLS:%v useStartTLS:%v, want false/true", cfg.Security.SMTP.UseTLS, cfg.Security.SMTP.UseStartTLS)
+	}
+	if cfg.Security.Turnstile.SiteKey != "site-key" {
+		t.Fatalf("security.turnstile.siteKey = %q, want site-key", cfg.Security.Turnstile.SiteKey)
+	}
+	if cfg.Security.Turnstile.Secret != "${TURNSTILE_SECRET}" {
+		t.Fatalf("security.turnstile.secret = %q, want placeholder", cfg.Security.Turnstile.Secret)
+	}
+	if !cfg.Security.Turnstile.ProtectLogin || !cfg.Security.Turnstile.ProtectRegistration || cfg.Security.Turnstile.ProtectVerification {
+		t.Fatalf("security.turnstile protect flags = login:%v registration:%v verification:%v, want true/true/false",
+			cfg.Security.Turnstile.ProtectLogin,
+			cfg.Security.Turnstile.ProtectRegistration,
+			cfg.Security.Turnstile.ProtectVerification,
+		)
+	}
+}
+
 func mustField(t *testing.T, value reflect.Value, name string) reflect.Value {
 	t.Helper()
 	if value.Kind() == reflect.Pointer {
