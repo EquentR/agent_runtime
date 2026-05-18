@@ -298,6 +298,30 @@ func TestAuthLogicRejectsUsernameAndEmailCrossFieldConflicts(t *testing.T) {
 	}
 }
 
+func TestAuthLogicRejectsEmailConflictingWithUsernameCaseInsensitively(t *testing.T) {
+	mailer := &fakeAuthMailSender{}
+	logic := newAuthLogicTestSubject(t, withAuthTestMailer(mailer, "123456"))
+
+	if _, err := logic.RegisterWithInput(context.Background(), RegisterInput{
+		Username:        "Alice@Example.COM",
+		Email:           "owner@example.com",
+		Password:        "secret-123",
+		ConfirmPassword: "secret-123",
+	}); err != nil {
+		t.Fatalf("RegisterWithInput(first) error = %v", err)
+	}
+
+	_, err := logic.RegisterWithInput(context.Background(), RegisterInput{
+		Username:        "bob",
+		Email:           "alice@example.com",
+		Password:        "secret-123",
+		ConfirmPassword: "secret-123",
+	})
+	if !errors.Is(err, ErrEmailTaken) {
+		t.Fatalf("RegisterWithInput(email conflicts with username case-insensitively) error = %v, want %v", err, ErrEmailTaken)
+	}
+}
+
 func TestAuthLogicLoginAcceptsUsernameOrEmail(t *testing.T) {
 	logic := newAuthLogicTestSubject(t)
 
@@ -354,12 +378,9 @@ func TestAuthLogicLoginRejectsPendingDisabledAndNeedsBindingUsers(t *testing.T) 
 	}
 
 	seedAuthLoginUser(t, logic.db, "force", "force@example.com", models.UserStatusActive, true, &now)
-	forceUser, forceSession, err := logic.Login(ctx, "force", "secret-123")
-	if err != nil {
-		t.Fatalf("Login(force password change) error = %v, want restricted session", err)
-	}
-	if !forceUser.ForcePasswordChange || forceSession.UserID != forceUser.ID {
-		t.Fatalf("Login(force password change) user=%#v session=%#v, want restricted session", forceUser, forceSession)
+	_, _, err = logic.Login(ctx, "force", "secret-123")
+	if !errors.Is(err, ErrPasswordChangeRequired) {
+		t.Fatalf("Login(force password change) error = %v, want %v", err, ErrPasswordChangeRequired)
 	}
 }
 

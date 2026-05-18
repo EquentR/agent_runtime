@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/EquentR/agent_runtime/app/logics"
 	"github.com/EquentR/agent_runtime/app/models"
@@ -21,6 +22,7 @@ import (
 	resp "github.com/EquentR/agent_runtime/pkg/rest"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
+	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
 
@@ -28,6 +30,15 @@ type authTestUser struct {
 	ID       uint64 `json:"id"`
 	Username string `json:"username"`
 	Role     string `json:"role"`
+}
+
+type authTestUserDetails struct {
+	ID                uint64  `json:"id"`
+	Username          string  `json:"username"`
+	Email             string  `json:"email"`
+	Status            string  `json:"status"`
+	EmailVerifiedAt   *string `json:"email_verified_at"`
+	ForcePasswordFlag bool    `json:"force_password_change"`
 }
 
 func TestAuthHandlerRegisterLoginLogoutFlow(t *testing.T) {
@@ -529,7 +540,85 @@ func TestAuthHandlerEmailVerificationSendDoesNotEnumerateUnknownEmails(t *testin
 	}
 }
 
+func TestAuthHandlerEmailBindingUsesCurrentSessionUser(t *testing.T) {
+	deps, server := newAuthHandlerTestServerWithDeps(t)
+	defer server.Close()
+
+	bindingUser := seedAuthHandlerUser(t, deps.db, "legacy", "", models.UserStatusNeedsEmailBinding, false, nil)
+	other := registerVerifiedAuthHandlerTestUser(t, deps, "other")
+
+	login := postAuthJSON(t, server.URL+"/api/v1/auth/login", map[string]any{
+		"username": "legacy",
+		"password": "secret-123",
+	})
+	defer login.Body.Close()
+	if login.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(login.Body)
+		t.Fatalf("login status = %d, want 200, body = %s", login.StatusCode, string(body))
+	}
+	session := mustFindCookie(t, login.Cookies(), authSessionCookieName)
+
+	sendRaw, err := json.Marshal(map[string]any{
+		"user_id": other.ID,
+		"email":   "legacy@example.com",
+		"purpose": logics.EmailVerificationPurposeEmailBinding,
+	})
+	if err != nil {
+		t.Fatalf("marshal send payload: %v", err)
+	}
+	sendRequest, err := http.NewRequest(http.MethodPost, server.URL+"/api/v1/auth/email-verification/send", bytes.NewReader(sendRaw))
+	if err != nil {
+		t.Fatalf("NewRequest(send) error = %v", err)
+	}
+	sendRequest.Header.Set("Content-Type", "application/json")
+	sendRequest.AddCookie(session)
+	sendResponse, err := http.DefaultClient.Do(sendRequest)
+	if err != nil {
+		t.Fatalf("Do(send) error = %v", err)
+	}
+	defer sendResponse.Body.Close()
+	if sendResponse.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(sendResponse.Body)
+		t.Fatalf("send status = %d, want 200, body = %s", sendResponse.StatusCode, string(body))
+	}
+
+	verifyRaw, err := json.Marshal(map[string]any{
+		"user_id": other.ID,
+		"email":   "legacy@example.com",
+		"purpose": logics.EmailVerificationPurposeEmailBinding,
+		"code":    "123456",
+	})
+	if err != nil {
+		t.Fatalf("marshal verify payload: %v", err)
+	}
+	verifyRequest, err := http.NewRequest(http.MethodPost, server.URL+"/api/v1/auth/email-verification/verify", bytes.NewReader(verifyRaw))
+	if err != nil {
+		t.Fatalf("NewRequest(verify) error = %v", err)
+	}
+	verifyRequest.Header.Set("Content-Type", "application/json")
+	verifyRequest.AddCookie(session)
+	verifyResponse, err := http.DefaultClient.Do(verifyRequest)
+	if err != nil {
+		t.Fatalf("Do(verify) error = %v", err)
+	}
+	defer verifyResponse.Body.Close()
+	if verifyResponse.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(verifyResponse.Body)
+		t.Fatalf("verify status = %d, want 200, body = %s", verifyResponse.StatusCode, string(body))
+	}
+	verified := decodeAuthUserDetailsResponse(t, verifyResponse.Body)
+	if verified.ID != bindingUser.ID || verified.Email != "legacy@example.com" || verified.Status != models.UserStatusActive || verified.EmailVerifiedAt == nil {
+		t.Fatalf("verified user = %#v, want current session user activated with bound email", verified)
+	}
+
+	reloadedOther := loadAuthHandlerUser(t, deps.db, other.ID)
+	if reloadedOther.Email != other.Email {
+		t.Fatalf("other user email = %q, want unchanged %q", reloadedOther.Email, other.Email)
+	}
+}
+
 type authHandlerTestDeps struct {
+	db                *gorm.DB
 	authLogic         *logics.AuthLogic
 	emailVerification *logics.EmailVerificationLogic
 	conversationStore *coreagent.ConversationStore
@@ -588,7 +677,7 @@ func newAuthHandlerTestServerWithDeps(t *testing.T) (*authHandlerTestDeps, *http
 
 	server := httptest.NewServer(engine)
 	t.Cleanup(server.Close)
-	return &authHandlerTestDeps{authLogic: authLogic, emailVerification: emailVerification, conversationStore: conversationStore, taskManager: taskManager}, server
+	return &authHandlerTestDeps{db: db, authLogic: authLogic, emailVerification: emailVerification, conversationStore: conversationStore, taskManager: taskManager}, server
 }
 
 func newAuthLogicForTest(t *testing.T, db *gorm.DB) *logics.AuthLogic {
@@ -649,6 +738,37 @@ func registerActiveAuthUserForTest(t *testing.T, logic *logics.AuthLogic, userna
 	}
 	if user.EmailVerifiedAt == nil {
 		t.Fatalf("registered user %q EmailVerifiedAt = nil, want verified timestamp", username)
+	}
+	return user
+}
+
+func seedAuthHandlerUser(t *testing.T, db *gorm.DB, username string, email string, status string, forcePasswordChange bool, verifiedAt *time.Time) models.User {
+	t.Helper()
+	hash, err := bcrypt.GenerateFromPassword([]byte("secret-123"), bcrypt.DefaultCost)
+	if err != nil {
+		t.Fatalf("GenerateFromPassword() error = %v", err)
+	}
+	user := models.User{
+		Username:            username,
+		Email:               email,
+		DisplayName:         username,
+		PasswordHash:        string(hash),
+		Role:                models.UserRoleUser,
+		Status:              status,
+		ForcePasswordChange: forcePasswordChange,
+		EmailVerifiedAt:     verifiedAt,
+	}
+	if err := db.Create(&user).Error; err != nil {
+		t.Fatalf("seed auth handler user %q: %v", username, err)
+	}
+	return user
+}
+
+func loadAuthHandlerUser(t *testing.T, db *gorm.DB, userID uint64) models.User {
+	t.Helper()
+	var user models.User
+	if err := db.First(&user, userID).Error; err != nil {
+		t.Fatalf("load auth handler user %d: %v", userID, err)
 	}
 	return user
 }
@@ -802,6 +922,19 @@ func decodeAuthUserResponse(t *testing.T, body io.Reader) authTestUser {
 	var user authTestUser
 	if err := json.Unmarshal(envelope.Data, &user); err != nil {
 		t.Fatalf("json.Unmarshal(user) error = %v", err)
+	}
+	return user
+}
+
+func decodeAuthUserDetailsResponse(t *testing.T, body io.Reader) authTestUserDetails {
+	t.Helper()
+	envelope := decodeEnvelope(t, body)
+	if !envelope.OK {
+		t.Fatalf("response ok = false, raw data = %s", string(envelope.Data))
+	}
+	var user authTestUserDetails
+	if err := json.Unmarshal(envelope.Data, &user); err != nil {
+		t.Fatalf("json.Unmarshal(user details) error = %v", err)
 	}
 	return user
 }

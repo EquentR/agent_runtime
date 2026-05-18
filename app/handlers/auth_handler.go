@@ -236,6 +236,20 @@ func (h *AuthHandler) handleSendEmailVerification() (method, relativePath string
 		if h.emailVerification == nil {
 			return nil, []resp.ResOpt{resp.WithCode(http.StatusServiceUnavailable)}, logics.ErrMailServiceUnavailable
 		}
+		if request.Purpose == logics.EmailVerificationPurposeEmailBinding {
+			user, _, err := h.middleware.resolve(c)
+			if err != nil {
+				return nil, []resp.ResOpt{resp.WithCode(http.StatusUnauthorized)}, logics.ErrUnauthorized
+			}
+			if err := h.emailVerification.Send(c.Request.Context(), logics.SendEmailVerificationInput{
+				UserID:  user.ID,
+				Email:   request.Email,
+				Purpose: logics.EmailVerificationPurposeEmailBinding,
+			}); err != nil {
+				return nil, []resp.ResOpt{resp.WithCode(authStatusCode(err, http.StatusBadRequest))}, err
+			}
+			return gin.H{"sent": true}, nil, nil
+		}
 		if err := h.emailVerification.SendByEmail(c.Request.Context(), logics.SendEmailVerificationInput{
 			UserID:  request.UserID,
 			Email:   request.Email,
@@ -274,8 +288,16 @@ func (h *AuthHandler) handleVerifyEmail() (method, relativePath string, wrapper 
 		if h.emailVerification == nil {
 			return nil, []resp.ResOpt{resp.WithCode(http.StatusServiceUnavailable)}, logics.ErrMailServiceUnavailable
 		}
+		userID := request.UserID
+		if request.Purpose == logics.EmailVerificationPurposeEmailBinding {
+			user, _, err := h.middleware.resolve(c)
+			if err != nil {
+				return nil, []resp.ResOpt{resp.WithCode(http.StatusUnauthorized)}, logics.ErrUnauthorized
+			}
+			userID = user.ID
+		}
 		user, err := h.emailVerification.Verify(c.Request.Context(), logics.VerifyEmailInput{
-			UserID:  request.UserID,
+			UserID:  userID,
 			Email:   request.Email,
 			Purpose: request.Purpose,
 			Code:    request.Code,

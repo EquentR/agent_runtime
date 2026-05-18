@@ -196,7 +196,7 @@ func (l *AuthLogic) register(ctx context.Context, input RegisterInput, legacyCom
 			if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 				return err
 			}
-			err = tx.Where("username = ?", email).Take(&existing).Error
+			err = tx.Where("LOWER(username) = ?", email).Take(&existing).Error
 			if err == nil {
 				return ErrEmailTaken
 			}
@@ -298,6 +298,9 @@ func validateUserCanLogin(user *models.User) error {
 		return ErrUserDisabled
 	case models.UserStatusPendingEmailVerification:
 		return ErrEmailVerificationRequired
+	}
+	if user.ForcePasswordChange {
+		return ErrPasswordChangeRequired
 	}
 	if user.Status != "" && user.Status != models.UserStatusActive && user.Status != models.UserStatusNeedsEmailBinding {
 		return ErrEmailVerificationRequired
