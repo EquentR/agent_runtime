@@ -278,7 +278,7 @@ func TestAuthLogicRejectsUsernameAndEmailCrossFieldConflicts(t *testing.T) {
 	}
 
 	_, err := logic.RegisterWithInput(context.Background(), RegisterInput{
-		Username:        "alice@example.com",
+		Username:        "Alice@Example.COM",
 		Email:           "bob@example.com",
 		Password:        "secret-123",
 		ConfirmPassword: "secret-123",
@@ -345,15 +345,21 @@ func TestAuthLogicLoginRejectsPendingDisabledAndNeedsBindingUsers(t *testing.T) 
 	}
 
 	seedAuthLoginUser(t, logic.db, "binding", "", models.UserStatusNeedsEmailBinding, false, nil)
-	_, _, err = logic.Login(ctx, "binding", "secret-123")
-	if !errors.Is(err, ErrEmailBindingRequired) {
-		t.Fatalf("Login(needs binding) error = %v, want %v", err, ErrEmailBindingRequired)
+	bindingUser, bindingSession, err := logic.Login(ctx, "binding", "secret-123")
+	if err != nil {
+		t.Fatalf("Login(needs binding) error = %v, want restricted session", err)
+	}
+	if bindingUser.Status != models.UserStatusNeedsEmailBinding || bindingSession.UserID != bindingUser.ID {
+		t.Fatalf("Login(needs binding) user=%#v session=%#v, want restricted session", bindingUser, bindingSession)
 	}
 
 	seedAuthLoginUser(t, logic.db, "force", "force@example.com", models.UserStatusActive, true, &now)
-	_, _, err = logic.Login(ctx, "force", "secret-123")
-	if !errors.Is(err, ErrPasswordChangeRequired) {
-		t.Fatalf("Login(force password change) error = %v, want %v", err, ErrPasswordChangeRequired)
+	forceUser, forceSession, err := logic.Login(ctx, "force", "secret-123")
+	if err != nil {
+		t.Fatalf("Login(force password change) error = %v, want restricted session", err)
+	}
+	if !forceUser.ForcePasswordChange || forceSession.UserID != forceUser.ID {
+		t.Fatalf("Login(force password change) user=%#v session=%#v, want restricted session", forceUser, forceSession)
 	}
 }
 

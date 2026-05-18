@@ -142,6 +142,7 @@ func (l *AuthLogic) register(ctx context.Context, input RegisterInput, legacyCom
 	}
 
 	email := normalizeAuthEmail(input.Email)
+	usernameAsEmail := normalizeAuthEmail(username)
 	var user *models.User
 	needsVerification := false
 	if err := l.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -178,12 +179,14 @@ func (l *AuthLogic) register(ctx context.Context, input RegisterInput, legacyCom
 		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 			return err
 		}
-		err = tx.Where("email = ?", username).Take(&existing).Error
-		if err == nil {
-			return ErrUsernameTaken
-		}
-		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-			return err
+		if usernameAsEmail != "" {
+			err = tx.Where("email = ?", usernameAsEmail).Take(&existing).Error
+			if err == nil {
+				return ErrUsernameTaken
+			}
+			if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
 		}
 		if email != "" {
 			err = tx.Where("email = ?", email).Take(&existing).Error
@@ -270,7 +273,7 @@ func (l *AuthLogic) Login(ctx context.Context, username, password string) (*mode
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
 		return nil, nil, ErrInvalidCredentials
 	}
-	if err := validateUserCanUseSession(&user); err != nil {
+	if err := validateUserCanLogin(&user); err != nil {
 		return nil, nil, err
 	}
 
@@ -286,28 +289,17 @@ func (l *AuthLogic) Login(ctx context.Context, username, password string) (*mode
 	return &user, session, nil
 }
 
-func validateUserCanUseSession(user *models.User) error {
+func validateUserCanLogin(user *models.User) error {
 	if user == nil {
 		return ErrUnauthorized
 	}
 	switch user.Status {
 	case models.UserStatusDisabled:
 		return ErrUserDisabled
-	case models.UserStatusNeedsEmailBinding:
-		return ErrEmailBindingRequired
 	case models.UserStatusPendingEmailVerification:
 		return ErrEmailVerificationRequired
 	}
-	if user.ForcePasswordChange {
-		return ErrPasswordChangeRequired
-	}
-	if strings.TrimSpace(user.Email) == "" {
-		return ErrEmailBindingRequired
-	}
-	if user.EmailVerifiedAt == nil {
-		return ErrEmailVerificationRequired
-	}
-	if user.Status != "" && user.Status != models.UserStatusActive {
+	if user.Status != "" && user.Status != models.UserStatusActive && user.Status != models.UserStatusNeedsEmailBinding {
 		return ErrEmailVerificationRequired
 	}
 	return nil

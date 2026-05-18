@@ -483,21 +483,49 @@ func TestAuthHandlerTurnstileProtectsLoginRegisterAndVerificationSend(t *testing
 }
 
 func TestAuthHandlerEmailVerificationSendDoesNotEnumerateUnknownEmails(t *testing.T) {
-	_, server := newAuthHandlerTestServerWithDeps(t)
+	deps, server := newAuthHandlerTestServerWithDeps(t)
 	defer server.Close()
 
-	response := postAuthJSON(t, server.URL+"/api/v1/auth/email-verification/send", map[string]any{
-		"email":   "missing@example.com",
-		"purpose": logics.EmailVerificationPurposeRegistration,
-	})
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(response.Body)
-		t.Fatalf("status = %d, want 200, body = %s", response.StatusCode, string(body))
-	}
-	envelope := decodeEnvelope(t, response.Body)
-	if !envelope.OK {
-		t.Fatal("envelope OK = false, want indistinguishable success")
+	for _, tc := range []struct {
+		name  string
+		email string
+	}{
+		{name: "unknown", email: "missing@example.com"},
+		{name: "active", email: "active@example.com"},
+		{name: "pending cooldown", email: "pending@example.com"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			switch tc.name {
+			case "active":
+				registerVerifiedAuthHandlerTestUser(t, deps, "active")
+			case "pending cooldown":
+				user, err := deps.authLogic.RegisterWithInput(context.Background(), logics.RegisterInput{
+					Username:        "pending",
+					Email:           "pending@example.com",
+					Password:        "secret-123",
+					ConfirmPassword: "secret-123",
+				})
+				if err != nil {
+					t.Fatalf("RegisterWithInput(pending) error = %v", err)
+				}
+				if user.Status != models.UserStatusPendingEmailVerification {
+					t.Fatalf("pending user status = %q, want %q", user.Status, models.UserStatusPendingEmailVerification)
+				}
+			}
+			response := postAuthJSON(t, server.URL+"/api/v1/auth/email-verification/send", map[string]any{
+				"email":   tc.email,
+				"purpose": logics.EmailVerificationPurposeRegistration,
+			})
+			defer response.Body.Close()
+			if response.StatusCode != http.StatusOK {
+				body, _ := io.ReadAll(response.Body)
+				t.Fatalf("status = %d, want 200, body = %s", response.StatusCode, string(body))
+			}
+			envelope := decodeEnvelope(t, response.Body)
+			if !envelope.OK {
+				t.Fatal("envelope OK = false, want indistinguishable success")
+			}
+		})
 	}
 }
 

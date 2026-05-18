@@ -241,7 +241,7 @@ func (h *AuthHandler) handleSendEmailVerification() (method, relativePath string
 			Email:   request.Email,
 			Purpose: request.Purpose,
 		}); err != nil {
-			if errors.Is(err, logics.ErrEmailVerificationNotFound) {
+			if isIndistinguishableEmailVerificationSendError(err) {
 				return gin.H{"sent": true}, nil, nil
 			}
 			return nil, []resp.ResOpt{resp.WithCode(authStatusCode(err, http.StatusBadRequest))}, err
@@ -325,6 +325,13 @@ func (h *AuthHandler) verifyTurnstile(c *gin.Context, token string, protected fu
 		return fmt.Errorf("turnstile verifier is not configured")
 	}
 	return h.turnstileVerifier.Verify(c.Request.Context(), token, c.ClientIP())
+}
+
+func isIndistinguishableEmailVerificationSendError(err error) bool {
+	return errors.Is(err, logics.ErrEmailVerificationNotFound) ||
+		errors.Is(err, logics.ErrEmailVerificationInvalidState) ||
+		errors.Is(err, logics.ErrEmailVerificationCooldown) ||
+		errors.Is(err, logics.ErrEmailVerificationTooManyAttempts)
 }
 
 func authStatusCode(err error, fallback int) int {
