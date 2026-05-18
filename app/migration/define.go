@@ -186,13 +186,11 @@ func migratePublicAdminBackoffice(tx *gorm.DB) error {
 		return err
 	}
 
-	return tx.Model(&models.User{}).
-		Where("email = '' OR email IS NULL").
-		Updates(map[string]any{
-			"display_name":          gorm.Expr("username"),
-			"status":                models.UserStatusNeedsEmailBinding,
-			"force_password_change": false,
-		}).Error
+	return tx.Model(&models.User{}).Where("1 = 1").Updates(map[string]any{
+		"display_name":          gorm.Expr("username"),
+		"status":                models.UserStatusNeedsEmailBinding,
+		"force_password_change": false,
+	}).Error
 }
 
 type approvalInteractionRequest struct {

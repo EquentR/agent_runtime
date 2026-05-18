@@ -316,6 +316,15 @@ func TestPublicAdminBackofficeMigrationCreatesSecurityAndModelTables(t *testing.
 	}
 }
 
+func TestPublicAdminBackofficeMigrationCreatesAdminAuditActorEmailColumn(t *testing.T) {
+	db := openMigrationTestDB(t)
+	runAllMigrationsForTest(t, db)
+
+	if !db.Migrator().HasColumn(&models.AdminAuditEvent{}, "actor_email") {
+		t.Fatal("admin_audit_events.actor_email column missing")
+	}
+}
+
 func TestPublicAdminBackofficeMigrationExtendsUsers(t *testing.T) {
 	db := openMigrationTestDB(t)
 	runAllMigrationsForTest(t, db)
@@ -333,6 +342,40 @@ func TestPublicAdminBackofficeMigrationExtendsUsers(t *testing.T) {
 	}
 }
 
+func TestPublicAdminBackofficeMigrationBackfillsUsersWithExistingEmail(t *testing.T) {
+	db := openMigrationTestDB(t)
+	runMigrationsThroughForTest(t, db, "0.1.4")
+	if err := db.Create(&models.User{
+		Username:            "mailful",
+		PasswordHash:        "hash",
+		Role:                models.UserRoleUser,
+		Email:               "mailful@example.com",
+		DisplayName:         "Previous Name",
+		Status:              models.UserStatusActive,
+		ForcePasswordChange: true,
+	}).Error; err != nil {
+		t.Fatalf("seed pre-0.1.5 user: %v", err)
+	}
+	runRemainingMigrationsForTest(t, db)
+
+	var user models.User
+	if err := db.Where("username = ?", "mailful").Take(&user).Error; err != nil {
+		t.Fatalf("load migrated user: %v", err)
+	}
+	if user.Email != "mailful@example.com" {
+		t.Fatalf("email = %q, want %q", user.Email, "mailful@example.com")
+	}
+	if user.Status != models.UserStatusNeedsEmailBinding {
+		t.Fatalf("status = %q, want %q", user.Status, models.UserStatusNeedsEmailBinding)
+	}
+	if user.DisplayName != user.Username {
+		t.Fatalf("display_name = %q, want username %q", user.DisplayName, user.Username)
+	}
+	if user.ForcePasswordChange {
+		t.Fatal("force_password_change = true, want false")
+	}
+}
+
 func TestPublicAdminBackofficeMigrationMarksLegacyUsersForEmailBinding(t *testing.T) {
 	db := openMigrationTestDB(t)
 	runMigrationsThroughForTest(t, db, "0.1.4")
@@ -347,6 +390,26 @@ func TestPublicAdminBackofficeMigrationMarksLegacyUsersForEmailBinding(t *testin
 	}
 	if user.Status != models.UserStatusNeedsEmailBinding {
 		t.Fatalf("status = %q, want %q", user.Status, models.UserStatusNeedsEmailBinding)
+	}
+}
+
+func TestPublicAdminBackofficeCustomLLMModelProviderIDUniquePerOwner(t *testing.T) {
+	db := openMigrationTestDB(t)
+	runAllMigrationsForTest(t, db)
+
+	first := newCustomLLMModelForTest("custom_1", 1, "openai-custom")
+	if err := db.Create(&first).Error; err != nil {
+		t.Fatalf("create first custom model: %v", err)
+	}
+
+	secondOwnerSameProvider := newCustomLLMModelForTest("custom_2", 2, "openai-custom")
+	if err := db.Create(&secondOwnerSameProvider).Error; err != nil {
+		t.Fatalf("same provider_id for different owner should be allowed: %v", err)
+	}
+
+	sameOwnerSameProvider := newCustomLLMModelForTest("custom_3", 1, "openai-custom")
+	if err := db.Create(&sameOwnerSameProvider).Error; err == nil {
+		t.Fatal("same provider_id for same owner was allowed")
 	}
 }
 
@@ -768,6 +831,21 @@ func openMigrationTestDB(t *testing.T) *gorm.DB {
 		t.Fatalf("open migration test db: %v", err)
 	}
 	return database
+}
+
+func newCustomLLMModelForTest(id string, ownerUserID uint64, providerID string) models.CustomLLMModel {
+	return models.CustomLLMModel{
+		ID:               id,
+		OwnerUserID:      ownerUserID,
+		ProviderID:       providerID,
+		ModelID:          "gpt-test",
+		DisplayName:      "GPT Test",
+		ProviderType:     "openai_responses",
+		EncryptedAPIKey:  "encrypted-key",
+		Scope:            "owner",
+		Enabled:          true,
+		ContextMaxTokens: 8192,
+	}
 }
 
 func runAllMigrationsForTest(t *testing.T, database *gorm.DB) {
