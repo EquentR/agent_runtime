@@ -3,6 +3,7 @@ package migration
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/EquentR/agent_runtime/core/agent"
 	"github.com/EquentR/agent_runtime/core/approvals"
 	"github.com/EquentR/agent_runtime/core/attachments"
+	"github.com/EquentR/agent_runtime/core/audit"
 	"github.com/EquentR/agent_runtime/core/interactions"
 	"github.com/EquentR/agent_runtime/core/memory"
 	"github.com/EquentR/agent_runtime/core/prompt"
@@ -19,6 +21,11 @@ import (
 	"github.com/EquentR/agent_runtime/pkg/db"
 	"github.com/EquentR/agent_runtime/pkg/log"
 	"github.com/EquentR/agent_runtime/pkg/migrate"
+	"github.com/glebarez/sqlite"
+	"github.com/hashicorp/go-version"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+	"gorm.io/gorm/logger"
 )
 
 // TestBootstrapMigratesTaskTables 验证迁移启动后会创建任务相关表。
@@ -289,6 +296,57 @@ func TestMigrationAddsConversationAttachmentsTable(t *testing.T) {
 	}
 	if versionCount != 1 {
 		t.Fatalf("data_versions row count = %d, want 1", versionCount)
+	}
+}
+
+func TestPublicAdminBackofficeMigrationCreatesSecurityAndModelTables(t *testing.T) {
+	db := openMigrationTestDB(t)
+	runAllMigrationsForTest(t, db)
+
+	for _, table := range []string{
+		"system_settings",
+		"email_verifications",
+		"admin_audit_events",
+		"llm_model_overrides",
+		"custom_llm_models",
+	} {
+		if !db.Migrator().HasTable(table) {
+			t.Fatalf("table %s was not created", table)
+		}
+	}
+}
+
+func TestPublicAdminBackofficeMigrationExtendsUsers(t *testing.T) {
+	db := openMigrationTestDB(t)
+	runAllMigrationsForTest(t, db)
+
+	for _, column := range []string{
+		"email",
+		"display_name",
+		"status",
+		"email_verified_at",
+		"force_password_change",
+	} {
+		if !db.Migrator().HasColumn(&models.User{}, column) {
+			t.Fatalf("users.%s column missing", column)
+		}
+	}
+}
+
+func TestPublicAdminBackofficeMigrationMarksLegacyUsersForEmailBinding(t *testing.T) {
+	db := openMigrationTestDB(t)
+	runMigrationsThroughForTest(t, db, "0.1.4")
+	if err := db.Create(&models.User{Username: "legacy", PasswordHash: "hash", Role: models.UserRoleAdmin}).Error; err != nil {
+		t.Fatalf("seed legacy user: %v", err)
+	}
+	runRemainingMigrationsForTest(t, db)
+
+	var user models.User
+	if err := db.Where("username = ?", "legacy").Take(&user).Error; err != nil {
+		t.Fatalf("load migrated user: %v", err)
+	}
+	if user.Status != models.UserStatusNeedsEmailBinding {
+		t.Fatalf("status = %q, want %q", user.Status, models.UserStatusNeedsEmailBinding)
 	}
 }
 
@@ -697,4 +755,227 @@ func tableForeignKeys(t *testing.T, table string) []pragmaForeignKeyInfo {
 		t.Fatalf("PRAGMA foreign_key_list(%s) error = %v", table, err)
 	}
 	return foreignKeys
+}
+
+func openMigrationTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
+
+	dsn := "file:" + t.TempDir() + "/migration.db?mode=memory&cache=shared"
+	database, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Silent),
+	})
+	if err != nil {
+		t.Fatalf("open migration test db: %v", err)
+	}
+	return database
+}
+
+func runAllMigrationsForTest(t *testing.T, database *gorm.DB) {
+	t.Helper()
+
+	if len(versionMigrations) == 0 {
+		t.Fatal("versionMigrations is empty")
+	}
+	runMigrationsThroughForTest(t, database, versionMigrations[len(versionMigrations)-1].Version)
+}
+
+func runMigrationsThroughForTest(t *testing.T, database *gorm.DB, targetVersion string) {
+	t.Helper()
+
+	ensureMigrationVersionForTest(t, database)
+	for _, migration := range versionMigrations {
+		if compareMigrationVersionsForTest(t, migration.Version, targetVersion) > 0 {
+			continue
+		}
+		runMigrationVersionForTest(t, database, migration.Version)
+	}
+}
+
+func runRemainingMigrationsForTest(t *testing.T, database *gorm.DB) {
+	t.Helper()
+
+	currentVersion := currentMigrationVersionForTest(t, database)
+	for _, migration := range versionMigrations {
+		if compareMigrationVersionsForTest(t, migration.Version, currentVersion) <= 0 {
+			continue
+		}
+		runMigrationVersionForTest(t, database, migration.Version)
+	}
+}
+
+func ensureMigrationVersionForTest(t *testing.T, database *gorm.DB) {
+	t.Helper()
+
+	if err := database.AutoMigrate(&migrate.DataVersion{}); err != nil {
+		t.Fatalf("AutoMigrate(data_versions) error = %v", err)
+	}
+	var count int64
+	if err := database.Model(&migrate.DataVersion{}).Where("id = ?", 1).Count(&count).Error; err != nil {
+		t.Fatalf("count data_versions error = %v", err)
+	}
+	if count == 0 {
+		if err := database.Create(&migrate.DataVersion{ID: 1, Version: "0.0.0"}).Error; err != nil {
+			t.Fatalf("seed data version error = %v", err)
+		}
+	}
+}
+
+func currentMigrationVersionForTest(t *testing.T, database *gorm.DB) string {
+	t.Helper()
+
+	ensureMigrationVersionForTest(t, database)
+	var dataVersion migrate.DataVersion
+	if err := database.First(&dataVersion, "id = ?", 1).Error; err != nil {
+		t.Fatalf("load data version error = %v", err)
+	}
+	return dataVersion.Version
+}
+
+func compareMigrationVersionsForTest(t *testing.T, left string, right string) int {
+	t.Helper()
+
+	leftVersion, err := version.NewVersion(left)
+	if err != nil {
+		t.Fatalf("parse migration version %q: %v", left, err)
+	}
+	rightVersion, err := version.NewVersion(right)
+	if err != nil {
+		t.Fatalf("parse migration version %q: %v", right, err)
+	}
+	return leftVersion.Compare(rightVersion)
+}
+
+func runMigrationVersionForTest(t *testing.T, database *gorm.DB, migrationVersion string) {
+	t.Helper()
+
+	if err := database.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&migrate.DataVersion{}).Where("id = ?", 1).Update("version", migrationVersion).Error; err != nil {
+			return err
+		}
+		return applyMigrationVersionForTest(tx, migrationVersion)
+	}); err != nil {
+		t.Fatalf("run migration %s error = %v", migrationVersion, err)
+	}
+}
+
+func applyMigrationVersionForTest(tx *gorm.DB, migrationVersion string) error {
+	switch migrationVersion {
+	case "0.0.1":
+		return tx.AutoMigrate(&migrate.DataVersion{})
+	case "0.0.2":
+		return tx.AutoMigrate(&coretasks.Task{}, &coretasks.TaskEvent{})
+	case "0.0.3":
+		return tx.AutoMigrate(&memory.LongTermMemory{})
+	case "0.0.4":
+		return tx.AutoMigrate(&agent.Conversation{}, &agent.ConversationMessage{})
+	case "0.0.5":
+		return tx.AutoMigrate(&models.User{}, &models.UserSession{})
+	case "0.0.6":
+		return tx.AutoMigrate(&audit.Run{}, &audit.Event{}, &audit.Artifact{})
+	case "0.0.7":
+		return migrateLegacyUserRolesForTest(tx)
+	case "0.0.8":
+		return tx.AutoMigrate(&prompt.PromptDocument{}, &prompt.PromptBinding{})
+	case "0.0.9":
+		return tx.AutoMigrate(&coretasks.Task{})
+	case "0.1.0":
+		return tx.AutoMigrate(&approvals.ToolApproval{})
+	case "0.1.1":
+		return migrateInteractionsForTest(tx)
+	case "0.1.2":
+		return tx.AutoMigrate(&agent.Conversation{})
+	case "0.1.3":
+		return tx.AutoMigrate(&agent.Conversation{})
+	case "0.1.4":
+		return tx.AutoMigrate(&attachments.Attachment{})
+	case "0.1.5":
+		return migratePublicAdminBackoffice(tx)
+	default:
+		return fmt.Errorf("migration test helper does not handle version %s", migrationVersion)
+	}
+}
+
+func migrateLegacyUserRolesForTest(tx *gorm.DB) error {
+	if err := tx.AutoMigrate(&models.User{}, &models.UserSession{}); err != nil {
+		return err
+	}
+
+	var users []models.User
+	if err := tx.Order("id asc").Find(&users).Error; err != nil {
+		return err
+	}
+	if len(users) == 0 {
+		return nil
+	}
+
+	adminFound := false
+	for _, user := range users {
+		if user.Role == models.UserRoleAdmin {
+			adminFound = true
+			break
+		}
+	}
+	if adminFound {
+		return nil
+	}
+
+	if err := tx.Model(&models.User{}).
+		Where("id = ?", users[0].ID).
+		Updates(map[string]any{"role": models.UserRoleAdmin}).Error; err != nil {
+		return err
+	}
+	if len(users) == 1 {
+		return nil
+	}
+
+	return tx.Model(&models.User{}).
+		Where("role = ? OR role = ''", models.UserRoleAdmin).
+		Where("id <> ?", users[0].ID).
+		Update("role", models.UserRoleUser).Error
+}
+
+func migrateInteractionsForTest(tx *gorm.DB) error {
+	if err := tx.AutoMigrate(&interactions.Interaction{}); err != nil {
+		return err
+	}
+	if !tx.Migrator().HasTable(&approvals.ToolApproval{}) {
+		return nil
+	}
+
+	var existingApprovals []approvals.ToolApproval
+	if err := tx.Order("created_at asc").Order("id asc").Find(&existingApprovals).Error; err != nil {
+		return err
+	}
+	if len(existingApprovals) == 0 {
+		return nil
+	}
+
+	backfilled := make([]interactions.Interaction, 0, len(existingApprovals))
+	for _, approval := range existingApprovals {
+		requestJSON, err := buildApprovalInteractionRequestJSON(approval)
+		if err != nil {
+			return err
+		}
+		responseJSON, respondedBy, respondedAt, err := buildApprovalInteractionResponse(approval)
+		if err != nil {
+			return err
+		}
+		backfilled = append(backfilled, interactions.Interaction{
+			ID:             approval.ID,
+			TaskID:         approval.TaskID,
+			ConversationID: approval.ConversationID,
+			StepIndex:      approval.StepIndex,
+			ToolCallID:     approval.ToolCallID,
+			Kind:           interactions.KindApproval,
+			Status:         interactions.Status(approval.Status),
+			RequestJSON:    requestJSON,
+			ResponseJSON:   responseJSON,
+			RespondedBy:    respondedBy,
+			RespondedAt:    respondedAt,
+			CreatedAt:      approval.CreatedAt,
+			UpdatedAt:      approval.UpdatedAt,
+		})
+	}
+
+	return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&backfilled).Error
 }

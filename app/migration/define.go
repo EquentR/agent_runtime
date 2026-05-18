@@ -169,6 +169,32 @@ var to014 = migrate.NewMigration("0.1.4", func(tx *gorm.DB) error {
 	return tx.AutoMigrate(&attachments.Attachment{})
 })
 
+// to015 为公网管理员后台创建安全与模型配置表，并标记旧用户需要绑定邮箱。
+var to015 = migrate.NewMigration("0.1.5", func(tx *gorm.DB) error {
+	return migratePublicAdminBackoffice(tx)
+})
+
+func migratePublicAdminBackoffice(tx *gorm.DB) error {
+	if err := tx.AutoMigrate(
+		&models.User{},
+		&models.SystemSetting{},
+		&models.EmailVerification{},
+		&models.AdminAuditEvent{},
+		&models.LLMModelOverride{},
+		&models.CustomLLMModel{},
+	); err != nil {
+		return err
+	}
+
+	return tx.Model(&models.User{}).
+		Where("email = '' OR email IS NULL").
+		Updates(map[string]any{
+			"display_name":          gorm.Expr("username"),
+			"status":                models.UserStatusNeedsEmailBinding,
+			"force_password_change": false,
+		}).Error
+}
+
 type approvalInteractionRequest struct {
 	ToolName         string     `json:"tool_name"`
 	ArgumentsSummary string     `json:"arguments_summary"`
