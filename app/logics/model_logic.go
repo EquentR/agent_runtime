@@ -30,7 +30,7 @@ var (
 	ErrModelUnauthorized      = errors.New("无权使用该模型")
 	ErrModelContextTooSmall   = errors.New("模型 context 上限不能小于 4")
 	ErrModelProviderConflict  = errors.New("自定义模型 provider_id 不能与配置文件 provider 冲突")
-	ErrModelSelectionConflict = errors.New("自定义模型 provider_id/model_id 与已启用共享模型冲突")
+	ErrModelSelectionConflict = errors.New("自定义模型 provider_id/model_id 与已启用可见模型冲突")
 	ErrModelInvalidScope      = errors.New("模型 scope 无效")
 )
 
@@ -536,7 +536,13 @@ func (l *ModelLogic) customProvidersForUse(ctx context.Context, user models.User
 		return nil, err
 	}
 	providers := make([]coretypes.LLMProvider, 0, len(rows))
+	seenSelections := make(map[string]struct{}, len(rows))
 	for _, row := range rows {
+		selectionKey := modelKey(row.ProviderID, row.ModelID)
+		if _, ok := seenSelections[selectionKey]; ok {
+			return nil, ErrModelSelectionConflict
+		}
+		seenSelections[selectionKey] = struct{}{}
 		resolved, err := l.resolvedCustom(row)
 		if err != nil {
 			return nil, err
@@ -549,14 +555,17 @@ func (l *ModelLogic) customProvidersForUse(ctx context.Context, user models.User
 func (l *ModelLogic) resolveCustomForUse(ctx context.Context, user models.User, providerID string, modelID string) (*coreagent.ResolvedModel, error) {
 	query := l.customUseQuery(ctx, user).
 		Where("provider_id = ? AND model_id = ? AND enabled = ?", strings.TrimSpace(providerID), strings.TrimSpace(modelID), true)
-	var row models.CustomLLMModel
-	if err := query.Order(ownerPreferredOrder(user.ID)).Take(&row).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrModelUnauthorized
-		}
+	var rows []models.CustomLLMModel
+	if err := query.Order(ownerPreferredOrder(user.ID)).Order("updated_at desc").Order("id desc").Limit(2).Find(&rows).Error; err != nil {
 		return nil, err
 	}
-	return l.resolvedCustom(row)
+	if len(rows) == 0 {
+		return nil, ErrModelUnauthorized
+	}
+	if len(rows) > 1 {
+		return nil, ErrModelSelectionConflict
+	}
+	return l.resolvedCustom(rows[0])
 }
 
 func (l *ModelLogic) customUseQuery(ctx context.Context, user models.User) *gorm.DB {

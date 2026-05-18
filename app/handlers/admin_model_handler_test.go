@@ -254,6 +254,61 @@ func TestAdminModelHandlerRejectsInvalidCustomModelScopeWithBadRequest(t *testin
 	}
 }
 
+func TestAdminModelHandlerRejectsCustomModelSelectionConflictWithBadRequest(t *testing.T) {
+	deps, _ := newAdminHandlerTestServer(t)
+	if err := deps.db.AutoMigrate(&models.LLMModelOverride{}, &models.CustomLLMModel{}); err != nil {
+		t.Fatalf("AutoMigrate(model tables) error = %v", err)
+	}
+	codec, err := secret.NewCodec("test-secret")
+	if err != nil {
+		t.Fatalf("NewCodec() error = %v", err)
+	}
+	modelLogic, err := logics.NewModelLogic(deps.db, nil, codec)
+	if err != nil {
+		t.Fatalf("NewModelLogic() error = %v", err)
+	}
+	otherOwner := seedAdminHandlerUser(t, deps.db, "model-owner", "model-owner@example.com", models.UserRoleAdmin, models.UserStatusActive, true)
+
+	engine := rest.Init()
+	authMiddleware := NewAuthMiddleware(deps.authLogic)
+	NewAdminModelHandler(modelLogic, deps.auditLogic, fakeModelTester{}, authMiddleware.RequireAdmin()).Register(engine.Group("/api/v1"))
+	server := httptest.NewServer(engine)
+	defer server.Close()
+
+	first := doAdminRequest(t, http.MethodPost, server.URL+"/api/v1/admin/models/custom", map[string]any{
+		"provider_id":        "conflict-handler-provider",
+		"model_id":           "conflict-handler-model",
+		"display_name":       "Conflict One",
+		"provider_type":      coretypes.LLMTypeOpenAICompletions,
+		"api_key":            "admin-secret",
+		"scope":              logics.ModelScopeGlobal,
+		"context_max_tokens": int64(32768),
+	}, deps.adminCookie)
+	defer first.Body.Close()
+	if envelope := decodeEnvelope(t, first.Body); !envelope.OK {
+		t.Fatalf("first create response OK = false, message = %s, data = %s", envelope.Message, string(envelope.Data))
+	}
+
+	second := doAdminRequest(t, http.MethodPost, server.URL+"/api/v1/admin/models/custom", map[string]any{
+		"owner_user_id":      otherOwner.ID,
+		"provider_id":        "conflict-handler-provider",
+		"model_id":           "conflict-handler-model",
+		"display_name":       "Conflict Two",
+		"provider_type":      coretypes.LLMTypeOpenAICompletions,
+		"api_key":            "admin-secret",
+		"scope":              logics.ModelScopeAdmin,
+		"context_max_tokens": int64(32768),
+	}, deps.adminCookie)
+	defer second.Body.Close()
+	envelope := decodeEnvelope(t, second.Body)
+	if envelope.Code != http.StatusBadRequest {
+		t.Fatalf("envelope.Code = %d, want 400", envelope.Code)
+	}
+	if envelope.OK {
+		t.Fatalf("response OK = true, want selection conflict failure")
+	}
+}
+
 func TestAdminModelHandlerCanClearCustomModelBaseURL(t *testing.T) {
 	deps, _ := newAdminHandlerTestServer(t)
 	if err := deps.db.AutoMigrate(&models.LLMModelOverride{}, &models.CustomLLMModel{}); err != nil {

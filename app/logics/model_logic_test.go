@@ -381,6 +381,51 @@ func TestModelLogicRejectsSharedCustomModelSelectionCollisions(t *testing.T) {
 	}
 }
 
+func TestModelLogicRejectsDuplicateVisibleCustomSelectionsAtRuntime(t *testing.T) {
+	logic := newModelLogicForTest(t, nil)
+	rows := []models.CustomLLMModel{
+		{
+			ID:               "dirty_shared_1",
+			OwnerUserID:      1,
+			ProviderID:       "dirty-provider",
+			ModelID:          "dirty-model",
+			DisplayName:      "Dirty One",
+			ProviderType:     coretypes.LLMTypeOpenAICompletions,
+			Scope:            ModelScopeGlobal,
+			Enabled:          true,
+			ContextMaxTokens: 32768,
+			CreatedAt:        time.Now().UTC(),
+			UpdatedAt:        time.Now().UTC(),
+		},
+		{
+			ID:               "dirty_shared_2",
+			OwnerUserID:      2,
+			ProviderID:       "DIRTY-PROVIDER",
+			ModelID:          "Dirty-Model",
+			DisplayName:      "Dirty Two",
+			ProviderType:     coretypes.LLMTypeOpenAICompletions,
+			Scope:            ModelScopeAdmin,
+			Enabled:          true,
+			ContextMaxTokens: 32768,
+			CreatedAt:        time.Now().UTC(),
+			UpdatedAt:        time.Now().UTC(),
+		},
+	}
+	if err := logic.DB().Create(&rows).Error; err != nil {
+		t.Fatalf("seed duplicate custom models: %v", err)
+	}
+	admin := models.User{ID: 3, Username: "root", Role: models.UserRoleAdmin}
+
+	_, err := logic.CatalogForUser(context.Background(), admin)
+	if !errors.Is(err, ErrModelSelectionConflict) {
+		t.Fatalf("CatalogForUser(duplicate visible custom selections) error = %v, want ErrModelSelectionConflict", err)
+	}
+	_, err = logic.ResolveForUse(context.Background(), admin, "dirty-provider", "dirty-model")
+	if !errors.Is(err, ErrModelSelectionConflict) {
+		t.Fatalf("ResolveForUse(duplicate visible custom selections) error = %v, want ErrModelSelectionConflict", err)
+	}
+}
+
 func TestModelLogicRejectsInvalidCustomModelScope(t *testing.T) {
 	logic := newModelLogicForTest(t, nil)
 	_, err := logic.CreateCustomModel(context.Background(), CreateCustomModelInput{
