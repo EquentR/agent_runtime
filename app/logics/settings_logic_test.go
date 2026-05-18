@@ -569,6 +569,22 @@ func TestSettingsLogicPublicRegistrationExplicitFalseDefaultStaysDisabled(t *tes
 	}
 }
 
+func TestSettingsLogicGetPublicTurnstileDoesNotDecryptCorruptSecret(t *testing.T) {
+	logic, db, _ := newSettingsLogicTestSubject(t, SettingsDefaults{})
+	seedCorruptTurnstileSetting(t, db)
+
+	settings, err := logic.GetPublicTurnstile(context.Background())
+	if err != nil {
+		t.Fatalf("GetPublicTurnstile() error = %v, want public fields without decrypting secret", err)
+	}
+	if !settings.Enabled || settings.SiteKey != "site-key" || !settings.ProtectLogin || !settings.ProtectRegistration || !settings.ProtectVerification {
+		t.Fatalf("public turnstile settings = %#v, want non-sensitive stored fields", settings)
+	}
+	if _, err := logic.GetTurnstile(context.Background()); err == nil {
+		t.Fatal("GetTurnstile() error = nil, want corrupt secret decrypt error on private path")
+	}
+}
+
 func newSettingsLogicTestSubject(t *testing.T, defaults SettingsDefaults) (*SettingsLogic, *gorm.DB, *secret.Codec) {
 	t.Helper()
 

@@ -133,6 +133,14 @@ func (h *AuthHandler) handleRegister() (method, relativePath string, wrapper res
 		if err != nil {
 			return nil, []resp.ResOpt{resp.WithCode(authStatusCode(err, http.StatusBadRequest))}, err
 		}
+		if user.Status == models.UserStatusActive {
+			loggedIn, session, err := h.logic.Login(c.Request.Context(), request.Username, request.Password)
+			if err != nil {
+				return nil, []resp.ResOpt{resp.WithCode(authStatusCode(err, http.StatusUnauthorized))}, err
+			}
+			h.setSessionCookie(c, session)
+			user = loggedIn
+		}
 		return authUserResponse(user), nil, nil
 	}, nil
 }

@@ -92,20 +92,15 @@ describe('session helpers', () => {
   })
 
   it('registers a verified first admin with email and then keeps the full auth user active', async () => {
-    vi.mocked(fetch)
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ ok: true, code: 200, message: 'OK', data: activeAdminUser, time: '' }),
-      } as Response)
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ ok: true, code: 200, message: 'OK', data: activeAdminUser, time: '' }),
-      } as Response)
+    vi.mocked(fetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ ok: true, code: 200, message: 'OK', data: activeAdminUser, time: '' }),
+    } as Response)
 
     const result = await register('alice', 'alice@example.com', 'secret-123', 'secret-123')
 
-    expect(fetch).toHaveBeenNthCalledWith(1, '/api/v1/auth/register', expect.objectContaining({ method: 'POST' }))
-    expect(fetch).toHaveBeenNthCalledWith(2, '/api/v1/auth/login', expect.objectContaining({ method: 'POST' }))
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(fetch).toHaveBeenCalledWith('/api/v1/auth/register', expect.objectContaining({ method: 'POST' }))
     expect(result).toEqual({ user: activeAdminUser, verification_required: false })
     expect(JSON.parse(localStorage.getItem(SESSION_STORAGE_KEY) ?? '{}')).toEqual(activeAdminUser)
     expect(getSessionName()).toBe('alice')

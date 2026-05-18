@@ -154,6 +154,44 @@ func TestAuthHandlerRegisterLoginLogoutFlow(t *testing.T) {
 	}
 }
 
+func TestAuthHandlerRegisterCreatesSessionForActiveFirstUser(t *testing.T) {
+	server := newAuthHandlerTestServer(t)
+
+	register := postAuthJSON(t, server.URL+"/api/v1/auth/register", map[string]any{
+		"username":         "first",
+		"email":            "first@example.com",
+		"password":         "secret-123",
+		"confirm_password": "secret-123",
+	})
+	defer register.Body.Close()
+	if register.StatusCode != http.StatusOK {
+		t.Fatalf("register status = %d, want 200", register.StatusCode)
+	}
+	registered := decodeAuthUserDetailsResponse(t, register.Body)
+	if registered.Status != models.UserStatusActive || !registered.EmailVerified {
+		t.Fatalf("registered first user = %#v, want active verified user", registered)
+	}
+	sessionCookie := mustFindCookie(t, register.Cookies(), authSessionCookieName)
+	if sessionCookie.Value == "" {
+		t.Fatal("register session cookie value is empty")
+	}
+
+	meRequest, err := http.NewRequest(http.MethodGet, server.URL+"/api/v1/auth/me", nil)
+	if err != nil {
+		t.Fatalf("NewRequest(me) error = %v", err)
+	}
+	meRequest.AddCookie(sessionCookie)
+	meResponse, err := http.DefaultClient.Do(meRequest)
+	if err != nil {
+		t.Fatalf("Do(me) error = %v", err)
+	}
+	defer meResponse.Body.Close()
+	current := decodeAuthUserDetailsResponse(t, meResponse.Body)
+	if current.ID != registered.ID || current.Username != "first" {
+		t.Fatalf("current user = %#v, want registered first user", current)
+	}
+}
+
 func TestAuthMiddlewareRejectsAnonymousTaskAndConversationRequests(t *testing.T) {
 	server := newAuthHandlerTestServer(t)
 

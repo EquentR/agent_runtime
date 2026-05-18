@@ -225,9 +225,28 @@ func (l *SettingsLogic) GetTurnstile(ctx context.Context) (TurnstileSettings, er
 }
 
 func (l *SettingsLogic) GetPublicTurnstile(ctx context.Context) (PublicTurnstileSettings, error) {
-	settings, err := l.loadTurnstile(ctx)
+	settings, err := l.loadPublicTurnstile(ctx)
 	if err != nil {
 		return PublicTurnstileSettings{}, err
+	}
+	return settings, nil
+}
+
+func (l *SettingsLogic) loadPublicTurnstile(ctx context.Context) (PublicTurnstileSettings, error) {
+	var payload turnstileSettingPayload
+	found, err := l.loadSetting(ctx, settingKeyTurnstile, &payload)
+	if err != nil {
+		return PublicTurnstileSettings{}, err
+	}
+	settings := l.defaults.Turnstile
+	if found {
+		settings = TurnstileSettings{
+			Enabled:             payload.Enabled,
+			SiteKey:             payload.SiteKey,
+			ProtectLogin:        payload.ProtectLogin,
+			ProtectRegistration: payload.ProtectRegistration,
+			ProtectVerification: payload.ProtectVerification,
+		}
 	}
 	return PublicTurnstileSettings{
 		Enabled:             settings.Enabled,

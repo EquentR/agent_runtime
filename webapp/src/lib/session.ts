@@ -116,7 +116,8 @@ export async function register(username: string, email: string, password: string
     return { user, verification_required: true }
   }
 
-  return { user: await login(username, password, turnstileToken), verification_required: false }
+  setSessionUser(user)
+  return { user, verification_required: false }
 }
 
 export async function verifyRegistrationEmail(userId: number, email: string, code: string) {

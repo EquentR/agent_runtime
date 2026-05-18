@@ -226,4 +226,60 @@ describe('LoginView', () => {
     expect(render).toHaveBeenCalledWith(expect.any(HTMLElement), expect.objectContaining({ sitekey: 'site-key' }))
     expect(session.register).toHaveBeenCalledWith('bob', 'bob@example.com', 'secret-123', 'secret-123', 'register-token')
   })
+
+  it('renders a fresh protected login turnstile after registration enters verify mode', async () => {
+    api.fetchPublicTurnstileSettings.mockResolvedValue({
+      enabled: true,
+      site_key: 'site-key',
+      protect_login: true,
+      protect_registration: true,
+      protect_verification: false,
+    })
+    session.register.mockResolvedValue({ user: pendingUser, verification_required: true })
+    session.verifyRegistrationEmail.mockResolvedValue({ ...pendingUser, status: 'active', email_verified: true, required_actions: [] })
+    const tokens = ['login-initial-token', 'register-token', 'verify-login-token']
+    const render = vi.fn((_element: HTMLElement, options: { callback?: (token: string) => void }) => {
+      options.callback?.(tokens.shift() ?? 'fallback-token')
+      return `widget-${render.mock.calls.length}`
+    })
+    Object.defineProperty(window, 'turnstile', {
+      configurable: true,
+      value: {
+        render,
+        reset: vi.fn(),
+        remove: vi.fn(),
+      },
+    })
+    const router = makeRouter()
+    await router.push('/login')
+    await router.isReady()
+
+    const wrapper = mount(LoginView, {
+      global: {
+        plugins: [router],
+      },
+    })
+    await flushPromises()
+
+    await wrapper.findAll('.auth-switch-button')[1].trigger('click')
+    await flushPromises()
+    await wrapper.find('#username').setValue('bob')
+    await wrapper.find('#email').setValue('bob@example.com')
+    await wrapper.find('#password').setValue('secret-123')
+    await wrapper.find('#confirmPassword').setValue('secret-123')
+    await wrapper.find('.primary-button').trigger('click')
+    await flushPromises()
+
+    expect(session.register).toHaveBeenCalledWith('bob', 'bob@example.com', 'secret-123', 'secret-123', 'register-token')
+    expect(wrapper.text()).toContain('邮箱验证码')
+    expect(render).toHaveBeenCalledTimes(3)
+
+    await wrapper.find('#verificationCode').setValue('123456')
+    await wrapper.find('.primary-button').trigger('click')
+    await flushPromises()
+
+    expect(session.verifyRegistrationEmail).toHaveBeenCalledWith(2, 'bob@example.com', '123456')
+    expect(session.login).toHaveBeenCalledWith('bob', 'secret-123', 'verify-login-token')
+    expect(router.currentRoute.value.path).toBe('/chat')
+  })
 })
