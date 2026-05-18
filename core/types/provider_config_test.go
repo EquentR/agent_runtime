@@ -124,6 +124,33 @@ llmProvider:
 	}
 }
 
+func TestLLMProviderContextWindowDerivesOutputFromMaxCappedAtEightK(t *testing.T) {
+	provider := mustLoadLLMProvider(t, `
+llmProvider:
+  models:
+    - id: large
+      name: large-context
+      type: openai_responses
+      context:
+        max: 100000
+    - id: small
+      name: small-context
+      type: openai_responses
+      context:
+        max: 100
+`)
+
+	large := provider.FindModel("large").ContextWindow()
+	if large.Max != 100000 || large.Input != 91808 || large.Output != 8192 {
+		t.Fatalf("large ContextWindow() = %#v, want max=100000 input=91808 output=8192", large)
+	}
+
+	small := provider.FindModel("small").ContextWindow()
+	if small.Max != 100 || small.Input != 75 || small.Output != 25 {
+		t.Fatalf("small ContextWindow() = %#v, want max=100 input=75 output=25", small)
+	}
+}
+
 func TestBaseProviderSupportsAPIKeyAliasAndProviderName(t *testing.T) {
 	provider := mustLoadLLMProvider(t, `
 llmProvider:

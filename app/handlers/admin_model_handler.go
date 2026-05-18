@@ -112,6 +112,13 @@ func (h *UserModelHandler) Register(rg *gin.RouterGroup) {
 	}, options...)
 }
 
+// @Summary 管理员获取 YAML 模型目录
+// @Description 返回配置文件模型及其数据库启用状态和可用范围覆盖。
+// @Tags admin-models
+// @Produce json
+// @Success 200 {object} AdminYAMLModelCatalogSwaggerResponse
+// @Failure 401 {object} ErrorSwaggerResponse
+// @Router /admin/models [get]
 func (h *AdminModelHandler) handleListYAMLModels() (method, relativePath string, wrapper resp.JsonOptionsResultWrapper, opts []resp.WrapperOption) {
 	return http.MethodGet, "", func(c *gin.Context) (any, []resp.ResOpt, error) {
 		catalog, err := h.models.ListYAMLModels(c.Request.Context())
@@ -119,6 +126,19 @@ func (h *AdminModelHandler) handleListYAMLModels() (method, relativePath string,
 	}, nil
 }
 
+// @Summary 管理员更新 YAML 模型可用范围
+// @Description 只覆盖配置文件模型的 enabled 和 scope。
+// @Tags admin-models
+// @Accept json
+// @Produce json
+// @Param provider_id path string true "Provider ID"
+// @Param model_id path string true "Model ID"
+// @Param request body AdminYAMLModelUpdateSwaggerRequest true "YAML 模型覆盖配置"
+// @Success 200 {object} AdminYAMLModelSwaggerResponse
+// @Failure 400 {object} ErrorSwaggerResponse
+// @Failure 401 {object} ErrorSwaggerResponse
+// @Failure 404 {object} ErrorSwaggerResponse
+// @Router /admin/models/yaml/{provider_id}/{model_id} [patch]
 func (h *AdminModelHandler) handleUpdateYAMLModel() (method, relativePath string, wrapper resp.JsonOptionsResultWrapper, opts []resp.WrapperOption) {
 	return http.MethodPatch, "/yaml/:provider_id/:model_id", func(c *gin.Context) (any, []resp.ResOpt, error) {
 		actor, err := requireModelActor(c)
@@ -129,7 +149,7 @@ func (h *AdminModelHandler) handleUpdateYAMLModel() (method, relativePath string
 		if err := c.ShouldBindJSON(&request); err != nil {
 			return nil, []resp.ResOpt{resp.WithCode(http.StatusBadRequest)}, err
 		}
-		var updated coreagent.ModelOptionEntry
+		var updated logics.YAMLModelResponse
 		if err := h.models.Transaction(c.Request.Context(), func(models *logics.ModelLogic) error {
 			before, err := models.ListYAMLModels(c.Request.Context())
 			if err != nil {
@@ -153,6 +173,13 @@ func (h *AdminModelHandler) handleUpdateYAMLModel() (method, relativePath string
 	}, nil
 }
 
+// @Summary 管理员获取自定义模型列表
+// @Description 返回所有用户创建的自定义模型配置，不包含 API key 明文。
+// @Tags admin-models
+// @Produce json
+// @Success 200 {object} CustomModelListSwaggerResponse
+// @Failure 401 {object} ErrorSwaggerResponse
+// @Router /admin/models/custom [get]
 func (h *AdminModelHandler) handleListCustomModels() (method, relativePath string, wrapper resp.JsonOptionsResultWrapper, opts []resp.WrapperOption) {
 	return http.MethodGet, "/custom", func(c *gin.Context) (any, []resp.ResOpt, error) {
 		models, err := h.models.ListCustomModels(c.Request.Context())
@@ -160,6 +187,16 @@ func (h *AdminModelHandler) handleListCustomModels() (method, relativePath strin
 	}, nil
 }
 
+// @Summary 管理员创建自定义模型
+// @Description 创建管理员或指定用户拥有的自定义模型配置，API key 加密保存。
+// @Tags admin-models
+// @Accept json
+// @Produce json
+// @Param request body CustomModelCreateSwaggerRequest true "自定义模型配置"
+// @Success 200 {object} CustomModelSwaggerResponse
+// @Failure 400 {object} ErrorSwaggerResponse
+// @Failure 401 {object} ErrorSwaggerResponse
+// @Router /admin/models/custom [post]
 func (h *AdminModelHandler) handleCreateCustomModel() (method, relativePath string, wrapper resp.JsonOptionsResultWrapper, opts []resp.WrapperOption) {
 	return http.MethodPost, "/custom", func(c *gin.Context) (any, []resp.ResOpt, error) {
 		actor, err := requireModelActor(c)
@@ -189,6 +226,18 @@ func (h *AdminModelHandler) handleCreateCustomModel() (method, relativePath stri
 	}, nil
 }
 
+// @Summary 管理员更新自定义模型
+// @Description 更新任意自定义模型配置，敏感字段只在请求中覆盖，不返回明文。
+// @Tags admin-models
+// @Accept json
+// @Produce json
+// @Param id path string true "自定义模型 ID"
+// @Param request body CustomModelUpdateSwaggerRequest true "自定义模型更新"
+// @Success 200 {object} CustomModelSwaggerResponse
+// @Failure 400 {object} ErrorSwaggerResponse
+// @Failure 401 {object} ErrorSwaggerResponse
+// @Failure 404 {object} ErrorSwaggerResponse
+// @Router /admin/models/custom/{id} [put]
 func (h *AdminModelHandler) handleUpdateCustomModel() (method, relativePath string, wrapper resp.JsonOptionsResultWrapper, opts []resp.WrapperOption) {
 	return http.MethodPut, "/custom/:id", func(c *gin.Context) (any, []resp.ResOpt, error) {
 		actor, err := requireModelActor(c)
@@ -217,6 +266,15 @@ func (h *AdminModelHandler) handleUpdateCustomModel() (method, relativePath stri
 	}, nil
 }
 
+// @Summary 管理员删除自定义模型
+// @Description 删除任意自定义模型配置。
+// @Tags admin-models
+// @Produce json
+// @Param id path string true "自定义模型 ID"
+// @Success 200 {object} CustomModelDeleteSwaggerResponse
+// @Failure 401 {object} ErrorSwaggerResponse
+// @Failure 404 {object} ErrorSwaggerResponse
+// @Router /admin/models/custom/{id} [delete]
 func (h *AdminModelHandler) handleDeleteCustomModel() (method, relativePath string, wrapper resp.JsonOptionsResultWrapper, opts []resp.WrapperOption) {
 	return http.MethodDelete, "/custom/:id", func(c *gin.Context) (any, []resp.ResOpt, error) {
 		actor, err := requireModelActor(c)
@@ -240,6 +298,16 @@ func (h *AdminModelHandler) handleDeleteCustomModel() (method, relativePath stri
 	}, nil
 }
 
+// @Summary 管理员测试自定义模型
+// @Description 管理员可测试任意用户自定义模型连通性，并写入后台操作审计。
+// @Tags admin-models
+// @Produce json
+// @Param id path string true "自定义模型 ID"
+// @Success 200 {object} ModelTestSwaggerResponse
+// @Failure 401 {object} ErrorSwaggerResponse
+// @Failure 404 {object} ErrorSwaggerResponse
+// @Failure 503 {object} ErrorSwaggerResponse
+// @Router /admin/models/custom/{id}/test [post]
 func (h *AdminModelHandler) handleTestCustomModel() (method, relativePath string, wrapper resp.JsonOptionsResultWrapper, opts []resp.WrapperOption) {
 	return http.MethodPost, "/custom/:id/test", func(c *gin.Context) (any, []resp.ResOpt, error) {
 		actor, err := requireModelActor(c)
@@ -264,6 +332,13 @@ func (h *AdminModelHandler) handleTestCustomModel() (method, relativePath string
 	}, nil
 }
 
+// @Summary 获取当前用户自定义模型
+// @Description 返回当前用户拥有的自定义模型配置。
+// @Tags user-models
+// @Produce json
+// @Success 200 {object} CustomModelListSwaggerResponse
+// @Failure 401 {object} ErrorSwaggerResponse
+// @Router /users/me/models [get]
 func (h *UserModelHandler) handleListCustomModels() (method, relativePath string, wrapper resp.JsonOptionsResultWrapper, opts []resp.WrapperOption) {
 	return http.MethodGet, "", func(c *gin.Context) (any, []resp.ResOpt, error) {
 		user, err := requireModelActor(c)
@@ -275,6 +350,16 @@ func (h *UserModelHandler) handleListCustomModels() (method, relativePath string
 	}, nil
 }
 
+// @Summary 当前用户创建自定义模型
+// @Description 创建 owner-scoped 自定义模型配置，API key 加密保存。
+// @Tags user-models
+// @Accept json
+// @Produce json
+// @Param request body CustomModelCreateSwaggerRequest true "自定义模型配置"
+// @Success 200 {object} CustomModelSwaggerResponse
+// @Failure 400 {object} ErrorSwaggerResponse
+// @Failure 401 {object} ErrorSwaggerResponse
+// @Router /users/me/models [post]
 func (h *UserModelHandler) handleCreateCustomModel() (method, relativePath string, wrapper resp.JsonOptionsResultWrapper, opts []resp.WrapperOption) {
 	return http.MethodPost, "", func(c *gin.Context) (any, []resp.ResOpt, error) {
 		user, err := requireModelActor(c)
@@ -296,6 +381,17 @@ func (h *UserModelHandler) handleCreateCustomModel() (method, relativePath strin
 	}, nil
 }
 
+// @Summary 当前用户更新自定义模型
+// @Description 更新当前用户拥有的自定义模型配置。
+// @Tags user-models
+// @Accept json
+// @Produce json
+// @Param id path string true "自定义模型 ID"
+// @Param request body CustomModelUpdateSwaggerRequest true "自定义模型更新"
+// @Success 200 {object} CustomModelSwaggerResponse
+// @Failure 400 {object} ErrorSwaggerResponse
+// @Failure 401 {object} ErrorSwaggerResponse
+// @Router /users/me/models/{id} [put]
 func (h *UserModelHandler) handleUpdateCustomModel() (method, relativePath string, wrapper resp.JsonOptionsResultWrapper, opts []resp.WrapperOption) {
 	return http.MethodPut, "/:id", func(c *gin.Context) (any, []resp.ResOpt, error) {
 		user, err := requireModelActor(c)
@@ -321,6 +417,14 @@ func (h *UserModelHandler) handleUpdateCustomModel() (method, relativePath strin
 	}, nil
 }
 
+// @Summary 当前用户删除自定义模型
+// @Description 删除当前用户拥有的自定义模型配置。
+// @Tags user-models
+// @Produce json
+// @Param id path string true "自定义模型 ID"
+// @Success 200 {object} CustomModelDeleteSwaggerResponse
+// @Failure 401 {object} ErrorSwaggerResponse
+// @Router /users/me/models/{id} [delete]
 func (h *UserModelHandler) handleDeleteCustomModel() (method, relativePath string, wrapper resp.JsonOptionsResultWrapper, opts []resp.WrapperOption) {
 	return http.MethodDelete, "/:id", func(c *gin.Context) (any, []resp.ResOpt, error) {
 		user, err := requireModelActor(c)
@@ -337,6 +441,15 @@ func (h *UserModelHandler) handleDeleteCustomModel() (method, relativePath strin
 	}, nil
 }
 
+// @Summary 当前用户测试自定义模型
+// @Description 测试当前用户拥有的自定义模型连通性。
+// @Tags user-models
+// @Produce json
+// @Param id path string true "自定义模型 ID"
+// @Success 200 {object} ModelTestSwaggerResponse
+// @Failure 401 {object} ErrorSwaggerResponse
+// @Failure 503 {object} ErrorSwaggerResponse
+// @Router /users/me/models/{id}/test [post]
 func (h *UserModelHandler) handleTestCustomModel() (method, relativePath string, wrapper resp.JsonOptionsResultWrapper, opts []resp.WrapperOption) {
 	return http.MethodPost, "/:id/test", func(c *gin.Context) (any, []resp.ResOpt, error) {
 		user, err := requireModelActor(c)
@@ -410,7 +523,7 @@ func modelErrorOptions(err error) []resp.ResOpt {
 		return []resp.ResOpt{resp.WithCode(resp.NotFound)}
 	case errors.Is(err, logics.ErrModelUnauthorized):
 		return []resp.ResOpt{resp.WithCode(http.StatusUnauthorized)}
-	case errors.Is(err, logics.ErrModelContextTooSmall):
+	case errors.Is(err, logics.ErrModelContextTooSmall), errors.Is(err, logics.ErrModelProviderConflict):
 		return []resp.ResOpt{resp.WithCode(http.StatusBadRequest)}
 	default:
 		return nil

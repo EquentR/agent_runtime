@@ -15,6 +15,313 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
+        "/admin/models": {
+            "get": {
+                "description": "返回配置文件模型及其数据库启用状态和可用范围覆盖。",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-models"
+                ],
+                "summary": "管理员获取 YAML 模型目录",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.AdminYAMLModelCatalogSwaggerResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/models/custom": {
+            "get": {
+                "description": "返回所有用户创建的自定义模型配置，不包含 API key 明文。",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-models"
+                ],
+                "summary": "管理员获取自定义模型列表",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.CustomModelListSwaggerResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "创建管理员或指定用户拥有的自定义模型配置，API key 加密保存。",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-models"
+                ],
+                "summary": "管理员创建自定义模型",
+                "parameters": [
+                    {
+                        "description": "自定义模型配置",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.CustomModelCreateSwaggerRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.CustomModelSwaggerResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/models/custom/{id}": {
+            "put": {
+                "description": "更新任意自定义模型配置，敏感字段只在请求中覆盖，不返回明文。",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-models"
+                ],
+                "summary": "管理员更新自定义模型",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "自定义模型 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "自定义模型更新",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.CustomModelUpdateSwaggerRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.CustomModelSwaggerResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "description": "删除任意自定义模型配置。",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-models"
+                ],
+                "summary": "管理员删除自定义模型",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "自定义模型 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.CustomModelDeleteSwaggerResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/models/custom/{id}/test": {
+            "post": {
+                "description": "管理员可测试任意用户自定义模型连通性，并写入后台操作审计。",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-models"
+                ],
+                "summary": "管理员测试自定义模型",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "自定义模型 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ModelTestSwaggerResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/models/yaml/{provider_id}/{model_id}": {
+            "patch": {
+                "description": "只覆盖配置文件模型的 enabled 和 scope。",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-models"
+                ],
+                "summary": "管理员更新 YAML 模型可用范围",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Provider ID",
+                        "name": "provider_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Model ID",
+                        "name": "model_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "YAML 模型覆盖配置",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.AdminYAMLModelUpdateSwaggerRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.AdminYAMLModelSwaggerResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/attachments": {
             "post": {
                 "description": "上传一个 multipart 文件，创建 draft 附件并返回展示元数据。",
@@ -1795,9 +2102,326 @@ const docTemplate = `{
                     }
                 }
             }
+        },
+        "/users/me/models": {
+            "get": {
+                "description": "返回当前用户拥有的自定义模型配置。",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "user-models"
+                ],
+                "summary": "获取当前用户自定义模型",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.CustomModelListSwaggerResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "创建 owner-scoped 自定义模型配置，API key 加密保存。",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "user-models"
+                ],
+                "summary": "当前用户创建自定义模型",
+                "parameters": [
+                    {
+                        "description": "自定义模型配置",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.CustomModelCreateSwaggerRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.CustomModelSwaggerResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/users/me/models/{id}": {
+            "put": {
+                "description": "更新当前用户拥有的自定义模型配置。",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "user-models"
+                ],
+                "summary": "当前用户更新自定义模型",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "自定义模型 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "自定义模型更新",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.CustomModelUpdateSwaggerRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.CustomModelSwaggerResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "description": "删除当前用户拥有的自定义模型配置。",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "user-models"
+                ],
+                "summary": "当前用户删除自定义模型",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "自定义模型 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.CustomModelDeleteSwaggerResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/users/me/models/{id}/test": {
+            "post": {
+                "description": "测试当前用户拥有的自定义模型连通性。",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "user-models"
+                ],
+                "summary": "当前用户测试自定义模型",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "自定义模型 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ModelTestSwaggerResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    }
+                }
+            }
         }
     },
     "definitions": {
+        "handlers.AdminYAMLModelCatalogSwaggerDoc": {
+            "type": "object",
+            "properties": {
+                "default_model_id": {
+                    "type": "string"
+                },
+                "default_provider_id": {
+                    "type": "string"
+                },
+                "providers": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.AdminYAMLModelProviderSwaggerDoc"
+                    }
+                }
+            }
+        },
+        "handlers.AdminYAMLModelCatalogSwaggerResponse": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "integer"
+                },
+                "data": {
+                    "$ref": "#/definitions/handlers.AdminYAMLModelCatalogSwaggerDoc"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "ok": {
+                    "type": "boolean"
+                },
+                "time": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.AdminYAMLModelProviderSwaggerDoc": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "models": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.AdminYAMLModelSwaggerDoc"
+                    }
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.AdminYAMLModelSwaggerDoc": {
+            "type": "object",
+            "properties": {
+                "capabilities": {
+                    "$ref": "#/definitions/handlers.ModelCapabilitiesSwaggerDoc"
+                },
+                "context": {
+                    "$ref": "#/definitions/handlers.ModelContextSwaggerDoc"
+                },
+                "cost": {
+                    "$ref": "#/definitions/handlers.ModelPricingSwaggerDoc"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "enabled_overridden": {
+                    "type": "boolean"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "scope": {
+                    "type": "string"
+                },
+                "scope_overridden": {
+                    "type": "boolean"
+                },
+                "type": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.AdminYAMLModelSwaggerResponse": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "integer"
+                },
+                "data": {
+                    "$ref": "#/definitions/handlers.AdminYAMLModelSwaggerDoc"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "ok": {
+                    "type": "boolean"
+                },
+                "time": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.AdminYAMLModelUpdateSwaggerRequest": {
+            "type": "object",
+            "properties": {
+                "enabled": {
+                    "type": "boolean"
+                },
+                "scope": {
+                    "type": "string"
+                }
+            }
+        },
         "handlers.ApprovalDecisionSwaggerRequest": {
             "type": "object",
             "properties": {
@@ -2697,6 +3321,215 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.CustomModelCreateSwaggerRequest": {
+            "type": "object",
+            "properties": {
+                "api_key": {
+                    "type": "string"
+                },
+                "base_url": {
+                    "type": "string"
+                },
+                "capabilities": {
+                    "$ref": "#/definitions/handlers.ModelCapabilitiesSwaggerDoc"
+                },
+                "context_max_tokens": {
+                    "type": "integer"
+                },
+                "cost": {
+                    "$ref": "#/definitions/handlers.ModelPricingSwaggerDoc"
+                },
+                "display_name": {
+                    "type": "string"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "model_id": {
+                    "type": "string"
+                },
+                "owner_user_id": {
+                    "type": "integer"
+                },
+                "provider_id": {
+                    "type": "string"
+                },
+                "provider_type": {
+                    "type": "string"
+                },
+                "scope": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.CustomModelDeleteSwaggerData": {
+            "type": "object",
+            "properties": {
+                "deleted": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "handlers.CustomModelDeleteSwaggerResponse": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "integer"
+                },
+                "data": {
+                    "$ref": "#/definitions/handlers.CustomModelDeleteSwaggerData"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "ok": {
+                    "type": "boolean"
+                },
+                "time": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.CustomModelListSwaggerResponse": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "integer"
+                },
+                "data": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.CustomModelSwaggerDoc"
+                    }
+                },
+                "message": {
+                    "type": "string"
+                },
+                "ok": {
+                    "type": "boolean"
+                },
+                "time": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.CustomModelSwaggerDoc": {
+            "type": "object",
+            "properties": {
+                "api_key_masked": {
+                    "type": "string"
+                },
+                "base_url": {
+                    "type": "string"
+                },
+                "capabilities": {
+                    "$ref": "#/definitions/handlers.ModelCapabilitiesSwaggerDoc"
+                },
+                "context": {
+                    "$ref": "#/definitions/handlers.ModelContextSwaggerDoc"
+                },
+                "context_max_tokens": {
+                    "type": "integer"
+                },
+                "cost": {
+                    "$ref": "#/definitions/handlers.ModelPricingSwaggerDoc"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "display_name": {
+                    "type": "string"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "model_id": {
+                    "type": "string"
+                },
+                "owner_user_id": {
+                    "type": "integer"
+                },
+                "provider_id": {
+                    "type": "string"
+                },
+                "provider_type": {
+                    "type": "string"
+                },
+                "scope": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.CustomModelSwaggerResponse": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "integer"
+                },
+                "data": {
+                    "$ref": "#/definitions/handlers.CustomModelSwaggerDoc"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "ok": {
+                    "type": "boolean"
+                },
+                "time": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.CustomModelUpdateSwaggerRequest": {
+            "type": "object",
+            "properties": {
+                "api_key": {
+                    "type": "string"
+                },
+                "base_url": {
+                    "type": "string"
+                },
+                "capabilities": {
+                    "$ref": "#/definitions/handlers.ModelCapabilitiesSwaggerDoc"
+                },
+                "clear_api_key": {
+                    "type": "boolean"
+                },
+                "context_max_tokens": {
+                    "type": "integer"
+                },
+                "cost": {
+                    "$ref": "#/definitions/handlers.ModelPricingSwaggerDoc"
+                },
+                "display_name": {
+                    "type": "string"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "model_id": {
+                    "type": "string"
+                },
+                "owner_user_id": {
+                    "type": "integer"
+                },
+                "provider_id": {
+                    "type": "string"
+                },
+                "provider_type": {
+                    "type": "string"
+                },
+                "scope": {
+                    "type": "string"
+                }
+            }
+        },
         "handlers.ErrorSwaggerResponse": {
             "type": "object",
             "properties": {
@@ -2908,6 +3741,34 @@ const docTemplate = `{
                     }
                 },
                 "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.ModelTestSwaggerData": {
+            "type": "object",
+            "properties": {
+                "ok": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "handlers.ModelTestSwaggerResponse": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "integer"
+                },
+                "data": {
+                    "$ref": "#/definitions/handlers.ModelTestSwaggerData"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "ok": {
+                    "type": "boolean"
+                },
+                "time": {
                     "type": "string"
                 }
             }

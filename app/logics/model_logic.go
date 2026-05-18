@@ -25,9 +25,10 @@ const (
 )
 
 var (
-	ErrModelNotFound        = errors.New("模型不存在")
-	ErrModelUnauthorized    = errors.New("无权使用该模型")
-	ErrModelContextTooSmall = errors.New("模型 context 上限不能小于 4")
+	ErrModelNotFound         = errors.New("模型不存在")
+	ErrModelUnauthorized     = errors.New("无权使用该模型")
+	ErrModelContextTooSmall  = errors.New("模型 context 上限不能小于 4")
+	ErrModelProviderConflict = errors.New("自定义模型 provider_id 不能与配置文件 provider 冲突")
 )
 
 type ModelLogic struct {
@@ -95,6 +96,31 @@ type CustomModelResponse struct {
 	UpdatedAt        time.Time                   `json:"updated_at"`
 }
 
+type YAMLModelCatalog struct {
+	DefaultProviderID string                      `json:"default_provider_id"`
+	DefaultModelID    string                      `json:"default_model_id"`
+	Providers         []YAMLModelProviderResponse `json:"providers"`
+}
+
+type YAMLModelProviderResponse struct {
+	ID     string              `json:"id"`
+	Name   string              `json:"name"`
+	Models []YAMLModelResponse `json:"models"`
+}
+
+type YAMLModelResponse struct {
+	ID                string                      `json:"id"`
+	Name              string                      `json:"name"`
+	Type              string                      `json:"type"`
+	Context           coreagent.ModelContext      `json:"context"`
+	Cost              *coretypes.ModelPricing     `json:"cost,omitempty"`
+	Capabilities      coretypes.ModelCapabilities `json:"capabilities"`
+	Scope             string                      `json:"scope"`
+	Enabled           bool                        `json:"enabled"`
+	ScopeOverridden   bool                        `json:"scope_overridden"`
+	EnabledOverridden bool                        `json:"enabled_overridden"`
+}
+
 func NewModelLogic(db *gorm.DB, providers []coretypes.LLMProvider, codec *secret.Codec) (*ModelLogic, error) {
 	if db == nil {
 		return nil, fmt.Errorf("model db is required")
@@ -149,26 +175,28 @@ func (l *ModelLogic) Resolver() *coreagent.ModelResolver {
 	}
 }
 
-func (l *ModelLogic) ListYAMLModels(ctx context.Context) (coreagent.ModelCatalog, error) {
-	providers, err := l.yamlProvidersWithOverrides(ctx)
+func (l *ModelLogic) ListYAMLModels(ctx context.Context) (YAMLModelCatalog, error) {
+	overrides, err := l.yamlOverrides(ctx)
 	if err != nil {
-		return coreagent.ModelCatalog{}, err
+		return YAMLModelCatalog{}, err
 	}
-	return (&coreagent.ModelResolver{Providers: providers}).Catalog(), nil
+	providers := cloneLLMProviders(l.providers)
+	applyYAMLOverrides(providers, overrides)
+	return yamlCatalogFromProviders(providers, overrides), nil
 }
 
-func (l *ModelLogic) UpdateYAMLModelOverride(ctx context.Context, input UpdateYAMLModelOverrideInput) (coreagent.ModelOptionEntry, error) {
+func (l *ModelLogic) UpdateYAMLModelOverride(ctx context.Context, input UpdateYAMLModelOverrideInput) (YAMLModelResponse, error) {
 	if l == nil || l.db == nil {
-		return coreagent.ModelOptionEntry{}, fmt.Errorf("model db is required")
+		return YAMLModelResponse{}, fmt.Errorf("model db is required")
 	}
 	providerID := strings.TrimSpace(input.ProviderID)
 	modelID := strings.TrimSpace(input.ModelID)
 	if providerID == "" || modelID == "" {
-		return coreagent.ModelOptionEntry{}, fmt.Errorf("provider_id and model_id are required")
+		return YAMLModelResponse{}, fmt.Errorf("provider_id and model_id are required")
 	}
 	provider, model := findProviderModel(l.providers, providerID, modelID)
 	if provider == nil || model == nil {
-		return coreagent.ModelOptionEntry{}, ErrModelNotFound
+		return YAMLModelResponse{}, ErrModelNotFound
 	}
 	scope := normalizeScope(firstNonEmptyString(input.Scope, model.EffectiveScope()), ModelScopeAdmin)
 	enabled := model.IsEnabled()
@@ -199,12 +227,12 @@ func (l *ModelLogic) UpdateYAMLModelOverride(ctx context.Context, input UpdateYA
 			Updates(map[string]any{"enabled": enabled, "scope": scope, "updated_by": row.UpdatedBy, "updated_at": now}).Error
 	})
 	if err != nil {
-		return coreagent.ModelOptionEntry{}, err
+		return YAMLModelResponse{}, err
 	}
 	updated := *model
 	updated.Scope = scope
 	updated.Enabled = &enabled
-	return modelOptionFromLLMModel(&updated), nil
+	return yamlModelResponseFromLLMModel(&updated, true, true), nil
 }
 
 func (l *ModelLogic) ListCustomModels(ctx context.Context) ([]CustomModelResponse, error) {
@@ -221,6 +249,9 @@ func (l *ModelLogic) CreateCustomModel(ctx context.Context, input CreateCustomMo
 	}
 	if err := validateCreateCustomModelInput(input); err != nil {
 		return CustomModelResponse{}, err
+	}
+	if l.yamlProviderIDExists(input.ProviderID) {
+		return CustomModelResponse{}, ErrModelProviderConflict
 	}
 	if input.ContextMaxTokens < 4 {
 		return CustomModelResponse{}, ErrModelContextTooSmall
@@ -259,6 +290,9 @@ func (l *ModelLogic) UpdateCustomModel(ctx context.Context, id string, input Upd
 	}
 	if providerType := strings.TrimSpace(input.ProviderType); providerType != "" && !isSupportedCustomProviderType(providerType) {
 		return CustomModelResponse{}, fmt.Errorf("unsupported provider_type %q", providerType)
+	}
+	if strings.TrimSpace(input.ProviderID) != "" && l.yamlProviderIDExists(input.ProviderID) {
+		return CustomModelResponse{}, ErrModelProviderConflict
 	}
 	updates, err := l.customUpdatesFromInput(existing, input)
 	if err != nil {
@@ -403,6 +437,15 @@ func (l *ModelLogic) ResolveCustomForOwner(ctx context.Context, user models.User
 
 func (l *ModelLogic) yamlProvidersWithOverrides(ctx context.Context) ([]coretypes.LLMProvider, error) {
 	providers := cloneLLMProviders(l.providers)
+	byKey, err := l.yamlOverrides(ctx)
+	if err != nil {
+		return nil, err
+	}
+	applyYAMLOverrides(providers, byKey)
+	return providers, nil
+}
+
+func (l *ModelLogic) yamlOverrides(ctx context.Context) (map[string]models.LLMModelOverride, error) {
 	overrides := []models.LLMModelOverride{}
 	if l != nil && l.db != nil {
 		if err := l.db.WithContext(ctx).Find(&overrides).Error; err != nil {
@@ -413,6 +456,10 @@ func (l *ModelLogic) yamlProvidersWithOverrides(ctx context.Context) ([]coretype
 	for _, override := range overrides {
 		byKey[modelKey(override.ProviderID, override.ModelID)] = override
 	}
+	return byKey, nil
+}
+
+func applyYAMLOverrides(providers []coretypes.LLMProvider, byKey map[string]models.LLMModelOverride) {
 	for i := range providers {
 		for j := range providers[i].Models {
 			override, ok := byKey[modelKey(providers[i].ProviderName(), providers[i].Models[j].ModelID())]
@@ -424,7 +471,6 @@ func (l *ModelLogic) yamlProvidersWithOverrides(ctx context.Context) ([]coretype
 			providers[i].Models[j].Enabled = &enabled
 		}
 	}
-	return providers, nil
 }
 
 func (l *ModelLogic) listCustomModels(ctx context.Context, ownerUserID uint64) ([]CustomModelResponse, error) {
@@ -529,6 +575,19 @@ func (l *ModelLogic) resolvedCustom(row models.CustomLLMModel) (*coreagent.Resol
 		provider.Models[0].Cost = pricingToCostConfig(*pricing)
 	}
 	return &coreagent.ResolvedModel{Provider: provider, Model: &provider.Models[0]}, nil
+}
+
+func (l *ModelLogic) yamlProviderIDExists(providerID string) bool {
+	target := strings.TrimSpace(providerID)
+	if target == "" {
+		return false
+	}
+	for i := range l.providers {
+		if strings.EqualFold(l.providers[i].ProviderName(), target) {
+			return true
+		}
+	}
+	return false
 }
 
 func (l *ModelLogic) customRowFromCreateInput(input CreateCustomModelInput, encryptedAPIKey string) (models.CustomLLMModel, error) {
@@ -684,12 +743,36 @@ func isSupportedCustomProviderType(providerType string) bool {
 	}
 }
 
-func modelOptionFromLLMModel(llmModel *coretypes.LLMModel) coreagent.ModelOptionEntry {
+func yamlCatalogFromProviders(providers []coretypes.LLMProvider, overrides map[string]models.LLMModelOverride) YAMLModelCatalog {
+	defaultProviderID, defaultModelID := (&coreagent.ModelResolver{Providers: providers}).DefaultSelection()
+	out := YAMLModelCatalog{
+		DefaultProviderID: defaultProviderID,
+		DefaultModelID:    defaultModelID,
+		Providers:         make([]YAMLModelProviderResponse, 0, len(providers)),
+	}
+	for i := range providers {
+		provider := providers[i]
+		models := make([]YAMLModelResponse, 0, len(provider.Models))
+		for j := range provider.Models {
+			model := provider.Models[j]
+			_, overridden := overrides[modelKey(provider.ProviderName(), model.ModelID())]
+			models = append(models, yamlModelResponseFromLLMModel(&model, overridden, overridden))
+		}
+		out.Providers = append(out.Providers, YAMLModelProviderResponse{
+			ID:     provider.ProviderName(),
+			Name:   provider.ProviderName(),
+			Models: models,
+		})
+	}
+	return out
+}
+
+func yamlModelResponseFromLLMModel(llmModel *coretypes.LLMModel, scopeOverridden bool, enabledOverridden bool) YAMLModelResponse {
 	if llmModel == nil {
-		return coreagent.ModelOptionEntry{}
+		return YAMLModelResponse{}
 	}
 	ctx := llmModel.ContextWindow()
-	return coreagent.ModelOptionEntry{
+	return YAMLModelResponse{
 		ID:   llmModel.ModelID(),
 		Name: firstNonEmptyString(llmModel.ModelName(), llmModel.ModelID()),
 		Type: llmModel.ModelType(),
@@ -698,17 +781,17 @@ func modelOptionFromLLMModel(llmModel *coretypes.LLMModel) coreagent.ModelOption
 			Input:  ctx.Input,
 			Output: ctx.Output,
 		},
-		Cost:         llmModel.Pricing(),
-		Capabilities: llmModel.Capabilities,
+		Cost:              llmModel.Pricing(),
+		Capabilities:      llmModel.Capabilities,
+		Scope:             normalizeScope(llmModel.EffectiveScope(), ModelScopeAdmin),
+		Enabled:           llmModel.IsEnabled(),
+		ScopeOverridden:   scopeOverridden,
+		EnabledOverridden: enabledOverridden,
 	}
 }
 
 func customContextBudget(maxTokens int64) coretypes.LLMContextConfig {
-	output := maxTokens / 4
-	if output > 8192 {
-		output = 8192
-	}
-	return coretypes.LLMContextConfig{Max: maxTokens, Input: maxTokens - output, Output: output}
+	return coretypes.LLMContextConfig{Max: maxTokens}.Normalized()
 }
 
 func userCanUseYAMLModel(user models.User, llmModel *coretypes.LLMModel) bool {

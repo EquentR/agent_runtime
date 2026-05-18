@@ -323,6 +323,109 @@ func TestTaskHandlerRejectsUnauthorizedModelSelection(t *testing.T) {
 	}
 }
 
+func TestTaskHandlerOverridesSpoofedUserIDBeforePersistingModelSelection(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.AutoMigrate(&models.User{}, &models.UserSession{}, &models.LLMModelOverride{}, &models.CustomLLMModel{}); err != nil {
+		t.Fatalf("AutoMigrate() error = %v", err)
+	}
+	authLogic, err := logics.NewAuthLogic(db, logics.AuthConfig{CookieName: authSessionCookieName})
+	if err != nil {
+		t.Fatalf("NewAuthLogic() error = %v", err)
+	}
+	victim := seedAdminHandlerUser(t, db, "victim", "victim@example.com", models.UserRoleUser, models.UserStatusActive, true)
+	attacker := seedAdminHandlerUser(t, db, "attacker", "attacker@example.com", models.UserRoleUser, models.UserStatusActive, true)
+	_, attackerSession, err := authLogic.Login(context.Background(), attacker.Username, "secret-123")
+	if err != nil {
+		t.Fatalf("Login(attacker) error = %v", err)
+	}
+	codec, err := secret.NewCodec("test-secret")
+	if err != nil {
+		t.Fatalf("NewCodec() error = %v", err)
+	}
+	modelLogic, err := logics.NewModelLogic(db, nil, codec)
+	if err != nil {
+		t.Fatalf("NewModelLogic() error = %v", err)
+	}
+	for _, owner := range []models.User{victim, attacker} {
+		_, err = modelLogic.CreateCustomModel(context.Background(), logics.CreateCustomModelInput{
+			OwnerUserID:      owner.ID,
+			ProviderID:       "shared-provider",
+			ModelID:          "shared-model",
+			DisplayName:      owner.Username + " Model",
+			ProviderType:     coretypes.LLMTypeOpenAICompletions,
+			APIKey:           owner.Username + "-secret",
+			ContextMaxTokens: 32768,
+		})
+		if err != nil {
+			t.Fatalf("CreateCustomModel(%s) error = %v", owner.Username, err)
+		}
+	}
+	taskStore := coretasks.NewStore(db)
+	if err := taskStore.AutoMigrate(); err != nil {
+		t.Fatalf("task AutoMigrate() error = %v", err)
+	}
+	conversationStore := coreagent.NewConversationStore(db)
+	if err := conversationStore.AutoMigrate(); err != nil {
+		t.Fatalf("conversation AutoMigrate() error = %v", err)
+	}
+	manager := coretasks.NewManager(taskStore, coretasks.ManagerOptions{})
+	engine := rest.Init()
+	authMiddleware := NewAuthMiddleware(authLogic)
+	NewTaskHandler(manager, conversationStore, authMiddleware.RequireActiveUser()).WithModelLogic(modelLogic).Register(engine.Group("/api/v1"))
+	server := httptest.NewServer(engine)
+	defer server.Close()
+
+	raw, err := json.Marshal(map[string]any{
+		"task_type": "agent.run",
+		"input": map[string]any{
+			"provider_id": "shared-provider",
+			"model_id":    "shared-model",
+			"user_id":     fmt.Sprintf("%d", victim.ID),
+			"message":     "hello",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	request, err := http.NewRequest(http.MethodPost, server.URL+"/api/v1/tasks", bytes.NewReader(raw))
+	if err != nil {
+		t.Fatalf("NewRequest() error = %v", err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.AddCookie(&http.Cookie{Name: authSessionCookieName, Value: attackerSession.ID})
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("Do() error = %v", err)
+	}
+	defer response.Body.Close()
+
+	var envelope taskTestResponse
+	if err := json.NewDecoder(response.Body).Decode(&envelope); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if !envelope.OK {
+		t.Fatalf("response OK = false, message = %s", envelope.Message)
+	}
+	var created coretasks.Task
+	if err := json.Unmarshal(envelope.Data, &created); err != nil {
+		t.Fatalf("Unmarshal task error = %v", err)
+	}
+	persisted, err := manager.GetTask(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("GetTask() error = %v", err)
+	}
+	input := decodeJSONRaw(t, persisted.InputJSON)
+	if input["user_id"] != fmt.Sprintf("%d", attacker.ID) {
+		t.Fatalf("persisted input.user_id = %#v, want attacker id %d", input["user_id"], attacker.ID)
+	}
+	if _, exists := input["UserID"]; exists {
+		t.Fatalf("persisted input.UserID exists = %#v, want removed", input["UserID"])
+	}
+}
+
 func TestCreateTaskPersistsConversationConcurrencyKey(t *testing.T) {
 	manager, server := newTaskHandlerTestServer(t, nil, false)
 

@@ -166,6 +166,157 @@ type ModelEntrySwaggerDoc struct {
 	Capabilities *ModelCapabilitiesSwaggerDoc `json:"capabilities,omitempty"`
 }
 
+// AdminYAMLModelCatalogSwaggerResponse 描述管理员 YAML 模型目录响应结构。
+type AdminYAMLModelCatalogSwaggerResponse struct {
+	Code    int                             `json:"code"`
+	Message string                          `json:"message"`
+	Data    AdminYAMLModelCatalogSwaggerDoc `json:"data"`
+	OK      bool                            `json:"ok"`
+	Time    string                          `json:"time"`
+}
+
+// AdminYAMLModelCatalogSwaggerDoc 描述管理员可管理的 YAML provider/model 目录。
+type AdminYAMLModelCatalogSwaggerDoc struct {
+	DefaultProviderID string                             `json:"default_provider_id"`
+	DefaultModelID    string                             `json:"default_model_id"`
+	Providers         []AdminYAMLModelProviderSwaggerDoc `json:"providers"`
+}
+
+// AdminYAMLModelProviderSwaggerDoc 描述管理员模型管理中的 YAML provider。
+type AdminYAMLModelProviderSwaggerDoc struct {
+	ID     string                     `json:"id"`
+	Name   string                     `json:"name"`
+	Models []AdminYAMLModelSwaggerDoc `json:"models"`
+}
+
+// AdminYAMLModelSwaggerDoc 描述管理员模型管理中的 YAML 模型。
+type AdminYAMLModelSwaggerDoc struct {
+	ID                string                       `json:"id"`
+	Name              string                       `json:"name"`
+	Type              string                       `json:"type"`
+	Context           *ModelContextSwaggerDoc      `json:"context,omitempty"`
+	Cost              *ModelPricingSwaggerDoc      `json:"cost,omitempty"`
+	Capabilities      *ModelCapabilitiesSwaggerDoc `json:"capabilities,omitempty"`
+	Scope             string                       `json:"scope"`
+	Enabled           bool                         `json:"enabled"`
+	ScopeOverridden   bool                         `json:"scope_overridden"`
+	EnabledOverridden bool                         `json:"enabled_overridden"`
+}
+
+// AdminYAMLModelSwaggerResponse 描述单个 YAML 模型管理响应结构。
+type AdminYAMLModelSwaggerResponse struct {
+	Code    int                      `json:"code"`
+	Message string                   `json:"message"`
+	Data    AdminYAMLModelSwaggerDoc `json:"data"`
+	OK      bool                     `json:"ok"`
+	Time    string                   `json:"time"`
+}
+
+// AdminYAMLModelUpdateSwaggerRequest 描述管理员更新 YAML 模型可用范围的请求。
+type AdminYAMLModelUpdateSwaggerRequest struct {
+	Enabled *bool  `json:"enabled"`
+	Scope   string `json:"scope"`
+}
+
+// CustomModelSwaggerDoc 描述自定义模型配置。
+type CustomModelSwaggerDoc struct {
+	ID               string                       `json:"id"`
+	OwnerUserID      uint64                       `json:"owner_user_id"`
+	ProviderID       string                       `json:"provider_id"`
+	ModelID          string                       `json:"model_id"`
+	DisplayName      string                       `json:"display_name"`
+	ProviderType     string                       `json:"provider_type"`
+	BaseURL          string                       `json:"base_url"`
+	APIKeyMasked     string                       `json:"api_key_masked,omitempty"`
+	Scope            string                       `json:"scope"`
+	Enabled          bool                         `json:"enabled"`
+	ContextMaxTokens int64                        `json:"context_max_tokens"`
+	Context          *ModelContextSwaggerDoc      `json:"context,omitempty"`
+	Capabilities     *ModelCapabilitiesSwaggerDoc `json:"capabilities,omitempty"`
+	Cost             *ModelPricingSwaggerDoc      `json:"cost,omitempty"`
+	CreatedAt        string                       `json:"created_at"`
+	UpdatedAt        string                       `json:"updated_at"`
+}
+
+// CustomModelListSwaggerResponse 描述自定义模型列表响应结构。
+type CustomModelListSwaggerResponse struct {
+	Code    int                     `json:"code"`
+	Message string                  `json:"message"`
+	Data    []CustomModelSwaggerDoc `json:"data"`
+	OK      bool                    `json:"ok"`
+	Time    string                  `json:"time"`
+}
+
+// CustomModelSwaggerResponse 描述单个自定义模型响应结构。
+type CustomModelSwaggerResponse struct {
+	Code    int                   `json:"code"`
+	Message string                `json:"message"`
+	Data    CustomModelSwaggerDoc `json:"data"`
+	OK      bool                  `json:"ok"`
+	Time    string                `json:"time"`
+}
+
+// CustomModelCreateSwaggerRequest 描述创建自定义模型请求。
+type CustomModelCreateSwaggerRequest struct {
+	OwnerUserID      uint64                      `json:"owner_user_id,omitempty"`
+	ProviderID       string                      `json:"provider_id"`
+	ModelID          string                      `json:"model_id"`
+	DisplayName      string                      `json:"display_name"`
+	ProviderType     string                      `json:"provider_type"`
+	BaseURL          string                      `json:"base_url,omitempty"`
+	APIKey           string                      `json:"api_key"`
+	Scope            string                      `json:"scope,omitempty"`
+	Enabled          *bool                       `json:"enabled,omitempty"`
+	ContextMaxTokens int64                       `json:"context_max_tokens"`
+	Capabilities     ModelCapabilitiesSwaggerDoc `json:"capabilities,omitempty"`
+	Cost             *ModelPricingSwaggerDoc     `json:"cost,omitempty"`
+}
+
+// CustomModelUpdateSwaggerRequest 描述更新自定义模型请求。
+type CustomModelUpdateSwaggerRequest struct {
+	OwnerUserID      *uint64                     `json:"owner_user_id,omitempty"`
+	ProviderID       string                      `json:"provider_id,omitempty"`
+	ModelID          string                      `json:"model_id,omitempty"`
+	DisplayName      string                      `json:"display_name,omitempty"`
+	ProviderType     string                      `json:"provider_type,omitempty"`
+	BaseURL          string                      `json:"base_url,omitempty"`
+	APIKey           string                      `json:"api_key,omitempty"`
+	ClearAPIKey      bool                        `json:"clear_api_key,omitempty"`
+	Scope            string                      `json:"scope,omitempty"`
+	Enabled          *bool                       `json:"enabled,omitempty"`
+	ContextMaxTokens int64                       `json:"context_max_tokens,omitempty"`
+	Capabilities     ModelCapabilitiesSwaggerDoc `json:"capabilities,omitempty"`
+	Cost             *ModelPricingSwaggerDoc     `json:"cost,omitempty"`
+}
+
+// CustomModelDeleteSwaggerResponse 描述删除自定义模型响应结构。
+type CustomModelDeleteSwaggerResponse struct {
+	Code    int                          `json:"code"`
+	Message string                       `json:"message"`
+	Data    CustomModelDeleteSwaggerData `json:"data"`
+	OK      bool                         `json:"ok"`
+	Time    string                       `json:"time"`
+}
+
+// CustomModelDeleteSwaggerData 描述删除自定义模型结果。
+type CustomModelDeleteSwaggerData struct {
+	Deleted bool `json:"deleted"`
+}
+
+// ModelTestSwaggerResponse 描述模型连通性测试响应结构。
+type ModelTestSwaggerResponse struct {
+	Code    int                  `json:"code"`
+	Message string               `json:"message"`
+	Data    ModelTestSwaggerData `json:"data"`
+	OK      bool                 `json:"ok"`
+	Time    string               `json:"time"`
+}
+
+// ModelTestSwaggerData 描述模型连通性测试结果。
+type ModelTestSwaggerData struct {
+	OK bool `json:"ok"`
+}
+
 // ModelCapabilitiesSwaggerDoc 描述模型能力开关。
 type ModelCapabilitiesSwaggerDoc struct {
 	Attachments bool `json:"attachments"`

@@ -1,5 +1,83 @@
 basePath: /api/v1
 definitions:
+  handlers.AdminYAMLModelCatalogSwaggerDoc:
+    properties:
+      default_model_id:
+        type: string
+      default_provider_id:
+        type: string
+      providers:
+        items:
+          $ref: '#/definitions/handlers.AdminYAMLModelProviderSwaggerDoc'
+        type: array
+    type: object
+  handlers.AdminYAMLModelCatalogSwaggerResponse:
+    properties:
+      code:
+        type: integer
+      data:
+        $ref: '#/definitions/handlers.AdminYAMLModelCatalogSwaggerDoc'
+      message:
+        type: string
+      ok:
+        type: boolean
+      time:
+        type: string
+    type: object
+  handlers.AdminYAMLModelProviderSwaggerDoc:
+    properties:
+      id:
+        type: string
+      models:
+        items:
+          $ref: '#/definitions/handlers.AdminYAMLModelSwaggerDoc'
+        type: array
+      name:
+        type: string
+    type: object
+  handlers.AdminYAMLModelSwaggerDoc:
+    properties:
+      capabilities:
+        $ref: '#/definitions/handlers.ModelCapabilitiesSwaggerDoc'
+      context:
+        $ref: '#/definitions/handlers.ModelContextSwaggerDoc'
+      cost:
+        $ref: '#/definitions/handlers.ModelPricingSwaggerDoc'
+      enabled:
+        type: boolean
+      enabled_overridden:
+        type: boolean
+      id:
+        type: string
+      name:
+        type: string
+      scope:
+        type: string
+      scope_overridden:
+        type: boolean
+      type:
+        type: string
+    type: object
+  handlers.AdminYAMLModelSwaggerResponse:
+    properties:
+      code:
+        type: integer
+      data:
+        $ref: '#/definitions/handlers.AdminYAMLModelSwaggerDoc'
+      message:
+        type: string
+      ok:
+        type: boolean
+      time:
+        type: string
+    type: object
+  handlers.AdminYAMLModelUpdateSwaggerRequest:
+    properties:
+      enabled:
+        type: boolean
+      scope:
+        type: string
+    type: object
   handlers.ApprovalDecisionSwaggerRequest:
     properties:
       decision:
@@ -592,6 +670,143 @@ definitions:
       task_type:
         type: string
     type: object
+  handlers.CustomModelCreateSwaggerRequest:
+    properties:
+      api_key:
+        type: string
+      base_url:
+        type: string
+      capabilities:
+        $ref: '#/definitions/handlers.ModelCapabilitiesSwaggerDoc'
+      context_max_tokens:
+        type: integer
+      cost:
+        $ref: '#/definitions/handlers.ModelPricingSwaggerDoc'
+      display_name:
+        type: string
+      enabled:
+        type: boolean
+      model_id:
+        type: string
+      owner_user_id:
+        type: integer
+      provider_id:
+        type: string
+      provider_type:
+        type: string
+      scope:
+        type: string
+    type: object
+  handlers.CustomModelDeleteSwaggerData:
+    properties:
+      deleted:
+        type: boolean
+    type: object
+  handlers.CustomModelDeleteSwaggerResponse:
+    properties:
+      code:
+        type: integer
+      data:
+        $ref: '#/definitions/handlers.CustomModelDeleteSwaggerData'
+      message:
+        type: string
+      ok:
+        type: boolean
+      time:
+        type: string
+    type: object
+  handlers.CustomModelListSwaggerResponse:
+    properties:
+      code:
+        type: integer
+      data:
+        items:
+          $ref: '#/definitions/handlers.CustomModelSwaggerDoc'
+        type: array
+      message:
+        type: string
+      ok:
+        type: boolean
+      time:
+        type: string
+    type: object
+  handlers.CustomModelSwaggerDoc:
+    properties:
+      api_key_masked:
+        type: string
+      base_url:
+        type: string
+      capabilities:
+        $ref: '#/definitions/handlers.ModelCapabilitiesSwaggerDoc'
+      context:
+        $ref: '#/definitions/handlers.ModelContextSwaggerDoc'
+      context_max_tokens:
+        type: integer
+      cost:
+        $ref: '#/definitions/handlers.ModelPricingSwaggerDoc'
+      created_at:
+        type: string
+      display_name:
+        type: string
+      enabled:
+        type: boolean
+      id:
+        type: string
+      model_id:
+        type: string
+      owner_user_id:
+        type: integer
+      provider_id:
+        type: string
+      provider_type:
+        type: string
+      scope:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  handlers.CustomModelSwaggerResponse:
+    properties:
+      code:
+        type: integer
+      data:
+        $ref: '#/definitions/handlers.CustomModelSwaggerDoc'
+      message:
+        type: string
+      ok:
+        type: boolean
+      time:
+        type: string
+    type: object
+  handlers.CustomModelUpdateSwaggerRequest:
+    properties:
+      api_key:
+        type: string
+      base_url:
+        type: string
+      capabilities:
+        $ref: '#/definitions/handlers.ModelCapabilitiesSwaggerDoc'
+      clear_api_key:
+        type: boolean
+      context_max_tokens:
+        type: integer
+      cost:
+        $ref: '#/definitions/handlers.ModelPricingSwaggerDoc'
+      display_name:
+        type: string
+      enabled:
+        type: boolean
+      model_id:
+        type: string
+      owner_user_id:
+        type: integer
+      provider_id:
+        type: string
+      provider_type:
+        type: string
+      scope:
+        type: string
+    type: object
   handlers.ErrorSwaggerResponse:
     properties:
       code:
@@ -730,6 +945,24 @@ definitions:
           $ref: '#/definitions/handlers.ModelEntrySwaggerDoc'
         type: array
       name:
+        type: string
+    type: object
+  handlers.ModelTestSwaggerData:
+    properties:
+      ok:
+        type: boolean
+    type: object
+  handlers.ModelTestSwaggerResponse:
+    properties:
+      code:
+        type: integer
+      data:
+        $ref: '#/definitions/handlers.ModelTestSwaggerData'
+      message:
+        type: string
+      ok:
+        type: boolean
+      time:
         type: string
     type: object
   handlers.PromptBindingCreateSwaggerRequest:
@@ -1074,6 +1307,209 @@ info:
   title: Agent Runtime API
   version: 0.0.1
 paths:
+  /admin/models:
+    get:
+      description: 返回配置文件模型及其数据库启用状态和可用范围覆盖。
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.AdminYAMLModelCatalogSwaggerResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+      summary: 管理员获取 YAML 模型目录
+      tags:
+      - admin-models
+  /admin/models/custom:
+    get:
+      description: 返回所有用户创建的自定义模型配置，不包含 API key 明文。
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.CustomModelListSwaggerResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+      summary: 管理员获取自定义模型列表
+      tags:
+      - admin-models
+    post:
+      consumes:
+      - application/json
+      description: 创建管理员或指定用户拥有的自定义模型配置，API key 加密保存。
+      parameters:
+      - description: 自定义模型配置
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.CustomModelCreateSwaggerRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.CustomModelSwaggerResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+      summary: 管理员创建自定义模型
+      tags:
+      - admin-models
+  /admin/models/custom/{id}:
+    delete:
+      description: 删除任意自定义模型配置。
+      parameters:
+      - description: 自定义模型 ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.CustomModelDeleteSwaggerResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+      summary: 管理员删除自定义模型
+      tags:
+      - admin-models
+    put:
+      consumes:
+      - application/json
+      description: 更新任意自定义模型配置，敏感字段只在请求中覆盖，不返回明文。
+      parameters:
+      - description: 自定义模型 ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: 自定义模型更新
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.CustomModelUpdateSwaggerRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.CustomModelSwaggerResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+      summary: 管理员更新自定义模型
+      tags:
+      - admin-models
+  /admin/models/custom/{id}/test:
+    post:
+      description: 管理员可测试任意用户自定义模型连通性，并写入后台操作审计。
+      parameters:
+      - description: 自定义模型 ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.ModelTestSwaggerResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+      summary: 管理员测试自定义模型
+      tags:
+      - admin-models
+  /admin/models/yaml/{provider_id}/{model_id}:
+    patch:
+      consumes:
+      - application/json
+      description: 只覆盖配置文件模型的 enabled 和 scope。
+      parameters:
+      - description: Provider ID
+        in: path
+        name: provider_id
+        required: true
+        type: string
+      - description: Model ID
+        in: path
+        name: model_id
+        required: true
+        type: string
+      - description: YAML 模型覆盖配置
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.AdminYAMLModelUpdateSwaggerRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.AdminYAMLModelSwaggerResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+      summary: 管理员更新 YAML 模型可用范围
+      tags:
+      - admin-models
   /attachments:
     post:
       consumes:
@@ -2247,4 +2683,134 @@ paths:
       summary: 查询会话运行中任务
       tags:
       - tasks
+  /users/me/models:
+    get:
+      description: 返回当前用户拥有的自定义模型配置。
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.CustomModelListSwaggerResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+      summary: 获取当前用户自定义模型
+      tags:
+      - user-models
+    post:
+      consumes:
+      - application/json
+      description: 创建 owner-scoped 自定义模型配置，API key 加密保存。
+      parameters:
+      - description: 自定义模型配置
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.CustomModelCreateSwaggerRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.CustomModelSwaggerResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+      summary: 当前用户创建自定义模型
+      tags:
+      - user-models
+  /users/me/models/{id}:
+    delete:
+      description: 删除当前用户拥有的自定义模型配置。
+      parameters:
+      - description: 自定义模型 ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.CustomModelDeleteSwaggerResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+      summary: 当前用户删除自定义模型
+      tags:
+      - user-models
+    put:
+      consumes:
+      - application/json
+      description: 更新当前用户拥有的自定义模型配置。
+      parameters:
+      - description: 自定义模型 ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: 自定义模型更新
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.CustomModelUpdateSwaggerRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.CustomModelSwaggerResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+      summary: 当前用户更新自定义模型
+      tags:
+      - user-models
+  /users/me/models/{id}/test:
+    post:
+      description: 测试当前用户拥有的自定义模型连通性。
+      parameters:
+      - description: 自定义模型 ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.ModelTestSwaggerResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+      summary: 当前用户测试自定义模型
+      tags:
+      - user-models
 swagger: "2.0"

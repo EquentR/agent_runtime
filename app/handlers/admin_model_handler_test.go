@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/EquentR/agent_runtime/app/logics"
@@ -165,6 +166,87 @@ func TestAdminModelHandlerRollsBackCustomCreateWhenAuditFails(t *testing.T) {
 	}
 	if count != 0 {
 		t.Fatalf("custom model count = %d, want rollback to 0", count)
+	}
+}
+
+func TestAdminModelHandlerYAMLResponsesExposeScopeEnabledAndAuditChanges(t *testing.T) {
+	deps, _ := newAdminHandlerTestServer(t)
+	if err := deps.db.AutoMigrate(&models.LLMModelOverride{}, &models.CustomLLMModel{}); err != nil {
+		t.Fatalf("AutoMigrate(model tables) error = %v", err)
+	}
+	codec, err := secret.NewCodec("test-secret")
+	if err != nil {
+		t.Fatalf("NewCodec() error = %v", err)
+	}
+	modelLogic, err := logics.NewModelLogic(deps.db, []coretypes.LLMProvider{{
+		BaseProvider: coretypes.BaseProvider{Name: "yaml"},
+		Models: []coretypes.LLMModel{{
+			BaseModel: coretypes.BaseModel{ID: "admin-only", Name: "Admin Only"},
+			Type:      coretypes.LLMTypeOpenAIResponses,
+		}},
+	}}, codec)
+	if err != nil {
+		t.Fatalf("NewModelLogic() error = %v", err)
+	}
+	engine := rest.Init()
+	authMiddleware := NewAuthMiddleware(deps.authLogic)
+	NewAdminModelHandler(modelLogic, deps.auditLogic, fakeModelTester{}, authMiddleware.RequireAdmin()).Register(engine.Group("/api/v1"))
+	server := httptest.NewServer(engine)
+	defer server.Close()
+
+	listResponse := doAdminRequest(t, http.MethodGet, server.URL+"/api/v1/admin/models", nil, deps.adminCookie)
+	defer listResponse.Body.Close()
+	listEnvelope := decodeEnvelope(t, listResponse.Body)
+	if !listEnvelope.OK {
+		t.Fatalf("list response OK = false, message = %s", listEnvelope.Message)
+	}
+	var listPayload struct {
+		Providers []struct {
+			Models []struct {
+				ID      string `json:"id"`
+				Scope   string `json:"scope"`
+				Enabled bool   `json:"enabled"`
+			} `json:"models"`
+		} `json:"providers"`
+	}
+	if err := json.Unmarshal(listEnvelope.Data, &listPayload); err != nil {
+		t.Fatalf("Unmarshal list payload error = %v", err)
+	}
+	if len(listPayload.Providers) != 1 || len(listPayload.Providers[0].Models) != 1 {
+		t.Fatalf("list payload = %#v, want one yaml model", listPayload)
+	}
+	if got := listPayload.Providers[0].Models[0]; got.ID != "admin-only" || got.Scope != logics.ModelScopeAdmin || !got.Enabled {
+		t.Fatalf("list model = %#v, want admin-only scope=admin enabled=true", got)
+	}
+
+	updateResponse := doAdminRequest(t, http.MethodPatch, server.URL+"/api/v1/admin/models/yaml/yaml/admin-only", map[string]any{
+		"enabled": false,
+		"scope":   logics.ModelScopeGlobal,
+	}, deps.adminCookie)
+	defer updateResponse.Body.Close()
+	updateEnvelope := decodeEnvelope(t, updateResponse.Body)
+	if !updateEnvelope.OK {
+		t.Fatalf("update response OK = false, message = %s", updateEnvelope.Message)
+	}
+	var updated struct {
+		ID      string `json:"id"`
+		Scope   string `json:"scope"`
+		Enabled bool   `json:"enabled"`
+	}
+	if err := json.Unmarshal(updateEnvelope.Data, &updated); err != nil {
+		t.Fatalf("Unmarshal updated payload error = %v", err)
+	}
+	if updated.ID != "admin-only" || updated.Scope != logics.ModelScopeGlobal || updated.Enabled {
+		t.Fatalf("updated model = %#v, want global disabled admin-only", updated)
+	}
+
+	var event models.AdminAuditEvent
+	if err := deps.db.Where("action = ?", "admin.models.yaml.update").Take(&event).Error; err != nil {
+		t.Fatalf("load audit event: %v", err)
+	}
+	afterJSON := string(event.AfterJSON)
+	if !strings.Contains(afterJSON, `"scope":"global"`) || !strings.Contains(afterJSON, `"enabled":false`) {
+		t.Fatalf("audit after_json = %s, want scope and enabled fields", afterJSON)
 	}
 }
 

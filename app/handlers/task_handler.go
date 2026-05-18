@@ -90,6 +90,7 @@ func (h *TaskHandler) handleCreateTask() (method, relativePath string, wrapper r
 		}
 		request.CreatedBy = h.resolveCreatedBy(c, request.CreatedBy)
 		h.canonicalizeTaskInputCreatedBy(request.Input, request.CreatedBy)
+		h.canonicalizeTaskInputUserID(c, request.Input)
 		if err := h.ensureModelAuthorized(c, &request); err != nil {
 			return gin.H{}, modelAuthorizationErrorOptions(err), err
 		}
@@ -176,6 +177,18 @@ func (h *TaskHandler) canonicalizeTaskInputCreatedBy(input map[string]any, creat
 	}
 	input["created_by"] = createdBy
 	input["CreatedBy"] = createdBy
+}
+
+func (h *TaskHandler) canonicalizeTaskInputUserID(c *gin.Context, input map[string]any) {
+	if len(input) == 0 {
+		return
+	}
+	delete(input, "UserID")
+	if user := currentAuthUser(c); user != nil && user.ID != 0 {
+		input["user_id"] = strconv.FormatUint(user.ID, 10)
+		return
+	}
+	delete(input, "user_id")
 }
 
 func conversationConcurrencyKey(input map[string]any) string {

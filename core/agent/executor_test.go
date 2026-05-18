@@ -2503,6 +2503,55 @@ func TestAgentExecutorUsesResolvedCustomModelContextBudget(t *testing.T) {
 	}
 }
 
+func TestAgentExecutorUsesTaskCreatedByForModelResolution(t *testing.T) {
+	store := newConversationStoreForTest(t)
+	client := &stubClient{streams: []model.Stream{newStubStream(
+		[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "ok"}}},
+		model.Message{Role: model.RoleAssistant, Content: "ok"},
+		nil,
+	)}}
+	var captured RunTaskInput
+	resolver := &ModelResolver{
+		ResolveTaskFunc: func(ctx context.Context, input RunTaskInput) (*ResolvedModel, error) {
+			captured = input
+			provider := &coretypes.LLMProvider{
+				BaseProvider: coretypes.BaseProvider{Name: "custom-provider"},
+				Models: []coretypes.LLMModel{{
+					BaseModel: coretypes.BaseModel{ID: "custom-model", Name: "Custom Model"},
+					Type:      coretypes.LLMTypeOpenAICompletions,
+					Context:   coretypes.LLMContextConfig{Max: 32768, Input: 24576, Output: 8192},
+				}},
+			}
+			return &ResolvedModel{Provider: provider, Model: &provider.Models[0]}, nil
+		},
+	}
+	executor := newTaskExecutorForTest(t, ExecutorDependencies{
+		Resolver:          resolver,
+		ConversationStore: store,
+		ClientFactory: func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) {
+			return client, nil
+		},
+	})
+
+	payload := marshalExecutorTaskInput(t, map[string]any{
+		"provider_id": "custom-provider",
+		"model_id":    "custom-model",
+		"user_id":     "999",
+		"created_by":  "spoofed",
+		"message":     "hello",
+	})
+	_, err := executor(context.Background(), &coretasks.Task{ID: "task_authority", TaskType: "agent.run", CreatedBy: "actual-user", InputJSON: payload}, nil)
+	if err != nil {
+		t.Fatalf("executor() error = %v", err)
+	}
+	if captured.CreatedBy != "actual-user" {
+		t.Fatalf("captured.CreatedBy = %q, want task CreatedBy", captured.CreatedBy)
+	}
+	if captured.UserID != "" {
+		t.Fatalf("captured.UserID = %q, want spoofed input user_id ignored", captured.UserID)
+	}
+}
+
 func TestAgentExecutorUsesTaskRuntimeSink(t *testing.T) {
 	store := newConversationStoreForTest(t)
 	resolver := &ModelResolver{Providers: []coretypes.LLMProvider{{

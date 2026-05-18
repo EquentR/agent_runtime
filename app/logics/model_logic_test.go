@@ -154,6 +154,47 @@ func TestModelLogicRejectsCustomModelMissingRequiredFields(t *testing.T) {
 	}
 }
 
+func TestModelLogicRejectsCustomProviderIDCollidingWithYAMLProvider(t *testing.T) {
+	logic := newModelLogicForTest(t, []coretypes.LLMProvider{{
+		BaseProvider: coretypes.BaseProvider{Name: "openai"},
+		Models: []coretypes.LLMModel{{
+			BaseModel: coretypes.BaseModel{ID: "gpt", Name: "GPT"},
+			Type:      coretypes.LLMTypeOpenAIResponses,
+		}},
+	}})
+	_, err := logic.CreateCustomModel(context.Background(), CreateCustomModelInput{
+		OwnerUserID:      1,
+		ProviderID:       " OpenAI ",
+		ModelID:          "custom",
+		DisplayName:      "Custom",
+		ProviderType:     coretypes.LLMTypeOpenAICompletions,
+		APIKey:           "secret",
+		ContextMaxTokens: 32768,
+	})
+	if !errors.Is(err, ErrModelProviderConflict) {
+		t.Fatalf("CreateCustomModel() error = %v, want ErrModelProviderConflict", err)
+	}
+
+	created, err := logic.CreateCustomModel(context.Background(), CreateCustomModelInput{
+		OwnerUserID:      1,
+		ProviderID:       "custom-openai",
+		ModelID:          "custom",
+		DisplayName:      "Custom",
+		ProviderType:     coretypes.LLMTypeOpenAICompletions,
+		APIKey:           "secret",
+		ContextMaxTokens: 32768,
+	})
+	if err != nil {
+		t.Fatalf("CreateCustomModel(custom-openai) error = %v", err)
+	}
+	_, err = logic.UpdateCustomModel(context.Background(), created.ID, UpdateCustomModelInput{
+		ProviderID: "openai",
+	})
+	if !errors.Is(err, ErrModelProviderConflict) {
+		t.Fatalf("UpdateCustomModel() error = %v, want ErrModelProviderConflict", err)
+	}
+}
+
 func TestModelLogicMasksCustomModelAPIKey(t *testing.T) {
 	logic := newModelLogicForTest(t, nil)
 	created, err := logic.CreateCustomModel(context.Background(), CreateCustomModelInput{

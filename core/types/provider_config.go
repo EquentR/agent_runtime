@@ -7,7 +7,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const tokensPerMillion int64 = 1_000_000
+const (
+	tokensPerMillion         int64 = 1_000_000
+	defaultOutputBudgetLimit int64 = 8_192
+)
 
 const (
 	LLMTypeGoogle            = "google"
@@ -201,6 +204,9 @@ func (c LLMContextConfig) Normalized() LLMContextConfig {
 	if normalized.Max <= 0 {
 		return normalized
 	}
+	if normalized.Input <= 0 && normalized.Output <= 0 {
+		normalized.Output = defaultOutputBudget(normalized.Max)
+	}
 	if normalized.Input <= 0 && normalized.Output >= 0 && normalized.Max >= normalized.Output {
 		normalized.Input = normalized.Max - normalized.Output
 	}
@@ -208,6 +214,14 @@ func (c LLMContextConfig) Normalized() LLMContextConfig {
 		normalized.Output = normalized.Max - normalized.Input
 	}
 	return normalized
+}
+
+func defaultOutputBudget(maxTokens int64) int64 {
+	output := maxTokens / 4
+	if output > defaultOutputBudgetLimit {
+		return defaultOutputBudgetLimit
+	}
+	return output
 }
 
 type EmbeddingProvider struct {

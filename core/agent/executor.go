@@ -269,6 +269,10 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 		if err := json.Unmarshal(task.InputJSON, &input); err != nil {
 			return nil, err
 		}
+		if task.CreatedBy != "" {
+			input.CreatedBy = task.CreatedBy
+			input.UserID = ""
+		}
 		input.Skills = coreskills.NormalizeNames(input.Skills)
 		auditor.setInput(input)
 
