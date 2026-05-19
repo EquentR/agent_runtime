@@ -159,10 +159,7 @@ async function updateYAML(row: YAMLModelRow, patch: { enabled?: boolean; scope?:
   errorMessage.value = ''
   statusMessage.value = ''
   try {
-    const updated = await updateAdminYAMLModel(row.providerId, row.model.id, {
-      enabled: patch.enabled ?? row.model.enabled,
-      scope: patch.scope ?? row.model.scope,
-    })
+    const updated = await updateAdminYAMLModel(row.providerId, row.model.id, patch)
     replaceYAMLModel(row.providerId, updated)
     statusMessage.value = 'YAML 模型配置已更新'
   } catch (error) {

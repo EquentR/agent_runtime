@@ -107,14 +107,12 @@ describe('AdminModelsView', () => {
 
     expect(api.updateAdminYAMLModel).toHaveBeenCalledWith('yaml', 'admin-only', {
       enabled: false,
-      scope: 'admin',
     })
 
     await wrapper.get('[data-yaml-scope="yaml:admin-only"]').setValue('global')
     await flushPromises()
 
     expect(api.updateAdminYAMLModel).toHaveBeenLastCalledWith('yaml', 'admin-only', {
-      enabled: false,
       scope: 'global',
     })
   })
