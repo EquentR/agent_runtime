@@ -40,6 +40,27 @@ type serveRouterEnvelope struct {
 	OK   bool `json:"ok"`
 }
 
+func assertServeRouteUnauthorized(t *testing.T, handler http.Handler, method string, path string) {
+	t.Helper()
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(method, path, nil)
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("%s %s status = %d, want 200 so route is registered; body = %s", method, path, recorder.Code, recorder.Body.String())
+	}
+	var envelope serveRouterEnvelope
+	if err := json.Unmarshal(recorder.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("%s %s envelope unmarshal error = %v, body = %s", method, path, err, recorder.Body.String())
+	}
+	if envelope.OK {
+		t.Fatalf("%s %s OK = true, want unauthorized failure", method, path)
+	}
+	if envelope.Code != http.StatusUnauthorized {
+		t.Fatalf("%s %s envelope.Code = %d, want %d; body = %s", method, path, envelope.Code, http.StatusUnauthorized, recorder.Body.String())
+	}
+}
+
 func TestBuildLLMClientFactoryUsesConfiguredRequestTimeout(t *testing.T) {
 	factory := buildLLMClientFactory(50 * time.Millisecond)
 
@@ -188,6 +209,150 @@ func TestBuildRouterDependenciesExposeModelLogicAndResolver(t *testing.T) {
 	deps = buildRouterDependencies(nil, nil, nil, nil, 0, nil, nil, resolver, nil, nil, nil, runtime.AuthLogic, runtime)
 	if deps.ModelTester != tester {
 		t.Fatalf("deps.ModelTester = %#v, want configured tester", deps.ModelTester)
+	}
+}
+
+func TestBuildRouterDependenciesIncludesPublicAdminBackofficeServices(t *testing.T) {
+	db := newServeTestDB(t)
+	if err := db.AutoMigrate(&models.User{}, &models.UserSession{}, &models.SystemSetting{}, &models.EmailVerification{}, &models.AdminAuditEvent{}, &models.LLMModelOverride{}, &models.CustomLLMModel{}); err != nil {
+		t.Fatalf("AutoMigrate() error = %v", err)
+	}
+	runtime, err := initAuthRuntime(db, config.SecurityConfig{AppSecret: "test-secret"})
+	if err != nil {
+		t.Fatalf("initAuthRuntime() error = %v", err)
+	}
+	resolver := &coreagent.ModelResolver{Providers: []coretypes.LLMProvider{{
+		BaseProvider: coretypes.BaseProvider{Name: "yaml"},
+		Models: []coretypes.LLMModel{{
+			BaseModel: coretypes.BaseModel{ID: "gpt-5.4", Name: "GPT 5.4"},
+			Type:      coretypes.LLMTypeOpenAIResponses,
+			Scope:     "global",
+		}},
+	}}}
+	modelLogic, err := logics.NewModelLogic(db, resolverProviders(resolver), runtime.SecretCodec)
+	if err != nil {
+		t.Fatalf("NewModelLogic() error = %v", err)
+	}
+	modelTester := &serveFakeModelTester{}
+	runtime.ModelLogic = modelLogic
+	runtime.ModelTester = modelTester
+
+	deps := buildRouterDependencies(nil, nil, nil, nil, 0, nil, nil, resolver, nil, nil, nil, runtime.AuthLogic, runtime)
+	if deps.AuthLogic != runtime.AuthLogic {
+		t.Fatalf("deps.AuthLogic = %#v, want %#v", deps.AuthLogic, runtime.AuthLogic)
+	}
+	if deps.UserDB != db {
+		t.Fatalf("deps.UserDB = %#v, want auth runtime db", deps.UserDB)
+	}
+	if deps.AuthSettings != runtime.Settings {
+		t.Fatalf("deps.AuthSettings = %#v, want runtime settings", deps.AuthSettings)
+	}
+	if deps.EmailVerification != runtime.EmailVerification {
+		t.Fatalf("deps.EmailVerification = %#v, want runtime email verification", deps.EmailVerification)
+	}
+	if deps.TurnstileVerifier != runtime.TurnstileVerifier {
+		t.Fatalf("deps.TurnstileVerifier = %#v, want runtime turnstile verifier", deps.TurnstileVerifier)
+	}
+	if deps.AdminAuditLogic == nil {
+		t.Fatal("deps.AdminAuditLogic = nil, want admin audit logic")
+	}
+	if deps.AdminSMTPTester == nil {
+		t.Fatal("deps.AdminSMTPTester = nil, want settings-backed SMTP tester")
+	}
+	if deps.ModelLogic != modelLogic {
+		t.Fatalf("deps.ModelLogic = %#v, want runtime model logic", deps.ModelLogic)
+	}
+	if deps.ModelResolver == resolver || deps.ModelResolver == nil {
+		t.Fatalf("deps.ModelResolver = %#v, want model logic resolver distinct from raw resolver", deps.ModelResolver)
+	}
+	if deps.ModelTester != modelTester {
+		t.Fatalf("deps.ModelTester = %#v, want runtime model tester", deps.ModelTester)
+	}
+
+	engine := rest.Init()
+	router.Init(engine, "/api/v1", nil, deps)
+	assertServeRouteUnauthorized(t, engine, http.MethodGet, "/api/v1/auth/me")
+	assertServeRouteUnauthorized(t, engine, http.MethodGet, "/api/v1/users/me")
+	assertServeRouteUnauthorized(t, engine, http.MethodGet, "/api/v1/admin/users")
+	assertServeRouteUnauthorized(t, engine, http.MethodGet, "/api/v1/admin/settings/smtp")
+	assertServeRouteUnauthorized(t, engine, http.MethodGet, "/api/v1/admin/models")
+	assertServeRouteUnauthorized(t, engine, http.MethodGet, "/api/v1/admin/audit-events")
+	assertServeRouteUnauthorized(t, engine, http.MethodGet, "/api/v1/models")
+	assertServeRouteUnauthorized(t, engine, http.MethodPost, "/api/v1/tasks")
+
+	pendingUser := models.User{
+		Username:    "pending-user",
+		Email:       "pending@example.com",
+		DisplayName: "pending-user",
+		Role:        models.UserRoleUser,
+		Status:      models.UserStatusPendingEmailVerification,
+	}
+	if err := db.Create(&pendingUser).Error; err != nil {
+		t.Fatalf("seed pending user error = %v", err)
+	}
+	pendingSession := models.UserSession{
+		ID:        "sess_pending_startup",
+		UserID:    pendingUser.ID,
+		Username:  pendingUser.Username,
+		ExpiresAt: time.Now().UTC().Add(time.Hour),
+	}
+	if err := db.Create(&pendingSession).Error; err != nil {
+		t.Fatalf("seed pending session error = %v", err)
+	}
+	profileRecorder := httptest.NewRecorder()
+	profileRequest := httptest.NewRequest(http.MethodGet, "/api/v1/users/me", nil)
+	profileRequest.AddCookie(&http.Cookie{Name: logics.DefaultAuthSessionCookieName, Value: pendingSession.ID})
+	engine.ServeHTTP(profileRecorder, profileRequest)
+	var profileEnvelope serveRouterEnvelope
+	if err := json.Unmarshal(profileRecorder.Body.Bytes(), &profileEnvelope); err != nil {
+		t.Fatalf("profile envelope unmarshal error = %v, body = %s", err, profileRecorder.Body.String())
+	}
+	if !profileEnvelope.OK {
+		t.Fatalf("/users/me with pending user OK = false, code = %d, body = %s", profileEnvelope.Code, profileRecorder.Body.String())
+	}
+	taskRecorder := httptest.NewRecorder()
+	taskRequest := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(`{"task_type":"agent.run","input":{}}`))
+	taskRequest.Header.Set("Content-Type", "application/json")
+	taskRequest.AddCookie(&http.Cookie{Name: logics.DefaultAuthSessionCookieName, Value: pendingSession.ID})
+	engine.ServeHTTP(taskRecorder, taskRequest)
+	var taskEnvelope serveRouterEnvelope
+	if err := json.Unmarshal(taskRecorder.Body.Bytes(), &taskEnvelope); err != nil {
+		t.Fatalf("task envelope unmarshal error = %v, body = %s", err, taskRecorder.Body.String())
+	}
+	if taskEnvelope.Code != http.StatusForbidden {
+		t.Fatalf("/tasks with pending user code = %d, want %d active-user gate; body = %s", taskEnvelope.Code, http.StatusForbidden, taskRecorder.Body.String())
+	}
+}
+
+func TestServeConfigRequiresAppSecretWhenRuntimeSettingsNeedSecrets(t *testing.T) {
+	db := newServeTestDB(t)
+	if err := db.AutoMigrate(&models.SystemSetting{}); err != nil {
+		t.Fatalf("AutoMigrate() error = %v", err)
+	}
+
+	_, err := initAuthRuntime(db, config.SecurityConfig{
+		SMTP: config.SMTPConfig{
+			Enabled:  true,
+			Host:     "smtp.example.com",
+			Port:     587,
+			Username: "smtp-user",
+			Password: "smtp-password",
+			From:     "noreply@example.com",
+		},
+		Turnstile: config.TurnstileConfig{
+			Enabled:             true,
+			SiteKey:             "site-key",
+			Secret:              "turnstile-secret",
+			ProtectLogin:        true,
+			ProtectRegistration: true,
+			ProtectVerification: true,
+		},
+	})
+	if err == nil {
+		t.Fatal("initAuthRuntime() error = nil, want missing app secret error")
+	}
+	if !strings.Contains(err.Error(), "app secret is required") {
+		t.Fatalf("initAuthRuntime() error = %v, want app secret required", err)
 	}
 }
 
