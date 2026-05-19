@@ -271,6 +271,7 @@ async function startEmailVerification() {
       : { email: emailDraft.email }
     await startUserEmailVerification(input)
     statusMessage.value = '验证码已发送'
+    resetTurnstileWidget()
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '发送验证码失败'
     resetTurnstileWidget()

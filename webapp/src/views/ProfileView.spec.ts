@@ -168,6 +168,7 @@ describe('ProfileView', () => {
       protect_registration: false,
       protect_verification: true,
     })
+    const resetTurnstile = vi.fn()
     Object.defineProperty(window, 'turnstile', {
       configurable: true,
       value: {
@@ -175,7 +176,7 @@ describe('ProfileView', () => {
           options.callback('profile-token')
           return 'profile-widget'
         }),
-        reset: vi.fn(),
+        reset: resetTurnstile,
         remove: vi.fn(),
       },
     })
@@ -194,6 +195,7 @@ describe('ProfileView', () => {
       email: 'bound@example.com',
       turnstile_token: 'profile-token',
     })
+    expect(resetTurnstile).toHaveBeenCalledWith('profile-widget')
   })
 
   it('ProfileView manages owner-scoped custom models', async () => {
