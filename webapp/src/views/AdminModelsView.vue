@@ -190,7 +190,7 @@ function buildCustomInput() {
   }
   const ownerUserID = Number(customDraft.ownerUserId)
   if (!selectedCustom.value || customDraft.ownerUserId.trim()) {
-    input.owner_user_id = Number.isFinite(ownerUserID) ? ownerUserID : 0
+    input.owner_user_id = Number.isInteger(ownerUserID) && ownerUserID > 0 ? ownerUserID : 0
   }
   return input
 }
@@ -201,6 +201,10 @@ function validateCustomInput(input: ReturnType<typeof buildCustomInput>) {
   }
   if (!selectedCustom.value && !input.api_key?.trim()) {
     return '创建模型时必须填写 API Key'
+  }
+  const ownerUserID = Number(customDraft.ownerUserId)
+  if (customDraft.ownerUserId.trim() && (!Number.isInteger(ownerUserID) || ownerUserID <= 0)) {
+    return 'Owner User ID 必须是正整数'
   }
   if ((input.context_max_tokens ?? 0) < 4) {
     return '上下文上限不能小于 4 tokens'
@@ -234,11 +238,12 @@ async function submitCustomModel() {
   errorMessage.value = ''
   statusMessage.value = ''
   try {
-    const saved = selectedCustom.value
-      ? await updateAdminCustomModel(selectedCustom.value.id, input)
+    const selected = selectedCustom.value
+    const saved = selected
+      ? await updateAdminCustomModel(selected.id, input)
       : await createAdminCustomModel(input)
     upsertCustomModel(saved)
-    statusMessage.value = selectedCustom.value ? '自定义模型已更新' : '自定义模型已创建'
+    statusMessage.value = selected ? '自定义模型已更新' : '自定义模型已创建'
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '保存自定义模型失败'
   } finally {

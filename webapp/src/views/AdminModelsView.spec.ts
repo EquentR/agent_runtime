@@ -177,6 +177,7 @@ describe('AdminModelsView', () => {
     }))
     expect(wrapper.text()).toContain('32,768')
     expect(wrapper.text()).toContain('sk-****abcd')
+    expect(wrapper.text()).toContain('自定义模型已创建')
   })
 
   it('AdminModelsView tests another user model and shows audit warning', async () => {
@@ -208,5 +209,17 @@ describe('AdminModelsView', () => {
     expect(api.updateAdminCustomModel).toHaveBeenCalledWith('custom_1', expect.not.objectContaining({
       owner_user_id: 0,
     }))
+  })
+
+  it('rejects invalid owner user id instead of sending owner zero', async () => {
+    const wrapper = await mountAdminModelsView()
+
+    await wrapper.get('[data-admin-custom-row="custom_1"]').trigger('click')
+    await wrapper.get('[data-admin-model-owner-user-id]').setValue('not-a-user')
+    await wrapper.get('[data-admin-model-form]').trigger('submit')
+    await flushPromises()
+
+    expect(api.updateAdminCustomModel).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('Owner User ID 必须是正整数')
   })
 })

@@ -230,7 +230,7 @@ function validateModelInput(input: ReturnType<typeof buildModelInput>) {
   if (!input.provider_type || !input.provider_id || !input.model_id || !input.display_name) {
     return 'Provider Type、Provider ID、Model ID 和显示名称必填'
   }
-  if (modelNeedsBaseURL(input.provider_type) && !input.base_url) {
+  if (modelNeedsBaseURL(input.provider_type) && !input.base_url && !input.clear_base_url) {
     return '当前 Provider Type 需要填写 Base URL'
   }
   if (!selectedModel.value && !input.api_key?.trim()) {
@@ -254,11 +254,12 @@ async function submitUserModel() {
   errorMessage.value = ''
   statusMessage.value = ''
   try {
-    const saved = selectedModel.value
-      ? await updateUserCustomModel(selectedModel.value.id, input)
+    const selected = selectedModel.value
+    const saved = selected
+      ? await updateUserCustomModel(selected.id, input)
       : await createUserCustomModel(input)
     upsertCustomModel(saved)
-    statusMessage.value = selectedModel.value ? '模型已更新' : '模型已创建'
+    statusMessage.value = selected ? '模型已更新' : '模型已创建'
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '保存模型失败'
   } finally {
@@ -469,7 +470,7 @@ onMounted(() => {
         </label>
         <label>
           <span class="field-label">Base URL</span>
-          <input v-model="modelDraft.baseURL" class="text-input" data-user-model-base-url :required="modelNeedsBaseURL(modelDraft.providerType)">
+          <input v-model="modelDraft.baseURL" class="text-input" data-user-model-base-url :required="modelNeedsBaseURL(modelDraft.providerType) && !selectedModel">
         </label>
         <label>
           <span class="field-label">API Key</span>

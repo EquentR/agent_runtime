@@ -180,6 +180,7 @@ describe('ProfileView', () => {
       enabled: true,
       context_max_tokens: 65536,
     }))
+    expect(wrapper.text()).toContain('模型已创建')
 
     await wrapper.get('[data-user-model-test="custom_me"]').trigger('click')
     await flushPromises()
@@ -199,5 +200,26 @@ describe('ProfileView', () => {
       context_max_tokens: 32768,
     }))
     expect(wrapper.find('[data-user-model-scope]').exists()).toBe(false)
+  })
+
+  it('clears base URL for user OpenAI completions models', async () => {
+    api.fetchUserCustomModels.mockResolvedValueOnce([buildCustomModel({
+      provider_type: 'openai_completions',
+      base_url: 'https://old.example.com/v1',
+    })])
+
+    const wrapper = await mountProfileView()
+    await flushPromises()
+
+    await wrapper.get('[data-user-model-row="custom_me"]').trigger('click')
+    await wrapper.get('[data-user-model-base-url]').setValue('')
+    await wrapper.get('[data-user-model-form]').trigger('submit')
+    await flushPromises()
+
+    expect(api.updateUserCustomModel).toHaveBeenCalledWith('custom_me', expect.objectContaining({
+      base_url: '',
+      clear_base_url: true,
+      provider_type: 'openai_completions',
+    }))
   })
 })
