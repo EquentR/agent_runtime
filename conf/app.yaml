@@ -30,6 +30,7 @@ log:
 
 security:
   appSecret: ${APP_SECRET}
+  secureCookie: false
   publicRegistration:
     enabled: true
   smtp:

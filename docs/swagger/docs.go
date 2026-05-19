@@ -4688,6 +4688,9 @@ const docTemplate = `{
             "properties": {
                 "email": {
                     "type": "string"
+                },
+                "turnstile_token": {
+                    "type": "string"
                 }
             }
         },

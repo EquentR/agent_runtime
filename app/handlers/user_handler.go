@@ -23,6 +23,8 @@ const (
 type UserHandler struct {
 	db                *gorm.DB
 	emailVerification *logics.EmailVerificationLogic
+	settings          AuthHandlerSettingsReader
+	turnstileVerifier logics.TurnstileVerifier
 	middlewares       []gin.HandlerFunc
 }
 
@@ -37,7 +39,8 @@ type changeUserPasswordRequest struct {
 }
 
 type startUserEmailVerificationRequest struct {
-	Email string `json:"email"`
+	Email          string `json:"email"`
+	TurnstileToken string `json:"turnstile_token"`
 }
 
 type confirmUserEmailVerificationRequest struct {
@@ -47,6 +50,12 @@ type confirmUserEmailVerificationRequest struct {
 
 func NewUserHandler(db *gorm.DB, emailVerification *logics.EmailVerificationLogic, middlewares ...gin.HandlerFunc) *UserHandler {
 	return &UserHandler{db: db, emailVerification: emailVerification, middlewares: middlewares}
+}
+
+func (h *UserHandler) WithTurnstile(settings AuthHandlerSettingsReader, verifier logics.TurnstileVerifier) *UserHandler {
+	h.settings = settings
+	h.turnstileVerifier = verifier
+	return h
 }
 
 func (h *UserHandler) Register(rg *gin.RouterGroup) {
@@ -190,6 +199,9 @@ func (h *UserHandler) handleStartEmailVerification() (method, relativePath strin
 		if err := c.ShouldBindJSON(&request); err != nil {
 			return nil, []resp.ResOpt{resp.WithCode(http.StatusBadRequest)}, err
 		}
+		if err := h.verifyTurnstile(c, request.TurnstileToken); err != nil {
+			return nil, []resp.ResOpt{resp.WithCode(http.StatusBadRequest)}, err
+		}
 		email := profileEmailVerificationEmail(user, request.Email)
 		if err := h.emailVerification.Send(c.Request.Context(), logics.SendEmailVerificationInput{
 			UserID:  user.ID,
@@ -258,6 +270,23 @@ func (h *UserHandler) currentUser(c *gin.Context) (*models.User, error) {
 		return nil, err
 	}
 	return &reloaded, nil
+}
+
+func (h *UserHandler) verifyTurnstile(c *gin.Context, token string) error {
+	if h == nil || h.settings == nil {
+		return nil
+	}
+	settings, err := h.settings.GetTurnstile(c.Request.Context())
+	if err != nil {
+		return err
+	}
+	if !settings.Enabled || !settings.ProtectVerification {
+		return nil
+	}
+	if h.turnstileVerifier == nil {
+		return fmt.Errorf("turnstile verifier is not configured")
+	}
+	return h.turnstileVerifier.Verify(c.Request.Context(), token, c.ClientIP())
 }
 
 func validateUserPasswordChange(user *models.User, request changeUserPasswordRequest) error {

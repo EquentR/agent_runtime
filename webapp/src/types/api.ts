@@ -34,6 +34,7 @@ export interface ChangeUserPasswordInput {
 
 export interface UserEmailVerificationStartInput {
   email: string
+  turnstile_token?: string
 }
 
 export interface UserEmailVerificationConfirmInput {

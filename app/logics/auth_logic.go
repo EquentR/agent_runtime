@@ -30,8 +30,9 @@ var (
 )
 
 type AuthConfig struct {
-	CookieName string
-	SessionTTL time.Duration
+	CookieName   string
+	SessionTTL   time.Duration
+	SecureCookie bool
 }
 
 type RegisterInput struct {
@@ -52,6 +53,7 @@ type AuthLogic struct {
 	db                *gorm.DB
 	cookieName        string
 	sessionTTL        time.Duration
+	secureCookie      bool
 	now               func() time.Time
 	settings          AuthSettingsReader
 	emailVerification *EmailVerificationLogic
@@ -89,7 +91,7 @@ func NewAuthLogic(db *gorm.DB, cfg AuthConfig, opts ...AuthOption) (*AuthLogic, 
 	if ttl <= 0 {
 		ttl = 7 * 24 * time.Hour
 	}
-	logic := &AuthLogic{db: db, cookieName: cookieName, sessionTTL: ttl, now: time.Now}
+	logic := &AuthLogic{db: db, cookieName: cookieName, sessionTTL: ttl, secureCookie: cfg.SecureCookie, now: time.Now}
 	for _, opt := range opts {
 		if opt != nil {
 			opt(logic)
@@ -108,6 +110,10 @@ func (l *AuthLogic) CookieName() string {
 
 func (l *AuthLogic) SessionTTL() time.Duration {
 	return l.sessionTTL
+}
+
+func (l *AuthLogic) SecureCookie() bool {
+	return l != nil && l.secureCookie
 }
 
 func (l *AuthLogic) EmailVerification() *EmailVerificationLogic {
@@ -246,10 +252,25 @@ func (l *AuthLogic) register(ctx context.Context, input RegisterInput, legacyCom
 			Email:   user.Email,
 			Purpose: EmailVerificationPurposeRegistration,
 		}); err != nil {
+			if cleanupErr := l.rollbackFailedRegistration(ctx, user.ID); cleanupErr != nil {
+				return nil, fmt.Errorf("%w; rollback failed: %v", err, cleanupErr)
+			}
 			return nil, err
 		}
 	}
 	return user, nil
+}
+
+func (l *AuthLogic) rollbackFailedRegistration(ctx context.Context, userID uint64) error {
+	if l == nil || l.db == nil || userID == 0 {
+		return nil
+	}
+	return l.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Delete(&models.EmailVerification{}, "user_id = ?", userID).Error; err != nil {
+			return err
+		}
+		return tx.Delete(&models.User{}, "id = ?", userID).Error
+	})
 }
 
 func (l *AuthLogic) Login(ctx context.Context, username, password string) (*models.User, *models.UserSession, error) {

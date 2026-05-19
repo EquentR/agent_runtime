@@ -571,7 +571,7 @@ func (l *ModelLogic) resolveCustomForUse(ctx context.Context, user models.User, 
 func (l *ModelLogic) customUseQuery(ctx context.Context, user models.User) *gorm.DB {
 	query := l.db.WithContext(ctx).Where("enabled = ?", true)
 	if isAdminModelUser(user) {
-		return query.Where("(owner_user_id = ? AND scope IN ?) OR scope IN ?", user.ID, []string{ModelScopeOwner, ModelScopeAdmin, ModelScopeGlobal}, []string{ModelScopeAdmin, ModelScopeGlobal})
+		return query.Where("owner_user_id = ? AND scope IN ?", user.ID, []string{ModelScopeOwner, ModelScopeAdmin, ModelScopeGlobal})
 	}
 	return query.Where("(owner_user_id = ? AND scope = ?) OR scope = ?", user.ID, ModelScopeOwner, ModelScopeGlobal)
 }

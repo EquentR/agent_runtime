@@ -179,11 +179,15 @@ func (l *EmailVerificationLogic) Send(ctx context.Context, input SendEmailVerifi
 		return err
 	}
 
-	return l.sender.Send(ctx, mail.Message{
+	if err := l.sender.Send(ctx, mail.Message{
 		To:      email,
 		Subject: "邮箱验证码",
 		Body:    fmt.Sprintf("您的邮箱验证码是 %s，10 分钟内有效。", code),
-	})
+	}); err != nil {
+		_ = l.db.WithContext(ctx).Delete(&models.EmailVerification{}, "id = ?", row.ID).Error
+		return err
+	}
+	return nil
 }
 
 func (l *EmailVerificationLogic) SendByEmail(ctx context.Context, input SendEmailVerificationInput) error {

@@ -43,6 +43,7 @@ func (c Config) ResolvedLLMRequestTimeout() time.Duration {
 
 type SecurityConfig struct {
 	AppSecret          string                   `yaml:"appSecret"`
+	SecureCookie       bool                     `yaml:"secureCookie"`
 	PublicRegistration PublicRegistrationConfig `yaml:"publicRegistration"`
 	SMTP               SMTPConfig               `yaml:"smtp"`
 	Turnstile          TurnstileConfig          `yaml:"turnstile"`

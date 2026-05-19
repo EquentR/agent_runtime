@@ -185,7 +185,7 @@ func initAuthRuntime(database *gorm.DB, cfg config.SecurityConfig) (*authRuntime
 	if err != nil {
 		return nil, err
 	}
-	authLogic, err := logics.NewAuthLogic(database, logics.AuthConfig{}, logics.WithAuthSettings(settings), logics.WithAuthEmailVerification(emailVerification))
+	authLogic, err := logics.NewAuthLogic(database, logics.AuthConfig{SecureCookie: cfg.SecureCookie}, logics.WithAuthSettings(settings), logics.WithAuthEmailVerification(emailVerification))
 	if err != nil {
 		return nil, err
 	}

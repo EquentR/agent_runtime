@@ -26,7 +26,7 @@ func Init(e *gin.Engine, baseUrl string, staticPath []rest.Static, deps Dependen
 		handlers.NewAuthHandler(deps.AuthLogic, authHandlerOptions...),
 		handlers.NewExampleHandler(),
 		handlers.NewSettingsHandler(deps.AuthSettings),
-		handlers.NewUserHandler(deps.UserDB, deps.EmailVerification, authMiddleware.RequireSession()),
+		handlers.NewUserHandler(deps.UserDB, deps.EmailVerification, authMiddleware.RequireSession()).WithTurnstile(deps.AuthSettings, deps.TurnstileVerifier),
 		handlers.NewAdminUserHandler(deps.UserDB, deps.AdminAuditLogic, deps.EmailVerification, adminUser),
 		handlers.NewAdminSettingsHandler(deps.AuthSettings, deps.AdminAuditLogic, deps.AdminSMTPTester, adminUser),
 		handlers.NewAdminAuditEventHandler(deps.AdminAuditLogic, adminUser),

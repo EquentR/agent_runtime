@@ -126,10 +126,23 @@ func TestModelLogicSharesCustomModelsByScope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CatalogForUser(otherAdmin) error = %v", err)
 	}
-	assertModelCatalogContains(t, adminCatalog, "shared-global", "global-model")
-	assertModelCatalogContains(t, adminCatalog, "shared-admin", "admin-model")
-	if _, err := logic.ResolveForUse(context.Background(), otherAdmin, "shared-admin", "admin-model"); err != nil {
-		t.Fatalf("ResolveForUse(otherAdmin admin) error = %v", err)
+	assertModelCatalogNotContains(t, adminCatalog, "shared-global", "global-model")
+	assertModelCatalogNotContains(t, adminCatalog, "shared-admin", "admin-model")
+	if _, err := logic.ResolveForUse(context.Background(), otherAdmin, "shared-global", "global-model"); !errors.Is(err, ErrModelUnauthorized) {
+		t.Fatalf("ResolveForUse(otherAdmin global) error = %v, want ErrModelUnauthorized", err)
+	}
+	if _, err := logic.ResolveForUse(context.Background(), otherAdmin, "shared-admin", "admin-model"); !errors.Is(err, ErrModelUnauthorized) {
+		t.Fatalf("ResolveForUse(otherAdmin admin) error = %v, want ErrModelUnauthorized", err)
+	}
+
+	ownerCatalog, err := logic.CatalogForUser(context.Background(), ownerAdmin)
+	if err != nil {
+		t.Fatalf("CatalogForUser(ownerAdmin) error = %v", err)
+	}
+	assertModelCatalogContains(t, ownerCatalog, "shared-global", "global-model")
+	assertModelCatalogContains(t, ownerCatalog, "shared-admin", "admin-model")
+	if _, err := logic.ResolveForUse(context.Background(), ownerAdmin, "shared-admin", "admin-model"); err != nil {
+		t.Fatalf("ResolveForUse(ownerAdmin admin) error = %v", err)
 	}
 }
 
@@ -404,7 +417,7 @@ func TestModelLogicRejectsDuplicateVisibleCustomSelectionsAtRuntime(t *testing.T
 			ModelID:          "Dirty-Model",
 			DisplayName:      "Dirty Two",
 			ProviderType:     coretypes.LLMTypeOpenAICompletions,
-			Scope:            ModelScopeAdmin,
+			Scope:            ModelScopeGlobal,
 			Enabled:          true,
 			ContextMaxTokens: 32768,
 			CreatedAt:        time.Now().UTC(),
@@ -414,13 +427,13 @@ func TestModelLogicRejectsDuplicateVisibleCustomSelectionsAtRuntime(t *testing.T
 	if err := logic.DB().Create(&rows).Error; err != nil {
 		t.Fatalf("seed duplicate custom models: %v", err)
 	}
-	admin := models.User{ID: 3, Username: "root", Role: models.UserRoleAdmin}
+	user := models.User{ID: 3, Username: "alice", Role: models.UserRoleUser}
 
-	_, err := logic.CatalogForUser(context.Background(), admin)
+	_, err := logic.CatalogForUser(context.Background(), user)
 	if !errors.Is(err, ErrModelSelectionConflict) {
 		t.Fatalf("CatalogForUser(duplicate visible custom selections) error = %v, want ErrModelSelectionConflict", err)
 	}
-	_, err = logic.ResolveForUse(context.Background(), admin, "dirty-provider", "dirty-model")
+	_, err = logic.ResolveForUse(context.Background(), user, "dirty-provider", "dirty-model")
 	if !errors.Is(err, ErrModelSelectionConflict) {
 		t.Fatalf("ResolveForUse(duplicate visible custom selections) error = %v, want ErrModelSelectionConflict", err)
 	}

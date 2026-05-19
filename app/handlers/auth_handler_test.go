@@ -154,6 +154,69 @@ func TestAuthHandlerRegisterLoginLogoutFlow(t *testing.T) {
 	}
 }
 
+func TestAuthHandlerSessionCookiesHonorSecureConfig(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("gorm.Open() error = %v", err)
+	}
+	mailer := &fakeHandlerMailSender{}
+	emailVerification, err := logics.NewEmailVerificationLogic(db, logics.EmailVerificationConfig{
+		Sender: mailer,
+		CodeGenerator: func() (string, error) {
+			return "123456", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewEmailVerificationLogic() error = %v", err)
+	}
+	authLogic, err := logics.NewAuthLogic(db, logics.AuthConfig{
+		CookieName:   authSessionCookieName,
+		SecureCookie: true,
+	}, logics.WithAuthEmailVerification(emailVerification))
+	if err != nil {
+		t.Fatalf("NewAuthLogic() error = %v", err)
+	}
+	if err := authLogic.AutoMigrate(); err != nil {
+		t.Fatalf("AuthLogic.AutoMigrate() error = %v", err)
+	}
+	if err := db.AutoMigrate(&models.EmailVerification{}); err != nil {
+		t.Fatalf("EmailVerification AutoMigrate() error = %v", err)
+	}
+
+	engine := rest.Init()
+	NewAuthHandler(authLogic, WithAuthHandlerEmailVerification(emailVerification)).Register(engine.Group("/api/v1"))
+	server := httptest.NewServer(engine)
+	defer server.Close()
+
+	register := postAuthJSON(t, server.URL+"/api/v1/auth/register", map[string]any{
+		"username":         "secure",
+		"email":            "secure@example.com",
+		"password":         "secret-123",
+		"confirm_password": "secret-123",
+	})
+	defer register.Body.Close()
+	sessionCookie := mustFindCookie(t, register.Cookies(), authSessionCookieName)
+	if !sessionCookie.Secure {
+		t.Fatalf("register session cookie Secure = false, want true: %#v", sessionCookie)
+	}
+
+	logoutRequest, err := http.NewRequest(http.MethodPost, server.URL+"/api/v1/auth/logout", bytes.NewReader([]byte("{}")))
+	if err != nil {
+		t.Fatalf("NewRequest(logout) error = %v", err)
+	}
+	logoutRequest.Header.Set("Content-Type", "application/json")
+	logoutRequest.AddCookie(sessionCookie)
+	logoutResponse, err := http.DefaultClient.Do(logoutRequest)
+	if err != nil {
+		t.Fatalf("Do(logout) error = %v", err)
+	}
+	defer logoutResponse.Body.Close()
+	clearedCookie := mustFindCookie(t, logoutResponse.Cookies(), authSessionCookieName)
+	if !clearedCookie.Secure {
+		t.Fatalf("logout cleared cookie Secure = false, want true: %#v", clearedCookie)
+	}
+}
+
 func TestAuthHandlerRegisterCreatesSessionForActiveFirstUser(t *testing.T) {
 	server := newAuthHandlerTestServer(t)
 

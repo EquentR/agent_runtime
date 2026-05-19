@@ -212,6 +212,56 @@ func TestAuthLogicRegisterCreatesPendingUserAndSendsVerification(t *testing.T) {
 	}
 }
 
+func TestAuthLogicRollsBackSecondRegistrationWhenVerificationSendFails(t *testing.T) {
+	mailer := &fakeAuthMailSender{}
+	logic := newAuthLogicTestSubject(t, withAuthTestMailer(mailer, "123456"))
+
+	if _, err := logic.RegisterWithInput(context.Background(), RegisterInput{
+		Username:        "admin",
+		Email:           "admin@example.com",
+		Password:        "secret-123",
+		ConfirmPassword: "secret-123",
+	}); err != nil {
+		t.Fatalf("RegisterWithInput(first) error = %v", err)
+	}
+
+	mailer.err = errors.New("smtp refused")
+	_, err := logic.RegisterWithInput(context.Background(), RegisterInput{
+		Username:        "bob",
+		Email:           "bob@example.com",
+		Password:        "secret-123",
+		ConfirmPassword: "secret-123",
+	})
+	if err == nil || !strings.Contains(err.Error(), "smtp refused") {
+		t.Fatalf("RegisterWithInput(second send failure) error = %v, want smtp refused", err)
+	}
+
+	var userCount int64
+	if err := logic.db.Model(&models.User{}).Where("username = ? OR email = ?", "bob", "bob@example.com").Count(&userCount).Error; err != nil {
+		t.Fatalf("count rolled back user error = %v", err)
+	}
+	if userCount != 0 {
+		t.Fatalf("rolled back user count = %d, want 0", userCount)
+	}
+	var verificationCount int64
+	if err := logic.db.Model(&models.EmailVerification{}).Where("email = ?", "bob@example.com").Count(&verificationCount).Error; err != nil {
+		t.Fatalf("count rolled back verification error = %v", err)
+	}
+	if verificationCount != 0 {
+		t.Fatalf("rolled back verification count = %d, want 0", verificationCount)
+	}
+
+	mailer.err = nil
+	if _, err := logic.RegisterWithInput(context.Background(), RegisterInput{
+		Username:        "bob",
+		Email:           "bob@example.com",
+		Password:        "secret-123",
+		ConfirmPassword: "secret-123",
+	}); err != nil {
+		t.Fatalf("RegisterWithInput(retry after rollback) error = %v", err)
+	}
+}
+
 func TestAuthLogicRejectsPublicRegistrationWhenDisabled(t *testing.T) {
 	settings := &fakeAuthSettings{publicRegistration: PublicRegistrationSettings{Enabled: true}}
 	mailer := &fakeAuthMailSender{}

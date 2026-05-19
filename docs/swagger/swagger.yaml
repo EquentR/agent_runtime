@@ -1364,6 +1364,8 @@ definitions:
     properties:
       email:
         type: string
+      turnstile_token:
+        type: string
     type: object
   handlers.UserPasswordChangeSwaggerRequest:
     properties:

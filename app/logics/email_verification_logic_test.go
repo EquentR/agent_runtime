@@ -87,6 +87,39 @@ func TestEmailVerificationAcceptsSixDigitCodeAndActivatesUser(t *testing.T) {
 	}
 }
 
+func TestEmailVerificationSendFailureDoesNotLeaveUsableVerificationRow(t *testing.T) {
+	now := time.Date(2026, 5, 18, 10, 0, 0, 0, time.UTC)
+	subject := newEmailVerificationTestSubject(t, now, "123456")
+	user := seedEmailVerificationUser(t, subject.db, "pending", "pending@example.com", models.UserStatusPendingEmailVerification)
+	subject.mailer.err = errors.New("smtp refused")
+
+	err := subject.logic.Send(context.Background(), SendEmailVerificationInput{
+		UserID:  user.ID,
+		Email:   user.Email,
+		Purpose: EmailVerificationPurposeRegistration,
+	})
+	if err == nil || !strings.Contains(err.Error(), "smtp refused") {
+		t.Fatalf("Send() error = %v, want smtp refused", err)
+	}
+
+	var count int64
+	if err := subject.db.Model(&models.EmailVerification{}).Where("user_id = ? AND email = ?", user.ID, user.Email).Count(&count).Error; err != nil {
+		t.Fatalf("count verification rows error = %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("verification rows after send failure = %d, want 0", count)
+	}
+
+	subject.mailer.err = nil
+	if err := subject.logic.Send(context.Background(), SendEmailVerificationInput{
+		UserID:  user.ID,
+		Email:   user.Email,
+		Purpose: EmailVerificationPurposeRegistration,
+	}); err != nil {
+		t.Fatalf("Send(retry) error = %v", err)
+	}
+}
+
 func TestEmailVerificationRejectsExpiredCodeAndTooManyAttempts(t *testing.T) {
 	now := time.Date(2026, 5, 18, 10, 0, 0, 0, time.UTC)
 	subject := newEmailVerificationTestSubject(t, now, "123456")

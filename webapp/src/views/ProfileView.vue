@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import {
@@ -7,6 +7,7 @@ import {
   confirmUserEmailVerification,
   createUserCustomModel,
   deleteUserCustomModel,
+  fetchPublicTurnstileSettings,
   fetchUserCustomModels,
   fetchUserProfile,
   startUserEmailVerification,
@@ -14,7 +15,66 @@ import {
   updateUserCustomModel,
   updateUserProfile,
 } from '../lib/api'
-import type { AuthUser, CustomLLMModel, CustomLLMModelInput } from '../types/api'
+import type { AuthUser, CustomLLMModel, CustomLLMModelInput, PublicTurnstileSettings } from '../types/api'
+
+interface TurnstileRenderOptions {
+  sitekey: string
+  callback: (token: string) => void
+  'expired-callback': () => void
+  'error-callback': () => void
+}
+
+interface TurnstileClient {
+  render: (element: HTMLElement, options: TurnstileRenderOptions) => string
+  reset?: (widgetId?: string) => void
+  remove?: (widgetId: string) => void
+}
+
+declare global {
+  interface Window {
+    turnstile?: TurnstileClient
+  }
+}
+
+let profileTurnstileScriptPromise: Promise<void> | null = null
+
+function loadProfileTurnstileScript() {
+  if (window.turnstile) {
+    return Promise.resolve()
+  }
+  if (!profileTurnstileScriptPromise) {
+    profileTurnstileScriptPromise = new Promise((resolve, reject) => {
+      const existing = document.querySelector<HTMLScriptElement>('script[data-agent-runtime-turnstile]')
+      if (existing) {
+        if (existing.dataset.loaded === 'true') {
+          window.turnstile ? resolve() : reject(new Error('turnstile script loaded without client'))
+          return
+        }
+        existing.addEventListener('load', () => resolve(), { once: true })
+        existing.addEventListener('error', () => {
+          profileTurnstileScriptPromise = null
+          reject(new Error('turnstile script failed to load'))
+        }, { once: true })
+        return
+      }
+      const script = document.createElement('script')
+      script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit'
+      script.async = true
+      script.defer = true
+      script.dataset.agentRuntimeTurnstile = 'true'
+      script.addEventListener('load', () => {
+        script.dataset.loaded = 'true'
+        resolve()
+      }, { once: true })
+      script.addEventListener('error', () => {
+        profileTurnstileScriptPromise = null
+        reject(new Error('turnstile script failed to load'))
+      }, { once: true })
+      document.head.appendChild(script)
+    })
+  }
+  return profileTurnstileScriptPromise
+}
 
 const loading = ref(false)
 const savingProfile = ref(false)
@@ -27,6 +87,17 @@ const customModels = ref<CustomLLMModel[]>([])
 const selectedModelId = ref('')
 const statusMessage = ref('')
 const errorMessage = ref('')
+const turnstileSettings = ref<PublicTurnstileSettings>({
+  enabled: false,
+  site_key: '',
+  protect_login: false,
+  protect_registration: false,
+  protect_verification: false,
+})
+const turnstileToken = ref('')
+const turnstileLoadError = ref('')
+const turnstileElement = ref<HTMLElement | null>(null)
+const turnstileWidgetId = ref<string | null>(null)
 
 const profileDraft = reactive({
   displayName: '',
@@ -60,6 +131,10 @@ const needsEmail = computed(() => requiredActions.value.includes('bind_email') |
 const needsPassword = computed(() => requiredActions.value.includes('change_password'))
 const selectedModel = computed(() => customModels.value.find((model) => model.id === selectedModelId.value) ?? null)
 const modelFormTitle = computed(() => selectedModel.value ? `编辑模型：${selectedModel.value.display_name}` : '新增我的模型')
+const turnstileRequired = computed(() => {
+  const settings = turnstileSettings.value
+  return Boolean(settings.enabled && settings.site_key && settings.protect_verification)
+})
 const emailStatus = computed(() => {
   if (!profile.value?.email) return '未绑定'
   return profile.value.email_verified ? '已验证' : '待验证'
@@ -132,6 +207,20 @@ async function loadUserModels() {
   }
 }
 
+async function loadTurnstileSettings() {
+  try {
+    turnstileSettings.value = await fetchPublicTurnstileSettings()
+  } catch {
+    turnstileSettings.value = {
+      enabled: false,
+      site_key: '',
+      protect_login: false,
+      protect_registration: false,
+      protect_verification: false,
+    }
+  }
+}
+
 async function submitProfile() {
   savingProfile.value = true
   errorMessage.value = ''
@@ -174,10 +263,17 @@ async function startEmailVerification() {
   statusMessage.value = ''
   try {
     emailDraft.email = emailDraft.email.trim()
-    await startUserEmailVerification({ email: emailDraft.email })
+    if (turnstileRequired.value && !turnstileToken.value) {
+      throw new Error('请先完成人机验证')
+    }
+    const input = turnstileRequired.value
+      ? { email: emailDraft.email, turnstile_token: turnstileToken.value }
+      : { email: emailDraft.email }
+    await startUserEmailVerification(input)
     statusMessage.value = '验证码已发送'
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '发送验证码失败'
+    resetTurnstileWidget()
   } finally {
     sendingEmailCode.value = false
   }
@@ -302,7 +398,76 @@ async function removeUserModel(model: CustomLLMModel) {
 onMounted(() => {
   void loadProfile()
   void loadUserModels()
+  void loadTurnstileSettings()
 })
+
+onBeforeUnmount(() => {
+  removeTurnstileWidget()
+})
+
+watch([turnstileRequired, () => turnstileSettings.value.site_key], async () => {
+  turnstileToken.value = ''
+  await renderTurnstile()
+}, { flush: 'post' })
+
+async function renderTurnstile() {
+  if (!turnstileRequired.value) {
+    removeTurnstileWidget()
+    turnstileLoadError.value = ''
+    return
+  }
+  await nextTick()
+  const element = turnstileElement.value
+  if (!element) {
+    return
+  }
+  removeTurnstileWidget()
+  turnstileLoadError.value = ''
+  try {
+    await loadProfileTurnstileScript()
+    if (!window.turnstile) {
+      throw new Error('turnstile is unavailable')
+    }
+    turnstileWidgetId.value = window.turnstile.render(element, {
+      sitekey: turnstileSettings.value.site_key,
+      callback: (token: string) => {
+        turnstileToken.value = token
+        turnstileLoadError.value = ''
+      },
+      'expired-callback': () => {
+        turnstileToken.value = ''
+      },
+      'error-callback': () => {
+        turnstileToken.value = ''
+        turnstileLoadError.value = '人机验证失败，请重试'
+      },
+    })
+  } catch {
+    turnstileToken.value = ''
+    turnstileLoadError.value = '人机验证加载失败，请刷新后重试'
+  }
+}
+
+function removeTurnstileWidget() {
+  const widgetId = turnstileWidgetId.value
+  if (!widgetId) {
+    return
+  }
+  if (window.turnstile?.remove) {
+    window.turnstile.remove(widgetId)
+  } else {
+    window.turnstile?.reset?.(widgetId)
+  }
+  turnstileWidgetId.value = null
+}
+
+function resetTurnstileWidget() {
+  if (!turnstileRequired.value || !turnstileWidgetId.value) {
+    return
+  }
+  turnstileToken.value = ''
+  window.turnstile?.reset?.(turnstileWidgetId.value)
+}
 </script>
 
 <template>
@@ -367,6 +532,8 @@ onMounted(() => {
             <span class="field-label">邮箱地址</span>
             <input v-model="emailDraft.email" class="text-input" type="email" data-profile-email-input>
           </label>
+          <div v-if="turnstileRequired" ref="turnstileElement" class="turnstile-widget" aria-label="Cloudflare Turnstile"></div>
+          <p v-if="turnstileLoadError" class="error-banner auth-error">{{ turnstileLoadError }}</p>
           <div class="admin-form-actions">
             <button class="primary-button" type="submit" :disabled="sendingEmailCode">
               {{ sendingEmailCode ? '发送中' : '发送验证码' }}

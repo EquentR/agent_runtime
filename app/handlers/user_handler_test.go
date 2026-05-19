@@ -154,6 +154,55 @@ func TestUserHandlerStartsAndVerifiesEmailBinding(t *testing.T) {
 	}
 }
 
+func TestUserHandlerEmailVerificationSendRequiresTurnstileWhenProtected(t *testing.T) {
+	deps, server, verifier := newUserHandlerTestServerWithTurnstile(t, logics.TurnstileSettings{
+		Enabled:             true,
+		SiteKey:             "site-key",
+		Secret:              "secret-key",
+		ProtectVerification: true,
+	})
+	user := seedUserHandlerUser(t, deps.db, userHandlerSeedUser{
+		username: "active",
+		email:    "active@example.com",
+		status:   models.UserStatusActive,
+		verified: true,
+	})
+	session := createUserHandlerSession(t, deps.db, user)
+	verifier.err = fmt.Errorf("turnstile rejected")
+
+	rejected := doUserRequest(t, http.MethodPost, server.URL+"/api/v1/users/me/email-verification", map[string]any{
+		"email": "new@example.com",
+	}, session)
+	defer rejected.Body.Close()
+	rejectedEnvelope := decodeEnvelope(t, rejected.Body)
+	if rejectedEnvelope.OK {
+		t.Fatal("email verification without turnstile OK = true, want false")
+	}
+	if len(verifier.calls) != 1 || verifier.calls[0].token != "" {
+		t.Fatalf("turnstile calls after rejected request = %#v, want one empty-token call", verifier.calls)
+	}
+	if len(deps.mailer.messages) != 0 {
+		t.Fatalf("sent messages after rejected request = %d, want 0", len(deps.mailer.messages))
+	}
+
+	verifier.err = nil
+	accepted := doUserRequest(t, http.MethodPost, server.URL+"/api/v1/users/me/email-verification", map[string]any{
+		"email":           "new@example.com",
+		"turnstile_token": "profile-token",
+	}, session)
+	defer accepted.Body.Close()
+	acceptedEnvelope := decodeEnvelope(t, accepted.Body)
+	if !acceptedEnvelope.OK {
+		t.Fatalf("email verification with turnstile OK = false, code = %d, message = %s", acceptedEnvelope.Code, acceptedEnvelope.Message)
+	}
+	if len(verifier.calls) != 2 || verifier.calls[1].token != "profile-token" {
+		t.Fatalf("turnstile calls after accepted request = %#v, want profile-token call", verifier.calls)
+	}
+	if len(deps.mailer.messages) != 1 || deps.mailer.messages[0].To != "new@example.com" {
+		t.Fatalf("sent messages = %#v, want one verification email", deps.mailer.messages)
+	}
+}
+
 func TestUserHandlerStartsAndVerifiesActiveEmailChange(t *testing.T) {
 	deps, server := newUserHandlerTestServer(t)
 	user := seedUserHandlerUser(t, deps.db, userHandlerSeedUser{
@@ -269,6 +318,11 @@ func (s *userHandlerMailSender) Send(ctx context.Context, message mail.Message) 
 }
 
 func newUserHandlerTestServer(t *testing.T) (*userHandlerTestDeps, *httptest.Server) {
+	deps, server, _ := newUserHandlerTestServerWithTurnstile(t, logics.TurnstileSettings{})
+	return deps, server
+}
+
+func newUserHandlerTestServerWithTurnstile(t *testing.T, turnstile logics.TurnstileSettings) (*userHandlerTestDeps, *httptest.Server, *fakeTurnstileVerifier) {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	if err != nil {
@@ -293,9 +347,11 @@ func newUserHandlerTestServer(t *testing.T) (*userHandlerTestDeps, *httptest.Ser
 	}
 
 	authMiddleware := NewAuthMiddleware(authLogic)
+	verifier := &fakeTurnstileVerifier{}
+	settings := &fakeAuthHandlerSettings{turnstile: turnstile}
 	engine := rest.Init()
 	group := engine.Group("/api/v1")
-	NewUserHandler(db, emailVerification, authMiddleware.RequireSession()).Register(group)
+	NewUserHandler(db, emailVerification, authMiddleware.RequireSession()).WithTurnstile(settings, verifier).Register(group)
 	server := httptest.NewServer(engine)
 	t.Cleanup(server.Close)
 
@@ -304,7 +360,7 @@ func newUserHandlerTestServer(t *testing.T) (*userHandlerTestDeps, *httptest.Ser
 		authLogic:         authLogic,
 		emailVerification: emailVerification,
 		mailer:            mailer,
-	}, server
+	}, server, verifier
 }
 
 func seedUserHandlerUser(t *testing.T, db *gorm.DB, input userHandlerSeedUser) models.User {

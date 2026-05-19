@@ -322,12 +322,12 @@ func (h *AuthHandler) handleVerifyEmail() (method, relativePath string, wrapper 
 
 func (h *AuthHandler) setSessionCookie(c *gin.Context, session *models.UserSession) {
 	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie(h.logic.CookieName(), session.ID, int(h.logic.SessionTTL().Seconds()), "/", "", false, true)
+	c.SetCookie(h.logic.CookieName(), session.ID, int(h.logic.SessionTTL().Seconds()), "/", "", h.logic.SecureCookie(), true)
 }
 
 func (h *AuthHandler) clearSessionCookie(c *gin.Context) {
 	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie(h.logic.CookieName(), "", -1, "/", "", false, true)
+	c.SetCookie(h.logic.CookieName(), "", -1, "/", "", h.logic.SecureCookie(), true)
 }
 
 func authUserResponse(user *models.User) gin.H {

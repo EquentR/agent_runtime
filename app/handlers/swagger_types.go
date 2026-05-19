@@ -490,7 +490,8 @@ type UserPasswordChangeSwaggerRequest struct {
 
 // UserEmailVerificationStartSwaggerRequest 描述当前用户发送邮箱验证码请求。
 type UserEmailVerificationStartSwaggerRequest struct {
-	Email string `json:"email"`
+	Email          string `json:"email"`
+	TurnstileToken string `json:"turnstile_token"`
 }
 
 // UserEmailVerificationConfirmSwaggerRequest 描述当前用户确认邮箱验证码请求。

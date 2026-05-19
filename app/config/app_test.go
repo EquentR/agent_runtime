@@ -238,6 +238,7 @@ func TestConfigParsesSMTPAndTurnstileDefaults(t *testing.T) {
 	if err := yaml.Unmarshal([]byte(`
 security:
   appSecret: ${APP_SECRET}
+  secureCookie: true
   publicRegistration:
     enabled: false
   smtp:
@@ -262,6 +263,9 @@ security:
 
 	if cfg.Security.AppSecret != "${APP_SECRET}" {
 		t.Fatalf("security.appSecret = %q, want placeholder", cfg.Security.AppSecret)
+	}
+	if !cfg.Security.SecureCookie {
+		t.Fatal("security.secureCookie = false, want true")
 	}
 	if !cfg.Security.PublicRegistration.Configured() {
 		t.Fatal("security.publicRegistration.Configured() = false, want true")

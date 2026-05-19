@@ -7,6 +7,7 @@ const api = vi.hoisted(() => ({
   confirmUserEmailVerification: vi.fn(),
   createUserCustomModel: vi.fn(),
   deleteUserCustomModel: vi.fn(),
+  fetchPublicTurnstileSettings: vi.fn(),
   fetchUserCustomModels: vi.fn(),
   fetchUserProfile: vi.fn(),
   startUserEmailVerification: vi.fn(),
@@ -79,7 +80,15 @@ async function mountProfileView() {
 describe('ProfileView', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    Reflect.deleteProperty(window, 'turnstile')
     api.fetchUserProfile.mockResolvedValue(buildProfile())
+    api.fetchPublicTurnstileSettings.mockResolvedValue({
+      enabled: false,
+      site_key: '',
+      protect_login: false,
+      protect_registration: false,
+      protect_verification: false,
+    })
     api.updateUserProfile.mockResolvedValue(buildProfile({ display_name: 'Alice Doe' }))
     api.changeUserPassword.mockResolvedValue(buildProfile({
       force_password_change: false,
@@ -149,6 +158,42 @@ describe('ProfileView', () => {
       code: '123456',
     })
     expect(wrapper.text()).toContain('bound@example.com')
+  })
+
+  it('sends profile email verification with a turnstile token when protected', async () => {
+    api.fetchPublicTurnstileSettings.mockResolvedValueOnce({
+      enabled: true,
+      site_key: 'site-key',
+      protect_login: false,
+      protect_registration: false,
+      protect_verification: true,
+    })
+    Object.defineProperty(window, 'turnstile', {
+      configurable: true,
+      value: {
+        render: vi.fn((_element, options) => {
+          options.callback('profile-token')
+          return 'profile-widget'
+        }),
+        reset: vi.fn(),
+        remove: vi.fn(),
+      },
+    })
+
+    const wrapper = await mountProfileView()
+    await flushPromises()
+    await flushPromises()
+
+    expect(wrapper.find('.turnstile-widget').exists()).toBe(true)
+
+    await wrapper.get('[data-profile-email-input]').setValue(' bound@example.com ')
+    await wrapper.get('[data-profile-email-start-form]').trigger('submit')
+    await flushPromises()
+
+    expect(api.startUserEmailVerification).toHaveBeenCalledWith({
+      email: 'bound@example.com',
+      turnstile_token: 'profile-token',
+    })
   })
 
   it('ProfileView manages owner-scoped custom models', async () => {
