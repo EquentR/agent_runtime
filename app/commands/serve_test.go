@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -36,8 +37,9 @@ import (
 )
 
 type serveRouterEnvelope struct {
-	Code int  `json:"code"`
-	OK   bool `json:"ok"`
+	Code int             `json:"code"`
+	OK   bool            `json:"ok"`
+	Data json.RawMessage `json:"data"`
 }
 
 func assertServeRouteUnauthorized(t *testing.T, handler http.Handler, method string, path string) {
@@ -59,6 +61,36 @@ func assertServeRouteUnauthorized(t *testing.T, handler http.Handler, method str
 	if envelope.Code != http.StatusUnauthorized {
 		t.Fatalf("%s %s envelope.Code = %d, want %d; body = %s", method, path, envelope.Code, http.StatusUnauthorized, recorder.Body.String())
 	}
+}
+
+func assertServeRouteWithSession(t *testing.T, handler http.Handler, method string, path string, sessionID string, wantCode int) serveRouterEnvelope {
+	t.Helper()
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(method, path, nil)
+	request.AddCookie(&http.Cookie{Name: logics.DefaultAuthSessionCookieName, Value: sessionID})
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("%s %s status = %d, want 200; body = %s", method, path, recorder.Code, recorder.Body.String())
+	}
+	var envelope serveRouterEnvelope
+	if err := json.Unmarshal(recorder.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("%s %s envelope unmarshal error = %v, body = %s", method, path, err, recorder.Body.String())
+	}
+	if envelope.Code != wantCode {
+		t.Fatalf("%s %s envelope.Code = %d, want %d; body = %s", method, path, envelope.Code, wantCode, recorder.Body.String())
+	}
+	return envelope
+}
+
+func assertServeRouteOKWithSession(t *testing.T, handler http.Handler, method string, path string, sessionID string) serveRouterEnvelope {
+	t.Helper()
+
+	envelope := assertServeRouteWithSession(t, handler, method, path, sessionID, http.StatusOK)
+	if !envelope.OK {
+		t.Fatalf("%s %s OK = false, want true; data = %s", method, path, string(envelope.Data))
+	}
+	return envelope
 }
 
 func TestBuildLLMClientFactoryUsesConfiguredRequestTimeout(t *testing.T) {
@@ -195,14 +227,18 @@ func TestBuildRouterDependenciesExposeModelLogicAndResolver(t *testing.T) {
 	if deps.ModelLogic == nil {
 		t.Fatal("deps.ModelLogic = nil, want runtime model logic")
 	}
-	if deps.ModelResolver == resolver {
-		t.Fatal("deps.ModelResolver still equals raw resolver, want model logic resolver")
-	}
 	if deps.ModelResolver == nil {
 		t.Fatal("deps.ModelResolver = nil, want model logic resolver")
 	}
 	if len(deps.ModelResolver.Providers) != 1 || deps.ModelResolver.Providers[0].ProviderName() != "yaml" {
 		t.Fatalf("deps.ModelResolver providers = %#v, want yaml provider passthrough", deps.ModelResolver.Providers)
+	}
+	resolvedModel, err := deps.ModelResolver.ResolveContext(context.Background(), "yaml", "global")
+	if err != nil {
+		t.Fatalf("deps.ModelResolver.ResolveContext() error = %v", err)
+	}
+	if resolvedModel.Provider.ProviderName() != "yaml" || resolvedModel.Model.ModelID() != "global" {
+		t.Fatalf("resolved model = %#v, want yaml/global", resolvedModel)
 	}
 	tester := &serveFakeModelTester{}
 	runtime.ModelTester = tester
@@ -262,8 +298,8 @@ func TestBuildRouterDependenciesIncludesPublicAdminBackofficeServices(t *testing
 	if deps.ModelLogic != modelLogic {
 		t.Fatalf("deps.ModelLogic = %#v, want runtime model logic", deps.ModelLogic)
 	}
-	if deps.ModelResolver == resolver || deps.ModelResolver == nil {
-		t.Fatalf("deps.ModelResolver = %#v, want model logic resolver distinct from raw resolver", deps.ModelResolver)
+	if deps.ModelResolver == nil {
+		t.Fatal("deps.ModelResolver = nil, want model logic resolver")
 	}
 	if deps.ModelTester != modelTester {
 		t.Fatalf("deps.ModelTester = %#v, want runtime model tester", deps.ModelTester)
@@ -279,6 +315,91 @@ func TestBuildRouterDependenciesIncludesPublicAdminBackofficeServices(t *testing
 	assertServeRouteUnauthorized(t, engine, http.MethodGet, "/api/v1/admin/audit-events")
 	assertServeRouteUnauthorized(t, engine, http.MethodGet, "/api/v1/models")
 	assertServeRouteUnauthorized(t, engine, http.MethodPost, "/api/v1/tasks")
+
+	now := time.Now().UTC()
+	adminUser := models.User{
+		Username:        "startup-admin",
+		Email:           "startup-admin@example.com",
+		DisplayName:     "startup-admin",
+		Role:            models.UserRoleAdmin,
+		Status:          models.UserStatusActive,
+		EmailVerifiedAt: &now,
+	}
+	if err := db.Create(&adminUser).Error; err != nil {
+		t.Fatalf("seed admin user error = %v", err)
+	}
+	adminSession := models.UserSession{
+		ID:        "sess_startup_admin",
+		UserID:    adminUser.ID,
+		Username:  adminUser.Username,
+		ExpiresAt: now.Add(time.Hour),
+	}
+	if err := db.Create(&adminSession).Error; err != nil {
+		t.Fatalf("seed admin session error = %v", err)
+	}
+	resolvedModel, err := deps.ModelResolver.ResolveTask(context.Background(), coreagent.RunTaskInput{
+		UserID:     strconv.FormatUint(adminUser.ID, 10),
+		ProviderID: "yaml",
+		ModelID:    "gpt-5.4",
+	})
+	if err != nil {
+		t.Fatalf("deps.ModelResolver.ResolveTask() error = %v", err)
+	}
+	if resolvedModel.Provider.ProviderName() != "yaml" || resolvedModel.Model.ModelID() != "gpt-5.4" {
+		t.Fatalf("resolved model = %#v, want yaml/gpt-5.4", resolvedModel)
+	}
+	assertServeRouteOKWithSession(t, engine, http.MethodGet, "/api/v1/admin/settings/smtp", adminSession.ID)
+	assertServeRouteOKWithSession(t, engine, http.MethodGet, "/api/v1/admin/audit-events", adminSession.ID)
+	modelEnvelope := assertServeRouteOKWithSession(t, engine, http.MethodGet, "/api/v1/admin/models", adminSession.ID)
+	var modelCatalog struct {
+		Providers []struct {
+			ID     string `json:"id"`
+			Models []struct {
+				ID string `json:"id"`
+			} `json:"models"`
+		} `json:"providers"`
+	}
+	if err := json.Unmarshal(modelEnvelope.Data, &modelCatalog); err != nil {
+		t.Fatalf("admin models data unmarshal error = %v, data = %s", err, string(modelEnvelope.Data))
+	}
+	hasYAMLModel := false
+	for _, provider := range modelCatalog.Providers {
+		if provider.ID != "yaml" {
+			continue
+		}
+		for _, model := range provider.Models {
+			if model.ID == "gpt-5.4" {
+				hasYAMLModel = true
+			}
+		}
+	}
+	if !hasYAMLModel {
+		t.Fatalf("admin models catalog = %#v, want yaml/gpt-5.4", modelCatalog)
+	}
+	normalUser := models.User{
+		Username:        "startup-user",
+		Email:           "startup-user@example.com",
+		DisplayName:     "startup-user",
+		Role:            models.UserRoleUser,
+		Status:          models.UserStatusActive,
+		EmailVerifiedAt: &now,
+	}
+	if err := db.Create(&normalUser).Error; err != nil {
+		t.Fatalf("seed normal user error = %v", err)
+	}
+	normalSession := models.UserSession{
+		ID:        "sess_startup_user",
+		UserID:    normalUser.ID,
+		Username:  normalUser.Username,
+		ExpiresAt: now.Add(time.Hour),
+	}
+	if err := db.Create(&normalSession).Error; err != nil {
+		t.Fatalf("seed normal session error = %v", err)
+	}
+	nonAdminEnvelope := assertServeRouteWithSession(t, engine, http.MethodGet, "/api/v1/admin/audit-events", normalSession.ID, http.StatusForbidden)
+	if nonAdminEnvelope.OK {
+		t.Fatalf("non-admin /admin/audit-events OK = true, want forbidden; data = %s", string(nonAdminEnvelope.Data))
+	}
 
 	pendingUser := models.User{
 		Username:    "pending-user",
