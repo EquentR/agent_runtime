@@ -963,17 +963,25 @@ func TestConversationHandlerDeleteConversation(t *testing.T) {
 	}
 }
 
-func TestConversationHandlerAdminCanListOtherUsersConversations(t *testing.T) {
+func TestConversationHandlerAdminListConversationsReturnsOnlyOwnConversations(t *testing.T) {
 	deps, server := newAuthenticatedConversationHandlerTestServer(t)
-	registerActiveAuthUserForTest(t, deps.authLogic, "admin", "secret-123")
+	admin := registerActiveAuthUserForTest(t, deps.authLogic, "admin", "secret-123")
 	owner := registerActiveAuthUserForTest(t, deps.authLogic, "owner", "secret-123")
+	if _, err := deps.store.CreateConversation(context.Background(), coreagent.CreateConversationInput{
+		ID:         "conv_admin",
+		ProviderID: "openai",
+		ModelID:    "gpt-5.4",
+		CreatedBy:  admin.Username,
+	}); err != nil {
+		t.Fatalf("CreateConversation(admin) error = %v", err)
+	}
 	if _, err := deps.store.CreateConversation(context.Background(), coreagent.CreateConversationInput{
 		ID:         "conv_owner",
 		ProviderID: "openai",
 		ModelID:    "gpt-5.4",
 		CreatedBy:  owner.Username,
 	}); err != nil {
-		t.Fatalf("CreateConversation() error = %v", err)
+		t.Fatalf("CreateConversation(owner) error = %v", err)
 	}
 
 	req, err := http.NewRequest(http.MethodGet, server.URL+"/api/v1/conversations", nil)
@@ -992,12 +1000,12 @@ func TestConversationHandlerAdminCanListOtherUsersConversations(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("len(conversations) = %d, want 1", len(got))
 	}
-	if got[0].ID != "conv_owner" {
-		t.Fatalf("conversation.ID = %q, want conv_owner", got[0].ID)
+	if got[0].ID != "conv_admin" {
+		t.Fatalf("conversation.ID = %q, want conv_admin", got[0].ID)
 	}
 }
 
-func TestConversationHandlerAdminCanViewAndDeleteOtherUsersConversation(t *testing.T) {
+func TestConversationHandlerAdminCannotUseConversationAPIsForOtherUsersConversation(t *testing.T) {
 	deps, server := newAuthenticatedConversationHandlerTestServer(t)
 	registerActiveAuthUserForTest(t, deps.authLogic, "admin", "secret-123")
 	owner := registerActiveAuthUserForTest(t, deps.authLogic, "owner", "secret-123")
@@ -1022,9 +1030,12 @@ func TestConversationHandlerAdminCanViewAndDeleteOtherUsersConversation(t *testi
 		t.Fatalf("Do(get) error = %v", err)
 	}
 	defer getResponse.Body.Close()
-	conversation := decodeConversationResponse(t, getResponse.Body)
-	if conversation.ID != "conv_owner" {
-		t.Fatalf("conversation.ID = %q, want conv_owner", conversation.ID)
+	getEnvelope := decodeEnvelope(t, getResponse.Body)
+	if getEnvelope.OK {
+		t.Fatal("get response ok = true, want false for admin cross-user conversation access")
+	}
+	if getEnvelope.Code != http.StatusUnauthorized {
+		t.Fatalf("get envelope.Code = %d, want %d", getEnvelope.Code, http.StatusUnauthorized)
 	}
 
 	messagesRequest, err := http.NewRequest(http.MethodGet, server.URL+"/api/v1/conversations/conv_owner/messages", nil)
@@ -1041,9 +1052,12 @@ func TestConversationHandlerAdminCanViewAndDeleteOtherUsersConversation(t *testi
 		t.Fatalf("Do(messages) error = %v", err)
 	}
 	defer messagesResponse.Body.Close()
-	messages := decodeConversationMessagesResponse(t, messagesResponse.Body)
-	if len(messages) != 1 || messages[0].Content != "hello" {
-		t.Fatalf("messages = %#v, want owner messages readable by admin", messages)
+	messagesEnvelope := decodeEnvelope(t, messagesResponse.Body)
+	if messagesEnvelope.OK {
+		t.Fatal("messages response ok = true, want false for admin cross-user conversation access")
+	}
+	if messagesEnvelope.Code != http.StatusUnauthorized {
+		t.Fatalf("messages envelope.Code = %d, want %d", messagesEnvelope.Code, http.StatusUnauthorized)
 	}
 
 	deleteRequest, err := http.NewRequest(http.MethodDelete, server.URL+"/api/v1/conversations/conv_owner", nil)
@@ -1064,22 +1078,6 @@ func TestConversationHandlerAdminCanViewAndDeleteOtherUsersConversation(t *testi
 	}
 	if deleteEnvelope.Code != http.StatusUnauthorized {
 		t.Fatalf("delete envelope.Code = %d, want %d", deleteEnvelope.Code, http.StatusUnauthorized)
-	}
-
-	listRequest, err := http.NewRequest(http.MethodGet, server.URL+"/api/v1/conversations", nil)
-	if err != nil {
-		t.Fatalf("http.NewRequest(list) error = %v", err)
-	}
-	listRequest.AddCookie(adminCookie)
-
-	listResponse, err := http.DefaultClient.Do(listRequest)
-	if err != nil {
-		t.Fatalf("Do(list) error = %v", err)
-	}
-	defer listResponse.Body.Close()
-	got := decodeConversationListResponse(t, listResponse.Body)
-	if len(got) != 1 {
-		t.Fatalf("len(conversations) = %d, want 1 because admin delete should be denied", len(got))
 	}
 }
 

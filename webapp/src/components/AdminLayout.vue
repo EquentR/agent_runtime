@@ -2,7 +2,7 @@
 import { RouterLink, RouterView } from 'vue-router'
 
 const navigation = [
-  { label: '仪表盘', to: '/chat' },
+  { label: '仪表盘', to: '/admin/dashboard' },
   { label: '用户管理', to: '/admin/users' },
   { label: '模型管理', to: '/admin/models' },
   { label: '系统设置', to: '/admin/settings' },
@@ -30,6 +30,9 @@ const navigation = [
           {{ item.label }}
         </RouterLink>
       </nav>
+      <div class="admin-layout-sidebar-footer">
+        <RouterLink class="ghost-button admin-layout-home-button" to="/chat">返回首页</RouterLink>
+      </div>
     </aside>
 
     <section class="admin-layout-main">
@@ -37,3 +40,18 @@ const navigation = [
     </section>
   </div>
 </template>
+
+<style scoped>
+.admin-layout-sidebar-footer {
+  margin-top: auto;
+  padding-top: 0.5rem;
+  border-top: 1px solid rgba(25, 50, 59, 0.08);
+}
+
+.admin-layout-home-button {
+  display: block;
+  text-align: center;
+  text-decoration: none;
+  font-size: 0.88rem;
+}
+</style>

@@ -13,6 +13,7 @@ import (
 
 	"github.com/EquentR/agent_runtime/app/logics"
 	"github.com/EquentR/agent_runtime/app/models"
+	coreagent "github.com/EquentR/agent_runtime/core/agent"
 	coreaudit "github.com/EquentR/agent_runtime/core/audit"
 	"github.com/EquentR/agent_runtime/pkg/rest"
 	"github.com/glebarez/sqlite"
@@ -210,6 +211,93 @@ func TestAuditHandlerAdminCanReadAnotherUsersRunAndReplay(t *testing.T) {
 	}
 	if bundle.Run.CreatedBy != owner.Username {
 		t.Fatalf("bundle.Run.CreatedBy = %q, want %q", bundle.Run.CreatedBy, owner.Username)
+	}
+}
+
+func TestAuditHandlerAdminCanListAllAuditConversations(t *testing.T) {
+	deps, server := newAuthenticatedAuditHandlerTestServer(t)
+	admin := registerAuditHandlerUser(t, deps.authLogic, "admin")
+	owner := registerAuditHandlerUser(t, deps.authLogic, "owner")
+	base := time.Date(2026, time.March, 22, 10, 0, 0, 0, time.UTC)
+	seedAuditConversationRun(t, deps.store, "run_owner_1", "task_owner_1", "conv_owner", owner.Username, base)
+	seedAuditConversationRun(t, deps.store, "run_owner_2", "task_owner_2", "conv_owner", owner.Username, base.Add(time.Minute))
+	seedAuditConversationRun(t, deps.store, "run_admin_1", "task_admin_1", "conv_admin", admin.Username, base.Add(2*time.Minute))
+	cookie := loginAuditHandlerSessionCookie(t, deps.authLogic, admin.Username)
+
+	request, err := http.NewRequest(http.MethodGet, server.URL+"/api/v1/audit/conversations", nil)
+	if err != nil {
+		t.Fatalf("http.NewRequest() error = %v", err)
+	}
+	request.AddCookie(cookie)
+
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("Do() error = %v", err)
+	}
+	defer response.Body.Close()
+
+	conversations := decodeAuditConversationSummariesResponse(t, response.Body)
+	if len(conversations) != 2 {
+		t.Fatalf("len(conversations) = %d, want 2", len(conversations))
+	}
+	if conversations[0].ID != "conv_admin" || conversations[0].CreatedBy != admin.Username || conversations[0].AuditRunID != "run_admin_1" {
+		t.Fatalf("conversations[0] = %#v, want admin conversation summary", conversations[0])
+	}
+	if conversations[1].ID != "conv_owner" || conversations[1].CreatedBy != owner.Username || conversations[1].AuditRunID != "run_owner_2" {
+		t.Fatalf("conversations[1] = %#v, want owner conversation summary with latest run", conversations[1])
+	}
+	if len(conversations[1].AuditRunIDs) != 2 || conversations[1].AuditRunIDs[0] != "run_owner_1" || conversations[1].AuditRunIDs[1] != "run_owner_2" {
+		t.Fatalf("owner AuditRunIDs = %v, want [run_owner_1 run_owner_2]", conversations[1].AuditRunIDs)
+	}
+}
+
+func TestAuditHandlerListAuditConversationsIncludesConversationMetadata(t *testing.T) {
+	db := newAuditHandlerTestDB(t)
+	auditStore := coreaudit.NewStore(db)
+	if err := auditStore.AutoMigrate(); err != nil {
+		t.Fatalf("audit AutoMigrate() error = %v", err)
+	}
+	conversationStore := coreagent.NewConversationStore(db)
+	if err := conversationStore.AutoMigrate(); err != nil {
+		t.Fatalf("conversation AutoMigrate() error = %v", err)
+	}
+	authLogic := newAuthLogicForTest(t, db)
+	authMiddleware := NewAuthMiddleware(authLogic)
+	admin := registerAuditHandlerUser(t, authLogic, "admin")
+
+	ctx := context.Background()
+	if _, err := conversationStore.CreateConversation(ctx, coreagent.CreateConversationInput{
+		ID:        "conv_owner",
+		Title:     "Owner visible audit title",
+		CreatedBy: "owner",
+	}); err != nil {
+		t.Fatalf("CreateConversation() error = %v", err)
+	}
+	seedAuditConversationRun(t, auditStore, "run_owner_1", "task_owner_1", "conv_owner", "owner", time.Date(2026, time.March, 22, 10, 0, 0, 0, time.UTC))
+
+	engine := rest.Init()
+	NewAuditHandler(auditStore, authMiddleware.RequireSession()).WithConversationStore(conversationStore).Register(engine.Group("/api/v1"))
+	server := httptest.NewServer(engine)
+	t.Cleanup(server.Close)
+
+	request, err := http.NewRequest(http.MethodGet, server.URL+"/api/v1/audit/conversations", nil)
+	if err != nil {
+		t.Fatalf("http.NewRequest() error = %v", err)
+	}
+	request.AddCookie(loginAuditHandlerSessionCookie(t, authLogic, admin.Username))
+
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("Do() error = %v", err)
+	}
+	defer response.Body.Close()
+
+	conversations := decodeAuditConversationSummariesResponse(t, response.Body)
+	if len(conversations) != 1 {
+		t.Fatalf("len(conversations) = %d, want 1", len(conversations))
+	}
+	if conversations[0].Title != "Owner visible audit title" {
+		t.Fatalf("conversation.Title = %q, want stored conversation title", conversations[0].Title)
 	}
 }
 
@@ -594,9 +682,57 @@ func decodeAuditRunsResponse(t *testing.T, body io.Reader) []coreaudit.Run {
 	return runs
 }
 
+type auditConversationSummaryTestResponse struct {
+	ID          string   `json:"id"`
+	Title       string   `json:"title"`
+	CreatedBy   string   `json:"created_by"`
+	AuditRunID  string   `json:"audit_run_id"`
+	AuditRunIDs []string `json:"audit_run_ids"`
+}
+
+func decodeAuditConversationSummariesResponse(t *testing.T, body io.Reader) []auditConversationSummaryTestResponse {
+	t.Helper()
+
+	var envelope taskTestResponse
+	if err := json.NewDecoder(body).Decode(&envelope); err != nil {
+		t.Fatalf("Decode() envelope error = %v", err)
+	}
+	if !envelope.OK {
+		t.Fatalf("response ok = false, raw data = %s", string(envelope.Data))
+	}
+	var conversations []auditConversationSummaryTestResponse
+	if err := json.Unmarshal(envelope.Data, &conversations); err != nil {
+		t.Fatalf("Unmarshal() conversations error = %v", err)
+	}
+	return conversations
+}
+
 func seedMultiTurnAuditRuns(t *testing.T, store *coreaudit.Store, conversationID string, turnCount int) {
 	t.Helper()
 	seedMultiTurnAuditRunsWithOwner(t, store, conversationID, turnCount, "tester")
+}
+
+func seedAuditConversationRun(t *testing.T, store *coreaudit.Store, runID string, taskID string, conversationID string, createdBy string, startedAt time.Time) {
+	t.Helper()
+
+	ctx := context.Background()
+	run, err := store.CreateRun(ctx, coreaudit.StartRunInput{
+		RunID:          runID,
+		TaskID:         taskID,
+		ConversationID: conversationID,
+		TaskType:       "agent.run",
+		CreatedBy:      createdBy,
+		SchemaVersion:  coreaudit.SchemaVersionV1,
+		Status:         coreaudit.StatusRunning,
+		StartedAt:      startedAt,
+		Replayable:     true,
+	})
+	if err != nil {
+		t.Fatalf("CreateRun(%s) error = %v", runID, err)
+	}
+	if err := store.FinishRun(ctx, run.ID, coreaudit.StatusSucceeded, startedAt.Add(time.Second)); err != nil {
+		t.Fatalf("FinishRun(%s) error = %v", runID, err)
+	}
 }
 
 func seedMultiTurnAuditRunsWithOwner(t *testing.T, store *coreaudit.Store, conversationID string, turnCount int, createdBy string) {

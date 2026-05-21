@@ -1,10 +1,12 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
 
+	coreagent "github.com/EquentR/agent_runtime/core/agent"
 	coreaudit "github.com/EquentR/agent_runtime/core/audit"
 	resp "github.com/EquentR/agent_runtime/pkg/rest"
 	"github.com/gin-gonic/gin"
@@ -12,14 +14,21 @@ import (
 
 // AuditHandler 提供审计运行、事件与回放只读查询接口。
 type AuditHandler struct {
-	store        *coreaudit.Store
-	middlewares  []gin.HandlerFunc
-	authRequired bool
+	store             *coreaudit.Store
+	conversationStore *coreagent.ConversationStore
+	middlewares       []gin.HandlerFunc
+	authRequired      bool
 }
 
 // NewAuditHandler 创建审计查询接口处理器。
 func NewAuditHandler(store *coreaudit.Store, middlewares ...gin.HandlerFunc) *AuditHandler {
 	return &AuditHandler{store: store, middlewares: middlewares, authRequired: len(middlewares) > 0}
+}
+
+// WithConversationStore enriches audit conversation summaries with persisted conversation metadata when available.
+func (h *AuditHandler) WithConversationStore(store *coreagent.ConversationStore) *AuditHandler {
+	h.conversationStore = store
+	return h
 }
 
 // Register 注册审计只读接口路由。
@@ -35,6 +44,7 @@ func (h *AuditHandler) Register(rg *gin.RouterGroup) {
 		resp.NewJsonOptionsHandler(h.handleGetRun),
 		resp.NewJsonOptionsHandler(h.handleGetRunEvents),
 		resp.NewJsonOptionsHandler(h.handleGetRunReplay),
+		resp.NewJsonOptionsHandler(h.handleListConversations),
 		resp.NewJsonOptionsHandler(h.handleListConversationRuns),
 		resp.NewJsonOptionsHandler(h.handleListConversationEvents),
 	}, options...)
@@ -115,6 +125,28 @@ func (h *AuditHandler) handleGetRunReplay() (method, relativePath string, wrappe
 		default:
 			return bundle, nil, nil
 		}
+	}, nil
+}
+
+// handleListConversations 返回审计会话列表接口定义。
+//
+// @Summary 列出审计会话
+// @Description 返回有审计运行的会话摘要；管理员可查看所有会话，普通用户只能查看自己的会话。
+// @Tags audit
+// @Produce json
+// @Success 200 {object} AuditConversationListSwaggerResponse
+// @Failure 401 {object} ErrorSwaggerResponse
+// @Router /audit/conversations [get]
+func (h *AuditHandler) handleListConversations() (method, relativePath string, wrapper resp.JsonOptionsResultWrapper, opts []resp.WrapperOption) {
+	return http.MethodGet, "/conversations", func(c *gin.Context) (any, []resp.ResOpt, error) {
+		if h.store == nil {
+			return nil, nil, fmt.Errorf("audit store is not configured")
+		}
+		conversations, err := h.store.ListConversationSummaries(c.Request.Context())
+		if err != nil {
+			return nil, nil, err
+		}
+		return h.enrichConversationSummaries(c.Request.Context(), h.filterConversationSummaries(c, conversations)), nil, nil
 	}, nil
 }
 
@@ -205,4 +237,49 @@ func (h *AuditHandler) ensureRunAccess(c *gin.Context, run *coreaudit.Run) error
 		return nil
 	}
 	return ensureOwnerReadableByCurrentUser(c, run.CreatedBy, "无权访问该审计记录")
+}
+
+func (h *AuditHandler) filterConversationSummaries(c *gin.Context, conversations []coreaudit.ConversationSummary) []coreaudit.ConversationSummary {
+	if !h.authRequired {
+		return conversations
+	}
+	user := currentAuthUser(c)
+	if user == nil {
+		return []coreaudit.ConversationSummary{}
+	}
+	if isAdminUser(user) {
+		return conversations
+	}
+	filtered := make([]coreaudit.ConversationSummary, 0, len(conversations))
+	for _, conversation := range conversations {
+		if conversation.CreatedBy == user.Username {
+			filtered = append(filtered, conversation)
+		}
+	}
+	return filtered
+}
+
+func (h *AuditHandler) enrichConversationSummaries(ctx context.Context, conversations []coreaudit.ConversationSummary) []coreaudit.ConversationSummary {
+	if h.conversationStore == nil || len(conversations) == 0 {
+		return conversations
+	}
+	enriched := make([]coreaudit.ConversationSummary, 0, len(conversations))
+	for _, summary := range conversations {
+		if conversation, err := h.conversationStore.GetConversation(ctx, summary.ID); err == nil && conversation != nil {
+			if conversation.Title != "" {
+				summary.Title = conversation.Title
+			}
+			if conversation.CreatedBy != "" {
+				summary.CreatedBy = conversation.CreatedBy
+			}
+			if !conversation.CreatedAt.IsZero() {
+				summary.CreatedAt = conversation.CreatedAt
+			}
+			if !conversation.UpdatedAt.IsZero() {
+				summary.UpdatedAt = conversation.UpdatedAt
+			}
+		}
+		enriched = append(enriched, summary)
+	}
+	return enriched
 }

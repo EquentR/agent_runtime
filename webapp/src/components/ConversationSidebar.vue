@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { Teleport, computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
-import { RouterLink } from 'vue-router'
 import {
   Close,
   DataAnalysis,
@@ -9,7 +8,8 @@ import {
   Menu,
   Memo,
   Plus,
-  Remove
+  Remove,
+  Setting,
 } from '@element-plus/icons-vue'
 
 import { formatConversationTitle } from '../lib/chat'
@@ -34,6 +34,7 @@ const emit = defineEmits<{
   delete: [conversationId: string]
   logout: []
   'toggle-collapse': []
+  'open-profile': []
 }>()
 
 type ConfirmState =
@@ -236,13 +237,12 @@ onBeforeUnmount(() => {
     <Teleport to="body">
       <transition name="model-menu-fade">
         <div v-if="userMenuOpen" ref="userMenuPanel" class="sidebar-user-menu-panel upward" :class="{ compact }" :style="userMenuStyle">
-          <RouterLink class="sidebar-user-menu-option sidebar-profile-link" to="/profile" @click="closeUserMenu">
+          <button class="sidebar-user-menu-option sidebar-profile-link" type="button" @click="closeUserMenu(); emit('open-profile')">
             <span class="sidebar-user-menu-option-check" aria-hidden="true"></span>
-            <Menu />
+            <Setting />
             <span class="sidebar-user-menu-option-label">个人设置</span>
-          </RouterLink>
-          <RouterLink v-if="isAdmin" class="sidebar-user-menu-option sidebar-admin-link" to="/admin/audit" @click="closeUserMenu">
-            <span class="sidebar-user-menu-option-check" aria-hidden="true"></span>
+          </button>
+          <RouterLink v-if="isAdmin" class="sidebar-user-menu-option sidebar-admin-link" to="/admin/audit" @click="closeUserMenu">            <span class="sidebar-user-menu-option-check" aria-hidden="true"></span>
             <DataAnalysis />
             <span class="sidebar-user-menu-option-label">审计</span>
           </RouterLink>

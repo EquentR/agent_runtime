@@ -167,9 +167,6 @@ func (h *ConversationHandler) filterConversations(c *gin.Context, conversations 
 	if user == nil {
 		return []coreagent.Conversation{}
 	}
-	if isAdminUser(user) {
-		return conversations
-	}
 	filtered := make([]coreagent.Conversation, 0, len(conversations))
 	for _, conversation := range conversations {
 		if conversation.CreatedBy == user.Username {
@@ -186,7 +183,7 @@ func (h *ConversationHandler) ensureConversationAccess(c *gin.Context, conversat
 	if conversation == nil {
 		return nil
 	}
-	return ensureOwnerReadableByCurrentUser(c, conversation.CreatedBy, "无权访问该会话")
+	return ensureConversationOwnedByCurrentUser(c, conversation)
 }
 
 func ensureConversationOwnedByCurrentUser(c *gin.Context, conversation *coreagent.Conversation) error {

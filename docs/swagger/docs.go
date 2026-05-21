@@ -499,6 +499,32 @@ const docTemplate = `{
                 }
             }
         },
+        "/audit/conversations": {
+            "get": {
+                "description": "返回有审计运行的会话摘要；管理员可查看所有会话，普通用户只能查看自己的会话。",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "audit"
+                ],
+                "summary": "列出审计会话",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.AuditConversationListSwaggerResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/audit/conversations/{conversation_id}/events": {
             "get": {
                 "description": "按 conversation_id 返回该会话下跨审计运行的所有事件，按时间和序列升序排列。",
@@ -2929,6 +2955,61 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "time": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.AuditConversationListSwaggerResponse": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "integer"
+                },
+                "data": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.AuditConversationSwaggerDoc"
+                    }
+                },
+                "message": {
+                    "type": "string"
+                },
+                "ok": {
+                    "type": "boolean"
+                },
+                "time": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.AuditConversationSwaggerDoc": {
+            "type": "object",
+            "properties": {
+                "audit_run_id": {
+                    "type": "string"
+                },
+                "audit_run_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "created_by": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "last_run_at": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "updated_at": {
                     "type": "string"
                 }
             }

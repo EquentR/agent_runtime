@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -83,6 +84,98 @@ func (s *Store) GetLatestRunByConversationID(ctx context.Context, conversationID
 		return nil, err
 	}
 	return &run, nil
+}
+
+// ListConversationSummaries 返回有审计运行的会话摘要，按最近运行时间倒序排列。
+func (s *Store) ListConversationSummaries(ctx context.Context) ([]ConversationSummary, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("store db cannot be nil")
+	}
+
+	var runs []Run
+	err := s.db.WithContext(ctx).
+		Where("conversation_id <> ?", "").
+		Order("conversation_id asc").
+		Order("created_at asc").
+		Order("id asc").
+		Find(&runs).Error
+	if err != nil {
+		return nil, err
+	}
+	if len(runs) == 0 {
+		return nil, nil
+	}
+
+	summariesByID := make(map[string]*ConversationSummary)
+	order := make([]string, 0, len(runs))
+	for _, run := range runs {
+		conversationID := strings.TrimSpace(run.ConversationID)
+		if conversationID == "" {
+			continue
+		}
+		summary, ok := summariesByID[conversationID]
+		if !ok {
+			createdAt := run.CreatedAt
+			if run.StartedAt != nil {
+				createdAt = *run.StartedAt
+			}
+			summary = &ConversationSummary{
+				ID:        conversationID,
+				Title:     conversationID,
+				CreatedBy: run.CreatedBy,
+				CreatedAt: createdAt,
+				UpdatedAt: run.UpdatedAt,
+			}
+			summariesByID[conversationID] = summary
+			order = append(order, conversationID)
+		}
+		if summary.CreatedBy == "" && run.CreatedBy != "" {
+			summary.CreatedBy = run.CreatedBy
+		}
+		if summary.CreatedAt.IsZero() {
+			summary.CreatedAt = run.CreatedAt
+			if run.StartedAt != nil {
+				summary.CreatedAt = *run.StartedAt
+			}
+		}
+		if run.CreatedAt.After(summary.UpdatedAt) || summary.UpdatedAt.IsZero() {
+			summary.UpdatedAt = run.CreatedAt
+		}
+		runAt := run.CreatedAt
+		if run.StartedAt != nil {
+			runAt = *run.StartedAt
+		}
+		if summary.LastRunAt == nil || runAt.After(*summary.LastRunAt) || (runAt.Equal(*summary.LastRunAt) && run.ID > summary.AuditRunID) {
+			runAtCopy := runAt
+			summary.LastRunAt = &runAtCopy
+			summary.AuditRunID = run.ID
+		}
+		summary.AuditRunIDs = append(summary.AuditRunIDs, run.ID)
+	}
+
+	summaries := make([]ConversationSummary, 0, len(order))
+	for _, conversationID := range order {
+		summary := summariesByID[conversationID]
+		if summary == nil {
+			continue
+		}
+		summaries = append(summaries, *summary)
+	}
+	sort.SliceStable(summaries, func(i, j int) bool {
+		left := summaries[i]
+		right := summaries[j]
+		if left.LastRunAt != nil && right.LastRunAt != nil && !left.LastRunAt.Equal(*right.LastRunAt) {
+			return left.LastRunAt.After(*right.LastRunAt)
+		}
+		if left.LastRunAt != nil && right.LastRunAt == nil {
+			return true
+		}
+		if left.LastRunAt == nil && right.LastRunAt != nil {
+			return false
+		}
+		return left.ID > right.ID
+	})
+	return summaries, nil
 }
 
 // ListRunsByConversationID 返回指定 conversation 下的所有审计运行记录，按创建时间升序排列。

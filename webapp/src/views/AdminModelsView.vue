@@ -63,6 +63,7 @@ const yamlRows = computed<YAMLModelRow[]>(() =>
   ) ?? [],
 )
 
+const showDialog = ref(false)
 const selectedCustom = computed(() => customModels.value.find((model) => model.id === selectedCustomId.value) ?? null)
 const customFormTitle = computed(() => selectedCustom.value ? `编辑模型：${selectedCustom.value.display_name}` : '新增自定义模型')
 
@@ -94,6 +95,25 @@ function syncCustomDraft(model: CustomLLMModel) {
   customDraft.enabled = model.enabled
   customDraft.contextMaxTokens = model.context_max_tokens || 32768
   customDraft.attachments = model.capabilities.attachments
+}
+
+function openCreateDialog() {
+  resetCustomDraft()
+  errorMessage.value = ''
+  statusMessage.value = ''
+  showDialog.value = true
+}
+
+function openEditDialog(model: CustomLLMModel) {
+  syncCustomDraft(model)
+  errorMessage.value = ''
+  statusMessage.value = ''
+  showDialog.value = true
+}
+
+function closeDialog() {
+  showDialog.value = false
+  resetCustomDraft()
 }
 
 function resetCustomDraft() {
@@ -241,6 +261,7 @@ async function submitCustomModel() {
       : await createAdminCustomModel(input)
     upsertCustomModel(saved)
     statusMessage.value = selected ? '自定义模型已更新' : '自定义模型已创建'
+    closeDialog()
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '保存自定义模型失败'
   } finally {
@@ -348,7 +369,7 @@ onMounted(() => {
     <section class="admin-section">
       <div class="admin-section-heading">
         <h2>自定义模型</h2>
-        <button class="ghost-button" type="button" @click="resetCustomDraft">新增模型</button>
+        <button class="ghost-button" type="button" @click="openCreateDialog">新增模型</button>
       </div>
       <div class="admin-table admin-model-table">
         <div class="admin-table-row admin-custom-model-row admin-table-head">
@@ -364,11 +385,8 @@ onMounted(() => {
           v-for="model in customModels"
           :key="model.id"
           class="admin-table-row admin-custom-model-row"
-          :class="{ active: model.id === selectedCustomId }"
         >
-          <button class="admin-text-button" type="button" :data-admin-custom-row="model.id" @click="syncCustomDraft(model)">
-            {{ model.display_name }}
-          </button>
+          <span class="admin-model-name">{{ model.display_name }}</span>
           <span>{{ model.owner_user_id || '-' }}</span>
           <span>{{ model.provider_type }} · {{ model.provider_id }} / {{ model.model_id }}</span>
           <span>{{ model.scope }} · {{ model.enabled ? '启用' : '停用' }}</span>
@@ -376,75 +394,81 @@ onMounted(() => {
           <span>{{ model.api_key_masked || '未保存' }}</span>
           <span class="admin-row-actions">
             <button class="ghost-button small" type="button" :data-admin-custom-test="model.id" @click="testCustom(model)">测试</button>
+            <button class="ghost-button small" type="button" :data-admin-custom-row="model.id" @click="openEditDialog(model)">编辑</button>
             <button class="ghost-button small" type="button" :disabled="saving === `delete:${model.id}`" @click="removeCustomModel(model)">删除</button>
           </span>
         </div>
       </div>
     </section>
 
-    <section class="admin-section">
-      <div class="admin-section-heading">
-        <h2>{{ customFormTitle }}</h2>
-        <span class="admin-current-value">输出预算默认不超过 8k，输入预算由 context 动态计算</span>
-      </div>
-      <form class="admin-form-grid" data-admin-model-form @submit.prevent="submitCustomModel">
-        <label>
-          <span class="field-label">Owner User ID</span>
-          <input v-model="customDraft.ownerUserId" class="text-input" data-admin-model-owner-user-id inputmode="numeric" placeholder="留空则使用当前管理员">
-        </label>
-        <label>
-          <span class="field-label">Provider Type</span>
-          <select v-model="customDraft.providerType" class="text-input" data-admin-model-provider-type required>
-            <option v-for="providerType in providerTypes" :key="providerType.value" :value="providerType.value">
-              {{ providerType.label }}
-            </option>
-          </select>
-        </label>
-        <label>
-          <span class="field-label">Provider ID</span>
-          <input v-model="customDraft.providerId" class="text-input" data-admin-model-provider-id required>
-        </label>
-        <label>
-          <span class="field-label">Model ID</span>
-          <input v-model="customDraft.modelId" class="text-input" data-admin-model-model-id required>
-        </label>
-        <label>
-          <span class="field-label">显示名称</span>
-          <input v-model="customDraft.displayName" class="text-input" data-admin-model-display-name required>
-        </label>
-        <label>
-          <span class="field-label">Base URL</span>
-          <input v-model="customDraft.baseURL" class="text-input" data-admin-model-base-url>
-        </label>
-        <label>
-          <span class="field-label">API Key</span>
-          <input v-model="customDraft.apiKey" class="text-input" type="password" data-admin-model-api-key :required="!selectedCustom">
-        </label>
-        <label>
-          <span class="field-label">Scope</span>
-          <select v-model="customDraft.scope" class="text-input" data-admin-model-scope>
-            <option v-for="scope in scopeOptions" :key="scope.value" :value="scope.value">{{ scope.label }}</option>
-          </select>
-        </label>
-        <label>
-          <span class="field-label">Context Max Tokens</span>
-          <input v-model.number="customDraft.contextMaxTokens" class="text-input" type="number" min="4" data-admin-model-context-max required>
-        </label>
-        <label class="admin-check-row">
-          <input v-model="customDraft.enabled" type="checkbox">
-          <span>启用</span>
-        </label>
-        <label class="admin-check-row">
-          <input v-model="customDraft.attachments" type="checkbox">
-          <span>支持附件</span>
-        </label>
-        <div class="admin-form-actions">
-          <button class="primary-button" type="submit" :disabled="saving === 'custom-create' || saving === 'custom-update'">
-            {{ selectedCustom ? '保存模型' : '创建模型' }}
-          </button>
+    <div v-if="showDialog" class="admin-dialog-overlay" @click.self="closeDialog">
+      <div class="admin-dialog" role="dialog" :aria-label="customFormTitle">
+        <div class="admin-dialog-header">
+          <h2>{{ customFormTitle }}</h2>
+          <button class="admin-dialog-close" type="button" aria-label="关闭" @click="closeDialog">✕</button>
         </div>
-      </form>
-    </section>
+        <p v-if="errorMessage" class="error-banner">{{ errorMessage }}</p>
+        <p class="admin-dialog-hint">输出预算默认不超过 8k，输入预算由 context 动态计算</p>
+        <form class="admin-form-grid" data-admin-model-form @submit.prevent="submitCustomModel">
+          <label>
+            <span class="field-label">Owner User ID</span>
+            <input v-model="customDraft.ownerUserId" class="text-input" data-admin-model-owner-user-id inputmode="numeric" placeholder="留空则使用当前管理员">
+          </label>
+          <label>
+            <span class="field-label">Provider Type</span>
+            <select v-model="customDraft.providerType" class="text-input" data-admin-model-provider-type required>
+              <option v-for="providerType in providerTypes" :key="providerType.value" :value="providerType.value">
+                {{ providerType.label }}
+              </option>
+            </select>
+          </label>
+          <label>
+            <span class="field-label">Provider ID</span>
+            <input v-model="customDraft.providerId" class="text-input" data-admin-model-provider-id required>
+          </label>
+          <label>
+            <span class="field-label">Model ID</span>
+            <input v-model="customDraft.modelId" class="text-input" data-admin-model-model-id required>
+          </label>
+          <label>
+            <span class="field-label">显示名称</span>
+            <input v-model="customDraft.displayName" class="text-input" data-admin-model-display-name required>
+          </label>
+          <label>
+            <span class="field-label">Base URL</span>
+            <input v-model="customDraft.baseURL" class="text-input" data-admin-model-base-url>
+          </label>
+          <label>
+            <span class="field-label">API Key</span>
+            <input v-model="customDraft.apiKey" class="text-input" type="password" data-admin-model-api-key :required="!selectedCustom">
+          </label>
+          <label>
+            <span class="field-label">Scope</span>
+            <select v-model="customDraft.scope" class="text-input" data-admin-model-scope>
+              <option v-for="scope in scopeOptions" :key="scope.value" :value="scope.value">{{ scope.label }}</option>
+            </select>
+          </label>
+          <label>
+            <span class="field-label">Context Max Tokens</span>
+            <input v-model.number="customDraft.contextMaxTokens" class="text-input" type="number" min="4" data-admin-model-context-max required>
+          </label>
+          <label class="admin-check-row">
+            <input v-model="customDraft.enabled" type="checkbox">
+            <span>启用</span>
+          </label>
+          <label class="admin-check-row">
+            <input v-model="customDraft.attachments" type="checkbox">
+            <span>支持附件</span>
+          </label>
+          <div class="admin-form-actions">
+            <button class="ghost-button admin-form-button" type="button" @click="closeDialog">取消</button>
+            <button class="primary-button admin-form-button" type="submit" :disabled="saving === 'custom-create' || saving === 'custom-update'">
+              {{ selectedCustom ? '保存模型' : '创建模型' }}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
   </main>
 </template>
 
@@ -467,8 +491,13 @@ onMounted(() => {
   background: linear-gradient(135deg, rgba(255, 238, 221, 0.94), rgba(238, 247, 249, 0.96));
 }
 
-.compact-check {
+.admin-model-name {
+  font-weight: 700;
+  color: #203840;
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .admin-text-button {
@@ -495,6 +524,12 @@ onMounted(() => {
 .ghost-button.small {
   min-height: 2rem;
   padding: 0.38rem 0.58rem;
+}
+
+.admin-dialog-hint {
+  font-size: 0.82rem;
+  color: #5a7a84;
+  margin: 0 0 0.5rem;
 }
 
 .admin-warning-banner {

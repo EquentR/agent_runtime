@@ -4,6 +4,7 @@ import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { Close, Menu } from '@element-plus/icons-vue'
 
 import ConversationSidebar from '../components/ConversationSidebar.vue'
+import ProfileDialog from '../components/ProfileDialog.vue'
 import MessageComposer from '../components/MessageComposer.vue'
 import MessageList from '../components/MessageList.vue'
 import {
@@ -73,6 +74,7 @@ const sidebarLoading = ref(false)
 const sidebarCollapsed = ref(false)
 const sidebarMobile = ref(false)
 const sidebarDrawerOpen = ref(false)
+const profileDialogOpen = ref(false)
 const username = ref(getSessionName())
 const activeConversationId = ref('')
 const activeTaskId = ref('')
@@ -1208,9 +1210,12 @@ onBeforeUnmount(() => {
       @close="closeSidebarDrawer"
       @delete="handleDeleteConversation"
       @logout="handleLogout"
+      @open-profile="profileDialogOpen = true"
       @select="selectConversation"
       @toggle-collapse="toggleSidebarCollapsed"
     />
+
+    <ProfileDialog :open="profileDialogOpen" @close="profileDialogOpen = false" />
 
     <section class="chat-stage" :class="{ 'composer-centered': entries.length === 0 && !noUsableModels }">
       <header class="topbar">

@@ -2,6 +2,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const api = vi.hoisted(() => ({
+  fetchAuditConversations: vi.fn(),
   fetchAuditConversationRuns: vi.fn(),
   fetchAuditRunReplay: vi.fn(),
   fetchConversation: vi.fn(),
@@ -24,26 +25,55 @@ function createDeferred<T>() {
 
 describe('AdminAuditView', () => {
   beforeEach(() => {
+    api.fetchAuditConversations.mockReset()
     api.fetchConversations.mockReset()
     api.fetchConversation.mockReset()
     api.fetchAuditConversationRuns.mockReset()
     api.fetchAuditRunReplay.mockReset()
   })
 
+  it('loads the sidebar from audit conversations and avoids the chat conversation APIs', async () => {
+    api.fetchAuditConversations.mockResolvedValue([
+      {
+        id: 'conv_owner',
+        title: 'Owner audit chat',
+        last_message: '',
+        message_count: 0,
+        provider_id: '',
+        model_id: '',
+        created_by: 'owner',
+        created_at: '2026-03-22T09:00:00Z',
+        updated_at: '2026-03-22T09:01:00Z',
+        audit_run_id: 'run_owner',
+      },
+    ])
+    api.fetchAuditConversationRuns.mockResolvedValue([])
+
+    const wrapper = mount(AdminAuditView, {
+      global: {
+        stubs: {
+          RouterLink: {
+            props: ['to'],
+            template: '<a :href="to" v-bind="$attrs"><slot /></a>',
+          },
+        },
+      },
+    })
+
+    await flushPromises()
+    await wrapper.find('[data-conversation-id="conv_owner"]').trigger('click')
+    await flushPromises()
+
+    expect(api.fetchAuditConversations).toHaveBeenCalledTimes(1)
+    expect(api.fetchConversations).not.toHaveBeenCalled()
+    expect(api.fetchConversation).not.toHaveBeenCalled()
+    expect(api.fetchAuditConversationRuns).toHaveBeenCalledWith('conv_owner')
+    expect(wrapper.text()).toContain('Owner audit chat')
+    expect(wrapper.text()).toContain('owner')
+  })
+
 
   it('starts conversation and run loading together before fetching replays', async () => {
-    const conversationDeferred = createDeferred<{
-      id: string
-      title: string
-      last_message: string
-      message_count: number
-      provider_id: string
-      model_id: string
-      created_by: string
-      created_at: string
-      updated_at: string
-      audit_run_id: string
-    }>()
     const runsDeferred = createDeferred<Array<{
       id: string
       task_id: string
@@ -56,7 +86,7 @@ describe('AdminAuditView', () => {
       updated_at: string
     }>>()
 
-    api.fetchConversations.mockResolvedValue([
+    api.fetchAuditConversations.mockResolvedValue([
       {
         id: 'conv_parallel',
         title: 'Parallel loading chat',
@@ -70,7 +100,6 @@ describe('AdminAuditView', () => {
         audit_run_id: 'run_parallel',
       },
     ])
-    api.fetchConversation.mockImplementation(() => conversationDeferred.promise)
     api.fetchAuditConversationRuns.mockImplementation(() => runsDeferred.promise)
     api.fetchAuditRunReplay.mockResolvedValue({
       run: {
@@ -106,24 +135,8 @@ describe('AdminAuditView', () => {
     await flushPromises()
     await wrapper.find('[data-conversation-id="conv_parallel"]').trigger('click')
 
-    expect(api.fetchConversation).toHaveBeenCalledWith('conv_parallel')
+    expect(api.fetchConversation).not.toHaveBeenCalled()
     expect(api.fetchAuditConversationRuns).toHaveBeenCalledWith('conv_parallel')
-    expect(api.fetchAuditRunReplay).not.toHaveBeenCalled()
-
-    conversationDeferred.resolve({
-      id: 'conv_parallel',
-      title: 'Parallel loading chat',
-      last_message: 'hello',
-      message_count: 1,
-      provider_id: 'openai',
-      model_id: 'gpt-5.4',
-      created_by: 'alice',
-      created_at: '2026-03-22T14:00:00Z',
-      updated_at: '2026-03-22T14:01:00Z',
-      audit_run_id: 'run_parallel',
-    })
-    await flushPromises()
-
     expect(api.fetchAuditRunReplay).not.toHaveBeenCalled()
 
     runsDeferred.resolve([
@@ -145,7 +158,7 @@ describe('AdminAuditView', () => {
   })
 
   it('loads conversations and selected conversation audit details', async () => {
-    api.fetchConversations.mockResolvedValue([
+    api.fetchAuditConversations.mockResolvedValue([
       {
         id: 'conv_1',
         title: 'First chat with a much longer title than the sidebar can safely display in full width',
@@ -471,8 +484,8 @@ describe('AdminAuditView', () => {
     await wrapper.find('[data-conversation-id="conv_2"]').trigger('click')
     await flushPromises()
 
-    expect(api.fetchConversations).toHaveBeenCalledTimes(1)
-    expect(api.fetchConversation).toHaveBeenCalledWith('conv_2')
+    expect(api.fetchAuditConversations).toHaveBeenCalledTimes(1)
+    expect(api.fetchConversation).not.toHaveBeenCalled()
     expect(api.fetchAuditConversationRuns).toHaveBeenCalledWith('conv_2')
     expect(api.fetchAuditRunReplay).toHaveBeenCalledWith('run_2')
     expect(wrapper.find('.admin-audit-back-link').attributes('title')).toBe('返回聊天')
@@ -565,7 +578,7 @@ describe('AdminAuditView', () => {
   })
 
   it('renders display_name as the primary timeline title and keeps raw event_type in metadata', async () => {
-    api.fetchConversations.mockResolvedValue([
+    api.fetchAuditConversations.mockResolvedValue([
       {
         id: 'conv_labels',
         title: 'Replay labels chat',
@@ -704,7 +717,7 @@ describe('AdminAuditView', () => {
   })
 
   it('keeps the selected event title when its artifact is shown', async () => {
-    api.fetchConversations.mockResolvedValue([
+    api.fetchAuditConversations.mockResolvedValue([
       {
         id: 'conv_heading',
         title: 'Heading precedence chat',
@@ -818,7 +831,7 @@ describe('AdminAuditView', () => {
 
 
   it('shows runtime prompt envelope artifacts as 系统提示', async () => {
-    api.fetchConversations.mockResolvedValue([
+    api.fetchAuditConversations.mockResolvedValue([
       {
         id: 'conv_runtime_prompt_artifact',
         title: 'Runtime prompt artifact chat',
@@ -929,7 +942,7 @@ describe('AdminAuditView', () => {
   })
 
   it('preserves active filters when selecting a turn', async () => {
-    api.fetchConversations.mockResolvedValue([
+    api.fetchAuditConversations.mockResolvedValue([
       {
         id: 'conv_filter_turns',
         title: 'Filter and turn chat',
@@ -1098,7 +1111,7 @@ describe('AdminAuditView', () => {
     wrapper.unmount()
   })
   it('keeps the newly selected conversation summary visible when runs loading fails', async () => {
-    api.fetchConversations.mockResolvedValue([
+    api.fetchAuditConversations.mockResolvedValue([
       {
         id: 'conv_a',
         title: 'Sidebar conversation A',
@@ -1189,7 +1202,7 @@ describe('AdminAuditView', () => {
     await wrapper.find('[data-conversation-id="conv_a"]').trigger('click')
     await flushPromises()
 
-    expect(wrapper.find('.topbar-conversation-title').text()).toBe('Loaded conversation A')
+    expect(wrapper.find('.topbar-conversation-title').text()).toBe('Sidebar conversation A')
     expect(wrapper.text()).toContain('alice')
 
     await wrapper.find('[data-conversation-id="conv_b"]').trigger('click')
@@ -1202,30 +1215,6 @@ describe('AdminAuditView', () => {
   })
 
   it('ignores stale out-of-order selection results and keeps the latest conversation details', async () => {
-    const conversationDeferredA = createDeferred<{
-      id: string
-      title: string
-      last_message: string
-      message_count: number
-      provider_id: string
-      model_id: string
-      created_by: string
-      created_at: string
-      updated_at: string
-      audit_run_id: string
-    }>()
-    const conversationDeferredB = createDeferred<{
-      id: string
-      title: string
-      last_message: string
-      message_count: number
-      provider_id: string
-      model_id: string
-      created_by: string
-      created_at: string
-      updated_at: string
-      audit_run_id: string
-    }>()
     const runsDeferredA = createDeferred<Array<{
       id: string
       task_id: string
@@ -1307,7 +1296,7 @@ describe('AdminAuditView', () => {
       artifacts: []
     }>()
 
-    api.fetchConversations.mockResolvedValue([
+    api.fetchAuditConversations.mockResolvedValue([
       {
         id: 'conv_a',
         title: 'Sidebar conversation A',
@@ -1333,12 +1322,6 @@ describe('AdminAuditView', () => {
         audit_run_id: 'run_b',
       },
     ])
-    api.fetchConversation.mockImplementation((conversationId: string) => {
-      if (conversationId === 'conv_a') {
-        return conversationDeferredA.promise
-      }
-      return conversationDeferredB.promise
-    })
     api.fetchAuditConversationRuns.mockImplementation((conversationId: string) => {
       if (conversationId === 'conv_a') {
         return runsDeferredA.promise
@@ -1367,18 +1350,6 @@ describe('AdminAuditView', () => {
     await wrapper.find('[data-conversation-id="conv_a"]').trigger('click')
     await wrapper.find('[data-conversation-id="conv_b"]').trigger('click')
 
-    conversationDeferredB.resolve({
-      id: 'conv_b',
-      title: 'Loaded conversation B',
-      last_message: 'beta',
-      message_count: 1,
-      provider_id: 'openai',
-      model_id: 'gpt-5.4',
-      created_by: 'bob',
-      created_at: '2026-03-22T10:00:00Z',
-      updated_at: '2026-03-22T10:01:00Z',
-      audit_run_id: 'run_b',
-    })
     runsDeferredB.resolve([
       {
         id: 'run_b',
@@ -1427,23 +1398,11 @@ describe('AdminAuditView', () => {
     })
     await flushPromises()
 
-    expect(wrapper.find('.topbar-conversation-title').text()).toBe('Loaded conversation B')
+    expect(wrapper.find('.topbar-conversation-title').text()).toBe('Sidebar conversation B')
     expect(wrapper.find('.status-pill').text()).toBe('succeeded')
     expect(wrapper.find('.admin-audit-timeline').text()).toContain('B timeline entry')
     expect(wrapper.text()).toContain('bob')
 
-    conversationDeferredA.resolve({
-      id: 'conv_a',
-      title: 'Loaded conversation A',
-      last_message: 'alpha',
-      message_count: 2,
-      provider_id: 'openai',
-      model_id: 'gpt-5.4',
-      created_by: 'alice',
-      created_at: '2026-03-22T09:00:00Z',
-      updated_at: '2026-03-22T09:01:00Z',
-      audit_run_id: 'run_a',
-    })
     runsDeferredA.resolve([
       {
         id: 'run_a',
@@ -1492,7 +1451,7 @@ describe('AdminAuditView', () => {
     })
     await flushPromises()
 
-    expect(wrapper.find('.topbar-conversation-title').text()).toBe('Loaded conversation B')
+    expect(wrapper.find('.topbar-conversation-title').text()).toBe('Sidebar conversation B')
     expect(wrapper.find('.admin-audit-timeline').text()).toContain('B timeline entry')
     expect(wrapper.find('.admin-audit-timeline').text()).not.toContain('A timeline entry')
     expect(wrapper.text()).toContain('bob')

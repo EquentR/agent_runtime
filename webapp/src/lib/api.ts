@@ -1163,6 +1163,11 @@ export async function fetchConversations() {
   return conversations.map((conversation) => normalizeConversation(conversation))
 }
 
+export async function fetchAuditConversations() {
+  const conversations = await request<Array<Partial<Conversation> & Record<string, unknown>>>('/audit/conversations')
+  return conversations.map((conversation) => normalizeConversation(conversation))
+}
+
 export async function fetchConversation(conversationId: string) {
   const conversation = await request<Partial<Conversation> & Record<string, unknown>>(`/conversations/${conversationId}`)
   return normalizeConversation(conversation)

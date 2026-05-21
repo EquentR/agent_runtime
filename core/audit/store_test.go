@@ -427,6 +427,60 @@ func TestStoreGetLatestRunByConversationIDReturnsNewestRun(t *testing.T) {
 	}
 }
 
+func TestStoreListConversationSummariesGroupsRunsByConversation(t *testing.T) {
+	db := newTestDB(t)
+	store := NewStore(db)
+	if err := store.AutoMigrate(); err != nil {
+		t.Fatalf("AutoMigrate() error = %v", err)
+	}
+
+	ctx := context.Background()
+	base := time.Date(2026, time.March, 22, 8, 0, 0, 0, time.UTC)
+	for _, input := range []StartRunInput{
+		{
+			RunID: "run_owner_1", TaskID: "task_owner_1", ConversationID: "conv_owner",
+			TaskType: "agent.run", Status: StatusSucceeded, SchemaVersion: SchemaVersionV1,
+			CreatedBy: "owner", StartedAt: base,
+		},
+		{
+			RunID: "run_owner_2", TaskID: "task_owner_2", ConversationID: "conv_owner",
+			TaskType: "agent.run", Status: StatusSucceeded, SchemaVersion: SchemaVersionV1,
+			CreatedBy: "owner", StartedAt: base.Add(time.Minute),
+		},
+		{
+			RunID: "run_admin_1", TaskID: "task_admin_1", ConversationID: "conv_admin",
+			TaskType: "agent.run", Status: StatusSucceeded, SchemaVersion: SchemaVersionV1,
+			CreatedBy: "admin", StartedAt: base.Add(2 * time.Minute),
+		},
+		{
+			RunID: "run_no_conversation", TaskID: "task_no_conversation",
+			TaskType: "agent.run", Status: StatusSucceeded, SchemaVersion: SchemaVersionV1,
+			CreatedBy: "nobody", StartedAt: base.Add(3 * time.Minute),
+		},
+	} {
+		if _, err := store.CreateRun(ctx, input); err != nil {
+			t.Fatalf("CreateRun(%s) error = %v", input.RunID, err)
+		}
+	}
+
+	summaries, err := store.ListConversationSummaries(ctx)
+	if err != nil {
+		t.Fatalf("ListConversationSummaries() error = %v", err)
+	}
+	if len(summaries) != 2 {
+		t.Fatalf("len(summaries) = %d, want 2", len(summaries))
+	}
+	if summaries[0].ID != "conv_admin" || summaries[0].CreatedBy != "admin" || summaries[0].AuditRunID != "run_admin_1" {
+		t.Fatalf("summaries[0] = %#v, want latest admin conversation first", summaries[0])
+	}
+	if summaries[1].ID != "conv_owner" || summaries[1].CreatedBy != "owner" || summaries[1].AuditRunID != "run_owner_2" {
+		t.Fatalf("summaries[1] = %#v, want grouped owner conversation", summaries[1])
+	}
+	if len(summaries[1].AuditRunIDs) != 2 || summaries[1].AuditRunIDs[0] != "run_owner_1" || summaries[1].AuditRunIDs[1] != "run_owner_2" {
+		t.Fatalf("owner AuditRunIDs = %v, want [run_owner_1 run_owner_2]", summaries[1].AuditRunIDs)
+	}
+}
+
 func TestRecorderAppendsEventsInSequenceForSerializedWrites(t *testing.T) {
 	db := newTestDB(t)
 	store := NewStore(db)

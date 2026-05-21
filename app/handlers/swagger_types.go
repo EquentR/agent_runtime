@@ -789,6 +789,27 @@ type AuditRunListSwaggerResponse struct {
 	Time    string               `json:"time"`
 }
 
+// AuditConversationListSwaggerResponse 描述审计会话列表接口的成功响应结构。
+type AuditConversationListSwaggerResponse struct {
+	Code    int                           `json:"code"`
+	Message string                        `json:"message"`
+	Data    []AuditConversationSwaggerDoc `json:"data"`
+	OK      bool                          `json:"ok"`
+	Time    string                        `json:"time"`
+}
+
+// AuditConversationSwaggerDoc 描述审计会话摘要。
+type AuditConversationSwaggerDoc struct {
+	ID          string   `json:"id"`
+	Title       string   `json:"title"`
+	CreatedBy   string   `json:"created_by"`
+	CreatedAt   string   `json:"created_at"`
+	UpdatedAt   string   `json:"updated_at"`
+	AuditRunID  string   `json:"audit_run_id"`
+	AuditRunIDs []string `json:"audit_run_ids"`
+	LastRunAt   string   `json:"last_run_at"`
+}
+
 // AuditEventListSwaggerResponse 描述按会话查询审计事件列表接口的成功响应结构。
 type AuditEventListSwaggerResponse struct {
 	Code    int                    `json:"code"`

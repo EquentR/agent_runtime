@@ -63,3 +63,14 @@ type Artifact struct {
 func (Artifact) TableName() string {
 	return "audit_artifacts"
 }
+
+type ConversationSummary struct {
+	ID          string     `json:"id"`
+	Title       string     `json:"title"`
+	CreatedBy   string     `json:"created_by"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+	AuditRunID  string     `json:"audit_run_id,omitempty"`
+	AuditRunIDs []string   `json:"audit_run_ids,omitempty"`
+	LastRunAt   *time.Time `json:"last_run_at,omitempty"`
+}

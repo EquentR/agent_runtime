@@ -1,6 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { RouterLink } from 'vue-router'
+import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
 
 import {
   changeUserPassword,
@@ -35,6 +34,9 @@ declare global {
     turnstile?: TurnstileClient
   }
 }
+
+const props = defineProps<{ open: boolean }>()
+const emit = defineEmits<{ close: [] }>()
 
 let profileTurnstileScriptPromise: Promise<void> | null = null
 
@@ -85,6 +87,7 @@ const modelSaving = ref('')
 const profile = ref<AuthUser | null>(null)
 const customModels = ref<CustomLLMModel[]>([])
 const selectedModelId = ref('')
+const showModelDialog = ref(false)
 const statusMessage = ref('')
 const errorMessage = ref('')
 const turnstileSettings = ref<PublicTurnstileSettings>({
@@ -179,12 +182,30 @@ function resetModelDraft() {
   modelDraft.attachments = false
 }
 
+function openModelCreate() {
+  resetModelDraft()
+  errorMessage.value = ''
+  statusMessage.value = ''
+  showModelDialog.value = true
+}
+
+function openModelEdit(model: CustomLLMModel) {
+  syncModelDraft(model)
+  errorMessage.value = ''
+  statusMessage.value = ''
+  showModelDialog.value = true
+}
+
+function closeModelDialog() {
+  showModelDialog.value = false
+  resetModelDraft()
+}
+
 function upsertCustomModel(model: CustomLLMModel) {
   const exists = customModels.value.some((item) => item.id === model.id)
   customModels.value = exists
     ? customModels.value.map((item) => item.id === model.id ? model : item)
     : [model, ...customModels.value]
-  syncModelDraft(model)
 }
 
 async function loadProfile() {
@@ -357,6 +378,7 @@ async function submitUserModel() {
       : await createUserCustomModel(input)
     upsertCustomModel(saved)
     statusMessage.value = selected ? '模型已更新' : '模型已创建'
+    closeModelDialog()
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '保存模型失败'
   } finally {
@@ -396,12 +418,6 @@ async function removeUserModel(model: CustomLLMModel) {
   }
 }
 
-onMounted(() => {
-  void loadProfile()
-  void loadUserModels()
-  void loadTurnstileSettings()
-})
-
 onBeforeUnmount(() => {
   removeTurnstileWidget()
 })
@@ -410,6 +426,15 @@ watch([turnstileRequired, () => turnstileSettings.value.site_key], async () => {
   turnstileToken.value = ''
   await renderTurnstile()
 }, { flush: 'post' })
+
+// Load data when dialog opens for the first time
+watch(() => props.open, async (isOpen) => {
+  if (isOpen && !profile.value) {
+    void loadProfile()
+    void loadUserModels()
+    void loadTurnstileSettings()
+  }
+})
 
 async function renderTurnstile() {
   if (!turnstileRequired.value) {
@@ -472,216 +497,270 @@ function resetTurnstileWidget() {
 </script>
 
 <template>
-  <main class="admin-workbench profile-workbench">
-    <header class="admin-workbench-header">
-      <div>
-        <p class="eyebrow">Profile</p>
-        <h1>个人设置</h1>
-      </div>
-      <div class="profile-header-actions">
-        <a class="ghost-button" href="#profile-models" data-profile-models-link>我的模型</a>
-        <RouterLink class="ghost-button" to="/chat">返回聊天</RouterLink>
-      </div>
-    </header>
+  <Teleport to="body">
+    <Transition name="profile-dialog-fade">
+      <div v-if="open" class="profile-dialog-overlay" role="dialog" aria-label="个人设置" @click.self="emit('close')">
+        <div class="profile-dialog-shell">
+          <div class="profile-dialog-header">
+            <div>
+              <p class="eyebrow">Profile</p>
+              <h1>个人设置</h1>
+            </div>
+            <button class="admin-dialog-close" type="button" aria-label="关闭" @click="emit('close')">✕</button>
+          </div>
 
-    <p v-if="errorMessage" class="error-banner">{{ errorMessage }}</p>
-    <p v-if="statusMessage" class="admin-inline-success">{{ statusMessage }}</p>
+          <div class="profile-dialog-body">
+            <p v-if="errorMessage" class="error-banner">{{ errorMessage }}</p>
+            <p v-if="statusMessage" class="admin-inline-success">{{ statusMessage }}</p>
 
-    <section v-if="needsEmail || needsPassword" class="admin-notice-row" aria-label="必要操作">
-      <span v-if="needsEmail" class="admin-warning-pill">必须绑定邮箱</span>
-      <span v-if="needsPassword" class="admin-warning-pill">必须修改密码</span>
-    </section>
+            <section v-if="needsEmail || needsPassword" class="admin-notice-row" aria-label="必要操作">
+              <span v-if="needsEmail" class="admin-warning-pill">必须绑定邮箱</span>
+              <span v-if="needsPassword" class="admin-warning-pill">必须修改密码</span>
+            </section>
 
-    <section class="admin-section">
-      <div class="admin-section-heading">
-        <h2>账号资料</h2>
-        <span class="status-pill" :class="{ loading }">{{ loading ? '加载中' : '就绪' }}</span>
-      </div>
-      <form class="admin-form-grid" data-profile-form @submit.prevent="submitProfile">
-        <label>
-          <span class="field-label">用户名</span>
-          <input class="text-input" :value="profile?.username ?? ''" readonly>
-        </label>
-        <label>
-          <span class="field-label">显示名称</span>
-          <input v-model="profileDraft.displayName" class="text-input" data-profile-display-name-input>
-        </label>
-        <label>
-          <span class="field-label">邮箱</span>
-          <input class="text-input" :value="profile?.email || '未绑定'" readonly>
-        </label>
-        <label>
-          <span class="field-label">邮箱状态</span>
-          <input class="text-input" :value="emailStatus" readonly>
-        </label>
-        <div class="admin-form-actions">
-          <button class="primary-button admin-form-button" type="submit" :disabled="savingProfile">
-            {{ savingProfile ? '保存中' : '保存资料' }}
-          </button>
+            <section class="admin-section">
+              <div class="admin-section-heading">
+                <h2>账号资料</h2>
+                <span class="status-pill" :class="{ loading }">{{ loading ? '加载中' : '就绪' }}</span>
+              </div>
+              <form class="admin-form-grid" data-profile-form @submit.prevent="submitProfile">
+                <label>
+                  <span class="field-label">用户名</span>
+                  <input class="text-input" :value="profile?.username ?? ''" readonly>
+                </label>
+                <label>
+                  <span class="field-label">显示名称</span>
+                  <input v-model="profileDraft.displayName" class="text-input" data-profile-display-name-input>
+                </label>
+                <label>
+                  <span class="field-label">邮箱</span>
+                  <input class="text-input" :value="profile?.email || '未绑定'" readonly>
+                </label>
+                <label>
+                  <span class="field-label">邮箱状态</span>
+                  <input class="text-input" :value="emailStatus" readonly>
+                </label>
+                <div class="admin-form-actions">
+                  <button class="primary-button admin-form-button" type="submit" :disabled="savingProfile">
+                    {{ savingProfile ? '保存中' : '保存资料' }}
+                  </button>
+                </div>
+              </form>
+            </section>
+
+            <section class="admin-section">
+              <div class="admin-section-heading">
+                <h2>邮箱验证</h2>
+                <span class="admin-current-value">当前邮箱：{{ profile?.email || '未绑定' }}</span>
+              </div>
+              <div class="admin-split-forms">
+                <form class="admin-form-grid compact" data-profile-email-start-form @submit.prevent="startEmailVerification">
+                  <label>
+                    <span class="field-label">邮箱地址</span>
+                    <input v-model="emailDraft.email" class="text-input" type="email" data-profile-email-input>
+                  </label>
+                  <div v-if="turnstileRequired" ref="turnstileElement" class="turnstile-widget" aria-label="Cloudflare Turnstile"></div>
+                  <p v-if="turnstileLoadError" class="error-banner auth-error">{{ turnstileLoadError }}</p>
+                  <div class="admin-form-actions">
+                    <button class="primary-button admin-form-button" type="submit" :disabled="sendingEmailCode">
+                      {{ sendingEmailCode ? '发送中' : '发送验证码' }}
+                    </button>
+                  </div>
+                </form>
+                <form class="admin-form-grid compact" data-profile-email-confirm-form @submit.prevent="confirmEmailVerification">
+                  <label>
+                    <span class="field-label">验证码</span>
+                    <input v-model="emailDraft.code" class="text-input" inputmode="numeric" data-profile-email-code-input>
+                  </label>
+                  <div class="admin-form-actions">
+                    <button class="primary-button admin-form-button" type="submit" :disabled="confirmingEmail">
+                      {{ confirmingEmail ? '确认中' : '确认绑定' }}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </section>
+
+            <section class="admin-section">
+              <div class="admin-section-heading">
+                <h2>安全</h2>
+              </div>
+              <form class="admin-form-grid" data-profile-password-form @submit.prevent="submitPassword">
+                <label>
+                  <span class="field-label">当前密码</span>
+                  <input v-model="passwordDraft.currentPassword" class="text-input" type="password" data-profile-current-password-input>
+                </label>
+                <label>
+                  <span class="field-label">新密码</span>
+                  <input v-model="passwordDraft.password" class="text-input" type="password" data-profile-new-password-input>
+                </label>
+                <label>
+                  <span class="field-label">确认新密码</span>
+                  <input v-model="passwordDraft.confirmPassword" class="text-input" type="password" data-profile-confirm-password-input>
+                </label>
+                <div class="admin-form-actions">
+                  <button class="primary-button admin-form-button" type="submit" :disabled="savingPassword">
+                    {{ savingPassword ? '保存中' : '修改密码' }}
+                  </button>
+                </div>
+              </form>
+            </section>
+
+            <section class="admin-section">
+              <div class="admin-section-heading">
+                <h2>我的模型</h2>
+                <button class="ghost-button profile-action-button" type="button" @click="openModelCreate">新增模型</button>
+              </div>
+
+              <div class="admin-table profile-model-table">
+                <div class="admin-table-row profile-model-row profile-model-head">
+                  <span>名称</span>
+                  <span>Provider</span>
+                  <span>Context Max</span>
+                  <span>API Key</span>
+                  <span>状态</span>
+                  <span>操作</span>
+                </div>
+                <div
+                  v-for="model in customModels"
+                  :key="model.id"
+                  class="admin-table-row profile-model-row"
+                >
+                  <span class="profile-model-name-cell">{{ model.display_name }}</span>
+                  <span>{{ model.provider_type }} · {{ model.provider_id }} / {{ model.model_id }}</span>
+                  <span>{{ formatNumber(model.context_max_tokens) }}</span>
+                  <span>{{ model.api_key_masked || '未保存' }}</span>
+                  <span>{{ model.enabled ? '启用' : '停用' }}</span>
+                  <span class="profile-model-actions">
+                    <button class="ghost-button small" type="button" :data-user-model-test="model.id" @click="testUserModel(model)">测试</button>
+                    <button class="ghost-button small" type="button" :data-user-model-row="model.id" @click="openModelEdit(model)">编辑</button>
+                    <button class="ghost-button small" type="button" :disabled="modelSaving === `model-delete:${model.id}`" @click="removeUserModel(model)">删除</button>
+                  </span>
+                </div>
+                <div v-if="customModels.length === 0" class="admin-table-row">
+                  <span class="admin-empty" style="grid-column: 1/-1">暂无自定义模型，点击"新增模型"添加。</span>
+                </div>
+              </div>
+            </section>
+          </div>
         </div>
-      </form>
-    </section>
-
-    <section class="admin-section">
-      <div class="admin-section-heading">
-        <h2>邮箱验证</h2>
-        <span class="admin-current-value">当前邮箱：{{ profile?.email || '未绑定' }}</span>
       </div>
-      <div class="admin-split-forms">
-        <form class="admin-form-grid compact" data-profile-email-start-form @submit.prevent="startEmailVerification">
+    </Transition>
+  </Teleport>
+
+  <!-- Model create/edit sub-dialog, teleported to body to escape profile panel stacking context -->
+  <Teleport to="body">
+    <div v-if="showModelDialog" class="profile-model-dialog-overlay" @click.self="closeModelDialog">
+      <div class="admin-dialog" role="dialog" :aria-label="modelFormTitle">
+        <div class="admin-dialog-header">
+          <h2>{{ modelFormTitle }}</h2>
+          <button class="admin-dialog-close" type="button" aria-label="关闭" @click="closeModelDialog">✕</button>
+        </div>
+        <p v-if="errorMessage" class="error-banner">{{ errorMessage }}</p>
+        <form class="admin-form-grid" data-user-model-form @submit.prevent="submitUserModel">
           <label>
-            <span class="field-label">邮箱地址</span>
-            <input v-model="emailDraft.email" class="text-input" type="email" data-profile-email-input>
+            <span class="field-label">Provider Type</span>
+            <select v-model="modelDraft.providerType" class="text-input" data-user-model-provider-type required>
+              <option value="openai_responses">OpenAI Responses</option>
+              <option value="openai_completions">OpenAI Completions</option>
+              <option value="google">Google</option>
+            </select>
           </label>
-          <div v-if="turnstileRequired" ref="turnstileElement" class="turnstile-widget" aria-label="Cloudflare Turnstile"></div>
-          <p v-if="turnstileLoadError" class="error-banner auth-error">{{ turnstileLoadError }}</p>
+          <label>
+            <span class="field-label">Provider ID</span>
+            <input v-model="modelDraft.providerId" class="text-input" data-user-model-provider-id required>
+          </label>
+          <label>
+            <span class="field-label">Model ID</span>
+            <input v-model="modelDraft.modelId" class="text-input" data-user-model-model-id required>
+          </label>
+          <label>
+            <span class="field-label">显示名称</span>
+            <input v-model="modelDraft.displayName" class="text-input" data-user-model-display-name required>
+          </label>
+          <label>
+            <span class="field-label">Base URL</span>
+            <input v-model="modelDraft.baseURL" class="text-input" data-user-model-base-url :required="modelNeedsBaseURL(modelDraft.providerType) && !selectedModel">
+          </label>
+          <label>
+            <span class="field-label">API Key</span>
+            <input v-model="modelDraft.apiKey" class="text-input" type="password" data-user-model-api-key :required="!selectedModel">
+          </label>
+          <label>
+            <span class="field-label">Context Max Tokens</span>
+            <input v-model.number="modelDraft.contextMaxTokens" class="text-input" type="number" min="4" data-user-model-context-max required>
+          </label>
+          <label class="admin-check-row">
+            <input v-model="modelDraft.enabled" type="checkbox">
+            <span>启用</span>
+          </label>
+          <label class="admin-check-row">
+            <input v-model="modelDraft.attachments" type="checkbox">
+            <span>支持附件</span>
+          </label>
           <div class="admin-form-actions">
-            <button class="primary-button admin-form-button" type="submit" :disabled="sendingEmailCode">
-              {{ sendingEmailCode ? '发送中' : '发送验证码' }}
+            <button class="ghost-button admin-form-button" type="button" @click="closeModelDialog">取消</button>
+            <button class="primary-button admin-form-button" type="submit" :disabled="modelSaving === 'model-create' || modelSaving === 'model-update'">
+              {{ selectedModel ? '保存模型' : '创建模型' }}
             </button>
           </div>
         </form>
-        <form class="admin-form-grid compact" data-profile-email-confirm-form @submit.prevent="confirmEmailVerification">
-          <label>
-            <span class="field-label">验证码</span>
-            <input v-model="emailDraft.code" class="text-input" inputmode="numeric" data-profile-email-code-input>
-          </label>
-          <div class="admin-form-actions">
-            <button class="primary-button admin-form-button" type="submit" :disabled="confirmingEmail">
-              {{ confirmingEmail ? '确认中' : '确认绑定' }}
-            </button>
-          </div>
-        </form>
       </div>
-    </section>
-
-    <section class="admin-section">
-      <div class="admin-section-heading">
-        <h2>安全</h2>
-      </div>
-      <form class="admin-form-grid" data-profile-password-form @submit.prevent="submitPassword">
-        <label>
-          <span class="field-label">当前密码</span>
-          <input v-model="passwordDraft.currentPassword" class="text-input" type="password" data-profile-current-password-input>
-        </label>
-        <label>
-          <span class="field-label">新密码</span>
-          <input v-model="passwordDraft.password" class="text-input" type="password" data-profile-new-password-input>
-        </label>
-        <label>
-          <span class="field-label">确认新密码</span>
-          <input v-model="passwordDraft.confirmPassword" class="text-input" type="password" data-profile-confirm-password-input>
-        </label>
-        <div class="admin-form-actions">
-          <button class="primary-button admin-form-button" type="submit" :disabled="savingPassword">
-            {{ savingPassword ? '保存中' : '修改密码' }}
-          </button>
-        </div>
-      </form>
-    </section>
-
-    <section id="profile-models" class="admin-section">
-      <div class="admin-section-heading">
-        <h2>我的模型</h2>
-        <button class="ghost-button profile-action-button" type="button" @click="resetModelDraft">新增模型</button>
-      </div>
-
-      <div class="admin-table profile-model-table">
-        <div class="admin-table-row profile-model-row profile-model-head">
-          <span>名称</span>
-          <span>Provider</span>
-          <span>Context Max</span>
-          <span>API Key</span>
-          <span>状态</span>
-          <span>操作</span>
-        </div>
-        <div
-          v-for="model in customModels"
-          :key="model.id"
-          class="admin-table-row profile-model-row"
-          :class="{ active: selectedModelId === model.id }"
-        >
-          <button class="profile-model-name" type="button" :data-user-model-row="model.id" @click="syncModelDraft(model)">
-            {{ model.display_name }}
-          </button>
-          <span>{{ model.provider_type }} · {{ model.provider_id }} / {{ model.model_id }}</span>
-          <span>{{ formatNumber(model.context_max_tokens) }}</span>
-          <span>{{ model.api_key_masked || '未保存' }}</span>
-          <span>{{ model.enabled ? '启用' : '停用' }}</span>
-          <span class="profile-model-actions">
-            <button class="ghost-button small" type="button" :data-user-model-test="model.id" @click="testUserModel(model)">测试</button>
-            <button class="ghost-button small" type="button" :disabled="modelSaving === `model-delete:${model.id}`" @click="removeUserModel(model)">删除</button>
-          </span>
-        </div>
-        <div v-if="customModels.length === 0" class="admin-table-row">
-          <span class="admin-empty" style="grid-column: 1/-1">暂无自定义模型，点击"新增模型"添加。</span>
-        </div>
-      </div>
-    </section>
-
-    <section class="admin-section">
-      <div class="admin-section-heading">
-        <h2>{{ modelFormTitle }}</h2>
-        <button v-if="selectedModelId" class="ghost-button profile-action-button" type="button" @click="resetModelDraft">取消编辑</button>
-      </div>
-
-      <form class="admin-form-grid" data-user-model-form @submit.prevent="submitUserModel">
-        <label>
-          <span class="field-label">Provider Type</span>
-          <select v-model="modelDraft.providerType" class="text-input" data-user-model-provider-type required>
-            <option value="openai_responses">OpenAI Responses</option>
-            <option value="openai_completions">OpenAI Completions</option>
-            <option value="google">Google</option>
-          </select>
-        </label>
-        <label>
-          <span class="field-label">Provider ID</span>
-          <input v-model="modelDraft.providerId" class="text-input" data-user-model-provider-id required>
-        </label>
-        <label>
-          <span class="field-label">Model ID</span>
-          <input v-model="modelDraft.modelId" class="text-input" data-user-model-model-id required>
-        </label>
-        <label>
-          <span class="field-label">显示名称</span>
-          <input v-model="modelDraft.displayName" class="text-input" data-user-model-display-name required>
-        </label>
-        <label>
-          <span class="field-label">Base URL</span>
-          <input v-model="modelDraft.baseURL" class="text-input" data-user-model-base-url :required="modelNeedsBaseURL(modelDraft.providerType) && !selectedModel">
-        </label>
-        <label>
-          <span class="field-label">API Key</span>
-          <input v-model="modelDraft.apiKey" class="text-input" type="password" data-user-model-api-key :required="!selectedModel">
-        </label>
-        <label>
-          <span class="field-label">Context Max Tokens</span>
-          <input v-model.number="modelDraft.contextMaxTokens" class="text-input" type="number" min="4" data-user-model-context-max required>
-        </label>
-        <label class="admin-check-row">
-          <input v-model="modelDraft.enabled" type="checkbox">
-          <span>启用</span>
-        </label>
-        <label class="admin-check-row">
-          <input v-model="modelDraft.attachments" type="checkbox">
-          <span>支持附件</span>
-        </label>
-        <div class="admin-form-actions">
-          <button class="primary-button admin-form-button" type="submit" :disabled="modelSaving === 'model-create' || modelSaving === 'model-update'">
-            {{ selectedModel ? '保存模型' : '创建模型' }}
-          </button>
-        </div>
-      </form>
-    </section>
-  </main>
+    </div>
+  </Teleport>
 </template>
 
 <style scoped>
-.profile-header-actions,
-.profile-model-actions {
+.profile-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  background: rgba(15, 32, 38, 0.48);
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
+  align-items: stretch;
+  justify-content: flex-end;
+}
+
+.profile-dialog-shell {
+  width: min(680px, 100vw);
+  height: 100%;
+  background: #f5f0eb;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: -8px 0 32px rgba(15, 32, 38, 0.18);
+}
+
+.profile-dialog-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 1.4rem 1.5rem 1rem;
+  border-bottom: 1px solid rgba(15, 32, 38, 0.08);
+  flex: 0 0 auto;
+}
+
+.profile-dialog-header h1 {
+  font-size: 1.35rem;
+  margin: 0;
+}
+
+.profile-dialog-header .eyebrow {
+  margin: 0 0 0.15rem;
+}
+
+.profile-dialog-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 1rem 1.5rem 2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+:deep(.admin-section) {
+  margin: 2px 0;
 }
 
 .profile-action-button {
@@ -698,28 +777,53 @@ function resetTurnstileWidget() {
   grid-template-columns: minmax(120px, 0.9fr) minmax(170px, 1.4fr) minmax(100px, 0.65fr) minmax(110px, 0.7fr) minmax(70px, 0.45fr) minmax(140px, 0.8fr);
 }
 
-.profile-model-row.active {
-  border-color: rgba(196, 88, 63, 0.24);
-  background: linear-gradient(135deg, rgba(255, 238, 221, 0.94), rgba(238, 247, 249, 0.96));
-}
-
-.profile-model-name {
-  border: 0;
-  padding: 0;
-  background: transparent;
-  color: #203840;
-  font: inherit;
+.profile-model-name-cell {
   font-weight: 700;
-  text-align: left;
-  cursor: pointer;
+  color: #203840;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.profile-model-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
 .ghost-button.small {
   min-height: 2rem;
   padding: 0.38rem 0.58rem;
+}
+
+.profile-model-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 950;
+  display: grid;
+  place-items: center;
+  background: rgba(25, 50, 59, 0.35);
+  padding: 1rem;
+}
+
+.profile-dialog-fade-enter-active,
+.profile-dialog-fade-leave-active {
+  transition: opacity 0.18s ease;
+}
+
+.profile-dialog-fade-enter-active .profile-dialog-shell,
+.profile-dialog-fade-leave-active .profile-dialog-shell {
+  transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.profile-dialog-fade-enter-from,
+.profile-dialog-fade-leave-to {
+  opacity: 0;
+}
+
+.profile-dialog-fade-enter-from .profile-dialog-shell,
+.profile-dialog-fade-leave-to .profile-dialog-shell {
+  transform: translateX(40px);
 }
 </style>

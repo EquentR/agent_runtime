@@ -4,10 +4,9 @@ import { RouterLink } from 'vue-router'
 import { ArrowLeft, CircleCheck, Cpu, InfoFilled, Operation, WarningFilled } from '@element-plus/icons-vue'
 
 import {
+  fetchAuditConversations,
   fetchAuditConversationRuns,
   fetchAuditRunReplay,
-  fetchConversation,
-  fetchConversations,
 } from '../lib/api'
 import { formatCompactTimestamp } from '../lib/time'
 import type { AuditReplayArtifact, AuditReplayBundle, AuditReplayEvent, AuditRun, Conversation } from '../types/api'
@@ -334,7 +333,7 @@ async function loadConversationList() {
   errorMessage.value = ''
 
   try {
-    conversations.value = await fetchConversations()
+    conversations.value = await fetchAuditConversations()
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '加载会话失败'
   } finally {
@@ -357,10 +356,8 @@ async function selectConversation(conversationId: string) {
   closeTurnMenu()
 
   try {
-    const [conversation, runs] = await Promise.all([
-      fetchConversation(conversationId),
-      fetchAuditConversationRuns(conversationId),
-    ])
+    const conversation = conversations.value.find((item) => item.id === conversationId) ?? null
+    const runs = await fetchAuditConversationRuns(conversationId)
 
     if (requestToken !== activeSelectionRequestToken || selectedConversationId.value !== conversationId) {
       return

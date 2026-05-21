@@ -4,6 +4,7 @@ import { formatDocumentTitle } from '../lib/chat'
 import { syncSession } from '../lib/session'
 import { getRequiredActionProfileTarget } from '../lib/user-state'
 import AdminLayout from '../components/AdminLayout.vue'
+import AdminDashboardView from '../views/AdminDashboardView.vue'
 import AdminAuditView from '../views/AdminAuditView.vue'
 import AdminModelsView from '../views/AdminModelsView.vue'
 import AdminOperationAuditView from '../views/AdminOperationAuditView.vue'
@@ -55,7 +56,15 @@ const routes = [
     children: [
       {
         path: '',
-        redirect: '/admin/users',
+        redirect: '/admin/dashboard',
+      },
+      {
+        path: 'dashboard',
+        name: 'admin-dashboard',
+        component: AdminDashboardView,
+        meta: {
+          title: '仪表盘',
+        },
       },
       {
         path: 'users',

@@ -865,6 +865,51 @@ describe('audit API helpers', () => {
     }))
     expect(runs).toEqual([expect.objectContaining({ id: 'run_1', conversation_id: 'conv_1' })])
   })
+
+  it('fetches audit conversation summaries from the audit endpoint', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        code: 200,
+        message: 'OK',
+        data: [
+          {
+            id: 'conv_owner',
+            title: 'conv_owner',
+            created_by: 'owner',
+            created_at: '2026-03-22T09:00:00Z',
+            updated_at: '2026-03-22T09:01:00Z',
+            audit_run_id: 'run_owner_2',
+            audit_run_ids: ['run_owner_1', 'run_owner_2'],
+          },
+        ],
+        time: '',
+      }),
+    } as Response)
+
+    const api = (await import('./api')) as Record<string, unknown>
+    expect(typeof api.fetchAuditConversations).toBe('function')
+
+    if (typeof api.fetchAuditConversations !== 'function') {
+      return
+    }
+
+    const conversations = await api.fetchAuditConversations()
+
+    expect(fetch).toHaveBeenCalledWith('/api/v1/audit/conversations', expect.objectContaining({
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    expect(conversations).toEqual([
+      expect.objectContaining({
+        id: 'conv_owner',
+        created_by: 'owner',
+        audit_run_id: 'run_owner_2',
+        audit_run_ids: ['run_owner_1', 'run_owner_2'],
+      }),
+    ])
+  })
 })
 
 describe('model catalog normalization', () => {
