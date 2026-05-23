@@ -12,10 +12,16 @@
 ## 📄 当前页面与能力
 
 - `/login`：登录页，负责会话进入与重定向。
-- `/chat`：主聊天页，提供会话列表、模型选择、流式消息展示、任务恢复、取消运行、审批决策和人工问题回复。
-- `/admin/prompts`：提示词管理页，面向管理员维护 prompt documents 与 bindings。
-- `/admin/audit`：审计会话页，面向管理员查看任务运行轨迹。
-- 审批独立视图：`ApprovalView` 提供审批卡片与决策操作的独立入口。
+- `/chat/:conversationId?`：主聊天页，提供会话列表、模型选择、流式消息展示、任务恢复、取消运行、审批决策和人工问题回复。审批与人工问答通过聊天流内嵌渲染，无独立路由入口。
+- `/profile`：个人资料页，支持资料修改、邮箱验证与密码修改；当账号被要求补全信息时由路由守卫强制跳转到这里。
+- `/admin/dashboard`：管理后台总览（管理员）。
+- `/admin/users`：用户管理（管理员）。
+- `/admin/models`：模型配置与连通性测试（管理员）。
+- `/admin/settings`：应用设置维护，含 SMTP 与 Turnstile 等（管理员）。
+- `/admin/prompts`：提示词文档与绑定管理（管理员）。
+- `/admin/audit`：任务审计会话（管理员）。
+- `/admin/audit-events`：后台操作审计（管理员）。
+- `ApprovalView` 作为审批卡片独立视图保留，当前未挂载到路由中，仅在历史/嵌入场景下复用。
 
 ## ✨ 当前交互特性
 
@@ -42,6 +48,7 @@
 | `src/lib/model-selection.ts` | 模型选择状态管理 |
 | `src/lib/question-entry.ts` | 人工问题输入状态管理 |
 | `src/lib/task-runtime.ts` | 任务运行时状态映射 |
+| `src/lib/user-state.ts` | 当前用户状态与待补全资料判断（被路由守卫使用） |
 | `src/lib/time.ts` | 时间格式化工具 |
 | `src/types/api.ts` | 后端契约在前端侧的类型定义 |
 
@@ -89,5 +96,6 @@ pnpm build
 ## 🔗 相关后端依赖
 
 - 聊天页依赖 `tasks`、`conversations`、`models`、`approvals`、`interactions`、`attachments`、`skills` API。
-- 管理台依赖 `prompts` 和 `audit` API。
+- 个人资料页依赖 `users/me` 与 `settings` API。
+- 管理后台依赖 `admin/users`、`admin/models`、`admin/settings`、`admin/audit-events`、`prompts`、`audit` API。
 - 登录态与路由守卫依赖 `auth` API。

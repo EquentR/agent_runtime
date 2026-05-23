@@ -21,10 +21,15 @@
 - `app/handlers`：HTTP 请求解析、响应整形、鉴权检查与路由注册。
 - `app/logics`：不应放在 handler 中的应用层业务逻辑。
 - `app/migration`：迁移注册与启动引导。
+- `app/models`：应用级数据库模型（用户、设置等）。
+- `app/logging`：把 `pkg/log` 适配到 `core/log` 接口的桥接层。
 - `core/agent`：agent 执行器、runner、流式事件、会话持久化。
 - `core/tasks`：任务存储、管理器、worker pool、事件、重试、取消、挂起恢复。
 - `core/prompt`：提示词文档、绑定与解析器。
+- `core/runtimeprompt`：运行时提示词构建与渲染。
+- `core/forcedprompt`：强制注入的系统级提示词 provider。
 - `core/skills`：工作目录技能包扫描、解析、只读查询与运行时解析。
+- `core/attachments`：附件存储后端、元数据与文件系统访问。
 - `core/approvals`：审批记录持久化。
 - `core/interactions`：人工交互记录持久化。
 - `core/audit`：任务运行审计与事件轨迹。
@@ -32,7 +37,10 @@
 - `core/providers`：模型抽象与 provider 专属客户端。
 - `core/memory`：上下文预算与记忆压缩。
 - `core/mcp`：MCP 抽象边界与 adapter。
-- `pkg`：数据库、日志、迁移、REST 等通用基础设施。
+- `core/types`：跨模块共享的领域类型（模型配置、工具元数据、任务元数据、成本等）。
+- `core/log`：领域日志门面，由 `app/logging` 适配到 `pkg/log`。
+- `core/rag`：预留目录，尚未实现。
+- `pkg`：数据库、日志、迁移、REST、JSON、邮件、密钥等通用基础设施。
 - `webapp`：Vue 3 + TypeScript + Vite 前端。
 
 ## 建议优先阅读

@@ -10,6 +10,8 @@
 - `RunStream(ctx, input) -> RunStreamResult` 驱动核心 agent loop：模型调用 -> 工具执行 -> 结果回填，循环直到达到停止条件。
 - `Run(ctx, input) -> RunResult` 在其上做聚合，返回最终聚合结果、token 用量和成本估算。
 - 支持 step 上限（默认 128）、max tokens 限制和工具自动选择。
+- `runner.go` 当前为占位空文件；Runner 的类型与实现分散在 `types.go` / `stream.go`。
+- `errors.go` 集中存放 executor 与 runner 共用的 sentinel error。
 
 ### Events 与 Sink（`events.go`、`task_adapter.go`）
 

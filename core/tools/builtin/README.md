@@ -1,6 +1,6 @@
 # 内建工具
 
-此包定义的 17 个内建工具（built-in tools）为 Agent 运行时提供文件操作、命令执行、网络请求、进程管理和技能加载能力。
+此包定义的 19 个内建工具（built-in tools）为 Agent 运行时提供文件操作、命令执行、网络请求、进程管理、图像生成和技能加载能力。
 
 ## 文件操作工具（8 个）
 
@@ -40,6 +40,15 @@
 |------|------|----------|
 | `ask_user` | 向用户发起结构化提问（支持选项、自定义回答、多选），触发人工交互挂起与恢复 | 由 runtime 拦截处理 |
 | `using_skills` | 按名加载 workspace 技能内容（`skills/<name>/SKILL.md`），结果标记为 ephemeral 不写入会话历史 | 自动 |
+
+## 图像工具（2 个）
+
+需要在 `conf/app.yaml` 的 `tools.imageGen.openai` 中配置 endpoint 与 API key，否则会在调用时返回未配置错误。生成结果通过附件子系统落盘，并以附件引用形式回传给模型。
+
+| 工具 | 说明 | 审批模式 |
+|------|------|----------|
+| `generate_image` | 按 prompt 生成图像，支持指定 size、quality、output format 与生成数量 | 自动 |
+| `edit_image` | 基于已有附件（含可选 mask）编辑图像，支持 size、quality、background、output format、input fidelity 与生成数量 | 自动 |
 
 ## 输出预算
 

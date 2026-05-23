@@ -44,15 +44,15 @@
 
 - 统一的 `ChatRequest` / `ChatResponse` / `Stream` 调用抽象，屏蔽不同 provider 的差异。
 - 已适配 Gemini、OpenAI-compatible Chat Completions 和 OpenAI Responses API。
-- 内建 17 个工具，涵盖文件读写、命令执行、HTTP 请求、进程管理、Web 搜索、技能加载和人工问答，运行范围限制在配置的工作区目录内。
+- 内建 19 个工具，涵盖文件读写、命令执行、HTTP 请求、进程管理、Web 搜索、技能加载、图像生成/编辑和人工问答，运行范围限制在配置的工作区目录内。
 - MCP tools / prompts 接入点已就绪，支持 stdio、SSE 和 Streamable HTTP 三种传输方式对接外部工具生态。
 
 ### 🖥️ 前端
 
-- 基于 Vue 3 + TypeScript + Vite，提供登录页、聊天页、会话侧边栏和管理后台。
+- 基于 Vue 3 + TypeScript + Vite，提供登录页、聊天页、个人资料页、会话侧边栏和管理后台。
 - 聊天页支持模型切换、流式消息展示、会话恢复、中止运行、审批决策和人工问题回复。
 - 消息列表可切换是否展示思考过程与工具调用详情，方便控制信息密度。
-- 管理后台提供提示词维护和审计记录查看功能，权限通过角色控制。
+- 管理后台覆盖用户、模型、提示词、应用设置、审计会话与后台操作审计，权限通过角色控制。
 
 ## 📦 近期主要更新
 
@@ -88,9 +88,15 @@ pnpm --dir webapp install
 默认配置文件为 `conf/app.yaml`。
 
 - 配置值中可直接使用环境变量占位符，如 `${OPENAI_BASE_URL}`、`${OPENAI_API_KEY}`、`${TAVILY_API_KEY}`，启动时自动展开。
-- `workspaceDir`：内建文件工具的根目录，留空时使用当前工作目录。
+- `workspaceDir`：内建文件工具的根目录，留空时使用当前工作目录；workspace skills 也从该目录下的 `skills/<name>/SKILL.md` 加载。
+- `server`：HTTP 监听地址、API 前缀与静态资源路径。
+- `sqlite` / `log`：数据库与日志输出配置。
+- `security`：应用密钥、Cookie 安全开关、公开注册开关、SMTP 与 Turnstile 等鉴权相关设置。
 - `tasks.workerCount`：后台任务的并发 worker 数量。
-- `llmProviders`：配置可用的模型列表，前端模型选择器和 `agent.run` 均从此处读取。
+- `tools`：内建工具的运行参数，含 `webSearch`（搜索 provider）与 `imageGen`（图像生成 provider）。
+- `attachments`：附件存储后端、根目录、草稿 TTL、已发送附件保留时长与 GC 间隔。
+- `llmRequestTimeout` / `llmProviders`：模型调用超时与可用模型列表，前端模型选择器和 `agent.run` 均从此处读取。
+- 如需对接 MCP 外部工具，可在配置中添加 `mcp` 节并配置 `servers`（详见 `core/mcp/README.md`）。
 
 ### 3. 启动后端
 
@@ -117,15 +123,22 @@ pnpm --dir webapp dev
 | 路由 | 说明 |
 |------|------|
 | `auth` | 注册、登录、退出、获取当前用户 |
-| `models` | 查询可用的 provider 和模型列表 |
+| `settings` | 公开应用设置（注册开关、Turnstile 配置等） |
+| `users/me` | 当前用户资料、邮箱验证、密码修改 |
+| `users/me/models` | 当前用户的模型偏好与连通性测试 |
+| `models` | 查询当前用户可用的 provider 和模型目录 |
 | `tasks` | 创建任务、查询详情、取消、重试、订阅 SSE 事件流 |
+| `tasks/:id/approvals` | 查询审批记录、提交审批决策 |
+| `tasks/:id/interactions` | 查询待回复问题、提交用户回复 |
 | `conversations` | 查询会话列表、会话详情、历史消息，删除会话 |
-| `prompts` | 提示词文档与绑定规则管理（需管理员权限） |
+| `prompts` | 提示词文档与绑定规则管理 |
 | `skills` | 查询 workspace 技能列表与详情 |
 | `attachments` | 上传文件附件、查询附件元数据与内容 |
-| `approvals` | 查询审批记录、提交审批决策 |
-| `interactions` | 查询待回复问题、提交用户回复 |
 | `audit` | 查询任务运行审计记录 |
+| `admin/users` | 管理员：用户管理 |
+| `admin/models` | 管理员：模型配置与连通性测试 |
+| `admin/settings` | 管理员：应用设置维护、SMTP 测试 |
+| `admin/audit-events` | 管理员：后台操作审计 |
 | `swagger` | 在浏览器中浏览和调试 API |
 
 ### 前端页面
@@ -133,20 +146,33 @@ pnpm --dir webapp dev
 | 路径 | 说明 |
 |------|------|
 | `/login` | 登录页 |
-| `/chat` | 聊天页，含会话侧栏、模型选择、流式消息、审批与问答内嵌交互 |
-| `/admin/prompts` | 提示词管理页（管理员） |
-| `/admin/audit` | 审计记录页（管理员） |
+| `/chat/:conversationId?` | 聊天页，含会话侧栏、模型选择、流式消息、审批与问答内嵌交互 |
+| `/profile` | 个人资料页（修改资料、邮箱验证、密码修改） |
+| `/admin/dashboard` | 管理后台总览（管理员） |
+| `/admin/users` | 用户管理（管理员） |
+| `/admin/models` | 模型配置（管理员） |
+| `/admin/settings` | 应用设置（管理员） |
+| `/admin/prompts` | 提示词管理（管理员） |
+| `/admin/audit` | 任务审计会话（管理员） |
+| `/admin/audit-events` | 后台操作审计（管理员） |
 
 ## 🗂️ 目录说明
 
 | 路径 | 说明 |
 |------|------|
 | `cmd/example_agent` | 可执行入口，读取配置并启动服务 |
-| `app` | 应用层，负责依赖组装、数据库迁移、路由注册和 HTTP handler |
+| `app/commands` / `app/config` / `app/router` | 应用层装配：服务启动、配置解析、路由注册 |
+| `app/handlers` / `app/logics` | HTTP handler 与应用层业务逻辑 |
+| `app/migration` | 数据库迁移注册与启动引导 |
+| `app/models` | 应用级数据库模型（用户、设置等） |
+| `app/logging` | 把 `pkg/log` 适配为 `core/log` 接口的桥接层 |
 | `core/agent` | Agent 执行器、流式处理、会话存储、任务桥接、审计输出 |
 | `core/tasks` | 任务存储、调度管理、事件流、并发执行、挂起恢复 |
 | `core/prompt` | 提示词文档、绑定规则与分发逻辑 |
+| `core/runtimeprompt` | 运行时提示词构建与渲染 |
+| `core/forcedprompt` | 强制注入的系统级提示词 provider |
 | `core/skills` | 工作目录技能包扫描、解析、只读查询与运行时注入 |
+| `core/attachments` | 附件存储后端、元数据与文件系统访问 |
 | `core/approvals` | 审批记录存储 |
 | `core/interactions` | 人工问答记录存储 |
 | `core/audit` | 任务运行审计记录与事件追踪 |
@@ -154,15 +180,18 @@ pnpm --dir webapp dev
 | `core/providers` | 模型调用抽象与各 provider 适配器 |
 | `core/memory` | 短期上下文管理、长期记忆持久化与上下文预算控制 |
 | `core/mcp` | MCP 抽象接口、通用类型与 mark3labs 适配器 |
-| `pkg` | 数据库、日志、迁移、HTTP 工具等基础设施 |
-| `webapp` | 前端应用，包含聊天界面和管理后台 |
+| `core/types` | 跨模块共享的领域类型（模型配置、工具元数据、任务元数据、成本等） |
+| `core/log` | 领域日志门面，由 `app/logging` 适配到 `pkg/log` |
+| `core/rag` | 预留：检索增强生成（尚未实现） |
+| `pkg` | 数据库、日志、迁移、HTTP、JSON、邮件、密钥等基础设施 |
+| `webapp` | 前端应用，包含聊天界面、个人资料与管理后台 |
 | `docs` | 设计文档、Swagger 生成产物与子计划 |
-| `skills` | 工作目录级技能包存放位置（按 `skills/<name>/SKILL.md` 组织） |
+| `workspace` | 默认工作区，含 `skills/<name>/SKILL.md` 等技能包；可由 `workspaceDir` 配置覆盖 |
 
 ## 📍 当前状态
 
 - 后端与前端均已可运行，适合本地联调、功能演示和在此基础上继续开发。
-- 当前功能覆盖：task 驱动的 agent 执行、会话持久化、17 个内建工具、3 个模型 provider 适配、workspace skills 系统、短期/长期记忆管理、人工审批/问答、审计追溯、附件上传、提示词管理、MCP 外部工具接入。
+- 当前功能覆盖：task 驱动的 agent 执行、会话持久化、19 个内建工具、3 个模型 provider 适配、workspace skills 系统、短期/长期记忆管理、人工审批/问答、审计追溯、附件上传、提示词管理、用户与模型管理后台、MCP 外部工具接入。
 - `core/rag` 为预留目录，尚未实现；多 agent 编排等能力留待后续扩展。
 
 ## ✅ 运行验证

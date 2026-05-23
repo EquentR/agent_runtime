@@ -41,6 +41,6 @@ core/mcp/
 
 ## 配置方式
 
-`conf/app.yaml` 中通过 `mcp.servers` 数组配置，每个 server 指定 `name`、`enabled`、`transport`（`stdio` / `sse` / `streamable_http`）及对应参数。
+通过应用配置中的 `mcp` 节加载，`servers` 数组中的每个 server 指定 `name`、`enabled`、`transport`（`stdio` / `sse` / `streamable_http`）及对应参数。仓库内的 `conf/app.yaml` 默认未启用 MCP，需要时按 `core/mcp/config` 包定义的结构补全。
 
 后续如需补充 server、resources、sessions 等能力，应继续优先扩展 `core/mcp` 的内部抽象，再追加 adapter。
