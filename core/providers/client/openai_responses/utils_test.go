@@ -201,8 +201,8 @@ func TestBuildResponseRequestParams_MessageAndToolMapping(t *testing.T) {
 		t.Fatalf("function_call_output item count = %d, want 1", functionOutputCount)
 	}
 
-	if _, exists := payload["tools"]; exists {
-		t.Fatalf("tools should be omitted for continuation payload, got %#v", payload["tools"])
+	if tools, ok := payload["tools"].([]any); !ok || len(tools) != 1 {
+		t.Fatalf("tools = %#v, want one tool preserved for continuation payload", payload["tools"])
 	}
 }
 
@@ -252,7 +252,7 @@ func TestBuildResponseRequestParams_ReplaysAssistantReasoningItems(t *testing.T)
 	}
 }
 
-func TestBuildResponseRequestParams_UsesDeveloperRoleForReasoningModelSystemPrompt(t *testing.T) {
+func TestBuildResponseRequestParams_GPT54PreservesSystemRoleAndSampling(t *testing.T) {
 	temp := float32(0.4)
 	topP := float32(0.9)
 
@@ -285,17 +285,14 @@ func TestBuildResponseRequestParams_UsesDeveloperRoleForReasoningModelSystemProm
 		t.Fatalf("input = %#v, want 2 items", payload["input"])
 	}
 	first, _ := input[0].(map[string]any)
-	if got, _ := first["role"].(string); got != "developer" {
-		t.Fatalf("system role = %q, want developer", got)
+	if got, _ := first["role"].(string); got != "system" {
+		t.Fatalf("system role = %q, want system", got)
 	}
-	if _, exists := payload["reasoning"]; !exists {
-		t.Fatalf("reasoning should be present for reasoning model payload")
+	if got, _ := payload["temperature"].(float64); got < 0.399 || got > 0.401 {
+		t.Fatalf("temperature = %v, want 0.4", payload["temperature"])
 	}
-	if _, exists := payload["temperature"]; exists {
-		t.Fatalf("temperature should be omitted for reasoning model payload")
-	}
-	if _, exists := payload["top_p"]; exists {
-		t.Fatalf("top_p should be omitted for reasoning model payload")
+	if got, _ := payload["top_p"].(float64); got < 0.899 || got > 0.901 {
+		t.Fatalf("top_p = %v, want 0.9", payload["top_p"])
 	}
 }
 
@@ -397,7 +394,7 @@ func TestBuildResponseRequestParams_ReplaysStructuredItemsFromResponseState(t *t
 	}
 }
 
-func TestBuildResponseRequestParams_ResponseStateToolContinuationDropsNonFunctionItems(t *testing.T) {
+func TestBuildResponseRequestParams_ResponseStateToolContinuationReplaysFullProviderOutput(t *testing.T) {
 	params, err := buildResponseRequestParams(model.ChatRequest{
 		Model: "gpt-5.4",
 		Messages: []model.Message{
@@ -429,14 +426,169 @@ func TestBuildResponseRequestParams_ResponseStateToolContinuationDropsNonFunctio
 	}
 
 	input, ok := payload["input"].([]any)
-	if !ok || len(input) != 3 {
-		t.Fatalf("input = %#v, want user + function_call + function_call_output", payload["input"])
+	if !ok {
+		t.Fatalf("input type = %T, want []any", payload["input"])
 	}
-	if second, _ := input[1].(map[string]any); second["type"] != "function_call" {
-		t.Fatalf("input[1] = %#v, want function_call", second)
+	types := make([]string, 0, len(input))
+	for _, raw := range input {
+		item, _ := raw.(map[string]any)
+		types = append(types, responseInputTestKind(item))
 	}
-	if third, _ := input[2].(map[string]any); third["type"] != "function_call_output" {
-		t.Fatalf("input[2] = %#v, want function_call_output", third)
+	if got := strings.Join(types, ","); got != "message:user,reasoning,message,function_call,function_call_output" {
+		t.Fatalf("input types = %q, want full provider output replay", got)
+	}
+}
+
+func TestBuildResponseRequestParams_ToolContinuationKeepsToolsAvailable(t *testing.T) {
+	params, err := buildResponseRequestParams(model.ChatRequest{
+		Model: "gpt-5.4",
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: "call the first tool"},
+			{
+				Role: model.RoleAssistant,
+				ToolCalls: []types.ToolCall{{
+					ID:        "call_1",
+					Name:      "echo_payload",
+					Arguments: `{"value":"alpha","step":1}`,
+				}},
+			},
+			{Role: model.RoleTool, ToolCallId: "call_1", Content: `{"ok":true}`},
+		},
+		Tools: []types.Tool{{
+			Name:        "second_payload",
+			Description: "accepts a second payload",
+			Parameters: types.JSONSchema{
+				Type: "object",
+				Properties: map[string]types.SchemaProperty{
+					"value": {Type: "string"},
+					"step":  {Type: "integer"},
+				},
+				Required: []string{"value", "step"},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("buildResponseRequestParams() error = %v", err)
+	}
+
+	data, err := json.Marshal(params)
+	if err != nil {
+		t.Fatalf("json.Marshal(params) error = %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("json.Unmarshal(payload) error = %v", err)
+	}
+	tools, ok := payload["tools"].([]any)
+	if !ok || len(tools) != 1 {
+		t.Fatalf("tools = %#v, want one tool preserved for continuation", payload["tools"])
+	}
+}
+
+func TestBuildResponseRequestParams_ToolContinuationReplaysFullProviderOutput(t *testing.T) {
+	params, err := buildResponseRequestParams(model.ChatRequest{
+		Model: "gpt-5.4",
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: "call a tool after reasoning"},
+			{
+				Role: model.RoleAssistant,
+				ProviderState: &model.ProviderState{
+					Provider:   providerName,
+					Format:     responseStateFormat,
+					Version:    messageVersion,
+					ResponseID: "resp_tool_reasoning",
+					Payload:    json.RawMessage(`{"response_id":"resp_tool_reasoning","output":[{"type":"reasoning","id":"rs_1","summary":[{"text":"plan"}]},{"type":"message","id":"msg_1","status":"completed","content":[{"type":"output_text","text":"thinking"}]},{"type":"function_call","id":"fc_1","call_id":"call_1","name":"echo_payload","arguments":"{\"value\":\"alpha\",\"step\":1}"}]}`),
+				},
+			},
+			{Role: model.RoleTool, ToolCallId: "call_1", Content: `{"ok":true}`},
+		},
+	})
+	if err != nil {
+		t.Fatalf("buildResponseRequestParams() error = %v", err)
+	}
+
+	data, err := json.Marshal(params)
+	if err != nil {
+		t.Fatalf("json.Marshal(params) error = %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("json.Unmarshal(payload) error = %v", err)
+	}
+
+	input, ok := payload["input"].([]any)
+	if !ok {
+		t.Fatalf("input type = %T, want []any", payload["input"])
+	}
+	types := make([]string, 0, len(input))
+	for _, raw := range input {
+		item, _ := raw.(map[string]any)
+		types = append(types, responseInputTestKind(item))
+	}
+	if got := strings.Join(types, ","); got != "message:user,reasoning,message,function_call,function_call_output" {
+		t.Fatalf("input types = %q, want full provider output replay", got)
+	}
+}
+
+func responseInputTestKind(item map[string]any) string {
+	if typ, _ := item["type"].(string); typ != "" {
+		return typ
+	}
+	if role, _ := item["role"].(string); role != "" {
+		return "message:" + role
+	}
+	return "<unknown>"
+}
+
+func TestBuildResponseRequestParams_DoesNotFallbackToItemReferenceReplay(t *testing.T) {
+	params, err := buildResponseRequestParams(model.ChatRequest{
+		Model: "gpt-5.4",
+		Messages: []model.Message{{
+			Role: model.RoleAssistant,
+			ProviderState: &model.ProviderState{
+				Provider:   providerName,
+				Format:     responseStateFormat,
+				Version:    messageVersion,
+				ResponseID: "resp_refs_only",
+				Payload:    json.RawMessage(`{"response_id":"resp_refs_only","items":[{"id":"msg_1","type":"message"},{"id":"fc_1","type":"function_call","call_id":"call_1","name":"echo_payload"}]}`),
+			},
+			Content: "fallback text",
+			ToolCalls: []types.ToolCall{{
+				ID:        "call_1",
+				Name:      "echo_payload",
+				Arguments: `{"value":"alpha","step":1}`,
+			}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("buildResponseRequestParams() error = %v", err)
+	}
+
+	data, err := json.Marshal(params)
+	if err != nil {
+		t.Fatalf("json.Marshal(params) error = %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("json.Unmarshal(payload) error = %v", err)
+	}
+	input, ok := payload["input"].([]any)
+	if !ok {
+		t.Fatalf("input type = %T, want []any", payload["input"])
+	}
+	for _, raw := range input {
+		item, _ := raw.(map[string]any)
+		if item["type"] == "item_reference" {
+			t.Fatalf("input should not contain item_reference fallback, got %#v", item)
+		}
+	}
+	types := make([]string, 0, len(input))
+	for _, raw := range input {
+		item, _ := raw.(map[string]any)
+		types = append(types, responseInputTestKind(item))
+	}
+	if got := strings.Join(types, ","); got != "message:assistant,function_call" {
+		t.Fatalf("input types = %q, want normalized assistant fallback", got)
 	}
 }
 
@@ -467,14 +619,16 @@ func TestBuildResponseRequestParams_ReplaysRawOutputForToolContinuation(t *testi
 	}
 
 	input, ok := payload["input"].([]any)
-	if !ok || len(input) != 3 {
-		t.Fatalf("input = %#v, want 3 items", payload["input"])
+	if !ok {
+		t.Fatalf("input type = %T, want []any", payload["input"])
 	}
-	if first, _ := input[0].(map[string]any); first["type"] == "reasoning" {
-		t.Fatalf("input[0] = %#v, reasoning should be omitted for tool continuation", first)
+	types := make([]string, 0, len(input))
+	for _, raw := range input {
+		item, _ := raw.(map[string]any)
+		types = append(types, responseInputTestKind(item))
 	}
-	if _, exists := payload["tools"]; exists {
-		t.Fatalf("tools should be omitted for tool continuation, got %#v", payload["tools"])
+	if got := strings.Join(types, ","); got != "message:user,reasoning,function_call,function_call_output" {
+		t.Fatalf("input types = %q, want raw output replay plus tool output", got)
 	}
 }
 

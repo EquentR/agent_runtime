@@ -121,6 +121,94 @@ func TestRunnerExecutesToolCallsAndContinuesConversation(t *testing.T) {
 	}
 }
 
+func TestRunnerExecutesConsecutiveToolCallTurns(t *testing.T) {
+	registry := coretools.NewRegistry()
+	if err := registry.Register(coretools.Tool{
+		Name: "first_tool",
+		Handler: func(ctx context.Context, arguments map[string]interface{}) (string, error) {
+			if arguments["value"] != "alpha" {
+				t.Fatalf("first_tool value = %#v, want alpha", arguments["value"])
+			}
+			return `{"next":"second_tool","value":"beta"}`, nil
+		},
+	}); err != nil {
+		t.Fatalf("Register(first_tool) error = %v", err)
+	}
+	if err := registry.Register(coretools.Tool{
+		Name: "second_tool",
+		Handler: func(ctx context.Context, arguments map[string]interface{}) (string, error) {
+			if arguments["value"] != "beta" {
+				t.Fatalf("second_tool value = %#v, want beta", arguments["value"])
+			}
+			return `{"done":true}`, nil
+		},
+	}); err != nil {
+		t.Fatalf("Register(second_tool) error = %v", err)
+	}
+
+	client := &stubClient{streams: []model.Stream{
+		newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "first_tool", Arguments: `{"value":"alpha"}`}}}}},
+			model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "first_tool", Arguments: `{"value":"alpha"}`}}},
+			nil,
+		),
+		newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_2", Name: "second_tool", Arguments: `{"value":"beta"}`}}}}},
+			model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_2", Name: "second_tool", Arguments: `{"value":"beta"}`}}},
+			nil,
+		),
+		newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "both tools completed"}}},
+			model.Message{Role: model.RoleAssistant, Content: "both tools completed"},
+			nil,
+		),
+	}}
+
+	runner, err := NewRunner(client, registry, Options{Model: "test-model", RuntimePromptBuilder: runtimeprompt.NewBuilder(nil), MaxSteps: 5})
+	if err != nil {
+		t.Fatalf("NewRunner() error = %v", err)
+	}
+
+	result, err := runner.Run(context.Background(), RunInput{
+		Messages: []model.Message{{Role: model.RoleUser, Content: "run both tools"}},
+		Tools:    registry.List(),
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.FinalMessage.Content != "both tools completed" {
+		t.Fatalf("final content = %q, want both tools completed", result.FinalMessage.Content)
+	}
+	if result.ToolCalls != 2 {
+		t.Fatalf("tool calls = %d, want 2", result.ToolCalls)
+	}
+	if len(client.streamRequests) != 3 {
+		t.Fatalf("request count = %d, want 3", len(client.streamRequests))
+	}
+
+	secondReq := client.streamRequests[1].Messages
+	if len(secondReq) != 3 {
+		t.Fatalf("len(second request messages) = %d, want 3", len(secondReq))
+	}
+	if secondReq[1].Role != model.RoleAssistant || len(secondReq[1].ToolCalls) != 1 || secondReq[1].ToolCalls[0].Name != "first_tool" {
+		t.Fatalf("second request assistant replay = %#v, want first_tool call", secondReq[1])
+	}
+	if secondReq[2].Role != model.RoleTool || secondReq[2].ToolCallId != "call_1" {
+		t.Fatalf("second request tool result = %#v, want call_1 result", secondReq[2])
+	}
+
+	thirdReq := client.streamRequests[2].Messages
+	if len(thirdReq) != 5 {
+		t.Fatalf("len(third request messages) = %d, want 5", len(thirdReq))
+	}
+	if thirdReq[3].Role != model.RoleAssistant || len(thirdReq[3].ToolCalls) != 1 || thirdReq[3].ToolCalls[0].Name != "second_tool" {
+		t.Fatalf("third request assistant replay = %#v, want second_tool call", thirdReq[3])
+	}
+	if thirdReq[4].Role != model.RoleTool || thirdReq[4].ToolCallId != "call_2" {
+		t.Fatalf("third request tool result = %#v, want call_2 result", thirdReq[4])
+	}
+}
+
 func TestRunnerToolContextCarriesMetadataToolCallAndEmitter(t *testing.T) {
 	recorder := &recordingTaskRuntime{taskID: "task_1"}
 	registry := coretools.NewRegistry()

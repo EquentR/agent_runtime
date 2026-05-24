@@ -2,7 +2,6 @@ package openai_responses
 
 import (
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -36,7 +35,7 @@ func getResponsesModelConfig(modelID string) responsesModelConfig {
 		strings.HasPrefix(modelID, "o3") || strings.Contains(modelID, "-o3") ||
 		strings.HasPrefix(modelID, "o4") || strings.Contains(modelID, "-o4") ||
 		strings.HasPrefix(modelID, "oss") || strings.Contains(modelID, "-oss") ||
-		strings.Contains(modelID, "gpt-5") || strings.Contains(modelID, "codex-") ||
+		strings.Contains(modelID, "codex-") ||
 		strings.Contains(modelID, "computer-use") {
 		if strings.Contains(modelID, "o1-mini") || strings.Contains(modelID, "o1-preview") {
 			return responsesModelConfig{
@@ -96,9 +95,6 @@ func buildResponseRequestParams(req model.ChatRequest) (responses.ResponseNewPar
 		params.ToolChoice = *toolChoice
 	}
 
-	if requestEndsWithToolContinuation(req.Messages) {
-		params.Tools = nil
-	}
 	if modelConfig.requiredAutoTruncation {
 		params.Truncation = responses.ResponseNewParamsTruncationAuto
 	}
@@ -106,49 +102,10 @@ func buildResponseRequestParams(req model.ChatRequest) (responses.ResponseNewPar
 	return params, nil
 }
 
-func responseInputHasToolOutput(input responses.ResponseInputParam) bool {
-	for _, item := range input {
-		if raw, err := json.Marshal(item); err == nil {
-			var obj map[string]any
-			if err := json.Unmarshal(raw, &obj); err == nil {
-				if obj["type"] == "function_call_output" {
-					return true
-				}
-			}
-		}
-	}
-	return false
-}
-
-func requestEndsWithToolContinuation(messages []model.Message) bool {
-	if len(messages) == 0 {
-		return false
-	}
-	hasTrailingTool := false
-	for i := len(messages) - 1; i >= 0; i-- {
-		switch messages[i].Role {
-		case model.RoleTool:
-			hasTrailingTool = true
-		case model.RoleAssistant:
-			return hasTrailingTool
-		case model.RoleSystem, model.RoleUser:
-			if hasTrailingTool {
-				return false
-			}
-		default:
-			if hasTrailingTool {
-				return false
-			}
-		}
-	}
-	return false
-}
-
 func buildResponseInput(messages []model.Message, systemMessageMode string) (responses.ResponseInputParam, string, error) {
 	input := make(responses.ResponseInputParam, 0, len(messages))
 
-	for i, m := range messages {
-		toolContinuation := hasFollowingToolOutput(messages, i)
+	for _, m := range messages {
 		switch m.Role {
 		case model.RoleSystem:
 			if strings.TrimSpace(m.Content) == "" {
@@ -172,7 +129,7 @@ func buildResponseInput(messages []model.Message, systemMessageMode string) (res
 			if rawItems, _, ok, err := rawOutputItemsFromProviderData(m.ProviderData); err != nil {
 				return nil, "", err
 			} else if ok {
-				for _, item := range filterReplayOutputItems(rawItems, toolContinuation) {
+				for _, item := range rawItems {
 					param, convErr := responseOutputItemToInputParam(item)
 					if convErr != nil {
 						return nil, "", convErr
@@ -185,14 +142,8 @@ func buildResponseInput(messages []model.Message, systemMessageMode string) (res
 			if err != nil {
 				return nil, "", err
 			}
-			if ok {
-				input = append(input, filterReplayInputItems(replayed, toolContinuation)...)
-				continue
-			}
-			if itemRefs, ok, err := providerStateItemReferences(m.ProviderState); err != nil {
-				return nil, "", err
-			} else if ok {
-				input = append(input, filterReplayInputItems(itemRefs, toolContinuation)...)
+			if ok && len(replayed) > 0 {
+				input = append(input, replayed...)
 				continue
 			}
 			for _, item := range m.ReasoningItems {
@@ -266,55 +217,6 @@ func responseContentItemFromAttachment(attachment model.Attachment) (responses.R
 func isTextMimeType(mimeType string) bool {
 	mimeType = strings.ToLower(strings.TrimSpace(mimeType))
 	return strings.HasPrefix(mimeType, "text/") || mimeType == "application/json" || strings.HasSuffix(mimeType, "+json")
-}
-
-func hasFollowingToolOutput(messages []model.Message, index int) bool {
-	if index < 0 || index >= len(messages) {
-		return false
-	}
-	for _, message := range messages[index+1:] {
-		if message.Role == model.RoleTool {
-			return true
-		}
-	}
-	return false
-}
-
-func filterReplayOutputItems(items []responses.ResponseOutputItemUnion, toolContinuation bool) []responses.ResponseOutputItemUnion {
-	if !toolContinuation {
-		return items
-	}
-	filtered := make([]responses.ResponseOutputItemUnion, 0, len(items))
-	for _, item := range items {
-		if item.Type == "function_call" {
-			filtered = append(filtered, item)
-		}
-	}
-	return filtered
-}
-
-func filterReplayInputItems(items []responses.ResponseInputItemUnionParam, toolContinuation bool) []responses.ResponseInputItemUnionParam {
-	if !toolContinuation {
-		return items
-	}
-	filtered := make([]responses.ResponseInputItemUnionParam, 0, len(items))
-	for _, item := range items {
-		raw, err := json.Marshal(item)
-		if err != nil {
-			filtered = append(filtered, item)
-			continue
-		}
-		var obj map[string]any
-		if err := json.Unmarshal(raw, &obj); err != nil {
-			filtered = append(filtered, item)
-			continue
-		}
-		typeName, _ := obj["type"].(string)
-		if typeName == "function_call" || typeName == "item_reference" {
-			filtered = append(filtered, item)
-		}
-	}
-	return filtered
 }
 
 func firstNonEmpty(values ...string) string {
