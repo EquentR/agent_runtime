@@ -19,6 +19,7 @@ import (
 	model "github.com/EquentR/agent_runtime/core/providers/types"
 	coretasks "github.com/EquentR/agent_runtime/core/tasks"
 	coretypes "github.com/EquentR/agent_runtime/core/types"
+	coreworkspaces "github.com/EquentR/agent_runtime/core/workspaces"
 	"github.com/EquentR/agent_runtime/pkg/rest"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
@@ -963,6 +964,139 @@ func TestConversationHandlerDeleteConversation(t *testing.T) {
 	}
 }
 
+func TestConversationWorkspaceStatusReturnsPendingStateForOwner(t *testing.T) {
+	store, manager, server := newConversationHandlerWorkspaceTestServer(t, &recordingConversationWorkspaceManager{states: map[string]coreworkspaces.WorkspaceStateFile{
+		"conv_1": {Mode: coreworkspaces.ModeMutable, State: coreworkspaces.StatePendingMerge},
+	}})
+	if _, err := store.CreateConversation(context.Background(), coreagent.CreateConversationInput{ID: "conv_1", ProviderID: "openai", ModelID: "gpt-5.4", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("CreateConversation() error = %v", err)
+	}
+
+	resp, err := http.Get(server.URL + "/api/v1/conversations/conv_1/workspace")
+	if err != nil {
+		t.Fatalf("http.Get() error = %v", err)
+	}
+	defer resp.Body.Close()
+	got := decodeConversationWorkspaceResponse(t, resp.Body)
+	if got == nil || got.State != coreworkspaces.StatePendingMerge {
+		t.Fatalf("workspace state = %#v, want pending_merge", got)
+	}
+	if manager.getUserID != "tester" || manager.getID != "conv_1" {
+		t.Fatalf("get workspace input = user %q id %q, want tester/conv_1", manager.getUserID, manager.getID)
+	}
+}
+
+func TestConversationWorkspaceStatusReturnsNullForMissingWorkspace(t *testing.T) {
+	store, _, server := newConversationHandlerWorkspaceTestServer(t, nil)
+	if _, err := store.CreateConversation(context.Background(), coreagent.CreateConversationInput{ID: "conv_empty", ProviderID: "openai", ModelID: "gpt-5.4", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("CreateConversation() error = %v", err)
+	}
+
+	resp, err := http.Get(server.URL + "/api/v1/conversations/conv_empty/workspace")
+	if err != nil {
+		t.Fatalf("http.Get() error = %v", err)
+	}
+	defer resp.Body.Close()
+	got := decodeConversationWorkspaceResponse(t, resp.Body)
+	if got != nil {
+		t.Fatalf("workspace state = %#v, want nil", got)
+	}
+}
+
+func TestConversationWorkspaceConfirmUsesConversationID(t *testing.T) {
+	store, manager, server := newConversationHandlerWorkspaceTestServer(t, &recordingConversationWorkspaceManager{states: map[string]coreworkspaces.WorkspaceStateFile{
+		"conv_1": {Mode: coreworkspaces.ModeMutable, State: coreworkspaces.StatePendingMerge},
+	}})
+	if _, err := store.CreateConversation(context.Background(), coreagent.CreateConversationInput{ID: "conv_1", ProviderID: "openai", ModelID: "gpt-5.4", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("CreateConversation() error = %v", err)
+	}
+
+	resp, err := http.Post(server.URL+"/api/v1/conversations/conv_1/workspace/confirm", "application/json", nil)
+	if err != nil {
+		t.Fatalf("POST confirm error = %v", err)
+	}
+	defer resp.Body.Close()
+	got := decodeConversationWorkspaceResponse(t, resp.Body)
+	if got == nil || got.TaskID != "conv_1" || got.State != coreworkspaces.StateMerged {
+		t.Fatalf("confirm workspace state = %#v, want conv_1 merged", got)
+	}
+	if manager.confirmUser != "tester" || manager.confirmID != "conv_1" {
+		t.Fatalf("confirm workspace input = user %q id %q, want tester/conv_1", manager.confirmUser, manager.confirmID)
+	}
+}
+
+func TestConversationWorkspaceDiscardUsesConversationID(t *testing.T) {
+	store, manager, server := newConversationHandlerWorkspaceTestServer(t, &recordingConversationWorkspaceManager{states: map[string]coreworkspaces.WorkspaceStateFile{
+		"conv_1": {Mode: coreworkspaces.ModeMutable, State: coreworkspaces.StatePendingMerge},
+	}})
+	if _, err := store.CreateConversation(context.Background(), coreagent.CreateConversationInput{ID: "conv_1", ProviderID: "openai", ModelID: "gpt-5.4", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("CreateConversation() error = %v", err)
+	}
+
+	resp, err := http.Post(server.URL+"/api/v1/conversations/conv_1/workspace/discard", "application/json", nil)
+	if err != nil {
+		t.Fatalf("POST discard error = %v", err)
+	}
+	defer resp.Body.Close()
+	got := decodeConversationWorkspaceResponse(t, resp.Body)
+	if got == nil || got.TaskID != "conv_1" || got.State != coreworkspaces.StateDiscarded {
+		t.Fatalf("discard workspace state = %#v, want conv_1 discarded", got)
+	}
+	if manager.discardUser != "tester" || manager.discardID != "conv_1" {
+		t.Fatalf("discard workspace input = user %q id %q, want tester/conv_1", manager.discardUser, manager.discardID)
+	}
+}
+
+func TestConversationWorkspaceConfirmMapsHomeChangedConflict(t *testing.T) {
+	store, _, server := newConversationHandlerWorkspaceTestServer(t, &recordingConversationWorkspaceManager{confirmErr: coreworkspaces.ErrWorkspaceHomeChanged})
+	if _, err := store.CreateConversation(context.Background(), coreagent.CreateConversationInput{ID: "conv_1", ProviderID: "openai", ModelID: "gpt-5.4", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("CreateConversation() error = %v", err)
+	}
+
+	resp, err := http.Post(server.URL+"/api/v1/conversations/conv_1/workspace/confirm", "application/json", nil)
+	if err != nil {
+		t.Fatalf("POST confirm error = %v", err)
+	}
+	defer resp.Body.Close()
+	envelope := decodeEnvelope(t, resp.Body)
+	if envelope.Code != http.StatusConflict {
+		t.Fatalf("envelope.Code = %d, want %d", envelope.Code, http.StatusConflict)
+	}
+	var detail workspaceActionErrorResponse
+	if err := json.Unmarshal(envelope.Data, &detail); err != nil {
+		t.Fatalf("Unmarshal workspace error detail = %v, data = %s", err, string(envelope.Data))
+	}
+	if detail.Code != workspaceErrorCodeHomeChanged || detail.ConversationID != "conv_1" {
+		t.Fatalf("workspace error detail = %#v, want home changed for conv_1", detail)
+	}
+	if !strings.Contains(detail.Message, "工作区基线已过期") {
+		t.Fatalf("workspace error message = %q, want friendly Chinese message", detail.Message)
+	}
+}
+
+func TestConversationWorkspaceStatusRejectsOtherUsersConversation(t *testing.T) {
+	deps, _, server := newAuthenticatedConversationHandlerWorkspaceTestServer(t, nil)
+	owner := registerActiveAuthUserForTest(t, deps.authLogic, "owner", "secret-123")
+	registerActiveAuthUserForTest(t, deps.authLogic, "guest", "secret-123")
+	if _, err := deps.store.CreateConversation(context.Background(), coreagent.CreateConversationInput{ID: "conv_other", ProviderID: "openai", ModelID: "gpt-5.4", CreatedBy: owner.Username}); err != nil {
+		t.Fatalf("CreateConversation() error = %v", err)
+	}
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/api/v1/conversations/conv_other/workspace", nil)
+	if err != nil {
+		t.Fatalf("http.NewRequest() error = %v", err)
+	}
+	req.AddCookie(newConversationHandlerSessionCookie(t, deps.authLogic, "guest"))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Do() error = %v", err)
+	}
+	defer resp.Body.Close()
+	envelope := decodeEnvelope(t, resp.Body)
+	if envelope.Code != http.StatusUnauthorized && envelope.Code != http.StatusForbidden {
+		t.Fatalf("envelope.Code = %d, want unauthorized or forbidden", envelope.Code)
+	}
+}
+
 func TestConversationHandlerAdminListConversationsReturnsOnlyOwnConversations(t *testing.T) {
 	deps, server := newAuthenticatedConversationHandlerTestServer(t)
 	admin := registerActiveAuthUserForTest(t, deps.authLogic, "admin", "secret-123")
@@ -1161,6 +1295,56 @@ type authenticatedConversationHandlerTestDeps struct {
 	authLogic *logics.AuthLogic
 }
 
+type recordingConversationWorkspaceManager struct {
+	states      map[string]coreworkspaces.WorkspaceStateFile
+	confirmErr  error
+	discardErr  error
+	getUserID   string
+	getID       string
+	confirmUser string
+	confirmID   string
+	discardUser string
+	discardID   string
+}
+
+func (m *recordingConversationWorkspaceManager) GetWorkspaceState(_ context.Context, userID string, workspaceID string) (*coreworkspaces.WorkspaceStateFile, bool, error) {
+	m.getUserID = userID
+	m.getID = workspaceID
+	state, ok := m.states[workspaceID]
+	if !ok {
+		return nil, false, nil
+	}
+	state.UserID = userID
+	state.TaskID = workspaceID
+	return &state, true, nil
+}
+
+func (m *recordingConversationWorkspaceManager) ConfirmTaskWorkspace(_ context.Context, userID string, workspaceID string) (*coreworkspaces.WorkspaceStateFile, error) {
+	m.confirmUser = userID
+	m.confirmID = workspaceID
+	if m.confirmErr != nil {
+		return nil, m.confirmErr
+	}
+	state := m.states[workspaceID]
+	state.UserID = userID
+	state.TaskID = workspaceID
+	state.State = coreworkspaces.StateMerged
+	return &state, nil
+}
+
+func (m *recordingConversationWorkspaceManager) DiscardTaskWorkspace(_ context.Context, userID string, workspaceID string) (*coreworkspaces.WorkspaceStateFile, error) {
+	m.discardUser = userID
+	m.discardID = workspaceID
+	if m.discardErr != nil {
+		return nil, m.discardErr
+	}
+	state := m.states[workspaceID]
+	state.UserID = userID
+	state.TaskID = workspaceID
+	state.State = coreworkspaces.StateDiscarded
+	return &state, nil
+}
+
 func newConversationHandlerTestServerWithDB(t *testing.T) (*coreagent.ConversationStore, *coreaudit.Store, *gorm.DB, *httptest.Server) {
 	t.Helper()
 	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())
@@ -1181,6 +1365,64 @@ func newConversationHandlerTestServerWithDB(t *testing.T) (*coreagent.Conversati
 	server := httptest.NewServer(engine)
 	t.Cleanup(server.Close)
 	return store, auditStore, db, server
+}
+
+func newConversationHandlerWorkspaceTestServer(t *testing.T, manager *recordingConversationWorkspaceManager) (*coreagent.ConversationStore, *recordingConversationWorkspaceManager, *httptest.Server) {
+	t.Helper()
+	dsn := fmt.Sprintf("file:%s-workspace?mode=memory&cache=shared", t.Name())
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("gorm.Open() error = %v", err)
+	}
+	store := coreagent.NewConversationStore(db)
+	if err := store.AutoMigrate(); err != nil {
+		t.Fatalf("conversation AutoMigrate() error = %v", err)
+	}
+	auditStore := coreaudit.NewStore(db)
+	if err := auditStore.AutoMigrate(); err != nil {
+		t.Fatalf("audit AutoMigrate() error = %v", err)
+	}
+	if manager == nil {
+		manager = &recordingConversationWorkspaceManager{}
+	}
+	if manager.states == nil {
+		manager.states = map[string]coreworkspaces.WorkspaceStateFile{}
+	}
+	engine := rest.Init()
+	NewConversationHandler(store, auditStore).WithWorkspaceManager(manager).Register(engine.Group("/api/v1"))
+	server := httptest.NewServer(engine)
+	t.Cleanup(server.Close)
+	return store, manager, server
+}
+
+func newAuthenticatedConversationHandlerWorkspaceTestServer(t *testing.T, manager *recordingConversationWorkspaceManager) (*authenticatedConversationHandlerTestDeps, *recordingConversationWorkspaceManager, *httptest.Server) {
+	t.Helper()
+	dsn := fmt.Sprintf("file:%s-workspace-auth?mode=memory&cache=shared", t.Name())
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("gorm.Open() error = %v", err)
+	}
+	store := coreagent.NewConversationStore(db)
+	if err := store.AutoMigrate(); err != nil {
+		t.Fatalf("conversation AutoMigrate() error = %v", err)
+	}
+	auditStore := coreaudit.NewStore(db)
+	if err := auditStore.AutoMigrate(); err != nil {
+		t.Fatalf("audit AutoMigrate() error = %v", err)
+	}
+	authLogic := newAuthLogicForTest(t, db)
+	authMiddleware := NewAuthMiddleware(authLogic)
+	if manager == nil {
+		manager = &recordingConversationWorkspaceManager{}
+	}
+	if manager.states == nil {
+		manager.states = map[string]coreworkspaces.WorkspaceStateFile{}
+	}
+	engine := rest.Init()
+	NewConversationHandler(store, auditStore, authMiddleware.RequireSession()).WithWorkspaceManager(manager).Register(engine.Group("/api/v1"))
+	server := httptest.NewServer(engine)
+	t.Cleanup(server.Close)
+	return &authenticatedConversationHandlerTestDeps{store: store, authLogic: authLogic}, manager, server
 }
 
 func newAuthenticatedConversationHandlerTestServer(t *testing.T) (*authenticatedConversationHandlerTestDeps, *httptest.Server) {
@@ -1223,6 +1465,22 @@ func decodeConversationResponse(t *testing.T, body io.Reader) coreagent.Conversa
 		t.Fatalf("json.Unmarshal() error = %v", err)
 	}
 	return got
+}
+
+func decodeConversationWorkspaceResponse(t *testing.T, body io.Reader) *coreworkspaces.WorkspaceStateFile {
+	t.Helper()
+	envelope := decodeEnvelope(t, body)
+	if !envelope.OK {
+		t.Fatalf("response ok = false, raw data = %s", string(envelope.Data))
+	}
+	if string(envelope.Data) == "null" {
+		return nil
+	}
+	var state coreworkspaces.WorkspaceStateFile
+	if err := json.Unmarshal(envelope.Data, &state); err != nil {
+		t.Fatalf("json.Unmarshal(workspace state) error = %v", err)
+	}
+	return &state
 }
 
 func decodeConversationMessagesResponse(t *testing.T, body io.Reader) []model.Message {

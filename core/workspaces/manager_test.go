@@ -121,6 +121,37 @@ func TestCreateTaskWorkspaceCopiesCurrentHomeAndWritesActiveState(t *testing.T) 
 	}
 }
 
+func TestGetWorkspaceStateReturnsNormalizedStateAndMissingFlag(t *testing.T) {
+	templateRoot := t.TempDir()
+	workspacesRoot := t.TempDir()
+	writeFile(t, templateRoot, "AGENTS.md", "# Workspace rules\n")
+	manager := newTestManager(t, templateRoot, workspacesRoot)
+
+	workspace, err := manager.CreateTaskWorkspace(context.Background(), "42", "conv_1", ModeMutable)
+	if err != nil {
+		t.Fatalf("CreateTaskWorkspace() error = %v", err)
+	}
+
+	state, ok, err := manager.GetWorkspaceState(context.Background(), "42", "conv_1")
+	if err != nil {
+		t.Fatalf("GetWorkspaceState() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("GetWorkspaceState() ok = false, want true")
+	}
+	if state.TaskID != "conv_1" || state.UserID != "42" || state.TaskRoot != workspace.Root || state.State != StateActive {
+		t.Fatalf("state = %#v, want normalized active conv_1 state", state)
+	}
+
+	missing, ok, err := manager.GetWorkspaceState(context.Background(), "42", "missing")
+	if err != nil {
+		t.Fatalf("GetWorkspaceState(missing) error = %v", err)
+	}
+	if ok || missing != nil {
+		t.Fatalf("missing state = %#v ok=%v, want nil false", missing, ok)
+	}
+}
+
 func TestNewManagerCreatesDefaultWorkspacesRoot(t *testing.T) {
 	baseDir := t.TempDir()
 	t.Chdir(baseDir)
@@ -169,7 +200,175 @@ func TestCompleteTaskWorkspaceMarksReadonlyTaskCompleted(t *testing.T) {
 	}
 }
 
-func TestConfirmTaskWorkspaceBacksUpHomeReplacesContentsAndIsIdempotent(t *testing.T) {
+func TestFinishMutableWorkspaceMarksCompletedWhenWorkspaceMatchesBaseline(t *testing.T) {
+	templateRoot := t.TempDir()
+	workspacesRoot := t.TempDir()
+	writeFile(t, templateRoot, "AGENTS.md", "# Workspace rules\n")
+	manager := newTestManager(t, templateRoot, workspacesRoot)
+
+	workspace, err := manager.CreateTaskWorkspace(context.Background(), "42", "conv_1", ModeMutable)
+	if err != nil {
+		t.Fatalf("CreateTaskWorkspace() error = %v", err)
+	}
+
+	state, err := manager.FinishMutableWorkspace(context.Background(), "42", "conv_1")
+	if err != nil {
+		t.Fatalf("FinishMutableWorkspace() error = %v", err)
+	}
+	if state.State != StateCompleted {
+		t.Fatalf("state.State = %q, want %q for unchanged workspace rooted at %s", state.State, StateCompleted, workspace.Root)
+	}
+}
+
+func TestFinishMutableWorkspaceMarksPendingMergeWhenWorkspaceDiffersFromBaseline(t *testing.T) {
+	templateRoot := t.TempDir()
+	workspacesRoot := t.TempDir()
+	writeFile(t, templateRoot, "AGENTS.md", "# Workspace rules\n")
+	manager := newTestManager(t, templateRoot, workspacesRoot)
+
+	workspace, err := manager.CreateTaskWorkspace(context.Background(), "42", "conv_1", ModeMutable)
+	if err != nil {
+		t.Fatalf("CreateTaskWorkspace() error = %v", err)
+	}
+	writeFile(t, workspace.Root, "notes.txt", "changed")
+
+	state, err := manager.FinishMutableWorkspace(context.Background(), "42", "conv_1")
+	if err != nil {
+		t.Fatalf("FinishMutableWorkspace() error = %v", err)
+	}
+	if state.State != StatePendingMerge {
+		t.Fatalf("state.State = %q, want %q", state.State, StatePendingMerge)
+	}
+}
+
+func TestWorkspaceManifestDetectsEmptyDirectoryChanges(t *testing.T) {
+	templateRoot := t.TempDir()
+	workspacesRoot := t.TempDir()
+	writeFile(t, templateRoot, "AGENTS.md", "# Workspace rules\n")
+	manager := newTestManager(t, templateRoot, workspacesRoot)
+
+	workspace, err := manager.CreateTaskWorkspace(context.Background(), "42", "conv_1", ModeMutable)
+	if err != nil {
+		t.Fatalf("CreateTaskWorkspace() error = %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(workspace.Root, "empty"), 0o755); err != nil {
+		t.Fatalf("Mkdir(empty) error = %v", err)
+	}
+
+	state, err := manager.FinishMutableWorkspace(context.Background(), "42", "conv_1")
+	if err != nil {
+		t.Fatalf("FinishMutableWorkspace() error = %v", err)
+	}
+	if state.State != StatePendingMerge {
+		t.Fatalf("state.State = %q, want %q", state.State, StatePendingMerge)
+	}
+}
+
+func TestFinishMutableWorkspaceRejectsSymlinkInWorkspaceManifest(t *testing.T) {
+	templateRoot := t.TempDir()
+	workspacesRoot := t.TempDir()
+	writeFile(t, templateRoot, "AGENTS.md", "# Workspace rules\n")
+	manager := newTestManager(t, templateRoot, workspacesRoot)
+
+	workspace, err := manager.CreateTaskWorkspace(context.Background(), "42", "conv_1", ModeMutable)
+	if err != nil {
+		t.Fatalf("CreateTaskWorkspace() error = %v", err)
+	}
+	externalRoot := t.TempDir()
+	if err := os.Symlink(externalRoot, filepath.Join(workspace.Root, "link")); err != nil {
+		if errors.Is(err, os.ErrPermission) {
+			t.Skipf("symlink creation not permitted: %v", err)
+		}
+		t.Fatalf("os.Symlink() error = %v", err)
+	}
+
+	_, err = manager.FinishMutableWorkspace(context.Background(), "42", "conv_1")
+	if err == nil || !strings.Contains(err.Error(), "symlink paths are not supported") {
+		t.Fatalf("FinishMutableWorkspace() error = %v, want symlink manifest rejection", err)
+	}
+}
+
+func TestCreateTaskWorkspaceRejectsNewMutableWorkspaceWhenAnotherWorkspacePendingMerge(t *testing.T) {
+	templateRoot := t.TempDir()
+	workspacesRoot := t.TempDir()
+	writeFile(t, templateRoot, "AGENTS.md", "# Workspace rules\n")
+	manager := newTestManager(t, templateRoot, workspacesRoot)
+
+	workspace, err := manager.CreateTaskWorkspace(context.Background(), "42", "conv_1", ModeMutable)
+	if err != nil {
+		t.Fatalf("CreateTaskWorkspace(conv_1) error = %v", err)
+	}
+	writeFile(t, workspace.Root, "notes.txt", "changed")
+	if _, err := manager.FinishMutableWorkspace(context.Background(), "42", "conv_1"); err != nil {
+		t.Fatalf("FinishMutableWorkspace() error = %v", err)
+	}
+
+	_, err = manager.CreateTaskWorkspace(context.Background(), "42", "conv_2", ModeMutable)
+	if !errors.Is(err, ErrWorkspacePendingMerge) {
+		t.Fatalf("CreateTaskWorkspace(conv_2) error = %v, want ErrWorkspacePendingMerge", err)
+	}
+	var actionErr *ActionError
+	if !errors.As(err, &actionErr) {
+		t.Fatalf("CreateTaskWorkspace(conv_2) error = %T, want ActionError", err)
+	}
+	if actionErr.Code != ActionErrorCodePendingMerge || actionErr.ConversationID != "conv_1" {
+		t.Fatalf("CreateTaskWorkspace(conv_2) action error = %+v, want pending merge for conv_1", actionErr)
+	}
+	if _, err := manager.CreateTaskWorkspace(context.Background(), "42", "conv_2", ModeReadonly); err != nil {
+		t.Fatalf("CreateTaskWorkspace(readonly conv_2) error = %v", err)
+	}
+}
+
+func TestCreateTaskWorkspaceReusesSamePendingMutableWorkspace(t *testing.T) {
+	templateRoot := t.TempDir()
+	workspacesRoot := t.TempDir()
+	writeFile(t, templateRoot, "AGENTS.md", "# Workspace rules\n")
+	manager := newTestManager(t, templateRoot, workspacesRoot)
+
+	workspace, err := manager.CreateTaskWorkspace(context.Background(), "42", "conv_1", ModeMutable)
+	if err != nil {
+		t.Fatalf("CreateTaskWorkspace(first) error = %v", err)
+	}
+	writeFile(t, workspace.Root, "notes.txt", "first change")
+	if _, err := manager.FinishMutableWorkspace(context.Background(), "42", "conv_1"); err != nil {
+		t.Fatalf("FinishMutableWorkspace() error = %v", err)
+	}
+
+	reused, err := manager.CreateTaskWorkspace(context.Background(), "42", "conv_1", ModeMutable)
+	if err != nil {
+		t.Fatalf("CreateTaskWorkspace(reuse) error = %v", err)
+	}
+	if reused.Root != workspace.Root || reused.State != StatePendingMerge {
+		t.Fatalf("reused workspace = %#v, want same root %q with pending state", reused, workspace.Root)
+	}
+	assertFileContent(t, reused.Root, "notes.txt", "first change")
+}
+
+func TestSummarizeUserWorkspacesIncludesPendingConversationWorkspace(t *testing.T) {
+	templateRoot := t.TempDir()
+	workspacesRoot := t.TempDir()
+	writeFile(t, templateRoot, "AGENTS.md", "# Workspace rules\n")
+	manager := newTestManager(t, templateRoot, workspacesRoot)
+
+	workspace, err := manager.CreateTaskWorkspace(context.Background(), "42", "conv_1", ModeMutable)
+	if err != nil {
+		t.Fatalf("CreateTaskWorkspace() error = %v", err)
+	}
+	writeFile(t, workspace.Root, "notes.txt", "changed")
+	if _, err := manager.FinishMutableWorkspace(context.Background(), "42", "conv_1"); err != nil {
+		t.Fatalf("FinishMutableWorkspace() error = %v", err)
+	}
+
+	summary, err := manager.SummarizeUserWorkspaces(context.Background(), "42")
+	if err != nil {
+		t.Fatalf("SummarizeUserWorkspaces() error = %v", err)
+	}
+	if len(summary.Tasks) != 1 || summary.Tasks[0].TaskID != "conv_1" || summary.Tasks[0].State != StatePendingMerge {
+		t.Fatalf("summary.Tasks = %#v, want conv_1 pending merge", summary.Tasks)
+	}
+}
+
+func TestConfirmTaskWorkspaceBacksUpHomeReplacesContents(t *testing.T) {
 	templateRoot := t.TempDir()
 	workspacesRoot := t.TempDir()
 	writeFile(t, templateRoot, "AGENTS.md", "# Workspace rules\n")
@@ -185,8 +384,6 @@ func TestConfirmTaskWorkspaceBacksUpHomeReplacesContentsAndIsIdempotent(t *testi
 		t.Fatalf("CreateTaskWorkspace() error = %v", err)
 	}
 	writeFile(t, task.Root, "task-only.txt", "merged into home")
-	writeFile(t, home.Root, "late-home-only.txt", "must be removed by replacement")
-	removePath(t, home.Root, "AGENTS.md")
 	if _, err := manager.MarkTaskWorkspacePendingMerge(context.Background(), "42", "tsk_123"); err != nil {
 		t.Fatalf("MarkTaskWorkspacePendingMerge() error = %v", err)
 	}
@@ -198,8 +395,8 @@ func TestConfirmTaskWorkspaceBacksUpHomeReplacesContentsAndIsIdempotent(t *testi
 
 	assertFileContent(t, home.Root, "task-only.txt", "merged into home")
 	assertFileContent(t, merged.BackupRoot, "home-only.txt", "preserve in backup")
-	assertPathMissing(t, home.Root, "late-home-only.txt")
 	assertPathMissing(t, home.Root, StateFileName)
+	assertPathMissing(t, home.Root, BaselineFileName)
 	state := readState(t, task.Root)
 	if state.State != StateMerged {
 		t.Fatalf("state.State = %q, want %q", state.State, StateMerged)
@@ -208,12 +405,8 @@ func TestConfirmTaskWorkspaceBacksUpHomeReplacesContentsAndIsIdempotent(t *testi
 		t.Fatalf("confirmed state should include backup_root and merged_at: %#v", state)
 	}
 
-	second, err := manager.ConfirmTaskWorkspace(context.Background(), "42", "tsk_123")
-	if err != nil {
-		t.Fatalf("second ConfirmTaskWorkspace() error = %v", err)
-	}
-	if second.BackupRoot != merged.BackupRoot {
-		t.Fatalf("second backup root = %q, want original %q", second.BackupRoot, merged.BackupRoot)
+	if _, err := manager.ConfirmTaskWorkspace(context.Background(), "42", "tsk_123"); err == nil {
+		t.Fatal("second ConfirmTaskWorkspace() error = nil, want non-pending state rejection")
 	}
 }
 
@@ -239,9 +432,9 @@ func TestConfirmTaskWorkspaceRestoresBackupWhenReplacementFails(t *testing.T) {
 		}
 		t.Fatalf("os.Symlink() error = %v", err)
 	}
-	if _, err := manager.MarkTaskWorkspacePendingMerge(context.Background(), "42", "tsk_restore"); err != nil {
-		t.Fatalf("MarkTaskWorkspacePendingMerge() error = %v", err)
-	}
+	setState(t, task.Root, func(state *WorkspaceStateFile) {
+		state.State = StatePendingMerge
+	})
 
 	_, err = manager.ConfirmTaskWorkspace(context.Background(), "42", "tsk_restore")
 	if err == nil || !strings.Contains(err.Error(), "symlink") {
@@ -249,6 +442,83 @@ func TestConfirmTaskWorkspaceRestoresBackupWhenReplacementFails(t *testing.T) {
 	}
 	assertFileContent(t, home.Root, "home-only.txt", "restore me")
 	assertPathMissing(t, home.Root, "bad-link")
+}
+
+func TestConfirmTaskWorkspaceRejectsWhenHomeChangedSinceBaseline(t *testing.T) {
+	templateRoot := t.TempDir()
+	workspacesRoot := t.TempDir()
+	writeFile(t, templateRoot, "AGENTS.md", "# Workspace rules\n")
+	manager := newTestManager(t, templateRoot, workspacesRoot)
+
+	home, err := manager.EnsureHomeWorkspace(context.Background(), "42")
+	if err != nil {
+		t.Fatalf("EnsureHomeWorkspace() error = %v", err)
+	}
+	workspace, err := manager.CreateTaskWorkspace(context.Background(), "42", "conv_1", ModeMutable)
+	if err != nil {
+		t.Fatalf("CreateTaskWorkspace() error = %v", err)
+	}
+	writeFile(t, workspace.Root, "notes.txt", "workspace change")
+	if _, err := manager.FinishMutableWorkspace(context.Background(), "42", "conv_1"); err != nil {
+		t.Fatalf("FinishMutableWorkspace() error = %v", err)
+	}
+	writeFile(t, home.Root, "other.txt", "home changed")
+
+	_, err = manager.ConfirmTaskWorkspace(context.Background(), "42", "conv_1")
+	if !errors.Is(err, ErrWorkspaceHomeChanged) {
+		t.Fatalf("ConfirmTaskWorkspace() error = %v, want ErrWorkspaceHomeChanged", err)
+	}
+	var actionErr *ActionError
+	if !errors.As(err, &actionErr) {
+		t.Fatalf("ConfirmTaskWorkspace() error = %T, want ActionError", err)
+	}
+	if actionErr.Code != ActionErrorCodeHomeChanged || actionErr.ConversationID != "conv_1" {
+		t.Fatalf("ConfirmTaskWorkspace() action error = %+v, want home changed for conv_1", actionErr)
+	}
+	assertPathMissing(t, home.Root, "notes.txt")
+	assertFileContent(t, home.Root, "other.txt", "home changed")
+	backupRoot := filepath.Join(workspacesRoot, "users", "42", "backups")
+	if _, err := os.Stat(backupRoot); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("backup root exists or stat failed with %v, want no backup created", err)
+	}
+}
+
+func TestConfirmTaskWorkspaceRejectsWhenBaselineMissing(t *testing.T) {
+	templateRoot := t.TempDir()
+	workspacesRoot := t.TempDir()
+	writeFile(t, templateRoot, "AGENTS.md", "# Workspace rules\n")
+	manager := newTestManager(t, templateRoot, workspacesRoot)
+
+	home, err := manager.EnsureHomeWorkspace(context.Background(), "42")
+	if err != nil {
+		t.Fatalf("EnsureHomeWorkspace() error = %v", err)
+	}
+	workspace, err := manager.CreateTaskWorkspace(context.Background(), "42", "conv_1", ModeMutable)
+	if err != nil {
+		t.Fatalf("CreateTaskWorkspace() error = %v", err)
+	}
+	writeFile(t, workspace.Root, "notes.txt", "workspace change")
+	if _, err := manager.FinishMutableWorkspace(context.Background(), "42", "conv_1"); err != nil {
+		t.Fatalf("FinishMutableWorkspace() error = %v", err)
+	}
+	removePath(t, workspace.Root, BaselineFileName)
+
+	_, err = manager.ConfirmTaskWorkspace(context.Background(), "42", "conv_1")
+	if !errors.Is(err, ErrWorkspaceHomeChanged) {
+		t.Fatalf("ConfirmTaskWorkspace() error = %v, want ErrWorkspaceHomeChanged", err)
+	}
+	var actionErr *ActionError
+	if !errors.As(err, &actionErr) {
+		t.Fatalf("ConfirmTaskWorkspace() error = %T, want ActionError", err)
+	}
+	if actionErr.Code != ActionErrorCodeHomeChanged || actionErr.ConversationID != "conv_1" {
+		t.Fatalf("ConfirmTaskWorkspace() action error = %+v, want home changed for conv_1", actionErr)
+	}
+	assertPathMissing(t, home.Root, "notes.txt")
+	backupRoot := filepath.Join(workspacesRoot, "users", "42", "backups")
+	if _, err := os.Stat(backupRoot); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("backup root exists or stat failed with %v, want no backup created", err)
+	}
 }
 
 func TestConfirmTaskWorkspaceRebuildsExistingBackupBeforeMerge(t *testing.T) {
@@ -266,6 +536,7 @@ func TestConfirmTaskWorkspaceRebuildsExistingBackupBeforeMerge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateTaskWorkspace() error = %v", err)
 	}
+	writeFile(t, task.Root, "task-output.txt", "merged into home")
 	if _, err := manager.MarkTaskWorkspacePendingMerge(context.Background(), "42", "tsk_partial_backup"); err != nil {
 		t.Fatalf("MarkTaskWorkspacePendingMerge() error = %v", err)
 	}
@@ -414,20 +685,22 @@ func TestConfirmAndDiscardTaskWorkspaceActionsAreSerializedPerUser(t *testing.T)
 	}
 }
 
-func TestDiscardTaskWorkspacePreservesTaskWorkspaceAndMarksDiscarded(t *testing.T) {
+func TestDiscardTaskWorkspaceRestoresWorkspaceFromHomeAndMarksDiscarded(t *testing.T) {
 	templateRoot := t.TempDir()
 	workspacesRoot := t.TempDir()
 	writeFile(t, templateRoot, "AGENTS.md", "# Workspace rules\n")
 	manager := newTestManager(t, templateRoot, workspacesRoot)
 
-	if _, err := manager.EnsureHomeWorkspace(context.Background(), "42"); err != nil {
+	home, err := manager.EnsureHomeWorkspace(context.Background(), "42")
+	if err != nil {
 		t.Fatalf("EnsureHomeWorkspace() error = %v", err)
 	}
+	writeFile(t, home.Root, "task-output.txt", "home content")
 	task, err := manager.CreateTaskWorkspace(context.Background(), "42", "tsk_123", ModeMutable)
 	if err != nil {
 		t.Fatalf("CreateTaskWorkspace() error = %v", err)
 	}
-	writeFile(t, task.Root, "task-output.txt", "keep me")
+	writeFile(t, task.Root, "task-output.txt", "workspace content")
 	if _, err := manager.MarkTaskWorkspacePendingMerge(context.Background(), "42", "tsk_123"); err != nil {
 		t.Fatalf("MarkTaskWorkspacePendingMerge() error = %v", err)
 	}
@@ -440,7 +713,45 @@ func TestDiscardTaskWorkspacePreservesTaskWorkspaceAndMarksDiscarded(t *testing.
 	if discarded.State != StateDiscarded || discarded.DiscardedAt == nil {
 		t.Fatalf("discarded state = %#v, want discarded with timestamp", discarded)
 	}
-	assertFileContent(t, task.Root, "task-output.txt", "keep me")
+	assertFileContent(t, task.Root, "task-output.txt", "home content")
+	state := readState(t, task.Root)
+	if state.State != StateDiscarded {
+		t.Fatalf("state.State = %q, want %q", state.State, StateDiscarded)
+	}
+	finished, err := manager.FinishMutableWorkspace(context.Background(), "42", "tsk_123")
+	if err != nil {
+		t.Fatalf("FinishMutableWorkspace(after discard) error = %v", err)
+	}
+	if finished.State == StatePendingMerge {
+		t.Fatalf("state after discard and no edits = %q, want non-pending", finished.State)
+	}
+}
+
+func TestListPendingMergeWorkspacesReturnsPendingConversationWorkspaces(t *testing.T) {
+	templateRoot := t.TempDir()
+	workspacesRoot := t.TempDir()
+	writeFile(t, templateRoot, "AGENTS.md", "# Workspace rules\n")
+	manager := newTestManager(t, templateRoot, workspacesRoot)
+
+	workspace, err := manager.CreateTaskWorkspace(context.Background(), "42", "conv_1", ModeMutable)
+	if err != nil {
+		t.Fatalf("CreateTaskWorkspace(conv_1) error = %v", err)
+	}
+	writeFile(t, workspace.Root, "notes.txt", "changed")
+	if _, err := manager.FinishMutableWorkspace(context.Background(), "42", "conv_1"); err != nil {
+		t.Fatalf("FinishMutableWorkspace() error = %v", err)
+	}
+	if _, err := manager.CreateTaskWorkspace(context.Background(), "42", "conv_2", ModeReadonly); err != nil {
+		t.Fatalf("CreateTaskWorkspace(readonly conv_2) error = %v", err)
+	}
+
+	pending, err := manager.ListPendingMergeWorkspaces(context.Background(), "42")
+	if err != nil {
+		t.Fatalf("ListPendingMergeWorkspaces() error = %v", err)
+	}
+	if len(pending) != 1 || pending[0].TaskID != "conv_1" || pending[0].State != StatePendingMerge {
+		t.Fatalf("pending = %#v, want only conv_1 pending merge", pending)
+	}
 }
 
 func TestPublicAPIUsesPlannedNamesAndSignatures(t *testing.T) {
@@ -460,6 +771,8 @@ func TestPublicAPIUsesPlannedNamesAndSignatures(t *testing.T) {
 	if _, err := manager.CreateTaskWorkspace(context.Background(), "42", "tsk_123", ModeMutable); err != nil {
 		t.Fatalf("CreateTaskWorkspace() error = %v", err)
 	}
+	taskRoot := filepath.Join(workspacesRoot, "users", "42", "tasks", "tsk_123")
+	writeFile(t, taskRoot, "notes.txt", "changed")
 	if _, err := manager.MarkTaskWorkspacePendingMerge(context.Background(), "42", "tsk_123"); err != nil {
 		t.Fatalf("MarkTaskWorkspacePendingMerge() error = %v", err)
 	}

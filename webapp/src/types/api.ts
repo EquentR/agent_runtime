@@ -6,6 +6,15 @@ export interface ApiEnvelope<T> {
   time: string
 }
 
+export type WorkspaceActionErrorCode = 'workspace_home_changed' | 'workspace_pending_merge'
+
+export interface WorkspaceActionErrorData {
+  code?: WorkspaceActionErrorCode | string
+  message?: string
+  conversation_id?: string
+  workspace_id?: string
+}
+
 export type UserRole = 'admin' | 'user'
 export type AuthUserStatus = 'pending_email_verification' | 'active' | 'disabled' | 'needs_email_binding'
 export type AuthRequiredAction = 'verify_email' | 'bind_email' | 'change_password'
@@ -505,6 +514,8 @@ export type TaskWorkspaceStateStatus = 'active' | WorkspaceState | 'completed'
 
 export interface TaskWorkspaceState {
   task_id: string
+  workspace_id?: string
+  conversation_id?: string
   user_id: string
   mode: WorkspaceMode
   state: TaskWorkspaceStateStatus

@@ -8,13 +8,17 @@ import ProfileDialog from '../components/ProfileDialog.vue'
 import MessageComposer from '../components/MessageComposer.vue'
 import MessageList from '../components/MessageList.vue'
 import {
+  ApiError,
   cancelTask,
+  confirmConversationWorkspaceMerge,
   confirmTaskWorkspaceMerge,
   createRunTask,
   decideTaskApproval,
   deleteAttachment,
   deleteConversation,
+  discardConversationWorkspaceChanges,
   discardTaskWorkspaceChanges,
+  fetchConversationWorkspaceState,
   fetchConversationMessages,
   fetchConversations,
   fetchModelCatalog,
@@ -58,6 +62,7 @@ import type {
   TaskWorkspaceState,
   TaskWorkspaceStateStatus,
   TranscriptEntry,
+  WorkspaceActionErrorData,
   WorkspaceMode,
   WorkspaceSkillListItem,
 } from '../types/api'
@@ -71,6 +76,11 @@ interface DraftAttachmentItem extends Omit<AttachmentRef, 'id'> {
   preview_url?: string
   upload_state: 'uploading' | 'uploaded' | 'failed'
   error_message?: string
+}
+
+interface WorkspaceErrorAction {
+  message: string
+  conversationId: string
 }
 
 const router = useRouter()
@@ -97,6 +107,7 @@ const pendingConversationById = ref<Record<string, Conversation>>({})
 const approvalDecisionStateById = ref<Record<string, { pending: boolean; decision: 'approve' | 'reject' }>>({})
 const questionResponseStateById = ref<Record<string, { pending: boolean }>>({})
 const errorMessage = ref('')
+const workspaceErrorAction = ref<WorkspaceErrorAction | null>(null)
 const modelCatalog = ref<ModelCatalog | null>(null)
 const catalogLoading = ref(false)
 const availableSkills = ref<WorkspaceSkillListItem[]>([])
@@ -104,6 +115,7 @@ const selectedSkillsByConversation = ref<Record<string, string[]>>({})
 const selectedWorkspaceModeByConversation = ref<Record<string, WorkspaceMode>>({})
 const pendingWorkspaceMergeTaskIdByConversation = ref<Record<string, string>>({})
 const workspaceStateByTaskId = ref<Record<string, TaskWorkspaceStateStatus>>({})
+const workspaceStateByConversationId = ref<Record<string, TaskWorkspaceStateStatus>>({})
 const selectedProviderId = ref('')
 const selectedModelId = ref('')
 const modelMenuOpen = ref(false)
@@ -169,8 +181,10 @@ const currentPendingWorkspaceMergeTaskId = computed(() => {
   if (conversationId) {
     return pendingWorkspaceMergeTaskIdByConversation.value[conversationId] ?? ''
   }
-  const pendingTaskIds = Object.values(pendingWorkspaceMergeTaskIdByConversation.value)
-  return pendingTaskIds.length === 1 ? pendingTaskIds[0] : ''
+  const confirmedPendingEntries = Object.entries(pendingWorkspaceMergeTaskIdByConversation.value).filter(
+    ([pendingConversationId]) => workspaceStateByConversationId.value[pendingConversationId] === 'pending_merge',
+  )
+  return confirmedPendingEntries.length === 1 ? confirmedPendingEntries[0][1] : ''
 })
 const currentConversationEntries = computed(() => {
   const conversationId = activeConversationId.value || routeConversationId.value
@@ -187,6 +201,44 @@ const topbarStatusClass = computed(() => ({
   idle: !messagesLoading.value && !currentConversationBusy.value,
   loading: messagesLoading.value || currentConversationBusy.value,
 }))
+
+function clearErrorState() {
+  errorMessage.value = ''
+  workspaceErrorAction.value = null
+}
+
+function workspaceErrorActionFromError(error: unknown): WorkspaceErrorAction | null {
+  if (!(error instanceof ApiError) || !error.data || typeof error.data !== 'object') {
+    return null
+  }
+  const data = error.data as WorkspaceActionErrorData
+  if (data.code !== 'workspace_home_changed' && data.code !== 'workspace_pending_merge') {
+    return null
+  }
+  const conversationId = typeof data.conversation_id === 'string' ? data.conversation_id.trim() : ''
+  if (!conversationId) {
+    return null
+  }
+  const message = typeof data.message === 'string' && data.message.trim()
+    ? data.message.trim()
+    : error.message
+  return { message, conversationId }
+}
+
+function applyErrorState(error: unknown, fallback: string) {
+  const action = workspaceErrorActionFromError(error)
+  workspaceErrorAction.value = action
+  errorMessage.value = action?.message ?? (error instanceof Error ? error.message : fallback)
+}
+
+async function handleWorkspaceErrorNavigation() {
+  const targetConversationId = workspaceErrorAction.value?.conversationId
+  if (!targetConversationId) {
+    return
+  }
+  clearErrorState()
+  await navigateToConversation(targetConversationId)
+}
 
 function activeConversationTitle() {
   const current = sidebarConversations.value.find((conversation) => conversation.id === activeConversationId.value)
@@ -315,6 +367,11 @@ function syncWorkspaceMergeStateFromTask(task: TaskDetails | null | undefined, f
   if (!conversationId) {
     return
   }
+  const conversationWorkspaceState = workspaceStateByConversationId.value[conversationId]
+  if (conversationWorkspaceState && conversationWorkspaceState !== 'pending_merge') {
+    clearPendingWorkspaceMergeTask(conversationId)
+    return
+  }
   const workspaceState = workspaceStateByTaskId.value[task.id]
   if (workspaceState && workspaceState !== 'pending_merge') {
     clearPendingWorkspaceMergeTask(conversationId)
@@ -329,22 +386,47 @@ function syncWorkspaceMergeStateFromTask(task: TaskDetails | null | undefined, f
 
 function syncWorkspaceMergeStateFromWorkspaceState(state: TaskWorkspaceState | null | undefined, fallbackConversationId = '') {
   if (!state) {
+    if (fallbackConversationId) {
+      workspaceStateByConversationId.value = {
+        ...workspaceStateByConversationId.value,
+        [fallbackConversationId]: 'completed',
+      }
+      clearPendingWorkspaceMergeTask(fallbackConversationId)
+    }
     return
   }
   const conversationId =
-    fallbackConversationId || activeConversationId.value || routeConversationId.value || resolvePendingWorkspaceMergeConversationId(state.task_id)
+    fallbackConversationId ||
+    state.conversation_id ||
+    state.workspace_id ||
+    activeConversationId.value ||
+    routeConversationId.value ||
+    resolvePendingWorkspaceMergeConversationId(state.task_id)
   if (!conversationId) {
     return
   }
+  const workspaceKey = state.task_id || state.workspace_id || conversationId
+  workspaceStateByConversationId.value = {
+    ...workspaceStateByConversationId.value,
+    [conversationId]: state.state,
+  }
   workspaceStateByTaskId.value = {
     ...workspaceStateByTaskId.value,
-    [state.task_id]: state.state,
+    [workspaceKey]: state.state,
   }
   if (state.state === 'pending_merge') {
-    setPendingWorkspaceMergeTask(conversationId, state.task_id)
+    setPendingWorkspaceMergeTask(conversationId, workspaceKey)
   } else {
     clearPendingWorkspaceMergeTask(conversationId)
   }
+}
+
+async function syncConversationWorkspaceState(conversationId: string) {
+  if (!conversationId) {
+    return
+  }
+  const state = await fetchConversationWorkspaceState(conversationId)
+  syncWorkspaceMergeStateFromWorkspaceState(state, conversationId)
 }
 
 function currentChatState() {
@@ -508,7 +590,7 @@ async function loadCatalog() {
     modelCatalog.value = await fetchModelCatalog()
     applySelection(selectedProviderId.value || modelCatalog.value.default_provider_id, selectedModelId.value || modelCatalog.value.default_model_id)
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '加载模型目录失败'
+    applyErrorState(error, '加载模型目录失败')
   } finally {
     catalogLoading.value = false
   }
@@ -678,7 +760,7 @@ async function loadConversationForRoute(conversationId: string) {
   contextStatsOpen.value = false
   syncActiveTaskStateFromConversation(conversationId)
   sidebarDrawerOpen.value = false
-  errorMessage.value = ''
+  clearErrorState()
 
   if (!conversationId) {
     if (!selectedProviderId.value || !selectedModelId.value) {
@@ -701,13 +783,25 @@ async function loadConversationForRoute(conversationId: string) {
         entries.value = nextEntries
       }
     } catch (error) {
-      errorMessage.value = error instanceof Error ? error.message : '加载消息失败'
+      applyErrorState(error, '加载消息失败')
     } finally {
       messagesLoading.value = false
     }
   }
 
+  try {
+    await syncConversationWorkspaceState(conversationId)
+  } catch (error) {
+    applyErrorState(error, '同步工作区状态失败')
+  }
+
   await resumeStreamForConversation(conversationId)
+
+  try {
+    await syncConversationWorkspaceState(conversationId)
+  } catch (error) {
+    applyErrorState(error, '同步工作区状态失败')
+  }
 }
 
 function applyEntriesForConversation(conversationId: string, nextEntries: TranscriptEntry[]) {
@@ -737,10 +831,20 @@ async function completeTaskConversation(conversationId: string, taskId: string, 
     entries.value = nextEntries
   }
   dropPendingConversation(conversationId)
-  if (result.workspace_state === 'pending_merge') {
-    setPendingWorkspaceMergeTask(conversationId, taskId)
-  } else {
-    clearPendingWorkspaceMergeTask(conversationId)
+  if (result.workspace_state) {
+    workspaceStateByConversationId.value = {
+      ...workspaceStateByConversationId.value,
+      [conversationId]: result.workspace_state,
+    }
+    workspaceStateByTaskId.value = {
+      ...workspaceStateByTaskId.value,
+      [taskId]: result.workspace_state,
+    }
+    if (result.workspace_state === 'pending_merge') {
+      setPendingWorkspaceMergeTask(conversationId, taskId)
+    } else {
+      clearPendingWorkspaceMergeTask(conversationId)
+    }
   }
   clearTaskStateForConversation(conversationId)
   await loadConversations(routeConversationId.value || conversationId)
@@ -818,7 +922,7 @@ async function attachTaskStream(taskId: string, conversationId = '') {
           return
         }
         if (taskConversationId === activeConversationId.value) {
-          errorMessage.value = taskError
+          applyErrorState(error, '发送消息失败')
         }
         const currentEntries = currentConversationContextEntries(taskConversationId)
         const nextEntries = updateTranscriptFromStreamEvent(currentEntries, {
@@ -831,7 +935,7 @@ async function attachTaskStream(taskId: string, conversationId = '') {
     } catch {
       if (taskError !== 'Task event stream disconnected') {
         if (streamConversationId === activeConversationId.value) {
-          errorMessage.value = taskError
+          applyErrorState(error, '发送消息失败')
         }
         const currentEntries = currentConversationContextEntries(streamConversationId)
         const nextEntries = updateTranscriptFromStreamEvent(currentEntries, {
@@ -924,7 +1028,7 @@ async function handleApprovalDecision(input: {
   }
 
   try {
-    errorMessage.value = ''
+    clearErrorState()
     approvalDecisionStateById.value = {
       ...approvalDecisionStateById.value,
       [input.approvalId]: { pending: true, decision: input.decision },
@@ -941,7 +1045,7 @@ async function handleApprovalDecision(input: {
     applyEntriesForConversation(conversationId, nextEntries)
     void attachTaskStream(taskId, conversationId)
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '审批提交失败'
+    applyErrorState(error, '审批提交失败')
   } finally {
     const nextState = { ...approvalDecisionStateById.value }
     delete nextState[input.approvalId]
@@ -956,7 +1060,7 @@ async function handleInteractionRespond(input: QuestionInteractionSubmitInput) {
   }
 
   try {
-    errorMessage.value = ''
+    clearErrorState()
     questionResponseStateById.value = {
       ...questionResponseStateById.value,
       [input.interactionId]: { pending: true },
@@ -974,7 +1078,7 @@ async function handleInteractionRespond(input: QuestionInteractionSubmitInput) {
     applyEntriesForConversation(conversationId, nextEntries)
     void attachTaskStream(taskId, conversationId)
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '提交回答失败'
+    applyErrorState(error, '提交回答失败')
   } finally {
     const nextState = { ...questionResponseStateById.value }
     delete nextState[input.interactionId]
@@ -990,19 +1094,35 @@ async function handleWorkspaceMergeAction(action: 'confirm' | 'discard') {
 
   const conversationId = activeConversationId.value || routeConversationId.value || resolvePendingWorkspaceMergeConversationId(taskId)
   try {
-    errorMessage.value = ''
+    clearErrorState()
     workspaceMergeActionPending.value = action
     let workspaceState
-    if (action === 'confirm') {
+    if (conversationId) {
+      workspaceState =
+        action === 'confirm'
+          ? await confirmConversationWorkspaceMerge(conversationId)
+          : await discardConversationWorkspaceChanges(conversationId)
+    } else if (action === 'confirm') {
       workspaceState = await confirmTaskWorkspaceMerge(taskId)
     } else {
       workspaceState = await discardTaskWorkspaceChanges(taskId)
     }
     syncWorkspaceMergeStateFromWorkspaceState(workspaceState, conversationId)
-    await fetchTaskDetails(taskId)
+    if (workspaceState?.state && workspaceState.state !== 'pending_merge') {
+      workspaceStateByTaskId.value = {
+        ...workspaceStateByTaskId.value,
+        [taskId]: workspaceState.state,
+      }
+      if (conversationId) {
+        workspaceStateByConversationId.value = {
+          ...workspaceStateByConversationId.value,
+          [conversationId]: workspaceState.state,
+        }
+      }
+    }
     await loadConversations(conversationId || routeConversationId.value)
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '工作区变更处理失败'
+    applyErrorState(error, '工作区变更处理失败')
   } finally {
     workspaceMergeActionPending.value = ''
   }
@@ -1016,7 +1136,7 @@ async function handleStopTask() {
 
   try {
     stoppingTask.value = true
-    errorMessage.value = ''
+    clearErrorState()
     let task = await cancelTask(taskId)
     if (task.status === 'cancel_requested') {
       task = await cancelTask(taskId)
@@ -1032,7 +1152,7 @@ async function handleStopTask() {
       clearTaskStateForConversation(conversationId)
     }
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '停止任务失败'
+    applyErrorState(error, '停止任务失败')
   } finally {
     stoppingTask.value = false
   }
@@ -1047,7 +1167,7 @@ function handleSkillSelectionChange(names: string[]) {
 }
 
 async function handleSend(message: string) {
-  errorMessage.value = ''
+  clearErrorState()
   const previousConversationId = activeConversationId.value
   const startedFromRouteConversationId = routeConversationId.value
   const sendingKey = previousConversationId || NEW_CONVERSATION_SENDING_KEY
@@ -1088,6 +1208,11 @@ async function handleSend(message: string) {
     clearDraftAttachments(sendingKey)
 
     if (createdConversationId) {
+      if (workspaceModeForRequest === 'mutable') {
+        const nextConversationStates = { ...workspaceStateByConversationId.value }
+        delete nextConversationStates[createdConversationId]
+        workspaceStateByConversationId.value = nextConversationStates
+      }
       setWorkspaceModeForConversation(createdConversationId, workspaceModeForRequest)
       setDraftEntries(createdConversationId, nextEntries)
       setTaskStateForConversation(createdConversationId, task.id, 0)
@@ -1116,7 +1241,7 @@ async function handleSend(message: string) {
   } catch (error) {
     if (!(error instanceof Error) || error.message !== TASK_STREAM_ABORTED_MESSAGE) {
       const taskError = error instanceof Error ? error.message : '发送消息失败'
-      errorMessage.value = taskError
+      applyErrorState(error, '发送消息失败')
       entries.value = updateTranscriptFromStreamEvent(entries.value, {
         type: 'task.failed',
         payload: { error: taskError },
@@ -1204,7 +1329,7 @@ async function handleRemoveAttachment(localId: string) {
 }
 
 async function handleDeleteConversation(conversationId: string) {
-  errorMessage.value = ''
+  clearErrorState()
 
   try {
     await deleteConversation(conversationId)
@@ -1215,7 +1340,7 @@ async function handleDeleteConversation(conversationId: string) {
     }
     await loadConversations(routeConversationId.value)
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '删除对话失败'
+    applyErrorState(error, '删除对话失败')
   }
 }
 
@@ -1228,7 +1353,7 @@ async function selectConversation(conversationId: string) {
 }
 
 function startNewConversation() {
-  errorMessage.value = ''
+  clearErrorState()
   contextStatsOpen.value = false
   modelMenuOpen.value = false
   sidebarDrawerOpen.value = false
@@ -1520,7 +1645,18 @@ onBeforeUnmount(() => {
         </div>
       </header>
 
-      <p v-if="errorMessage" class="error-banner">{{ errorMessage }}</p>
+      <div v-if="errorMessage" class="error-banner">
+        <span>{{ errorMessage }}</span>
+        <button
+          v-if="workspaceErrorAction"
+          class="ghost-button error-banner-action"
+          type="button"
+          data-workspace-error-conversation-link
+          @click="handleWorkspaceErrorNavigation"
+        >
+          前往会话处理
+        </button>
+      </div>
 
       <div class="chat-main">
         <div v-if="showNoModelEmpty" class="chat-no-model-empty" data-no-model-empty>
@@ -1567,30 +1703,30 @@ onBeforeUnmount(() => {
               只读
             </button>
           </div>
-        </div>
-        <div v-if="currentPendingWorkspaceMergeTaskId" class="workspace-merge-banner" data-workspace-merge-banner>
-          <div class="workspace-merge-copy">
-            <strong>工作区变更待确认</strong>
-            <span>将本轮任务的文件改动合并到当前工作区，或丢弃这些改动。</span>
-          </div>
-          <div class="workspace-merge-actions">
+          <div
+            v-if="currentPendingWorkspaceMergeTaskId"
+            class="workspace-merge-inline"
+            data-workspace-merge-inline
+            aria-label="工作区变更待确认"
+          >
+            <span class="workspace-merge-inline-label">待合并</span>
             <button
-              class="ghost-button workspace-merge-button"
+              class="ghost-button workspace-merge-inline-button"
               type="button"
               data-workspace-merge-discard
               :disabled="workspaceMergeActionPending !== ''"
               @click="handleWorkspaceMergeAction('discard')"
             >
-              丢弃
+              放弃
             </button>
             <button
-              class="primary-button workspace-merge-button"
+              class="primary-button workspace-merge-inline-button"
               type="button"
               data-workspace-merge-confirm
               :disabled="workspaceMergeActionPending !== ''"
               @click="handleWorkspaceMergeAction('confirm')"
             >
-              合并
+              确认
             </button>
           </div>
         </div>
@@ -1622,6 +1758,26 @@ onBeforeUnmount(() => {
   justify-content: flex-end;
   gap: 0.65rem;
   margin: 0 0 0.55rem;
+  flex-wrap: wrap;
+}
+
+.error-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.error-banner span {
+  min-width: 0;
+}
+
+.error-banner-action {
+  flex: 0 0 auto;
+  padding: 0.42rem 0.7rem;
+  border-radius: 7px;
+  font-size: 0.82rem;
+  line-height: 1.1;
 }
 
 .workspace-mode-label {
@@ -1641,61 +1797,49 @@ onBeforeUnmount(() => {
   cursor: pointer;
 }
 
-.workspace-merge-banner {
+.workspace-merge-inline {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 0.9rem;
-  margin: 0 0 0.55rem;
-  padding: 0.72rem 0.82rem;
+  gap: 0.38rem;
+  min-height: 2.1rem;
+  padding: 0.22rem 0.26rem 0.22rem 0.52rem;
   border: 1px solid rgba(143, 184, 174, 0.34);
-  border-radius: 12px;
+  border-radius: 8px;
   background: rgba(241, 248, 246, 0.94);
   color: #28454e;
 }
 
-.workspace-merge-copy {
-  display: grid;
-  gap: 0.12rem;
-  min-width: 0;
-}
-
-.workspace-merge-copy strong {
-  font-size: 0.9rem;
-}
-
-.workspace-merge-copy span {
+.workspace-merge-inline-label {
+  white-space: nowrap;
   font-size: 0.78rem;
   color: rgba(25, 50, 59, 0.62);
 }
 
-.workspace-merge-actions {
-  display: flex;
-  align-items: center;
-  gap: 0.45rem;
-  flex: 0 0 auto;
-}
-
-.workspace-merge-button {
-  padding: 0.44rem 0.75rem;
-  border-radius: 8px;
-  font-size: 0.82rem;
+.workspace-merge-inline-button {
+  padding: 0.32rem 0.58rem;
+  border-radius: 7px;
+  font-size: 0.78rem;
+  line-height: 1.1;
 }
 
 @media (max-width: 640px) {
-  .workspace-mode-row,
-  .workspace-merge-banner {
-    align-items: stretch;
-    flex-direction: column;
+  .workspace-mode-row {
+    align-items: center;
+    justify-content: flex-start;
   }
 
-  .workspace-mode-switch,
-  .workspace-merge-actions {
+  .workspace-mode-switch {
     width: 100%;
   }
 
-  .workspace-merge-actions {
+  .workspace-merge-inline {
+    flex: 1 1 auto;
     justify-content: flex-end;
+  }
+
+  .error-banner {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
 </style>

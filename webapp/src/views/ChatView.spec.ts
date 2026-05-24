@@ -10,75 +10,93 @@ const chatStyles = readFileSync(resolve(process.cwd(), 'src/style.css'), 'utf8')
 
 config.global.plugins = [ElementPlus]
 
-const api = vi.hoisted(() => ({
-  TASK_STREAM_ABORTED_MESSAGE: 'Task event stream aborted',
-  cancelTask: vi.fn(),
-  createRunTask: vi.fn(),
-  decideTaskApproval: vi.fn(),
-  deleteAttachment: vi.fn(),
-  deleteConversation: vi.fn(),
-  confirmTaskWorkspaceMerge: vi.fn(),
-  discardTaskWorkspaceChanges: vi.fn(),
-  getAttachmentContentURL: vi.fn(() => ''),
-  fetchModelCatalog: vi.fn(),
-  fetchConversationMessages: vi.fn(),
-  fetchConversations: vi.fn(),
-  fetchSkills: vi.fn(),
-  fetchTaskInteractions: vi.fn(),
-  fetchTaskApprovals: vi.fn(),
-  findRunningTaskByConversation: vi.fn(),
-  fetchTaskDetails: vi.fn(),
-  normalizeToolApproval: vi.fn((approval: any) => ({
-    id: approval.id ?? approval.approval_id ?? '',
-    task_id: approval.task_id ?? '',
-    conversation_id: approval.conversation_id ?? '',
-    step_index: approval.step_index ?? approval.step,
-    tool_call_id: approval.tool_call_id ?? '',
-    tool_name: approval.tool_name ?? '',
-    arguments_summary: approval.arguments_summary ?? '',
-    risk_level: approval.risk_level ?? '',
-    reason: approval.reason,
-    status: approval.status ?? '',
-    decision: approval.decision,
-    decision_by: approval.decision_by,
-    decision_reason: approval.decision_reason,
-    decision_at: approval.decision_at,
-    created_at: approval.created_at,
-    updated_at: approval.updated_at,
-  })),
-  normalizeInteractionRecord: vi.fn((interaction: any) => ({
-    id: interaction.id ?? '',
-    task_id: interaction.task_id ?? '',
-    conversation_id: interaction.conversation_id ?? '',
-    step_index: interaction.step_index,
-    tool_call_id: interaction.tool_call_id ?? '',
-    kind: interaction.kind ?? '',
-    status: interaction.status ?? '',
-    request_json: interaction.request_json,
-    response_json: interaction.response_json,
-    responded_by: interaction.responded_by,
-    responded_at: interaction.responded_at,
-    created_at: interaction.created_at,
-    updated_at: interaction.updated_at,
-  })),
-  normalizeMemoryCompressionSnapshot: vi.fn((compression: any) => compression),
-  normalizeMemoryContextSnapshot: vi.fn((state: any) => state),
-  normalizeTranscriptTokenUsage: vi.fn((usage: any) => usage),
-  normalizeAuthUser: vi.fn((user: any) => ({
-    id: Number(user.id ?? 0),
-    username: String(user.username ?? ''),
-    email: String(user.email ?? ''),
-    display_name: String(user.display_name ?? user.username ?? ''),
-    role: user.role === 'admin' ? 'admin' : 'user',
-    status: user.status ?? 'active',
-    email_verified: Boolean(user.email_verified ?? true),
-    force_password_change: Boolean(user.force_password_change ?? false),
-    required_actions: Array.isArray(user.required_actions) ? user.required_actions : [],
-  })),
-  respondTaskInteraction: vi.fn(),
-  streamRunTask: vi.fn(),
-  uploadAttachment: vi.fn(),
-}))
+const api = vi.hoisted(() => {
+  class MockApiError extends Error {
+    readonly statusCode: number
+    readonly data: unknown
+
+    constructor(message: string, statusCode: number, data?: unknown) {
+      super(message)
+      this.name = 'ApiError'
+      this.statusCode = statusCode
+      this.data = data
+    }
+  }
+
+  return {
+    ApiError: MockApiError,
+    TASK_STREAM_ABORTED_MESSAGE: 'Task event stream aborted',
+    cancelTask: vi.fn(),
+    createRunTask: vi.fn(),
+    decideTaskApproval: vi.fn(),
+    deleteAttachment: vi.fn(),
+    deleteConversation: vi.fn(),
+    fetchConversationWorkspaceState: vi.fn(),
+    confirmConversationWorkspaceMerge: vi.fn(),
+    discardConversationWorkspaceChanges: vi.fn(),
+    confirmTaskWorkspaceMerge: vi.fn(),
+    discardTaskWorkspaceChanges: vi.fn(),
+    getAttachmentContentURL: vi.fn(() => ''),
+    fetchModelCatalog: vi.fn(),
+    fetchConversationMessages: vi.fn(),
+    fetchConversations: vi.fn(),
+    fetchSkills: vi.fn(),
+    fetchTaskInteractions: vi.fn(),
+    fetchTaskApprovals: vi.fn(),
+    findRunningTaskByConversation: vi.fn(),
+    fetchTaskDetails: vi.fn(),
+    normalizeToolApproval: vi.fn((approval: any) => ({
+      id: approval.id ?? approval.approval_id ?? '',
+      task_id: approval.task_id ?? '',
+      conversation_id: approval.conversation_id ?? '',
+      step_index: approval.step_index ?? approval.step,
+      tool_call_id: approval.tool_call_id ?? '',
+      tool_name: approval.tool_name ?? '',
+      arguments_summary: approval.arguments_summary ?? '',
+      risk_level: approval.risk_level ?? '',
+      reason: approval.reason,
+      status: approval.status ?? '',
+      decision: approval.decision,
+      decision_by: approval.decision_by,
+      decision_reason: approval.decision_reason,
+      decision_at: approval.decision_at,
+      created_at: approval.created_at,
+      updated_at: approval.updated_at,
+    })),
+    normalizeInteractionRecord: vi.fn((interaction: any) => ({
+      id: interaction.id ?? '',
+      task_id: interaction.task_id ?? '',
+      conversation_id: interaction.conversation_id ?? '',
+      step_index: interaction.step_index,
+      tool_call_id: interaction.tool_call_id ?? '',
+      kind: interaction.kind ?? '',
+      status: interaction.status ?? '',
+      request_json: interaction.request_json,
+      response_json: interaction.response_json,
+      responded_by: interaction.responded_by,
+      responded_at: interaction.responded_at,
+      created_at: interaction.created_at,
+      updated_at: interaction.updated_at,
+    })),
+    normalizeMemoryCompressionSnapshot: vi.fn((compression: any) => compression),
+    normalizeMemoryContextSnapshot: vi.fn((state: any) => state),
+    normalizeTranscriptTokenUsage: vi.fn((usage: any) => usage),
+    normalizeAuthUser: vi.fn((user: any) => ({
+      id: Number(user.id ?? 0),
+      username: String(user.username ?? ''),
+      email: String(user.email ?? ''),
+      display_name: String(user.display_name ?? user.username ?? ''),
+      role: user.role === 'admin' ? 'admin' : 'user',
+      status: user.status ?? 'active',
+      email_verified: Boolean(user.email_verified ?? true),
+      force_password_change: Boolean(user.force_password_change ?? false),
+      required_actions: Array.isArray(user.required_actions) ? user.required_actions : [],
+    })),
+    respondTaskInteraction: vi.fn(),
+    streamRunTask: vi.fn(),
+    uploadAttachment: vi.fn(),
+  }
+})
 
 vi.mock('../lib/api', () => api)
 
@@ -127,6 +145,9 @@ describe('ChatView', () => {
     api.decideTaskApproval.mockReset()
     api.deleteAttachment.mockReset()
     api.deleteConversation.mockReset()
+    api.fetchConversationWorkspaceState.mockReset()
+    api.confirmConversationWorkspaceMerge.mockReset()
+    api.discardConversationWorkspaceChanges.mockReset()
     api.confirmTaskWorkspaceMerge.mockReset()
     api.discardTaskWorkspaceChanges.mockReset()
     api.fetchTaskInteractions.mockReset()
@@ -160,6 +181,7 @@ describe('ChatView', () => {
       { name: 'debugging', source_ref: 'skills/debugging/SKILL.md' },
       { name: 'review', source_ref: 'skills/review/SKILL.md' },
     ])
+    api.fetchConversationWorkspaceState.mockResolvedValue(null)
   })
 
   afterEach(() => {
@@ -1767,7 +1789,67 @@ describe('ChatView', () => {
     }))
   })
 
-  it('shows a merge confirmation banner when the task result needs workspace confirmation', async () => {
+  it('shows a Chinese workspace conflict message and links to the pending conversation when a run is blocked', async () => {
+    api.fetchConversations.mockResolvedValue([
+      {
+        id: 'conv_current',
+        title: 'Current chat',
+        last_message: 'hello',
+        message_count: 1,
+        provider_id: 'openai',
+        model_id: 'gpt-5.4',
+        created_by: 'demo-user',
+        created_at: '',
+        updated_at: '',
+      },
+      {
+        id: 'conv_pending',
+        title: 'Pending merge chat',
+        last_message: 'done',
+        message_count: 2,
+        provider_id: 'openai',
+        model_id: 'gpt-5.4',
+        created_by: 'demo-user',
+        created_at: '',
+        updated_at: '',
+      },
+    ])
+    api.fetchConversationMessages.mockResolvedValue([{ role: 'assistant', content: 'hello' }])
+    api.createRunTask.mockResolvedValue({ id: 'task_blocked', input: { conversation_id: 'conv_current' } })
+    api.streamRunTask.mockRejectedValue(new api.ApiError(
+      '另一个会话还有未处理的工作区变更。请先前往该会话确认或丢弃后，再继续当前操作。',
+      409,
+      {
+        code: 'workspace_pending_merge',
+        message: '另一个会话还有未处理的工作区变更。请先前往该会话确认或丢弃后，再继续当前操作。',
+        conversation_id: 'conv_pending',
+      },
+    ))
+
+    const router = makeRouter()
+    await router.push('/chat/conv_current')
+    await router.isReady()
+
+    const wrapper = mount(ChatView, {
+      global: {
+        plugins: [router],
+      },
+    })
+
+    await flushPromises()
+    await wrapper.find('textarea').setValue('hello again')
+    await wrapper.find('form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('另一个会话还有未处理的工作区变更')
+
+    await wrapper.get('[data-workspace-error-conversation-link]').trigger('click')
+    await flushPromises()
+
+    expect(router.currentRoute.value.fullPath).toBe('/chat/conv_pending')
+  })
+
+  it('shows an inline merge confirmation control when the task result needs workspace confirmation', async () => {
     api.fetchConversations.mockResolvedValue([])
     api.createRunTask.mockResolvedValue({ id: 'task_merge', input: { conversation_id: 'conv_merge' } })
     api.streamRunTask.mockResolvedValue({
@@ -1778,6 +1860,16 @@ describe('ChatView', () => {
       workspace_state: 'pending_merge',
       messages_appended: 2,
       final_message: { role: 'assistant', content: 'done' },
+    })
+    api.fetchConversationWorkspaceState.mockResolvedValue({
+      task_id: 'conv_merge',
+      user_id: '42',
+      mode: 'mutable',
+      state: 'pending_merge',
+      home_root: '/home',
+      task_root: '/workspace',
+      created_at: '',
+      updated_at: '',
     })
 
     const router = makeRouter()
@@ -1795,10 +1887,131 @@ describe('ChatView', () => {
     await wrapper.find('form').trigger('submit.prevent')
     await flushPromises()
 
-    expect(wrapper.find('[data-workspace-merge-banner]').exists()).toBe(true)
+    expect(wrapper.find('[data-workspace-merge-inline]').exists()).toBe(true)
+    expect(wrapper.find('[data-workspace-merge-banner]').exists()).toBe(false)
   })
 
-  it('restores a pending workspace merge banner from saved chat state', async () => {
+  it('restores pending workspace merge from backend when switching conversations', async () => {
+    localStorage.setItem(
+      'agent-runtime.chat-state',
+      JSON.stringify({
+        activeConversationId: 'conv_merge',
+        activeTaskId: '',
+        activeTaskEventSeq: 0,
+        activeTaskIdByConversation: {},
+        activeTaskEventSeqByConversation: {},
+        entries: [],
+        draftEntriesByConversation: {},
+        selectedSkillsByConversation: {},
+        selectedWorkspaceModeByConversation: {},
+        pendingWorkspaceMergeTaskIdByConversation: {},
+      }),
+    )
+    api.fetchConversations.mockResolvedValue([
+      {
+        id: 'conv_merge',
+        title: 'Merge chat',
+        last_message: 'done',
+        message_count: 2,
+        provider_id: 'openai',
+        model_id: 'gpt-5.4',
+        created_by: 'demo-user',
+        created_at: '',
+        updated_at: '',
+      },
+    ])
+    api.fetchConversationMessages.mockResolvedValue([{ role: 'assistant', content: 'done' }])
+    api.fetchConversationWorkspaceState.mockResolvedValue({
+      task_id: 'conv_merge',
+      user_id: '42',
+      mode: 'mutable',
+      state: 'pending_merge',
+      home_root: '/home',
+      task_root: '/workspace',
+      created_at: '',
+      updated_at: '',
+    })
+
+    const router = makeRouter()
+    await router.push('/chat/conv_merge')
+    await router.isReady()
+
+    const wrapper = mount(ChatView, {
+      global: {
+        plugins: [router],
+      },
+    })
+
+    await flushPromises()
+
+    expect(api.fetchConversationWorkspaceState).toHaveBeenCalledWith('conv_merge')
+    expect(wrapper.find('[data-workspace-merge-inline]').exists()).toBe(true)
+    expect(wrapper.find('[data-workspace-merge-banner]').exists()).toBe(false)
+    expect(api.fetchTaskDetails).not.toHaveBeenCalledWith('task_merge')
+  })
+
+  it('keeps pending workspace merge visible after a readonly follow-up omits workspace state', async () => {
+    api.fetchConversations.mockResolvedValue([
+      {
+        id: 'conv_merge',
+        title: 'Merge chat',
+        last_message: 'done',
+        message_count: 2,
+        provider_id: 'openai',
+        model_id: 'gpt-5.4',
+        created_by: 'demo-user',
+        created_at: '',
+        updated_at: '',
+      },
+    ])
+    api.fetchConversationMessages.mockResolvedValue([{ role: 'assistant', content: 'done' }])
+    api.fetchConversationWorkspaceState.mockResolvedValue({
+      task_id: 'conv_merge',
+      user_id: '42',
+      mode: 'mutable',
+      state: 'pending_merge',
+      home_root: '/home',
+      task_root: '/workspace',
+      created_at: '',
+      updated_at: '',
+    })
+    api.createRunTask.mockResolvedValue({ id: 'task_readonly', input: { conversation_id: 'conv_merge' } })
+    api.streamRunTask.mockResolvedValue({
+      conversation_id: 'conv_merge',
+      provider_id: 'openai',
+      model_id: 'gpt-5.4',
+      workspace_mode: 'readonly',
+      messages_appended: 1,
+      final_message: { role: 'assistant', content: 'readonly done' },
+    })
+
+    const router = makeRouter()
+    await router.push('/chat/conv_merge')
+    await router.isReady()
+
+    const wrapper = mount(ChatView, {
+      global: {
+        plugins: [router],
+      },
+    })
+
+    await flushPromises()
+
+    expect(wrapper.find('[data-workspace-merge-inline]').exists()).toBe(true)
+
+    await wrapper.get('[data-workspace-mode="readonly"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('textarea').setValue('readonly follow-up')
+    await wrapper.find('form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(api.createRunTask).toHaveBeenCalledWith(expect.objectContaining({
+      workspaceMode: 'readonly',
+    }))
+    expect(wrapper.find('[data-workspace-merge-inline]').exists()).toBe(true)
+  })
+
+  it('clears cached pending workspace merge when backend has no pending changes', async () => {
     localStorage.setItem(
       'agent-runtime.chat-state',
       JSON.stringify({
@@ -1830,6 +2043,7 @@ describe('ChatView', () => {
       },
     ])
     api.fetchConversationMessages.mockResolvedValue([{ role: 'assistant', content: 'done' }])
+    api.fetchConversationWorkspaceState.mockResolvedValue(null)
 
     const router = makeRouter()
     await router.push('/chat/conv_merge')
@@ -1843,24 +2057,89 @@ describe('ChatView', () => {
 
     await flushPromises()
 
-    expect(wrapper.find('[data-workspace-merge-banner]').exists()).toBe(true)
-    expect(api.fetchTaskDetails).not.toHaveBeenCalledWith('task_merge')
+    expect(api.fetchConversationWorkspaceState).toHaveBeenCalledWith('conv_merge')
+    expect(wrapper.find('[data-workspace-merge-inline]').exists()).toBe(false)
+  })
+
+  it('does not show cached pending workspace merge on the empty chat route without backend sync', async () => {
+    localStorage.setItem(
+      'agent-runtime.chat-state',
+      JSON.stringify({
+        activeConversationId: '',
+        activeTaskId: '',
+        activeTaskEventSeq: 0,
+        activeTaskIdByConversation: {},
+        activeTaskEventSeqByConversation: {},
+        entries: [],
+        draftEntriesByConversation: {},
+        selectedSkillsByConversation: {},
+        selectedWorkspaceModeByConversation: {},
+        pendingWorkspaceMergeTaskIdByConversation: {
+          conv_merge: 'conv_merge',
+        },
+      }),
+    )
+    api.fetchConversations.mockResolvedValue([])
+
+    const router = makeRouter()
+    await router.push('/chat')
+    await router.isReady()
+
+    const wrapper = mount(ChatView, {
+      global: {
+        plugins: [router],
+      },
+    })
+
+    await flushPromises()
+
+    expect(wrapper.find('[data-workspace-merge-inline]').exists()).toBe(false)
   })
 
   it('confirms pending workspace changes from the returned workspace state without stale task details restoring the banner', async () => {
-    api.fetchConversations.mockResolvedValue([])
-    api.createRunTask.mockResolvedValue({ id: 'task_merge', input: { conversation_id: 'conv_merge' } })
-    api.streamRunTask.mockResolvedValue({
-      conversation_id: 'conv_merge',
-      provider_id: 'openai',
-      model_id: 'gpt-5.4',
-      workspace_mode: 'readonly',
-      workspace_state: 'pending_merge',
-      messages_appended: 2,
-      final_message: { role: 'assistant', content: 'done' },
-    })
-    api.confirmTaskWorkspaceMerge.mockResolvedValue({
-      task_id: 'task_merge',
+    localStorage.setItem(
+      'agent-runtime.chat-state',
+      JSON.stringify({
+        activeConversationId: 'conv_merge',
+        activeTaskId: 'task_merge',
+        activeTaskEventSeq: 0,
+        activeTaskIdByConversation: { conv_merge: 'task_merge' },
+        activeTaskEventSeqByConversation: {},
+        entries: [],
+        draftEntriesByConversation: {},
+        selectedSkillsByConversation: {},
+        selectedWorkspaceModeByConversation: {},
+        pendingWorkspaceMergeTaskIdByConversation: {},
+      }),
+    )
+    api.fetchConversations.mockResolvedValue([
+      {
+        id: 'conv_merge',
+        title: 'Merge chat',
+        last_message: 'done',
+        message_count: 2,
+        provider_id: 'openai',
+        model_id: 'gpt-5.4',
+        created_by: 'demo-user',
+        created_at: '',
+        updated_at: '',
+      },
+    ])
+    api.fetchConversationMessages.mockResolvedValue([{ role: 'assistant', content: 'done' }])
+    api.fetchConversationWorkspaceState
+      .mockResolvedValueOnce({
+        task_id: 'conv_merge',
+        user_id: '42',
+        mode: 'mutable',
+        state: 'pending_merge',
+        home_root: '/home',
+        task_root: '/workspace',
+        created_at: '',
+        updated_at: '',
+      })
+      .mockResolvedValue(null)
+    api.confirmConversationWorkspaceMerge.mockResolvedValue({
+      task_id: 'conv_merge',
       user_id: 'demo-user',
       mode: 'readonly',
       state: 'merged',
@@ -1889,7 +2168,7 @@ describe('ChatView', () => {
     api.fetchTaskDetails.mockReturnValue(taskDetails.promise)
 
     const router = makeRouter()
-    await router.push('/chat')
+    await router.push('/chat/conv_merge')
     await router.isReady()
 
     const wrapper = mount(ChatView, {
@@ -1899,37 +2178,117 @@ describe('ChatView', () => {
     })
 
     await flushPromises()
-    await wrapper.find('textarea').setValue('hello')
-    await wrapper.find('form').trigger('submit.prevent')
-    await flushPromises()
 
     await wrapper.get('[data-workspace-merge-confirm]').trigger('click')
     await flushPromises()
 
-    expect(api.confirmTaskWorkspaceMerge).toHaveBeenCalledWith('task_merge')
-    expect(api.fetchTaskDetails).toHaveBeenCalledWith('task_merge')
-    expect(wrapper.find('[data-workspace-merge-banner]').exists()).toBe(false)
+    expect(api.confirmConversationWorkspaceMerge).toHaveBeenCalledWith('conv_merge')
+    expect(api.confirmTaskWorkspaceMerge).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-workspace-merge-inline]').exists()).toBe(false)
 
     taskDetails.resolve(staleTaskDetails)
     await flushPromises()
 
-    expect(wrapper.find('[data-workspace-merge-banner]').exists()).toBe(false)
+    expect(wrapper.find('[data-workspace-merge-inline]').exists()).toBe(false)
+  })
+
+  it('shows a Chinese home-changed message with a conversation link when merge confirmation is rejected', async () => {
+    api.fetchConversations.mockResolvedValue([
+      {
+        id: 'conv_merge',
+        title: 'Merge chat',
+        last_message: 'done',
+        message_count: 2,
+        provider_id: 'openai',
+        model_id: 'gpt-5.4',
+        created_by: 'demo-user',
+        created_at: '',
+        updated_at: '',
+      },
+    ])
+    api.fetchConversationMessages.mockResolvedValue([{ role: 'assistant', content: 'done' }])
+    api.fetchConversationWorkspaceState.mockResolvedValue({
+      task_id: 'conv_merge',
+      user_id: '42',
+      mode: 'mutable',
+      state: 'pending_merge',
+      home_root: '/home',
+      task_root: '/workspace',
+      created_at: '',
+      updated_at: '',
+    })
+    api.confirmConversationWorkspaceMerge.mockRejectedValue(new api.ApiError(
+      '工作区基线已过期，当前 home 工作区已经发生变化。请回到该会话丢弃本次变更，或在最新 home 上重新运行。',
+      409,
+      {
+        code: 'workspace_home_changed',
+        message: '工作区基线已过期，当前 home 工作区已经发生变化。请回到该会话丢弃本次变更，或在最新 home 上重新运行。',
+        conversation_id: 'conv_merge',
+      },
+    ))
+
+    const router = makeRouter()
+    await router.push('/chat/conv_merge')
+    await router.isReady()
+
+    const wrapper = mount(ChatView, {
+      global: {
+        plugins: [router],
+      },
+    })
+
+    await flushPromises()
+    await wrapper.get('[data-workspace-merge-confirm]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('工作区基线已过期')
+    expect(wrapper.get('[data-workspace-error-conversation-link]').text()).toContain('前往会话处理')
   })
 
   it('discards pending workspace changes from the returned workspace state without stale task details restoring the banner', async () => {
-    api.fetchConversations.mockResolvedValue([])
-    api.createRunTask.mockResolvedValue({ id: 'task_merge', input: { conversation_id: 'conv_merge' } })
-    api.streamRunTask.mockResolvedValue({
-      conversation_id: 'conv_merge',
-      provider_id: 'openai',
-      model_id: 'gpt-5.4',
-      workspace_mode: 'readonly',
-      workspace_state: 'pending_merge',
-      messages_appended: 2,
-      final_message: { role: 'assistant', content: 'done' },
-    })
-    api.discardTaskWorkspaceChanges.mockResolvedValue({
-      task_id: 'task_merge',
+    localStorage.setItem(
+      'agent-runtime.chat-state',
+      JSON.stringify({
+        activeConversationId: 'conv_merge',
+        activeTaskId: 'task_merge',
+        activeTaskEventSeq: 0,
+        activeTaskIdByConversation: { conv_merge: 'task_merge' },
+        activeTaskEventSeqByConversation: {},
+        entries: [],
+        draftEntriesByConversation: {},
+        selectedSkillsByConversation: {},
+        selectedWorkspaceModeByConversation: {},
+        pendingWorkspaceMergeTaskIdByConversation: {},
+      }),
+    )
+    api.fetchConversations.mockResolvedValue([
+      {
+        id: 'conv_merge',
+        title: 'Merge chat',
+        last_message: 'done',
+        message_count: 2,
+        provider_id: 'openai',
+        model_id: 'gpt-5.4',
+        created_by: 'demo-user',
+        created_at: '',
+        updated_at: '',
+      },
+    ])
+    api.fetchConversationMessages.mockResolvedValue([{ role: 'assistant', content: 'done' }])
+    api.fetchConversationWorkspaceState
+      .mockResolvedValueOnce({
+        task_id: 'conv_merge',
+        user_id: '42',
+        mode: 'mutable',
+        state: 'pending_merge',
+        home_root: '/home',
+        task_root: '/workspace',
+        created_at: '',
+        updated_at: '',
+      })
+      .mockResolvedValue(null)
+    api.discardConversationWorkspaceChanges.mockResolvedValue({
+      task_id: 'conv_merge',
       user_id: 'demo-user',
       mode: 'readonly',
       state: 'discarded',
@@ -1959,7 +2318,7 @@ describe('ChatView', () => {
     api.fetchTaskDetails.mockReturnValue(taskDetails.promise)
 
     const router = makeRouter()
-    await router.push('/chat')
+    await router.push('/chat/conv_merge')
     await router.isReady()
 
     const wrapper = mount(ChatView, {
@@ -1969,21 +2328,18 @@ describe('ChatView', () => {
     })
 
     await flushPromises()
-    await wrapper.find('textarea').setValue('hello')
-    await wrapper.find('form').trigger('submit.prevent')
-    await flushPromises()
 
     await wrapper.get('[data-workspace-merge-discard]').trigger('click')
     await flushPromises()
 
-    expect(api.discardTaskWorkspaceChanges).toHaveBeenCalledWith('task_merge')
-    expect(api.fetchTaskDetails).toHaveBeenCalledWith('task_merge')
-    expect(wrapper.find('[data-workspace-merge-banner]').exists()).toBe(false)
+    expect(api.discardConversationWorkspaceChanges).toHaveBeenCalledWith('conv_merge')
+    expect(api.discardTaskWorkspaceChanges).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-workspace-merge-inline]').exists()).toBe(false)
 
     taskDetails.resolve(staleTaskDetails)
     await flushPromises()
 
-    expect(wrapper.find('[data-workspace-merge-banner]').exists()).toBe(false)
+    expect(wrapper.find('[data-workspace-merge-inline]').exists()).toBe(false)
   })
 
   it('sends attachment_ids with run task request', async () => {

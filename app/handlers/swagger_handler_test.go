@@ -335,16 +335,33 @@ func TestSwaggerJSONIncludesWorkspacePathsAndDefinitions(t *testing.T) {
 	if !ok {
 		t.Fatalf("paths = %#v, want object", document["paths"])
 	}
-	for _, path := range []string{"/tasks/{id}/workspace/confirm", "/tasks/{id}/workspace/discard", "/admin/workspaces/users/{user_id}"} {
+	for _, path := range []string{
+		"/tasks/{id}/workspace/confirm",
+		"/tasks/{id}/workspace/discard",
+		"/conversations/{id}/workspace",
+		"/conversations/{id}/workspace/confirm",
+		"/conversations/{id}/workspace/discard",
+		"/admin/workspaces/users/{user_id}",
+	} {
 		if _, ok := paths[path]; !ok {
 			t.Fatalf("swagger paths missing %q", path)
 		}
 	}
+	assertSwaggerPathHasResponses(t, paths, "/tasks/{id}/workspace/confirm", "post", "200", "400", "401", "404", "409")
+	assertSwaggerPathHasResponses(t, paths, "/conversations/{id}/workspace", "get", "200", "401", "404")
+	assertSwaggerPathHasResponses(t, paths, "/conversations/{id}/workspace/confirm", "post", "200", "400", "401", "404", "409")
+	assertSwaggerPathHasResponses(t, paths, "/conversations/{id}/workspace/discard", "post", "200", "400", "401", "404")
 	definitions, ok := document["definitions"].(map[string]any)
 	if !ok {
 		t.Fatalf("definitions = %#v, want object", document["definitions"])
 	}
-	for _, definition := range []string{"handlers.WorkspaceStateSwaggerDoc", "handlers.UserWorkspaceSummarySwaggerDoc", "handlers.TaskWorkspaceSummarySwaggerDoc"} {
+	for _, definition := range []string{
+		"handlers.WorkspaceStateSwaggerDoc",
+		"handlers.WorkspaceStateSwaggerResponse",
+		"handlers.ConversationWorkspaceStateSwaggerResponse",
+		"handlers.UserWorkspaceSummarySwaggerDoc",
+		"handlers.TaskWorkspaceSummarySwaggerDoc",
+	} {
 		if _, ok := definitions[definition]; !ok {
 			t.Fatalf("swagger definitions missing %q", definition)
 		}

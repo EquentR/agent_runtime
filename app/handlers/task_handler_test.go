@@ -524,26 +524,138 @@ func TestTaskHandlerConfirmAndDiscardWorkspaceUseOwnedWorkspaceUser(t *testing.T
 			"message": "hello",
 		},
 	})
+	input := decodeJSONRaw(t, created.InputJSON)
+	conversationID, _ := input["conversation_id"].(string)
+	if strings.TrimSpace(conversationID) == "" {
+		t.Fatalf("created conversation_id = %#v, want generated conversation id", input["conversation_id"])
+	}
 
 	recorder := mustTaskWorkspaceManager(t, server)
 	confirm := postWorkspaceAction(t, server.URL, "/api/v1/tasks/"+created.ID+"/workspace/confirm")
 	if confirm.State != coreworkspaces.StateMerged {
 		t.Fatalf("confirm state = %q, want merged", confirm.State)
 	}
-	if recorder.confirmUserID != "42" || recorder.confirmTaskID != created.ID {
-		t.Fatalf("confirm input = user %q task %q, want authenticated user/task", recorder.confirmUserID, recorder.confirmTaskID)
+	if recorder.confirmUserID != "42" || recorder.confirmTaskID != conversationID {
+		t.Fatalf("confirm input = user %q workspace %q, want authenticated user/conversation", recorder.confirmUserID, recorder.confirmTaskID)
 	}
 
 	discard := postWorkspaceAction(t, server.URL, "/api/v1/tasks/"+created.ID+"/workspace/discard")
 	if discard.State != coreworkspaces.StateDiscarded {
 		t.Fatalf("discard state = %q, want discarded", discard.State)
 	}
-	if recorder.discardUserID != "42" || recorder.discardTaskID != created.ID {
-		t.Fatalf("discard input = user %q task %q, want authenticated user/task", recorder.discardUserID, recorder.discardTaskID)
+	if recorder.discardUserID != "42" || recorder.discardTaskID != conversationID {
+		t.Fatalf("discard input = user %q workspace %q, want authenticated user/conversation", recorder.discardUserID, recorder.discardTaskID)
 	}
 
 	if _, err := manager.GetTask(context.Background(), created.ID); err != nil {
 		t.Fatalf("created task should remain readable after workspace actions: %v", err)
+	}
+}
+
+func TestTaskHandlerWorkspaceActionsUseAuthenticatedUserOverStoredWorkspaceUser(t *testing.T) {
+	recorder := &recordingTaskWorkspaceManager{
+		confirmState: coreworkspaces.WorkspaceStateFile{State: coreworkspaces.StateMerged},
+	}
+	manager, _, server := newTaskHandlerTestServerWithAuthUser(t, &models.User{ID: 42, Username: "alice", Role: models.UserRoleUser}, recorder)
+	created, err := manager.CreateTask(context.Background(), coretasks.CreateTaskInput{
+		TaskType:  "agent.run",
+		CreatedBy: "alice",
+		Input: map[string]any{
+			"conversation_id":   "conv_1",
+			"workspace_user_id": "999",
+			"message":           "hello",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateTask() error = %v", err)
+	}
+
+	response, err := http.Post(server.URL+"/api/v1/tasks/"+created.ID+"/workspace/confirm", "application/json", bytes.NewReader([]byte(`{}`)))
+	if err != nil {
+		t.Fatalf("Post(confirm) error = %v", err)
+	}
+	defer response.Body.Close()
+	if recorder.confirmUserID != "42" || recorder.confirmTaskID != "conv_1" {
+		t.Fatalf("confirm input = user %q workspace %q, want authenticated user/conversation", recorder.confirmUserID, recorder.confirmTaskID)
+	}
+}
+
+func TestTaskWorkspaceConfirmUsesConversationIDWhenPresent(t *testing.T) {
+	manager, server := newWorkspaceActionTaskHandlerTestServer(t, map[string]any{
+		"conversation_id":   " conv_1 ",
+		"workspace_user_id": "tester",
+	})
+
+	response, err := http.Post(server.URL+"/api/v1/tasks/task_1/workspace/confirm", "application/json", nil)
+	if err != nil {
+		t.Fatalf("POST confirm error = %v", err)
+	}
+	defer response.Body.Close()
+
+	if manager.confirmTaskID != "conv_1" {
+		t.Fatalf("confirm workspace id = %q, want conv_1", manager.confirmTaskID)
+	}
+}
+
+func TestTaskWorkspaceConfirmReturnsStructuredHomeChangedConflict(t *testing.T) {
+	manager, server := newWorkspaceActionTaskHandlerTestServer(t, map[string]any{
+		"conversation_id":   " conv_1 ",
+		"workspace_user_id": "tester",
+	})
+	manager.confirmErr = coreworkspaces.ErrWorkspaceHomeChanged
+
+	response, err := http.Post(server.URL+"/api/v1/tasks/task_1/workspace/confirm", "application/json", nil)
+	if err != nil {
+		t.Fatalf("POST confirm error = %v", err)
+	}
+	defer response.Body.Close()
+
+	envelope := decodeEnvelope(t, response.Body)
+	if envelope.Code != http.StatusConflict {
+		t.Fatalf("envelope.Code = %d, want %d", envelope.Code, http.StatusConflict)
+	}
+	var detail workspaceActionErrorResponse
+	if err := json.Unmarshal(envelope.Data, &detail); err != nil {
+		t.Fatalf("Unmarshal workspace error detail = %v, data = %s", err, string(envelope.Data))
+	}
+	if detail.Code != workspaceErrorCodeHomeChanged || detail.ConversationID != "conv_1" {
+		t.Fatalf("workspace error detail = %#v, want home changed for conv_1", detail)
+	}
+	if !strings.Contains(detail.Message, "工作区基线已过期") {
+		t.Fatalf("workspace error message = %q, want friendly Chinese message", detail.Message)
+	}
+}
+
+func TestTaskWorkspaceConfirmFallsBackToTaskIDWithoutConversationID(t *testing.T) {
+	manager, server := newWorkspaceActionTaskHandlerTestServer(t, map[string]any{
+		"workspace_user_id": "tester",
+	})
+
+	response, err := http.Post(server.URL+"/api/v1/tasks/task_1/workspace/confirm", "application/json", nil)
+	if err != nil {
+		t.Fatalf("POST confirm error = %v", err)
+	}
+	defer response.Body.Close()
+
+	if manager.confirmTaskID != "task_1" {
+		t.Fatalf("confirm workspace id = %q, want task_1", manager.confirmTaskID)
+	}
+}
+
+func TestTaskWorkspaceDiscardUsesConversationIDWhenPresent(t *testing.T) {
+	manager, server := newWorkspaceActionTaskHandlerTestServer(t, map[string]any{
+		"conversation_id":   "conv_1",
+		"workspace_user_id": "tester",
+	})
+
+	response, err := http.Post(server.URL+"/api/v1/tasks/task_1/workspace/discard", "application/json", nil)
+	if err != nil {
+		t.Fatalf("POST discard error = %v", err)
+	}
+	defer response.Body.Close()
+
+	if manager.discardTaskID != "conv_1" {
+		t.Fatalf("discard workspace id = %q, want conv_1", manager.discardTaskID)
 	}
 }
 
@@ -874,6 +986,49 @@ func postWorkspaceAction(t *testing.T, baseURL string, path string) coreworkspac
 }
 
 // postTask 统一发送 POST 请求并解析任务响应。
+func newWorkspaceActionTaskHandlerTestServer(t *testing.T, input map[string]any) (*recordingTaskWorkspaceManager, *httptest.Server) {
+	t.Helper()
+
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("gorm.Open() error = %v", err)
+	}
+	store := coretasks.NewStore(db)
+	if err := store.AutoMigrate(); err != nil {
+		t.Fatalf("task AutoMigrate() error = %v", err)
+	}
+	manager := coretasks.NewManager(store, coretasks.ManagerOptions{RunnerID: "workspace-action-test"})
+	taskInput := map[string]any{}
+	for key, value := range input {
+		taskInput[key] = value
+	}
+	taskInputJSON, err := json.Marshal(taskInput)
+	if err != nil {
+		t.Fatalf("json.Marshal(task input) error = %v", err)
+	}
+	if err := db.Create(&coretasks.Task{
+		ID:            "task_1",
+		TaskType:      "agent.run",
+		Status:        coretasks.StatusQueued,
+		InputJSON:     taskInputJSON,
+		ConfigJSON:    []byte(`{}`),
+		MetadataJSON:  []byte(`{}`),
+		ExecutionMode: coretasks.ExecutionModeSerial,
+		RootTaskID:    "task_1",
+		CreatedBy:     "tester",
+	}).Error; err != nil {
+		t.Fatalf("CreateTask() error = %v", err)
+	}
+
+	workspaces := &recordingTaskWorkspaceManager{}
+	engine := rest.Init()
+	NewTaskHandler(manager, nil).WithWorkspaceManager(workspaces).Register(engine.Group("/api/v1"))
+	server := httptest.NewServer(engine)
+	t.Cleanup(server.Close)
+	return workspaces, server
+}
+
 func postTask(t *testing.T, url string, payload map[string]any) coretasks.Task {
 	t.Helper()
 	raw, err := json.Marshal(payload)
@@ -965,6 +1120,8 @@ type recordingTaskWorkspaceManager struct {
 	confirmTaskID string
 	discardUserID string
 	discardTaskID string
+	confirmErr    error
+	discardErr    error
 	confirmState  coreworkspaces.WorkspaceStateFile
 	discardState  coreworkspaces.WorkspaceStateFile
 }
@@ -972,6 +1129,9 @@ type recordingTaskWorkspaceManager struct {
 func (m *recordingTaskWorkspaceManager) ConfirmTaskWorkspace(_ context.Context, userID string, taskID string) (*coreworkspaces.WorkspaceStateFile, error) {
 	m.confirmUserID = userID
 	m.confirmTaskID = taskID
+	if m.confirmErr != nil {
+		return nil, m.confirmErr
+	}
 	state := m.confirmState
 	state.TaskID = taskID
 	state.UserID = userID
@@ -981,6 +1141,9 @@ func (m *recordingTaskWorkspaceManager) ConfirmTaskWorkspace(_ context.Context, 
 func (m *recordingTaskWorkspaceManager) DiscardTaskWorkspace(_ context.Context, userID string, taskID string) (*coreworkspaces.WorkspaceStateFile, error) {
 	m.discardUserID = userID
 	m.discardTaskID = taskID
+	if m.discardErr != nil {
+		return nil, m.discardErr
+	}
 	state := m.discardState
 	state.TaskID = taskID
 	state.UserID = userID

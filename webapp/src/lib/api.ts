@@ -56,6 +56,7 @@ import type {
   UserEmailVerificationConfirmInput,
   UserEmailVerificationStartInput,
   UserRole,
+  WorkspaceActionErrorData,
   WorkspaceSkill,
   WorkspaceSkillListItem,
   WorkspaceMode,
@@ -70,12 +71,40 @@ const POLL_INTERVAL_MS = 1200
 const POLL_TIMEOUT_MS = 90000
 export const TASK_STREAM_ABORTED_MESSAGE = 'Task event stream aborted'
 
+export class ApiError extends Error {
+  readonly statusCode: number
+  readonly data: unknown
+
+  constructor(message: string, statusCode: number, data?: unknown) {
+    super(message || 'Request failed')
+    this.name = 'ApiError'
+    this.statusCode = statusCode
+    this.data = data
+  }
+}
+
 export function unwrapEnvelope<T>(envelope: ApiEnvelope<T>) {
   if (!envelope.ok) {
-    throw new Error(envelope.message || 'Request failed')
+    throw new ApiError(errorMessageFromData(envelope.data) ?? envelope.message ?? 'Request failed', envelope.code, envelope.data)
   }
 
   return envelope.data
+}
+
+function errorMessageFromData(data: unknown) {
+  if (!data || typeof data !== 'object') {
+    return undefined
+  }
+  const message = (data as { message?: unknown }).message
+  return typeof message === 'string' && message.trim() ? message.trim() : undefined
+}
+
+export function isWorkspaceActionErrorData(value: unknown): value is WorkspaceActionErrorData {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+  const code = (value as { code?: unknown }).code
+  return code === 'workspace_home_changed' || code === 'workspace_pending_merge'
 }
 
 export async function requestJSON<T>(basePath: string, path: string, init?: RequestInit) {
@@ -885,7 +914,9 @@ function normalizeTaskInput(input: TaskDetails['input'] | undefined): TaskDetail
 }
 
 export function normalizeTaskWorkspaceState(state: Partial<TaskWorkspaceState> & Record<string, unknown>): TaskWorkspaceState {
-  return {
+  const workspaceId = normalizeFirstOptionalStringValue(state.workspace_id, state.workspaceId, state.WorkspaceID)
+  const conversationId = normalizeFirstOptionalStringValue(state.conversation_id, state.conversationId, state.ConversationID)
+  const normalized: TaskWorkspaceState = {
     task_id: normalizeFirstStringValue(state.task_id, state.taskId, state.TaskID),
     user_id: normalizeFirstStringValue(state.user_id, state.userId, state.UserID),
     mode: normalizeWorkspaceMode(state.mode ?? state.Mode) ?? 'mutable',
@@ -899,6 +930,13 @@ export function normalizeTaskWorkspaceState(state: Partial<TaskWorkspaceState> &
     discarded_at: normalizeFirstOptionalStringValue(state.discarded_at, state.discardedAt, state.DiscardedAt),
     error_message: normalizeFirstOptionalStringValue(state.error_message, state.errorMessage, state.ErrorMessage),
   }
+  if (workspaceId) {
+    normalized.workspace_id = workspaceId
+  }
+  if (conversationId) {
+    normalized.conversation_id = conversationId
+  }
+  return normalized
 }
 
 export function normalizeConversation(
@@ -963,6 +1001,14 @@ export function formatTaskError(error: unknown, status?: string) {
   }
 
   return 'Task failed'
+}
+
+function taskCompletionError(error: unknown, status?: string) {
+  const message = formatTaskError(error, status)
+  if (isWorkspaceActionErrorData(error)) {
+    return new ApiError(message, 409, error)
+  }
+  return new Error(message)
 }
 
 async function request<T>(path: string, init?: RequestInit) {
@@ -1396,6 +1442,29 @@ export async function discardTaskWorkspaceChanges(taskId: string) {
   return normalizeTaskWorkspaceState(state)
 }
 
+export async function fetchConversationWorkspaceState(conversationId: string) {
+  const state = await request<Partial<TaskWorkspaceState> & Record<string, unknown> | null>(
+    `/conversations/${encodeURIComponent(conversationId)}/workspace`,
+  )
+  return state ? normalizeTaskWorkspaceState(state) : null
+}
+
+export async function confirmConversationWorkspaceMerge(conversationId: string) {
+  const state = await request<Partial<TaskWorkspaceState> & Record<string, unknown>>(
+    `/conversations/${encodeURIComponent(conversationId)}/workspace/confirm`,
+    { method: 'POST' },
+  )
+  return normalizeTaskWorkspaceState(state)
+}
+
+export async function discardConversationWorkspaceChanges(conversationId: string) {
+  const state = await request<Partial<TaskWorkspaceState> & Record<string, unknown>>(
+    `/conversations/${encodeURIComponent(conversationId)}/workspace/discard`,
+    { method: 'POST' },
+  )
+  return normalizeTaskWorkspaceState(state)
+}
+
 export function normalizeInteractionRecord(value: Partial<InteractionRecord> & Record<string, unknown>): InteractionRecord {
   return {
     id: String(value.id ?? ''),
@@ -1465,7 +1534,7 @@ export async function waitForRunTask(taskId: string) {
     }
 
     if (task.status === 'failed' || task.status === 'cancelled') {
-      throw new Error(formatTaskError(task.error, task.status))
+      throw taskCompletionError(task.error, task.status)
     }
 
     await new Promise((resolve) => window.setTimeout(resolve, POLL_INTERVAL_MS))
@@ -1542,7 +1611,7 @@ export async function streamRunTask(
       try {
         const task = await fetchTaskResult(taskId)
         if (task.status === 'failed' || task.status === 'cancelled') {
-          reject(new Error(formatTaskError(task.error, task.status)))
+          reject(taskCompletionError(task.error, task.status))
           return
         }
         const result = await waitForRunTask(taskId)

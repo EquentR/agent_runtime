@@ -10,7 +10,10 @@ import (
 	"syscall"
 )
 
-const workspaceStateSidecarName = ".workspace-state.json"
+var internalWorkspaceSidecarNames = map[string]struct{}{
+	".workspace-state.json":    {},
+	".workspace-baseline.json": {},
+}
 
 func (e runtimeEnv) resolveWorkspacePath(raw string) (string, string, error) {
 	trimmed := strings.TrimSpace(raw)
@@ -35,8 +38,8 @@ func (e runtimeEnv) resolveWorkspacePath(raw string) (string, string, error) {
 	if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
 		return "", "", fmt.Errorf("path escapes workspace: %s", raw)
 	}
-	if filepath.ToSlash(rel) == workspaceStateSidecarName {
-		return "", "", fmt.Errorf("internal workspace state cannot be modified")
+	if _, ok := internalWorkspaceSidecarNames[filepath.ToSlash(rel)]; ok {
+		return "", "", fmt.Errorf("internal workspace metadata cannot be modified")
 	}
 	if err := ensureNoSymlink(abs); err != nil {
 		return "", "", err

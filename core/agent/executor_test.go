@@ -378,6 +378,379 @@ func TestAgentExecutorUsesTaskWorkspaceFromWorkspaceManager(t *testing.T) {
 	assertExecutorFileContent(t, filepath.Join(workspacesRoot, "users", "alice", "tasks", "task_workspace_manager", "AGENTS.md"), "Alice home prompt")
 }
 
+func TestAgentExecutorUsesConversationIDForMutableWorkspace(t *testing.T) {
+	store := newConversationStoreForTest(t)
+	templateRoot := t.TempDir()
+	writeExecutorWorkspacePrompt(t, templateRoot, "Template prompt")
+	workspacesRoot := t.TempDir()
+	workspaceManager := newExecutorWorkspaceManager(t, templateRoot, workspacesRoot)
+	home, err := workspaceManager.EnsureHomeWorkspace(context.Background(), "alice")
+	if err != nil {
+		t.Fatalf("EnsureHomeWorkspace() error = %v", err)
+	}
+	writeExecutorWorkspacePrompt(t, home.Root, "Alice home prompt")
+	client := &stubClient{streams: []model.Stream{newStubStream(
+		[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "hello"}}},
+		model.Message{Role: model.RoleAssistant, Content: "hello"},
+		nil,
+	)}}
+	executor := newTaskExecutorForTest(t, ExecutorDependencies{
+		Resolver:          newExecutorResolverForTest(),
+		ConversationStore: store,
+		PromptResolver:    newExecutorPromptResolverForTest(t, nil),
+		WorkspaceRoot:     templateRoot,
+		WorkspaceManager:  workspaceManager,
+		ClientFactory:     func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return client, nil },
+	})
+
+	payload := marshalExecutorTaskInput(t, map[string]any{
+		"conversation_id":   "conv_1",
+		"provider_id":       "openai",
+		"model_id":          "gpt-5.4",
+		"message":           "write a file",
+		"workspace_user_id": "alice",
+		"workspace_mode":    "mutable",
+	})
+	task := &coretasks.Task{ID: "task_1", TaskType: "agent.run", CreatedBy: "alice", InputJSON: payload}
+	if _, err := executor(context.Background(), task, nil); err != nil {
+		t.Fatalf("executor() error = %v", err)
+	}
+
+	wantRoot := filepath.Join(workspacesRoot, "users", "alice", "tasks", "conv_1")
+	assertExecutorFileContent(t, filepath.Join(wantRoot, "AGENTS.md"), "Alice home prompt")
+	if _, err := os.Stat(filepath.Join(workspacesRoot, "users", "alice", "tasks", "task_1")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("task id workspace exists or stat error = %v, want no task-scoped workspace", err)
+	}
+}
+
+func TestAgentExecutorReusesConversationWorkspaceAcrossTurns(t *testing.T) {
+	store := newConversationStoreForTest(t)
+	templateRoot := t.TempDir()
+	writeExecutorWorkspacePrompt(t, templateRoot, "Template prompt")
+	workspacesRoot := t.TempDir()
+	workspaceManager := newExecutorWorkspaceManager(t, templateRoot, workspacesRoot)
+	home, err := workspaceManager.EnsureHomeWorkspace(context.Background(), "alice")
+	if err != nil {
+		t.Fatalf("EnsureHomeWorkspace() error = %v", err)
+	}
+	writeExecutorWorkspacePrompt(t, home.Root, "Alice home prompt")
+
+	firstClient := &stubClient{streams: []model.Stream{newStubStream(
+		[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "first"}}},
+		model.Message{Role: model.RoleAssistant, Content: "first"},
+		nil,
+	)}}
+	executor := newTaskExecutorForTest(t, ExecutorDependencies{
+		Resolver:          newExecutorResolverForTest(),
+		ConversationStore: store,
+		PromptResolver:    newExecutorPromptResolverForTest(t, nil),
+		WorkspaceRoot:     templateRoot,
+		WorkspaceManager:  workspaceManager,
+		ClientFactory:     func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return firstClient, nil },
+	})
+
+	payload := marshalExecutorTaskInput(t, map[string]any{
+		"conversation_id":   "conv_1",
+		"provider_id":       "openai",
+		"model_id":          "gpt-5.4",
+		"message":           "first",
+		"workspace_user_id": "alice",
+		"workspace_mode":    "mutable",
+	})
+	if _, err := executor(context.Background(), &coretasks.Task{ID: "task_1", TaskType: "agent.run", CreatedBy: "alice", InputJSON: payload}, nil); err != nil {
+		t.Fatalf("executor(first) error = %v", err)
+	}
+
+	conversationRoot := filepath.Join(workspacesRoot, "users", "alice", "tasks", "conv_1")
+	if err := os.WriteFile(filepath.Join(conversationRoot, "notes.txt"), []byte("from first turn"), 0o644); err != nil {
+		t.Fatalf("write conversation workspace file error = %v", err)
+	}
+
+	secondClient := &stubClient{streams: []model.Stream{newStubStream(
+		[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "second"}}},
+		model.Message{Role: model.RoleAssistant, Content: "second"},
+		nil,
+	)}}
+	executor = newTaskExecutorForTest(t, ExecutorDependencies{
+		Resolver:          newExecutorResolverForTest(),
+		ConversationStore: store,
+		PromptResolver:    newExecutorPromptResolverForTest(t, nil),
+		WorkspaceRoot:     templateRoot,
+		WorkspaceManager:  workspaceManager,
+		ClientFactory:     func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return secondClient, nil },
+	})
+	secondPayload := marshalExecutorTaskInput(t, map[string]any{
+		"conversation_id":   "conv_1",
+		"provider_id":       "openai",
+		"model_id":          "gpt-5.4",
+		"message":           "second",
+		"workspace_user_id": "alice",
+		"workspace_mode":    "mutable",
+	})
+	if _, err := executor(context.Background(), &coretasks.Task{ID: "task_2", TaskType: "agent.run", CreatedBy: "alice", InputJSON: secondPayload}, nil); err != nil {
+		t.Fatalf("executor(second) error = %v", err)
+	}
+	assertExecutorFileContent(t, filepath.Join(conversationRoot, "notes.txt"), "from first turn")
+}
+
+func TestAgentExecutorReturnsCompletedWorkspaceStateWhenMutableWorkspaceUnchanged(t *testing.T) {
+	store := newConversationStoreForTest(t)
+	templateRoot := t.TempDir()
+	writeExecutorWorkspacePrompt(t, templateRoot, "Template prompt")
+	workspacesRoot := t.TempDir()
+	workspaceManager := newExecutorWorkspaceManager(t, templateRoot, workspacesRoot)
+	home, err := workspaceManager.EnsureHomeWorkspace(context.Background(), "alice")
+	if err != nil {
+		t.Fatalf("EnsureHomeWorkspace() error = %v", err)
+	}
+	writeExecutorWorkspacePrompt(t, home.Root, "Alice home prompt")
+	client := &stubClient{streams: []model.Stream{newStubStream(
+		[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "hello"}}},
+		model.Message{Role: model.RoleAssistant, Content: "hello"},
+		nil,
+	)}}
+	executor := newTaskExecutorForTest(t, ExecutorDependencies{
+		Resolver:          newExecutorResolverForTest(),
+		ConversationStore: store,
+		PromptResolver:    newExecutorPromptResolverForTest(t, nil),
+		WorkspaceRoot:     templateRoot,
+		WorkspaceManager:  workspaceManager,
+		ClientFactory:     func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return client, nil },
+	})
+	payload := marshalExecutorTaskInput(t, map[string]any{
+		"conversation_id":   "conv_unchanged",
+		"provider_id":       "openai",
+		"model_id":          "gpt-5.4",
+		"message":           "do not edit files",
+		"workspace_user_id": "alice",
+		"workspace_mode":    "mutable",
+	})
+
+	output, err := executor(context.Background(), &coretasks.Task{ID: "task_unchanged", TaskType: "agent.run", CreatedBy: "alice", InputJSON: payload}, nil)
+	if err != nil {
+		t.Fatalf("executor() error = %v", err)
+	}
+	result := output.(RunTaskResult)
+	if result.WorkspaceState != workspaces.StateCompleted {
+		t.Fatalf("WorkspaceState = %q, want %q", result.WorkspaceState, workspaces.StateCompleted)
+	}
+}
+
+func TestAgentExecutorReturnsPendingWorkspaceStateWhenMutableWorkspaceChanged(t *testing.T) {
+	store := newConversationStoreForTest(t)
+	templateRoot := t.TempDir()
+	writeExecutorWorkspacePrompt(t, templateRoot, "Template prompt")
+	workspacesRoot := t.TempDir()
+	workspaceManager := newExecutorWorkspaceManager(t, templateRoot, workspacesRoot)
+	home, err := workspaceManager.EnsureHomeWorkspace(context.Background(), "alice")
+	if err != nil {
+		t.Fatalf("EnsureHomeWorkspace() error = %v", err)
+	}
+	writeExecutorWorkspacePrompt(t, home.Root, "Alice home prompt")
+	client := &verifyingStreamClient{
+		base: &stubClient{streams: []model.Stream{newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "hello"}}},
+			model.Message{Role: model.RoleAssistant, Content: "hello"},
+			nil,
+		)}},
+		beforeStream: func(model.ChatRequest) {
+			conversationRoot := filepath.Join(workspacesRoot, "users", "alice", "tasks", "conv_changed")
+			if err := os.WriteFile(filepath.Join(conversationRoot, "notes.txt"), []byte("changed"), 0o644); err != nil {
+				t.Fatalf("write conversation workspace file error = %v", err)
+			}
+		},
+	}
+	executor := newTaskExecutorForTest(t, ExecutorDependencies{
+		Resolver:          newExecutorResolverForTest(),
+		ConversationStore: store,
+		PromptResolver:    newExecutorPromptResolverForTest(t, nil),
+		WorkspaceRoot:     templateRoot,
+		WorkspaceManager:  workspaceManager,
+		ClientFactory:     func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return client, nil },
+	})
+	payload := marshalExecutorTaskInput(t, map[string]any{
+		"conversation_id":   "conv_changed",
+		"provider_id":       "openai",
+		"model_id":          "gpt-5.4",
+		"message":           "edit files",
+		"workspace_user_id": "alice",
+		"workspace_mode":    "mutable",
+	})
+
+	output, err := executor(context.Background(), &coretasks.Task{ID: "task_changed", TaskType: "agent.run", CreatedBy: "alice", InputJSON: payload}, nil)
+	if err != nil {
+		t.Fatalf("executor() error = %v", err)
+	}
+	result := output.(RunTaskResult)
+	if result.WorkspaceState != workspaces.StatePendingMerge {
+		t.Fatalf("WorkspaceState = %q, want %q", result.WorkspaceState, workspaces.StatePendingMerge)
+	}
+}
+
+func TestAgentExecutorRejectsMutableRunWhenAnotherConversationHasPendingMerge(t *testing.T) {
+	store := newConversationStoreForTest(t)
+	templateRoot := t.TempDir()
+	writeExecutorWorkspacePrompt(t, templateRoot, "Template prompt")
+	workspacesRoot := t.TempDir()
+	workspaceManager := newExecutorWorkspaceManager(t, templateRoot, workspacesRoot)
+	home, err := workspaceManager.EnsureHomeWorkspace(context.Background(), "alice")
+	if err != nil {
+		t.Fatalf("EnsureHomeWorkspace() error = %v", err)
+	}
+	writeExecutorWorkspacePrompt(t, home.Root, "Alice home prompt")
+	pending, err := workspaceManager.CreateTaskWorkspace(context.Background(), "alice", "conv_pending", workspaces.ModeMutable)
+	if err != nil {
+		t.Fatalf("CreateTaskWorkspace(pending) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pending.Root, "pending.txt"), []byte("pending change"), 0o600); err != nil {
+		t.Fatalf("write pending file error = %v", err)
+	}
+	if _, err := workspaceManager.FinishMutableWorkspace(context.Background(), "alice", "conv_pending"); err != nil {
+		t.Fatalf("FinishMutableWorkspace(pending) error = %v", err)
+	}
+	client := &stubClient{streams: []model.Stream{newStubStream(
+		[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "hello"}}},
+		model.Message{Role: model.RoleAssistant, Content: "hello"},
+		nil,
+	)}}
+	executor := newTaskExecutorForTest(t, ExecutorDependencies{
+		Resolver:          newExecutorResolverForTest(),
+		ConversationStore: store,
+		PromptResolver:    newExecutorPromptResolverForTest(t, nil),
+		WorkspaceRoot:     templateRoot,
+		WorkspaceManager:  workspaceManager,
+		ClientFactory:     func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return client, nil },
+	})
+	payload := marshalExecutorTaskInput(t, map[string]any{
+		"conversation_id":   "conv_new",
+		"provider_id":       "openai",
+		"model_id":          "gpt-5.4",
+		"message":           "new mutable work",
+		"workspace_user_id": "alice",
+		"workspace_mode":    "mutable",
+	})
+
+	_, err = executor(context.Background(), &coretasks.Task{ID: "task_new", TaskType: "agent.run", CreatedBy: "alice", InputJSON: payload}, nil)
+	if !errors.Is(err, workspaces.ErrWorkspacePendingMerge) {
+		t.Fatalf("executor() error = %v, want pending workspace merge rejection", err)
+	}
+	var workspaceErr interface {
+		TaskErrorData() map[string]any
+	}
+	if !errors.As(err, &workspaceErr) {
+		t.Fatalf("executor() error = %T %v, want structured workspace error", err, err)
+	}
+	if data := workspaceErr.TaskErrorData(); data["code"] != string(workspaces.ActionErrorCodePendingMerge) || data["conversation_id"] != "conv_pending" {
+		t.Fatalf("workspace error data = %#v, want pending merge for conv_pending", data)
+	}
+}
+
+func TestAgentExecutorReadonlyRunDoesNotDiscardPendingConversationWorkspace(t *testing.T) {
+	store := newConversationStoreForTest(t)
+	templateRoot := t.TempDir()
+	writeExecutorWorkspacePrompt(t, templateRoot, "Template prompt")
+	workspacesRoot := t.TempDir()
+	workspaceManager := newExecutorWorkspaceManager(t, templateRoot, workspacesRoot)
+	home, err := workspaceManager.EnsureHomeWorkspace(context.Background(), "alice")
+	if err != nil {
+		t.Fatalf("EnsureHomeWorkspace() error = %v", err)
+	}
+	writeExecutorWorkspacePrompt(t, home.Root, "Alice home prompt")
+	pending, err := workspaceManager.CreateTaskWorkspace(context.Background(), "alice", "conv_pending", workspaces.ModeMutable)
+	if err != nil {
+		t.Fatalf("CreateTaskWorkspace(pending) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pending.Root, "pending.txt"), []byte("pending change"), 0o600); err != nil {
+		t.Fatalf("write pending file error = %v", err)
+	}
+	if _, err := workspaceManager.FinishMutableWorkspace(context.Background(), "alice", "conv_pending"); err != nil {
+		t.Fatalf("FinishMutableWorkspace(pending) error = %v", err)
+	}
+	client := &stubClient{streams: []model.Stream{newStubStream(
+		[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "readonly answer"}}},
+		model.Message{Role: model.RoleAssistant, Content: "readonly answer"},
+		nil,
+	)}}
+	executor := newTaskExecutorForTest(t, ExecutorDependencies{
+		Resolver:          newExecutorResolverForTest(),
+		ConversationStore: store,
+		PromptResolver:    newExecutorPromptResolverForTest(t, nil),
+		WorkspaceRoot:     templateRoot,
+		WorkspaceManager:  workspaceManager,
+		ClientFactory:     func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return client, nil },
+	})
+	payload := marshalExecutorTaskInput(t, map[string]any{
+		"conversation_id":   "conv_pending",
+		"provider_id":       "openai",
+		"model_id":          "gpt-5.4",
+		"message":           "readonly followup",
+		"workspace_user_id": "alice",
+		"workspace_mode":    "readonly",
+	})
+
+	_, err = executor(context.Background(), &coretasks.Task{ID: "task_readonly", TaskType: "agent.run", CreatedBy: "alice", InputJSON: payload}, nil)
+	if err != nil {
+		t.Fatalf("executor(readonly) error = %v", err)
+	}
+	pendingState := readExecutorWorkspaceState(t, filepath.Join(workspacesRoot, "users", "alice", "tasks", "conv_pending"))
+	if pendingState.State != workspaces.StatePendingMerge {
+		t.Fatalf("pending workspace state = %q, want %q", pendingState.State, workspaces.StatePendingMerge)
+	}
+	assertExecutorFileContent(t, filepath.Join(workspacesRoot, "users", "alice", "tasks", "conv_pending", "pending.txt"), "pending change")
+	assertExecutorFileContent(t, filepath.Join(workspacesRoot, "users", "alice", "tasks", "task_readonly", "AGENTS.md"), "Alice home prompt")
+}
+
+func TestAgentExecutorFailurePreservesPendingConversationWorkspace(t *testing.T) {
+	store := newConversationStoreForTest(t)
+	templateRoot := t.TempDir()
+	writeExecutorWorkspacePrompt(t, templateRoot, "Template prompt")
+	workspacesRoot := t.TempDir()
+	workspaceManager := newExecutorWorkspaceManager(t, templateRoot, workspacesRoot)
+	home, err := workspaceManager.EnsureHomeWorkspace(context.Background(), "alice")
+	if err != nil {
+		t.Fatalf("EnsureHomeWorkspace() error = %v", err)
+	}
+	writeExecutorWorkspacePrompt(t, home.Root, "Alice home prompt")
+	pending, err := workspaceManager.CreateTaskWorkspace(context.Background(), "alice", "conv_pending", workspaces.ModeMutable)
+	if err != nil {
+		t.Fatalf("CreateTaskWorkspace(pending) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pending.Root, "pending.txt"), []byte("pending change"), 0o600); err != nil {
+		t.Fatalf("write pending file error = %v", err)
+	}
+	if _, err := workspaceManager.FinishMutableWorkspace(context.Background(), "alice", "conv_pending"); err != nil {
+		t.Fatalf("FinishMutableWorkspace(pending) error = %v", err)
+	}
+	runErr := errors.New("model stream failed")
+	client := &stubClient{streamErrs: []error{runErr}}
+	executor := newTaskExecutorForTest(t, ExecutorDependencies{
+		Resolver:          newExecutorResolverForTest(),
+		ConversationStore: store,
+		PromptResolver:    newExecutorPromptResolverForTest(t, nil),
+		WorkspaceRoot:     templateRoot,
+		WorkspaceManager:  workspaceManager,
+		ClientFactory:     func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return client, nil },
+	})
+	payload := marshalExecutorTaskInput(t, map[string]any{
+		"conversation_id":   "conv_pending",
+		"provider_id":       "openai",
+		"model_id":          "gpt-5.4",
+		"message":           "failing followup",
+		"workspace_user_id": "alice",
+		"workspace_mode":    "mutable",
+	})
+
+	_, err = executor(context.Background(), &coretasks.Task{ID: "task_failed_pending", TaskType: "agent.run", CreatedBy: "alice", InputJSON: payload}, nil)
+	if !errors.Is(err, runErr) {
+		t.Fatalf("executor() error = %v, want %v", err, runErr)
+	}
+	state := readExecutorWorkspaceState(t, filepath.Join(workspacesRoot, "users", "alice", "tasks", "conv_pending"))
+	if state.State != workspaces.StatePendingMerge || state.ErrorMessage != runErr.Error() {
+		t.Fatalf("workspace state = %#v, want pending_merge with error message", state)
+	}
+	assertExecutorFileContent(t, filepath.Join(workspacesRoot, "users", "alice", "tasks", "conv_pending", "pending.txt"), "pending change")
+}
+
 func TestAgentExecutorCreatesAndCompletesTaskWorkspaceWhenModelResolutionFails(t *testing.T) {
 	store := newConversationStoreForTest(t)
 	templateRoot := t.TempDir()
@@ -394,10 +767,10 @@ func TestAgentExecutorCreatesAndCompletesTaskWorkspaceWhenModelResolutionFails(t
 		Resolver: &ModelResolver{ResolveTaskFunc: func(context.Context, RunTaskInput) (*ResolvedModel, error) {
 			return nil, resolutionErr
 		}},
-		ConversationStore:  store,
-		WorkspaceRoot:      templateRoot,
-		WorkspaceManager:   workspaceManager,
-		ClientFactory:      func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return nil, nil },
+		ConversationStore: store,
+		WorkspaceRoot:     templateRoot,
+		WorkspaceManager:  workspaceManager,
+		ClientFactory:     func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return nil, nil },
 	})
 
 	payload := marshalExecutorTaskInput(t, map[string]any{

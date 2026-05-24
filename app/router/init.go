@@ -40,7 +40,7 @@ func Init(e *gin.Engine, baseUrl string, staticPath []rest.Static, deps Dependen
 		handlers.NewTaskHandler(deps.TaskManager, deps.ConversationStore, activeUser).WithModelLogic(deps.ModelLogic).WithWorkspaceManager(deps.WorkspaceManager),
 		handlers.NewInteractionHandler(deps.TaskManager, deps.InteractionStore, deps.ConversationStore, activeUser),
 		handlers.NewApprovalHandler(deps.TaskManager, deps.ApprovalStore, deps.ConversationStore, activeUser).WithInteractionStore(deps.InteractionStore),
-		handlers.NewConversationHandler(deps.ConversationStore, deps.AuditStore, activeUser),
+		handlers.NewConversationHandler(deps.ConversationStore, deps.AuditStore, activeUser).WithWorkspaceManager(deps.WorkspaceManager),
 		handlers.NewAuditHandler(deps.AuditStore, activeUser).WithConversationStore(deps.ConversationStore),
 		handlers.NewSwaggerHandler(),
 	}

@@ -263,21 +263,25 @@ func TestWriteFileSupportsInsertAndReplace(t *testing.T) {
 	}
 }
 
-func TestWriteFileRejectsWorkspaceStateSidecar(t *testing.T) {
-	workspace := t.TempDir()
-	target := filepath.Join(workspace, ".workspace-state.json")
-	mustWriteFile(t, target, `{"state":"pending_merge"}`)
-	registry := newBuiltinRegistry(t, Options{WorkspaceRoot: workspace})
+func TestWriteFileRejectsWorkspaceMetadataSidecars(t *testing.T) {
+	for _, name := range []string{".workspace-state.json", ".workspace-baseline.json"} {
+		t.Run(name, func(t *testing.T) {
+			workspace := t.TempDir()
+			target := filepath.Join(workspace, name)
+			mustWriteFile(t, target, `{"state":"pending_merge"}`)
+			registry := newBuiltinRegistry(t, Options{WorkspaceRoot: workspace})
 
-	_, err := registry.Execute(context.Background(), "write_file", map[string]any{
-		"path":    ".workspace-state.json",
-		"content": `{"home_root":"tampered"}`,
-	})
-	if err == nil || !strings.Contains(err.Error(), "internal workspace state") {
-		t.Fatalf("Execute(write_file) error = %v, want internal workspace state rejection", err)
-	}
-	if got := mustReadText(t, target); got != `{"state":"pending_merge"}` {
-		t.Fatalf("state sidecar content = %q, want unchanged", got)
+			_, err := registry.Execute(context.Background(), "write_file", map[string]any{
+				"path":    name,
+				"content": `{"home_root":"tampered"}`,
+			})
+			if err == nil || !strings.Contains(err.Error(), "internal workspace metadata") {
+				t.Fatalf("Execute(write_file) error = %v, want internal workspace metadata rejection", err)
+			}
+			if got := mustReadText(t, target); got != `{"state":"pending_merge"}` {
+				t.Fatalf("%s content = %q, want unchanged", name, got)
+			}
+		})
 	}
 }
 

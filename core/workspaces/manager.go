@@ -2,9 +2,11 @@ package workspaces
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -57,6 +59,28 @@ func (m *Manager) EnsureHomeWorkspace(ctx context.Context, userID string) (*Work
 	unlock := m.lockUserWorkspace(userID)
 	defer unlock()
 	return m.ensureHomeWorkspace(ctx, userID)
+}
+
+func (m *Manager) GetWorkspaceState(ctx context.Context, userID string, taskID string) (*WorkspaceStateFile, bool, error) {
+	_ = ctx
+	unlock := m.lockUserWorkspace(userID)
+	defer unlock()
+
+	taskRoot, err := m.taskRoot(userID, taskID)
+	if err != nil {
+		return nil, false, err
+	}
+	state, ok, err := m.loadState(taskRoot)
+	if err != nil {
+		return nil, false, err
+	}
+	if !ok {
+		return nil, false, nil
+	}
+	if err := m.normalizeLoadedState(userID, taskID, taskRoot, &state); err != nil {
+		return nil, false, err
+	}
+	return &state, true, nil
 }
 
 func (m *Manager) ensureHomeWorkspace(ctx context.Context, userID string) (*Workspace, error) {
@@ -217,13 +241,57 @@ func (m *Manager) CreateTaskWorkspace(ctx context.Context, userID string, taskID
 		if state, ok, err := m.loadState(taskRoot); err != nil {
 			return nil, err
 		} else if ok {
+			if err := m.normalizeLoadedState(userID, taskID, taskRoot, &state); err != nil {
+				return nil, err
+			}
+			if mode == ModeMutable && state.State != StatePendingMerge {
+				if pending, err := m.findPendingMergeWorkspace(userID, state.TaskID); err != nil {
+					return nil, err
+				} else if pending != nil {
+					return nil, NewPendingMergeError(pending.TaskID)
+				}
+			}
+			if _, ok, err := m.loadBaseline(taskRoot); err != nil {
+				return nil, err
+			} else if !ok {
+				manifest, err := m.buildManifest(taskRoot)
+				if err != nil {
+					return nil, err
+				}
+				if err := m.saveBaseline(taskRoot, manifest); err != nil {
+					return nil, err
+				}
+			}
+			if mode == ModeMutable && state.State != StatePendingMerge {
+				now := m.nowUTC()
+				state.Mode = ModeMutable
+				state.State = StateActive
+				state.UpdatedAt = now
+				state.ErrorMessage = ""
+				if err := m.saveState(taskRoot, state); err != nil {
+					return nil, err
+				}
+			}
 			return &Workspace{UserID: strings.TrimSpace(userID), TaskID: strings.TrimSpace(taskID), Root: taskRoot, State: state.State}, nil
+		}
+		if mode == ModeMutable {
+			if pending, err := m.findPendingMergeWorkspace(userID, strings.TrimSpace(taskID)); err != nil {
+				return nil, err
+			} else if pending != nil {
+				return nil, NewPendingMergeError(pending.TaskID)
+			}
 		}
 		if err := os.RemoveAll(taskRoot); err != nil {
 			return nil, err
 		}
 	} else if !os.IsNotExist(err) {
 		return nil, err
+	} else if mode == ModeMutable {
+		if pending, err := m.findPendingMergeWorkspace(userID, strings.TrimSpace(taskID)); err != nil {
+			return nil, err
+		} else if pending != nil {
+			return nil, NewPendingMergeError(pending.TaskID)
+		}
 	}
 
 	if err := os.MkdirAll(taskRoot, 0o755); err != nil {
@@ -235,10 +303,17 @@ func (m *Manager) CreateTaskWorkspace(ctx context.Context, userID string, taskID
 
 	filter := func(relativePath string, entry os.DirEntry) bool {
 		_ = entry
-		return filepath.ToSlash(relativePath) == StateFileName
+		return isWorkspaceSidecar(relativePath)
 	}
 	if err := copyDirectoryContents(home.Root, taskRoot, filter); err != nil {
 		return nil, fmt.Errorf("copy home workspace: %w", err)
+	}
+	manifest, err := m.buildManifest(taskRoot)
+	if err != nil {
+		return nil, err
+	}
+	if err := m.saveBaseline(taskRoot, manifest); err != nil {
+		return nil, err
 	}
 
 	now := m.nowUTC()
@@ -277,11 +352,23 @@ func (m *Manager) ConfirmTaskWorkspace(ctx context.Context, userID string, taskI
 	if err := m.normalizeLoadedState(userID, taskID, taskRoot, &state); err != nil {
 		return nil, err
 	}
-	if state.State == StateMerged || state.State == StateDiscarded {
-		return &state, nil
-	}
 	if state.State != StatePendingMerge {
 		return nil, fmt.Errorf("workspace is not ready for confirmation: %s", state.State)
+	}
+
+	homeManifest, err := m.buildManifest(state.HomeRoot)
+	if err != nil {
+		return nil, err
+	}
+	baseline, ok, err := m.loadBaseline(taskRoot)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, NewHomeChangedError(state.TaskID)
+	}
+	if !manifestsEqual(homeManifest, baseline) {
+		return nil, NewHomeChangedError(state.TaskID)
 	}
 
 	backupRoot := state.BackupRoot
@@ -303,12 +390,19 @@ func (m *Manager) ConfirmTaskWorkspace(ctx context.Context, userID string, taskI
 
 	if err := replaceDirectoryContents(taskRoot, state.HomeRoot, func(relativePath string, entry os.DirEntry) bool {
 		_ = entry
-		return filepath.ToSlash(relativePath) == StateFileName
+		return isWorkspaceSidecar(relativePath)
 	}); err != nil {
 		if restoreErr := replaceDirectoryContents(backupRoot, state.HomeRoot, nil); restoreErr != nil {
 			return nil, fmt.Errorf("replace home workspace: %w (restore backup failed: %v)", err, restoreErr)
 		}
 		return nil, fmt.Errorf("replace home workspace: %w", err)
+	}
+	mergedManifest, err := m.buildManifest(state.HomeRoot)
+	if err != nil {
+		return nil, err
+	}
+	if err := m.saveBaseline(taskRoot, mergedManifest); err != nil {
+		return nil, err
 	}
 
 	now := m.nowUTC()
@@ -321,10 +415,14 @@ func (m *Manager) ConfirmTaskWorkspace(ctx context.Context, userID string, taskI
 	return &state, nil
 }
 
-func (m *Manager) MarkTaskWorkspacePendingMerge(ctx context.Context, userID string, taskID string) (*WorkspaceStateFile, error) {
+func (m *Manager) FinishMutableWorkspace(ctx context.Context, userID string, taskID string) (*WorkspaceStateFile, error) {
 	_ = ctx
 	unlock := m.lockUserWorkspace(userID)
 	defer unlock()
+	return m.finishMutableWorkspace(userID, taskID)
+}
+
+func (m *Manager) finishMutableWorkspace(userID string, taskID string) (*WorkspaceStateFile, error) {
 	taskRoot, err := m.taskRoot(userID, taskID)
 	if err != nil {
 		return nil, err
@@ -339,22 +437,48 @@ func (m *Manager) MarkTaskWorkspacePendingMerge(ctx context.Context, userID stri
 	if err := m.normalizeLoadedState(userID, taskID, taskRoot, &state); err != nil {
 		return nil, err
 	}
-	if state.State == StatePendingMerge || state.State == StateMerged || state.State == StateDiscarded || state.State == StateCompleted {
-		return &state, nil
-	}
 	if state.Mode != ModeMutable {
-		return nil, fmt.Errorf("workspace mode cannot enter pending merge: %s", state.Mode)
+		return nil, fmt.Errorf("workspace mode cannot finish mutable workspace: %s", state.Mode)
 	}
-	if state.State != StateActive {
-		return nil, fmt.Errorf("workspace is not active: %s", state.State)
+
+	baseline, ok, err := m.loadBaseline(taskRoot)
+	if err != nil {
+		return nil, err
+	}
+	currentManifest, err := m.buildManifest(taskRoot)
+	if err != nil {
+		return nil, err
 	}
 	now := m.nowUTC()
-	state.State = StatePendingMerge
 	state.UpdatedAt = now
+	state.ErrorMessage = ""
+	if !ok {
+		if err := m.saveBaseline(taskRoot, currentManifest); err != nil {
+			return nil, err
+		}
+		state.State = StateCompleted
+		if err := m.saveState(taskRoot, state); err != nil {
+			return nil, err
+		}
+		return &state, nil
+	}
+
+	if manifestsEqual(currentManifest, baseline) {
+		state.State = StateCompleted
+	} else {
+		state.State = StatePendingMerge
+	}
 	if err := m.saveState(taskRoot, state); err != nil {
 		return nil, err
 	}
 	return &state, nil
+}
+
+func (m *Manager) MarkTaskWorkspacePendingMerge(ctx context.Context, userID string, taskID string) (*WorkspaceStateFile, error) {
+	_ = ctx
+	unlock := m.lockUserWorkspace(userID)
+	defer unlock()
+	return m.finishMutableWorkspace(userID, taskID)
 }
 
 func (m *Manager) CompleteTaskWorkspace(ctx context.Context, userID string, taskID string, errorMessage string) (*WorkspaceStateFile, error) {
@@ -379,9 +503,30 @@ func (m *Manager) CompleteTaskWorkspace(ctx context.Context, userID string, task
 		return &state, nil
 	}
 	now := m.nowUTC()
-	state.State = StateCompleted
 	state.ErrorMessage = strings.TrimSpace(errorMessage)
 	state.UpdatedAt = now
+	if state.Mode == ModeMutable {
+		baseline, ok, err := m.loadBaseline(taskRoot)
+		if err != nil {
+			return nil, err
+		}
+		currentManifest, err := m.buildManifest(taskRoot)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			if err := m.saveBaseline(taskRoot, currentManifest); err != nil {
+				return nil, err
+			}
+			state.State = StateCompleted
+		} else if manifestsEqual(currentManifest, baseline) {
+			state.State = StateCompleted
+		} else {
+			state.State = StatePendingMerge
+		}
+	} else {
+		state.State = StateCompleted
+	}
 	if err := m.saveState(taskRoot, state); err != nil {
 		return nil, err
 	}
@@ -409,6 +554,21 @@ func (m *Manager) DiscardTaskWorkspace(ctx context.Context, userID string, taskI
 	if state.State == StateDiscarded || state.State == StateMerged {
 		return &state, nil
 	}
+	if state.Mode == ModeMutable {
+		if err := replaceDirectoryContents(state.HomeRoot, taskRoot, func(relativePath string, entry os.DirEntry) bool {
+			_ = entry
+			return isWorkspaceSidecar(relativePath)
+		}); err != nil {
+			return nil, fmt.Errorf("restore workspace from home: %w", err)
+		}
+		manifest, err := m.buildManifest(taskRoot)
+		if err != nil {
+			return nil, err
+		}
+		if err := m.saveBaseline(taskRoot, manifest); err != nil {
+			return nil, err
+		}
+	}
 	now := m.nowUTC()
 	state.State = StateDiscarded
 	state.DiscardedAt = &now
@@ -417,6 +577,45 @@ func (m *Manager) DiscardTaskWorkspace(ctx context.Context, userID string, taskI
 		return nil, err
 	}
 	return &state, nil
+}
+
+func (m *Manager) ListPendingMergeWorkspaces(ctx context.Context, userID string) ([]TaskWorkspaceSummary, error) {
+	_ = ctx
+	unlock := m.lockUserWorkspace(userID)
+	defer unlock()
+	return m.listPendingMergeWorkspaces(userID)
+}
+
+func isWorkspaceSidecar(relativePath string) bool {
+	switch filepath.ToSlash(relativePath) {
+	case StateFileName, BaselineFileName:
+		return true
+	default:
+		return false
+	}
+}
+
+func comparableManifestEntries(entries []WorkspaceManifestEntry) []WorkspaceManifestEntry {
+	result := make([]WorkspaceManifestEntry, len(entries))
+	copy(result, entries)
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Path < result[j].Path
+	})
+	return result
+}
+
+func fileSHA256(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", hash.Sum(nil)), nil
 }
 
 func (m *Manager) SummarizeUserWorkspaces(ctx context.Context, userID string) (*UserWorkspaceSummary, error) {
@@ -466,6 +665,9 @@ func (m *Manager) SummarizeUserWorkspaces(ctx context.Context, userID string) (*
 		if !ok {
 			continue
 		}
+		if err := m.normalizeLoadedState(userID, entry.Name(), taskRoot, &state); err != nil {
+			return nil, err
+		}
 		summary.Tasks = append(summary.Tasks, TaskWorkspaceSummary{
 			TaskID:      state.TaskID,
 			Mode:        state.Mode,
@@ -482,6 +684,76 @@ func (m *Manager) SummarizeUserWorkspaces(ctx context.Context, userID string) (*
 		return summary.Tasks[i].TaskID < summary.Tasks[j].TaskID
 	})
 	return summary, nil
+}
+
+func (m *Manager) findPendingMergeWorkspace(userID string, exceptTaskID string) (*TaskWorkspaceSummary, error) {
+	pending, err := m.listPendingMergeWorkspaces(userID)
+	if err != nil {
+		return nil, err
+	}
+	exceptTaskID = strings.TrimSpace(exceptTaskID)
+	for i := range pending {
+		if pending[i].TaskID == exceptTaskID {
+			continue
+		}
+		return &pending[i], nil
+	}
+	return nil, nil
+}
+
+func (m *Manager) listPendingMergeWorkspaces(userID string) ([]TaskWorkspaceSummary, error) {
+	tasksRoot, err := m.resolveWorkspacePath("users", userID, "tasks")
+	if err != nil {
+		return nil, err
+	}
+	if err := ensureNoSymlink(tasksRoot); err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(tasksRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []TaskWorkspaceSummary{}, nil
+		}
+		return nil, err
+	}
+	pending := []TaskWorkspaceSummary{}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		taskRoot := filepath.Join(tasksRoot, entry.Name())
+		if err := ensureNoSymlink(taskRoot); err != nil {
+			return nil, err
+		}
+		state, ok, err := m.loadState(taskRoot)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			continue
+		}
+		if err := m.normalizeLoadedState(userID, entry.Name(), taskRoot, &state); err != nil {
+			return nil, err
+		}
+		if state.State != StatePendingMerge {
+			continue
+		}
+		pending = append(pending, TaskWorkspaceSummary{
+			TaskID:      state.TaskID,
+			Mode:        state.Mode,
+			State:       state.State,
+			TaskRoot:    state.TaskRoot,
+			BackupRoot:  state.BackupRoot,
+			CreatedAt:   state.CreatedAt,
+			UpdatedAt:   state.UpdatedAt,
+			MergedAt:    state.MergedAt,
+			DiscardedAt: state.DiscardedAt,
+		})
+	}
+	sort.Slice(pending, func(i, j int) bool {
+		return pending[i].TaskID < pending[j].TaskID
+	})
+	return pending, nil
 }
 
 func (m *Manager) lockUserWorkspace(userID string) func() {
@@ -565,6 +837,130 @@ func (m *Manager) saveState(taskRoot string, state WorkspaceStateFile) error {
 		return err
 	}
 	return os.WriteFile(statePath, content, 0o644)
+}
+
+func (m *Manager) buildManifest(root string) (WorkspaceManifest, error) {
+	if err := ensureNoSymlink(root); err != nil {
+		return WorkspaceManifest{}, err
+	}
+	manifest := WorkspaceManifest{
+		Version: 1,
+		Entries: []WorkspaceManifestEntry{},
+	}
+	if err := filepath.WalkDir(root, func(currentPath string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if currentPath == root {
+			return nil
+		}
+		relativePath, err := filepath.Rel(root, currentPath)
+		if err != nil {
+			return err
+		}
+		slashPath := filepath.ToSlash(relativePath)
+		if isWorkspaceSidecar(slashPath) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return fmt.Errorf("symlink paths are not supported: %s", currentPath)
+		}
+		if entry.IsDir() {
+			manifest.Entries = append(manifest.Entries, WorkspaceManifestEntry{
+				Path: slashPath,
+				Kind: "dir",
+			})
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		hash, err := fileSHA256(currentPath)
+		if err != nil {
+			return err
+		}
+		manifest.Entries = append(manifest.Entries, WorkspaceManifestEntry{
+			Path:   slashPath,
+			Kind:   "file",
+			Size:   info.Size(),
+			SHA256: hash,
+		})
+		return nil
+	}); err != nil {
+		return WorkspaceManifest{}, err
+	}
+	sort.Slice(manifest.Entries, func(i, j int) bool {
+		return manifest.Entries[i].Path < manifest.Entries[j].Path
+	})
+	return manifest, nil
+}
+
+func (m *Manager) loadBaseline(root string) (WorkspaceManifest, bool, error) {
+	baselinePath := filepath.Join(root, BaselineFileName)
+	if err := ensureNoSymlink(baselinePath); err != nil {
+		return WorkspaceManifest{}, false, err
+	}
+	content, err := os.ReadFile(baselinePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return WorkspaceManifest{}, false, nil
+		}
+		return WorkspaceManifest{}, false, err
+	}
+	var manifest WorkspaceManifest
+	if err := json.Unmarshal(content, &manifest); err != nil {
+		return WorkspaceManifest{}, false, err
+	}
+	if manifest.Version == 0 {
+		manifest.Version = 1
+	}
+	if manifest.Entries == nil {
+		manifest.Entries = []WorkspaceManifestEntry{}
+	}
+	sort.Slice(manifest.Entries, func(i, j int) bool {
+		return manifest.Entries[i].Path < manifest.Entries[j].Path
+	})
+	return manifest, true, nil
+}
+
+func (m *Manager) saveBaseline(root string, manifest WorkspaceManifest) error {
+	manifest.Version = 1
+	if manifest.Entries == nil {
+		manifest.Entries = []WorkspaceManifestEntry{}
+	}
+	sort.Slice(manifest.Entries, func(i, j int) bool {
+		return manifest.Entries[i].Path < manifest.Entries[j].Path
+	})
+	baselinePath := filepath.Join(root, BaselineFileName)
+	if err := ensureNoSymlink(baselinePath); err != nil {
+		return err
+	}
+	content, err := json.Marshal(manifest)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(baselinePath, content, 0o644)
+}
+
+func manifestsEqual(left WorkspaceManifest, right WorkspaceManifest) bool {
+	leftEntries := comparableManifestEntries(left.Entries)
+	rightEntries := comparableManifestEntries(right.Entries)
+	if len(leftEntries) != len(rightEntries) {
+		return false
+	}
+	for i := range leftEntries {
+		if leftEntries[i].Path != rightEntries[i].Path ||
+			leftEntries[i].Kind != rightEntries[i].Kind ||
+			leftEntries[i].Size != rightEntries[i].Size ||
+			leftEntries[i].SHA256 != rightEntries[i].SHA256 {
+			return false
+		}
+	}
+	return true
 }
 
 func (m *Manager) normalizeLoadedState(userID string, taskID string, taskRoot string, state *WorkspaceStateFile) error {

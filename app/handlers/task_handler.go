@@ -27,8 +27,8 @@ type taskWorkspaceManager interface {
 }
 
 type taskWorkspaceActionInput struct {
-	UserID string
-	TaskID string
+	UserID      string
+	WorkspaceID string
 }
 
 type TaskHandler struct {
@@ -427,6 +427,7 @@ func (h *TaskHandler) handleRetryTask() (method, relativePath string, wrapper re
 // @Failure 400 {object} ErrorSwaggerResponse
 // @Failure 401 {object} ErrorSwaggerResponse
 // @Failure 404 {object} ErrorSwaggerResponse
+// @Failure 409 {object} ErrorSwaggerResponse
 // @Router /tasks/{id}/workspace/confirm [post]
 func (h *TaskHandler) handleConfirmTaskWorkspace() (method, relativePath string, wrapper resp.JsonOptionsResultWrapper, opts []resp.WrapperOption) {
 	return http.MethodPost, "/:id/workspace/confirm", func(c *gin.Context) (any, []resp.ResOpt, error) {
@@ -441,8 +442,12 @@ func (h *TaskHandler) handleConfirmTaskWorkspace() (method, relativePath string,
 		if err != nil {
 			return nil, []resp.ResOpt{resp.WithCode(http.StatusBadRequest)}, err
 		}
-		state, err := h.workspaces.ConfirmTaskWorkspace(c.Request.Context(), input.UserID, input.TaskID)
-		return state, workspaceActionErrorOptions(err), err
+		state, err := h.workspaces.ConfirmTaskWorkspace(c.Request.Context(), input.UserID, input.WorkspaceID)
+		if err != nil {
+			data, opts := workspaceActionResponseOptions(err, input.WorkspaceID, workspaceActionErrorOptions)
+			return data, opts, err
+		}
+		return state, nil, nil
 	}, nil
 }
 
@@ -471,8 +476,12 @@ func (h *TaskHandler) handleDiscardTaskWorkspace() (method, relativePath string,
 		if err != nil {
 			return nil, []resp.ResOpt{resp.WithCode(http.StatusBadRequest)}, err
 		}
-		state, err := h.workspaces.DiscardTaskWorkspace(c.Request.Context(), input.UserID, input.TaskID)
-		return state, workspaceActionErrorOptions(err), err
+		state, err := h.workspaces.DiscardTaskWorkspace(c.Request.Context(), input.UserID, input.WorkspaceID)
+		if err != nil {
+			data, opts := workspaceActionResponseOptions(err, input.WorkspaceID, workspaceActionErrorOptions)
+			return data, opts, err
+		}
+		return state, nil, nil
 	}, nil
 }
 
@@ -484,21 +493,23 @@ func (h *TaskHandler) taskWorkspaceInput(c *gin.Context, task *coretasks.Task) (
 	if err != nil {
 		return taskWorkspaceActionInput{}, err
 	}
-	return taskWorkspaceActionInput{UserID: userID, TaskID: task.ID}, nil
+	workspaceID, err := workspaceIDFromTask(task)
+	if err != nil {
+		return taskWorkspaceActionInput{}, err
+	}
+	return taskWorkspaceActionInput{UserID: userID, WorkspaceID: workspaceID}, nil
 }
 
 func workspaceUserIDFromTask(c *gin.Context, task *coretasks.Task) (string, error) {
-	input := map[string]any{}
-	if len(task.InputJSON) > 0 {
-		if err := json.Unmarshal(task.InputJSON, &input); err != nil {
-			return "", fmt.Errorf("decode task input: %w", err)
-		}
+	if user := currentAuthUser(c); user != nil && user.ID != 0 {
+		return strconv.FormatUint(user.ID, 10), nil
+	}
+	input, err := decodeTaskInputMap(task)
+	if err != nil {
+		return "", err
 	}
 	if raw, ok := input["workspace_user_id"].(string); ok && strings.TrimSpace(raw) != "" {
 		return strings.TrimSpace(raw), nil
-	}
-	if user := currentAuthUser(c); user != nil && user.ID != 0 {
-		return strconv.FormatUint(user.ID, 10), nil
 	}
 	if raw, ok := input["user_id"].(string); ok && strings.TrimSpace(raw) != "" {
 		return strings.TrimSpace(raw), nil
@@ -509,12 +520,42 @@ func workspaceUserIDFromTask(c *gin.Context, task *coretasks.Task) (string, erro
 	return "", fmt.Errorf("workspace_user_id is missing")
 }
 
+func workspaceIDFromTask(task *coretasks.Task) (string, error) {
+	if task == nil {
+		return "", fmt.Errorf("task is required")
+	}
+	input, err := decodeTaskInputMap(task)
+	if err != nil {
+		return "", err
+	}
+	if raw, ok := input["conversation_id"].(string); ok && strings.TrimSpace(raw) != "" {
+		return strings.TrimSpace(raw), nil
+	}
+	if strings.TrimSpace(task.ID) != "" {
+		return strings.TrimSpace(task.ID), nil
+	}
+	return "", fmt.Errorf("workspace id is missing")
+}
+
+func decodeTaskInputMap(task *coretasks.Task) (map[string]any, error) {
+	input := map[string]any{}
+	if task == nil || len(task.InputJSON) == 0 {
+		return input, nil
+	}
+	if err := json.Unmarshal(task.InputJSON, &input); err != nil {
+		return nil, fmt.Errorf("decode task input: %w", err)
+	}
+	return input, nil
+}
+
 func workspaceActionErrorOptions(err error) []resp.ResOpt {
 	if err == nil {
 		return nil
 	}
 	message := err.Error()
 	switch {
+	case errors.Is(err, coreworkspaces.ErrWorkspaceHomeChanged):
+		return []resp.ResOpt{resp.WithCode(http.StatusConflict)}
 	case strings.Contains(message, "not found"):
 		return []resp.ResOpt{resp.WithCode(http.StatusNotFound)}
 	case strings.Contains(message, "not ready"), strings.Contains(message, "invalid"):

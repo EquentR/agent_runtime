@@ -498,9 +498,10 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 }
 
 type executorWorkspaceInfo struct {
-	UserID string
-	TaskID string
-	Mode   workspaces.Mode
+	UserID      string
+	WorkspaceID string
+	TaskID      string
+	Mode        workspaces.Mode
 }
 
 func resolveExecutorWorkspace(ctx context.Context, deps ExecutorDependencies, task *coretasks.Task, input RunTaskInput) (string, *tools.Registry, *coreskills.Resolver, executorWorkspaceInfo, error) {
@@ -517,8 +518,9 @@ func resolveExecutorWorkspace(ctx context.Context, deps ExecutorDependencies, ta
 		return workspaceRoot, registry, skillsResolver, info, nil
 	}
 	info.UserID = workspaceUserID
+	info.WorkspaceID = executorWorkspaceID(task, input)
 	info.TaskID = task.ID
-	taskWorkspace, err := deps.WorkspaceManager.CreateTaskWorkspace(ctx, workspaceUserID, task.ID, info.Mode)
+	taskWorkspace, err := deps.WorkspaceManager.CreateTaskWorkspace(ctx, workspaceUserID, info.WorkspaceID, info.Mode)
 	if err != nil {
 		return "", nil, nil, info, err
 	}
@@ -534,35 +536,38 @@ func resolveExecutorWorkspace(ctx context.Context, deps ExecutorDependencies, ta
 }
 
 func finishSuccessfulExecutorWorkspace(ctx context.Context, deps ExecutorDependencies, info executorWorkspaceInfo) (workspaces.State, error) {
-	if deps.WorkspaceManager == nil || info.UserID == "" || info.TaskID == "" {
+	if deps.WorkspaceManager == nil || info.UserID == "" || info.WorkspaceID == "" {
 		return "", nil
 	}
 	if info.Mode == workspaces.ModeMutable {
-		state, err := deps.WorkspaceManager.MarkTaskWorkspacePendingMerge(ctx, info.UserID, info.TaskID)
+		state, err := deps.WorkspaceManager.FinishMutableWorkspace(ctx, info.UserID, info.WorkspaceID)
 		if err != nil {
 			return "", err
 		}
 		return state.State, nil
 	}
-	state, err := deps.WorkspaceManager.DiscardTaskWorkspace(ctx, info.UserID, info.TaskID)
-	if err != nil {
-		return "", err
-	}
-	return state.State, nil
+	return "", nil
 }
 
 func completeExecutorWorkspace(ctx context.Context, deps ExecutorDependencies, info executorWorkspaceInfo, cause error) (*workspaces.WorkspaceStateFile, error) {
-	if deps.WorkspaceManager == nil || info.UserID == "" || info.TaskID == "" {
+	if deps.WorkspaceManager == nil || info.UserID == "" || info.WorkspaceID == "" {
 		return nil, nil
 	}
 	if info.Mode == workspaces.ModeReadonly {
-		return deps.WorkspaceManager.DiscardTaskWorkspace(ctx, info.UserID, info.TaskID)
+		return nil, nil
 	}
 	message := ""
 	if cause != nil {
 		message = cause.Error()
 	}
-	return deps.WorkspaceManager.CompleteTaskWorkspace(ctx, info.UserID, info.TaskID, message)
+	return deps.WorkspaceManager.CompleteTaskWorkspace(ctx, info.UserID, info.WorkspaceID, message)
+}
+
+func executorWorkspaceID(task *coretasks.Task, input RunTaskInput) string {
+	if normalizeWorkspaceMode(input.WorkspaceMode) == workspaces.ModeReadonly {
+		return task.ID
+	}
+	return firstNonEmpty(input.ConversationID, task.ID)
 }
 
 func hydrateReplayMessages(ctx context.Context, store *attachments.Store, storage attachments.Storage, messages []model.Message, conversationID string, allowExpiredHistoryContinuation bool) ([]model.Message, error) {

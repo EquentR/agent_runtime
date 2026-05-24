@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
+  ApiError,
   buildRunTaskRequest,
   cancelTask,
   extractStreamText,
@@ -11,12 +12,53 @@ import {
   normalizeTaskDetails,
   normalizeRunTaskResult,
   confirmTaskWorkspaceMerge,
+  confirmConversationWorkspaceMerge,
   discardTaskWorkspaceChanges,
+  discardConversationWorkspaceChanges,
+  fetchConversationWorkspaceState,
   streamRunTask,
   unwrapEnvelope,
 } from './api'
 
 describe('auth normalization helpers', () => {
+  it('throws API errors with status code and structured data from failed envelopes', () => {
+    expect(() =>
+      unwrapEnvelope({
+        ok: false,
+        code: 409,
+        message: 'workspace home changed since baseline',
+        data: {
+          code: 'workspace_home_changed',
+          message: '工作区基线已过期',
+          conversation_id: 'conv_1',
+        },
+        time: '',
+      }),
+    ).toThrow(ApiError)
+
+    try {
+      unwrapEnvelope({
+        ok: false,
+        code: 409,
+        message: 'workspace home changed since baseline',
+        data: {
+          code: 'workspace_home_changed',
+          message: '工作区基线已过期',
+          conversation_id: 'conv_1',
+        },
+        time: '',
+      })
+    } catch (error) {
+      expect(error).toBeInstanceOf(ApiError)
+      expect((error as ApiError).message).toBe('工作区基线已过期')
+      expect((error as ApiError).statusCode).toBe(409)
+      expect((error as ApiError).data).toEqual(expect.objectContaining({
+        code: 'workspace_home_changed',
+        conversation_id: 'conv_1',
+      }))
+    }
+  })
+
   it('includes role from backend auth payloads', async () => {
     const api = (await import('./api')) as Record<string, unknown>
 
@@ -1473,6 +1515,115 @@ describe('workspace merge actions', () => {
     vi.restoreAllMocks()
   })
 
+  it('fetches conversation workspace state', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      json: async () => ({
+        ok: true,
+        code: 200,
+        message: 'OK',
+        time: '',
+        data: {
+          task_id: 'conv_1',
+          user_id: '42',
+          mode: 'mutable',
+          state: 'pending_merge',
+          home_root: '/home',
+          task_root: '/workspace',
+          created_at: '2026-05-24T00:00:00Z',
+          updated_at: '2026-05-24T00:00:00Z',
+        },
+      }),
+    } as Response)
+
+    const state = await fetchConversationWorkspaceState('conv_1')
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      '/api/v1/conversations/conv_1/workspace',
+      expect.objectContaining({
+        credentials: 'include',
+      }),
+    )
+    expect(state?.state).toBe('pending_merge')
+  })
+
+  it('returns null when a conversation has no workspace state', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      json: async () => ({
+        ok: true,
+        code: 200,
+        message: 'OK',
+        time: '',
+        data: null,
+      }),
+    } as Response)
+
+    await expect(fetchConversationWorkspaceState('conv_1')).resolves.toBeNull()
+  })
+
+  it('confirms conversation workspace changes', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      json: async () => ({
+        ok: true,
+        code: 200,
+        message: 'OK',
+        time: '',
+        data: {
+          task_id: 'conv_1',
+          user_id: '42',
+          mode: 'mutable',
+          state: 'merged',
+          home_root: '/home',
+          task_root: '/workspace',
+          created_at: '',
+          updated_at: '',
+        },
+      }),
+    } as Response)
+
+    const state = await confirmConversationWorkspaceMerge('conv_1')
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      '/api/v1/conversations/conv_1/workspace/confirm',
+      expect.objectContaining({
+        method: 'POST',
+        credentials: 'include',
+      }),
+    )
+    expect(state.state).toBe('merged')
+  })
+
+  it('discards conversation workspace changes', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      json: async () => ({
+        ok: true,
+        code: 200,
+        message: 'OK',
+        time: '',
+        data: {
+          task_id: 'conv_1',
+          user_id: '42',
+          mode: 'mutable',
+          state: 'discarded',
+          home_root: '/home',
+          task_root: '/workspace',
+          created_at: '',
+          updated_at: '',
+        },
+      }),
+    } as Response)
+
+    const state = await discardConversationWorkspaceChanges('conv_1')
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      '/api/v1/conversations/conv_1/workspace/discard',
+      expect.objectContaining({
+        method: 'POST',
+        credentials: 'include',
+      }),
+    )
+    expect(state.state).toBe('discarded')
+  })
+
   it('POSTs a task merge confirmation request for the task id', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
       json: async () => ({
@@ -1980,6 +2131,76 @@ describe('streamRunTask', () => {
     })
 
     await expect(promise).resolves.toMatchObject({ conversation_id: 'conv_new' })
+  })
+
+  it('rejects failed workspace tasks with structured API error data', async () => {
+    class MockEventSource {
+      static instances: MockEventSource[] = []
+
+      url: string
+      withCredentials: boolean
+      onerror: (() => void) | null = null
+      private readonly listeners = new Map<string, Array<(event: MessageEvent<string>) => void>>()
+
+      constructor(url: string, options?: { withCredentials?: boolean }) {
+        this.url = url
+        this.withCredentials = options?.withCredentials ?? false
+        MockEventSource.instances.push(this)
+      }
+
+      addEventListener(type: string, handler: (event: MessageEvent<string>) => void) {
+        this.listeners.set(type, [...(this.listeners.get(type) ?? []), handler])
+      }
+
+      close() {
+        void 0
+      }
+
+      emit(type: string, data: unknown) {
+        for (const handler of this.listeners.get(type) ?? []) {
+          handler({ data: JSON.stringify(data) } as MessageEvent<string>)
+        }
+      }
+    }
+
+    vi.stubGlobal('EventSource', MockEventSource as unknown as typeof EventSource)
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        code: 200,
+        message: 'OK',
+        data: {
+          id: 'task_1',
+          task_type: 'agent.run',
+          status: 'failed',
+          input: { conversation_id: 'conv_current' },
+          error: {
+            code: 'workspace_pending_merge',
+            message: '另一个会话还有未处理的工作区变更。请先前往该会话确认或丢弃后，再继续当前操作。',
+            conversation_id: 'conv_pending',
+          },
+        },
+      }),
+    } as Response))
+
+    const promise = streamRunTask('task_1', () => void 0)
+
+    MockEventSource.instances[0]?.emit('task.finished', {
+      task_id: 'task_1',
+      seq: 1,
+      type: 'task.finished',
+      payload: { status: 'failed' },
+    })
+
+    await expect(promise).rejects.toMatchObject({
+      message: '另一个会话还有未处理的工作区变更。请先前往该会话确认或丢弃后，再继续当前操作。',
+      statusCode: 409,
+      data: expect.objectContaining({
+        code: 'workspace_pending_merge',
+        conversation_id: 'conv_pending',
+      }),
+    })
   })
 
   it('normalizes authoritative memory snapshots on fetched conversations', async () => {

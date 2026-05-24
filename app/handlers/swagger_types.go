@@ -711,6 +711,15 @@ type WorkspaceStateSwaggerResponse struct {
 	Time    string                   `json:"time"`
 }
 
+// ConversationWorkspaceStateSwaggerResponse describes a nullable conversation workspace state response.
+type ConversationWorkspaceStateSwaggerResponse struct {
+	Code    int                       `json:"code"`
+	Message string                    `json:"message"`
+	Data    *WorkspaceStateSwaggerDoc `json:"data"`
+	OK      bool                      `json:"ok"`
+	Time    string                    `json:"time"`
+}
+
 // WorkspaceStateSwaggerDoc describes persisted task workspace state.
 type WorkspaceStateSwaggerDoc struct {
 	TaskID       string  `json:"task_id"`

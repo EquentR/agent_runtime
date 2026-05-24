@@ -560,45 +560,61 @@ func (m *Manager) executeTask(ctx context.Context, task *Task) {
 		return
 	}
 
-		taskCtx, cancel := context.WithCancel(ctx)
-		m.setActiveCancel(task.ID, cancel)
-		defer func() {
-			cancel()
-			m.clearActiveCancel(task.ID)
-		}()
+	taskCtx, cancel := context.WithCancel(ctx)
+	m.setActiveCancel(task.ID, cancel)
+	defer func() {
+		cancel()
+		m.clearActiveCancel(task.ID)
+	}()
 
-		startedAt := time.Now()
-		go m.heartbeatLoop(taskCtx, task.ID)
+	startedAt := time.Now()
+	go m.heartbeatLoop(taskCtx, task.ID)
 
-		runtime := newRuntime(m, task.ID)
-		result, execErr := executor(taskCtx, task, runtime)
+	runtime := newRuntime(m, task.ID)
+	result, execErr := executor(taskCtx, task, runtime)
 
-		var finished *Task
-		var events []TaskEvent
-		var reason any
-		switch {
-		case errors.Is(execErr, context.Canceled) || errors.Is(taskCtx.Err(), context.Canceled):
-			reason = map[string]any{"message": "task cancelled"}
-			finished, events, execErr = m.store.MarkCancelled(context.Background(), task.ID, reason)
-		case runtime.isSuspended() && m.taskStatusIs(context.Background(), task.ID, StatusWaiting):
-			return
-		case errors.Is(execErr, ErrTaskSuspended):
-			return
-		case execErr != nil:
-			reason = map[string]any{"message": execErr.Error()}
-			corelog.Error("task execution failed", corelog.String("component", "tasks"), corelog.String("module", "task_manager"), corelog.String("task_id", task.ID), corelog.String("task_type", task.TaskType), corelog.Err(execErr))
-			finished, events, execErr = m.store.MarkFailed(context.Background(), task.ID, reason)
-		default:
-			finished, events, execErr = m.store.MarkSucceeded(context.Background(), task.ID, result)
+	var finished *Task
+	var events []TaskEvent
+	var reason any
+	switch {
+	case errors.Is(execErr, context.Canceled) || errors.Is(taskCtx.Err(), context.Canceled):
+		reason = map[string]any{"message": "task cancelled"}
+		finished, events, execErr = m.store.MarkCancelled(context.Background(), task.ID, reason)
+	case runtime.isSuspended() && m.taskStatusIs(context.Background(), task.ID, StatusWaiting):
+		return
+	case errors.Is(execErr, ErrTaskSuspended):
+		return
+	case execErr != nil:
+		reason = taskFailureReason(execErr)
+		corelog.Error("task execution failed", corelog.String("component", "tasks"), corelog.String("module", "task_manager"), corelog.String("task_id", task.ID), corelog.String("task_type", task.TaskType), corelog.Err(execErr))
+		finished, events, execErr = m.store.MarkFailed(context.Background(), task.ID, reason)
+	default:
+		finished, events, execErr = m.store.MarkSucceeded(context.Background(), task.ID, result)
+	}
+	if execErr == nil {
+		if len(events) > 0 {
+			m.recordTaskFinished(finished, reason)
 		}
-		if execErr == nil {
-			if len(events) > 0 {
-				m.recordTaskFinished(finished, reason)
-			}
-			corelog.Info("task finished", corelog.String("component", "tasks"), corelog.String("module", "task_manager"), corelog.String("task_id", task.ID), corelog.String("task_type", task.TaskType), corelog.String("status", string(finished.Status)), corelog.Duration("duration", time.Since(startedAt)))
-			m.publish(events...)
-			m.tryResumeParentAfterChild(finished)
+		corelog.Info("task finished", corelog.String("component", "tasks"), corelog.String("module", "task_manager"), corelog.String("task_id", task.ID), corelog.String("task_type", task.TaskType), corelog.String("status", string(finished.Status)), corelog.Duration("duration", time.Since(startedAt)))
+		m.publish(events...)
+		m.tryResumeParentAfterChild(finished)
+	}
+}
+
+func taskFailureReason(err error) any {
+	if err == nil {
+		return nil
+	}
+	type structuredTaskError interface {
+		TaskErrorData() map[string]any
+	}
+	var structuredErr structuredTaskError
+	if errors.As(err, &structuredErr) {
+		if data := structuredErr.TaskErrorData(); len(data) > 0 {
+			return data
 		}
+	}
+	return map[string]any{"message": err.Error()}
 }
 
 func (m *Manager) taskStatusIs(ctx context.Context, taskID string, want Status) bool {

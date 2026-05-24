@@ -11,13 +11,21 @@ import (
 	"github.com/EquentR/agent_runtime/app/models"
 	coreagent "github.com/EquentR/agent_runtime/core/agent"
 	coreaudit "github.com/EquentR/agent_runtime/core/audit"
+	coreworkspaces "github.com/EquentR/agent_runtime/core/workspaces"
 	resp "github.com/EquentR/agent_runtime/pkg/rest"
 	"github.com/gin-gonic/gin"
 )
 
+type conversationWorkspaceManager interface {
+	GetWorkspaceState(ctx context.Context, userID string, workspaceID string) (*coreworkspaces.WorkspaceStateFile, bool, error)
+	ConfirmTaskWorkspace(ctx context.Context, userID string, workspaceID string) (*coreworkspaces.WorkspaceStateFile, error)
+	DiscardTaskWorkspace(ctx context.Context, userID string, workspaceID string) (*coreworkspaces.WorkspaceStateFile, error)
+}
+
 type ConversationHandler struct {
 	store        *coreagent.ConversationStore
 	auditStore   *coreaudit.Store
+	workspaces   conversationWorkspaceManager
 	middlewares  []gin.HandlerFunc
 	authRequired bool
 }
@@ -25,6 +33,12 @@ type ConversationHandler struct {
 // NewConversationHandler 创建会话查询接口处理器。
 func NewConversationHandler(store *coreagent.ConversationStore, auditStore *coreaudit.Store, middlewares ...gin.HandlerFunc) *ConversationHandler {
 	return &ConversationHandler{store: store, auditStore: auditStore, middlewares: middlewares, authRequired: len(middlewares) > 0}
+}
+
+// WithWorkspaceManager 注入 conversation workspace 查询与操作依赖。
+func (h *ConversationHandler) WithWorkspaceManager(workspaces conversationWorkspaceManager) *ConversationHandler {
+	h.workspaces = workspaces
+	return h
 }
 
 // Register 注册 conversation 查询与删除接口路由。
@@ -41,6 +55,9 @@ func (h *ConversationHandler) Register(rg *gin.RouterGroup) {
 		resp.NewJsonOptionsHandler(h.handleGetConversation),
 		resp.NewJsonOptionsHandler(h.handleGetConversationMessages),
 		resp.NewJsonOptionsHandler(h.handleDeleteConversation),
+		resp.NewJsonOptionsHandler(h.handleGetConversationWorkspace),
+		resp.NewJsonOptionsHandler(h.handleConfirmConversationWorkspace),
+		resp.NewJsonOptionsHandler(h.handleDiscardConversationWorkspace),
 	}, options...)
 }
 
@@ -157,6 +174,141 @@ func (h *ConversationHandler) handleDeleteConversation() (method, relativePath s
 		}
 		return gin.H{"deleted": true}, nil, nil
 	}, nil
+}
+
+// handleGetConversationWorkspace returns conversation-scoped workspace state.
+//
+// @Summary 查询会话工作区状态
+// @Description 根据 conversation id 返回 conversation workspace 状态；不存在时返回 null。
+// @Tags conversations
+// @Produce json
+// @Param id path string true "会话 ID"
+// @Success 200 {object} ConversationWorkspaceStateSwaggerResponse
+// @Failure 401 {object} ErrorSwaggerResponse
+// @Failure 404 {object} ErrorSwaggerResponse
+// @Router /conversations/{id}/workspace [get]
+func (h *ConversationHandler) handleGetConversationWorkspace() (method, relativePath string, wrapper resp.JsonOptionsResultWrapper, opts []resp.WrapperOption) {
+	return http.MethodGet, "/:id/workspace", func(c *gin.Context) (any, []resp.ResOpt, error) {
+		conversation, workspaceUserID, resOpts, err := h.conversationWorkspaceContext(c)
+		if err != nil {
+			return nil, resOpts, err
+		}
+		state, ok, err := h.workspaces.GetWorkspaceState(c.Request.Context(), workspaceUserID, conversation.ID)
+		if err != nil {
+			data, opts := workspaceActionResponseOptions(err, conversation.ID, conversationWorkspaceActionErrorOptions)
+			return data, opts, err
+		}
+		if !ok {
+			return nil, nil, nil
+		}
+		return state, nil, nil
+	}, nil
+}
+
+// handleConfirmConversationWorkspace confirms a conversation-scoped workspace merge.
+//
+// @Summary 确认会话工作区合并
+// @Description 将当前 conversation workspace 合并回用户 home workspace。
+// @Tags conversations
+// @Produce json
+// @Param id path string true "会话 ID"
+// @Success 200 {object} WorkspaceStateSwaggerResponse
+// @Failure 400 {object} ErrorSwaggerResponse
+// @Failure 401 {object} ErrorSwaggerResponse
+// @Failure 404 {object} ErrorSwaggerResponse
+// @Failure 409 {object} ErrorSwaggerResponse
+// @Router /conversations/{id}/workspace/confirm [post]
+func (h *ConversationHandler) handleConfirmConversationWorkspace() (method, relativePath string, wrapper resp.JsonOptionsResultWrapper, opts []resp.WrapperOption) {
+	return http.MethodPost, "/:id/workspace/confirm", func(c *gin.Context) (any, []resp.ResOpt, error) {
+		conversation, workspaceUserID, resOpts, err := h.conversationWorkspaceContext(c)
+		if err != nil {
+			return nil, resOpts, err
+		}
+		state, err := h.workspaces.ConfirmTaskWorkspace(c.Request.Context(), workspaceUserID, conversation.ID)
+		if err != nil {
+			data, opts := workspaceActionResponseOptions(err, conversation.ID, conversationWorkspaceActionErrorOptions)
+			return data, opts, err
+		}
+		return state, nil, nil
+	}, nil
+}
+
+// handleDiscardConversationWorkspace discards a conversation-scoped workspace.
+//
+// @Summary 丢弃会话工作区变更
+// @Description 从用户 home workspace 恢复 conversation workspace 并标记为 discarded。
+// @Tags conversations
+// @Produce json
+// @Param id path string true "会话 ID"
+// @Success 200 {object} WorkspaceStateSwaggerResponse
+// @Failure 400 {object} ErrorSwaggerResponse
+// @Failure 401 {object} ErrorSwaggerResponse
+// @Failure 404 {object} ErrorSwaggerResponse
+// @Router /conversations/{id}/workspace/discard [post]
+func (h *ConversationHandler) handleDiscardConversationWorkspace() (method, relativePath string, wrapper resp.JsonOptionsResultWrapper, opts []resp.WrapperOption) {
+	return http.MethodPost, "/:id/workspace/discard", func(c *gin.Context) (any, []resp.ResOpt, error) {
+		conversation, workspaceUserID, resOpts, err := h.conversationWorkspaceContext(c)
+		if err != nil {
+			return nil, resOpts, err
+		}
+		state, err := h.workspaces.DiscardTaskWorkspace(c.Request.Context(), workspaceUserID, conversation.ID)
+		if err != nil {
+			data, opts := workspaceActionResponseOptions(err, conversation.ID, conversationWorkspaceActionErrorOptions)
+			return data, opts, err
+		}
+		return state, nil, nil
+	}, nil
+}
+
+func (h *ConversationHandler) conversationWorkspaceContext(c *gin.Context) (*coreagent.Conversation, string, []resp.ResOpt, error) {
+	if h.store == nil {
+		return nil, "", nil, fmt.Errorf("conversation store is not configured")
+	}
+	if h.workspaces == nil {
+		return nil, "", []resp.ResOpt{resp.WithCode(http.StatusServiceUnavailable)}, fmt.Errorf("workspace manager is not configured")
+	}
+	conversation, err := h.store.GetConversation(c.Request.Context(), c.Param("id"))
+	if errors.Is(err, coreagent.ErrConversationNotFound) {
+		return nil, "", []resp.ResOpt{resp.WithCode(resp.NotFound)}, err
+	}
+	if err != nil {
+		return nil, "", nil, err
+	}
+	if err := h.ensureConversationAccess(c, conversation); err != nil {
+		return nil, "", []resp.ResOpt{resp.WithCode(http.StatusUnauthorized)}, err
+	}
+	workspaceUserID := h.workspaceUserIDForConversation(c, conversation)
+	if workspaceUserID == "" {
+		return nil, "", []resp.ResOpt{resp.WithCode(http.StatusBadRequest)}, fmt.Errorf("workspace user id is missing")
+	}
+	return conversation, workspaceUserID, nil, nil
+}
+
+func (h *ConversationHandler) workspaceUserIDForConversation(c *gin.Context, conversation *coreagent.Conversation) string {
+	if user := currentAuthUser(c); user != nil && user.ID != 0 {
+		return fmt.Sprintf("%d", user.ID)
+	}
+	if conversation != nil && strings.TrimSpace(conversation.CreatedBy) != "" {
+		return strings.TrimSpace(conversation.CreatedBy)
+	}
+	return "local"
+}
+
+func conversationWorkspaceActionErrorOptions(err error) []resp.ResOpt {
+	if err == nil {
+		return nil
+	}
+	message := err.Error()
+	switch {
+	case errors.Is(err, coreworkspaces.ErrWorkspaceHomeChanged):
+		return []resp.ResOpt{resp.WithCode(http.StatusConflict)}
+	case strings.Contains(message, "not found"):
+		return []resp.ResOpt{resp.WithCode(http.StatusNotFound)}
+	case strings.Contains(message, "not ready"), strings.Contains(message, "invalid"), strings.Contains(message, "not active"):
+		return []resp.ResOpt{resp.WithCode(http.StatusBadRequest)}
+	default:
+		return nil
+	}
 }
 
 func (h *ConversationHandler) filterConversations(c *gin.Context, conversations []coreagent.Conversation) []coreagent.Conversation {
