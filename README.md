@@ -19,6 +19,7 @@
 - 长期记忆：跨会话持久化用户偏好与关键事实，通过 LLM 做增量压缩。
 - 提示词路由：通过 document + binding + resolver 体系，按场景、阶段、模型分发提示词。
 - 技能注入：运行时按需解析 workspace skills，通过 `using_skills` 工具动态加载。
+- 用户工作区隔离：`workspaceDir` 作为模板和技能来源，运行时写入隔离在 `workspaces.root` 下的用户 home / conversation workspace。
 
 ### 任务调度
 
@@ -26,6 +27,7 @@
 - Worker pool 并发执行，可通过 `concurrency_key` 对同一资源下的任务做串行保护。
 - `waiting` 状态支持任务挂起与恢复——等待审批或用户回复时自动暂停，条件满足后继续执行。
 - 支持父子任务基本编排结构，为 fan-out / fan-in 和子 agent 调度预留基础能力。
+- `agent.run` 支持 `mutable` / `readonly` workspace 模式；可写模式按会话复用同一个 workspace，未变更时不会提示合并。
 
 ### 技能系统
 
@@ -44,6 +46,7 @@
 
 - 统一的 `ChatRequest` / `ChatResponse` / `Stream` 调用抽象，屏蔽不同 provider 的差异。
 - 已适配 Gemini、OpenAI-compatible Chat Completions 和 OpenAI Responses API。
+- Responses API 适配保留 provider state 的完整 output replay，支持 reasoning、assistant message 与连续工具调用跨轮延续。
 - 内建 19 个工具，涵盖文件读写、命令执行、HTTP 请求、进程管理、Web 搜索、技能加载、图像生成/编辑和人工问答，运行范围限制在配置的工作区目录内。
 - MCP tools / prompts 接入点已就绪，支持 stdio、SSE 和 Streamable HTTP 三种传输方式对接外部工具生态。
 
@@ -51,18 +54,21 @@
 
 - 基于 Vue 3 + TypeScript + Vite，提供登录页、聊天页、个人资料页、会话侧边栏和管理后台。
 - 聊天页支持模型切换、流式消息展示、会话恢复、中止运行、审批决策和人工问题回复。
+- 聊天页支持工作区只读/可写切换，并在会话工作区存在待合并变更时显示轻量确认控件。
 - 消息列表可切换是否展示思考过程与工具调用详情，方便控制信息密度。
 - 管理后台覆盖用户、模型、提示词、应用设置、审计会话与后台操作审计，权限通过角色控制。
 
 ## 📦 近期主要更新
 
+- **会话级工作区**：`mutable` 运行按 `conversation_id` 复用 workspace，基于 `.workspace-baseline.json` 判断是否存在真实文件变更，最终合并回用户 `home`。
+- **工作区隔离**：新增 `workspaces.root`，把用户 home、conversation workspace 与备份目录从模板 `workspaceDir` 中拆出，避免不同用户或任务互相污染。
 - **技能系统**：新增 workspace skills 支持，通过 `using_skills` 工具在运行中动态加载技能内容。
 - **附件系统**：支持文件上传与在消息中引用附件，附件可在 provider 层按需消费。
 - **提示词管理**：从运行时内部配置升级为独立资源，可通过 HTTP API 和管理后台进行增删改查。
 - **任务调度**：新增并发 worker、挂起恢复、状态细化，事件轨迹更完整。
 - **人工介入**：执行链新增审批流和人工问答流，支持在工具调用前后等待人类决策。
-- **模型调用**：新增 OpenAI Responses API 适配、请求预算管控、provider state 无损回放与跨轮复用。
-- **前端**：补全审批卡片展示、中文界面文案、动态页面标题、思考与工具调用显示切换。
+- **模型调用**：新增 OpenAI Responses API 适配、请求预算管控、provider state 完整 output replay 与连续工具调用跨轮复用。
+- **前端**：补全审批卡片展示、中文界面文案、动态页面标题、思考与工具调用显示切换，以及工作区合并提示和会话跳转错误处理。
 
 ## 🚀 快速开始
 
@@ -88,7 +94,8 @@ pnpm --dir webapp install
 默认配置文件为 `conf/app.yaml`。
 
 - 配置值中可直接使用环境变量占位符，如 `${OPENAI_BASE_URL}`、`${OPENAI_API_KEY}`、`${TAVILY_API_KEY}`，启动时自动展开。
-- `workspaceDir`：内建文件工具的根目录，留空时使用当前工作目录；workspace skills 也从该目录下的 `skills/<name>/SKILL.md` 加载。
+- `workspaceDir`：工作区模板根目录，也是 workspace skills 的来源目录；默认 `workspace`。
+- `workspaces.root`：用户实际运行工作区根目录，默认 `data/workspaces`，其下按 `users/{user_id}/home`、`users/{user_id}/tasks/{workspace_id}` 和 `users/{user_id}/backups` 组织。
 - `server`：HTTP 监听地址、API 前缀与静态资源路径。
 - `sqlite` / `log`：数据库与日志输出配置。
 - `security`：应用密钥、Cookie 安全开关、公开注册开关、SMTP 与 Turnstile 等鉴权相关设置。
@@ -131,10 +138,12 @@ pnpm --dir webapp dev
 | `tasks/:id/approvals` | 查询审批记录、提交审批决策 |
 | `tasks/:id/interactions` | 查询待回复问题、提交用户回复 |
 | `conversations` | 查询会话列表、会话详情、历史消息，删除会话 |
+| `conversations/:id/workspace` | 查询、确认或丢弃会话级 workspace 待合并变更 |
 | `prompts` | 提示词文档与绑定规则管理 |
 | `skills` | 查询 workspace 技能列表与详情 |
 | `attachments` | 上传文件附件、查询附件元数据与内容 |
 | `audit` | 查询任务运行审计记录 |
+| `admin/workspaces` | 管理员：查询用户 workspace home 与待合并任务摘要 |
 | `admin/users` | 管理员：用户管理 |
 | `admin/models` | 管理员：模型配置与连通性测试 |
 | `admin/settings` | 管理员：应用设置维护、SMTP 测试 |
@@ -166,7 +175,7 @@ pnpm --dir webapp dev
 | `app/migration` | 数据库迁移注册与启动引导 |
 | `app/models` | 应用级数据库模型（用户、设置等） |
 | `app/logging` | 把 `pkg/log` 适配为 `core/log` 接口的桥接层 |
-| `core/agent` | Agent 执行器、流式处理、会话存储、任务桥接、审计输出 |
+| `core/agent` | Agent 执行器、流式处理、会话存储、workspace 解析、任务桥接、审计输出 |
 | `core/tasks` | 任务存储、调度管理、事件流、并发执行、挂起恢复 |
 | `core/prompt` | 提示词文档、绑定规则与分发逻辑 |
 | `core/runtimeprompt` | 运行时提示词构建与渲染 |
@@ -178,6 +187,7 @@ pnpm --dir webapp dev
 | `core/audit` | 任务运行审计记录与事件追踪 |
 | `core/tools` | 内建工具注册表与 MCP 接入点 |
 | `core/providers` | 模型调用抽象与各 provider 适配器 |
+| `core/workspaces` | 用户 home / conversation workspace 管理、baseline manifest、合并/丢弃与备份 |
 | `core/memory` | 短期上下文管理、长期记忆持久化与上下文预算控制 |
 | `core/mcp` | MCP 抽象接口、通用类型与 mark3labs 适配器 |
 | `core/types` | 跨模块共享的领域类型（模型配置、工具元数据、任务元数据、成本等） |
@@ -191,7 +201,7 @@ pnpm --dir webapp dev
 ## 📍 当前状态
 
 - 后端与前端均已可运行，适合本地联调、功能演示和在此基础上继续开发。
-- 当前功能覆盖：task 驱动的 agent 执行、会话持久化、19 个内建工具、3 个模型 provider 适配、workspace skills 系统、短期/长期记忆管理、人工审批/问答、审计追溯、附件上传、提示词管理、用户与模型管理后台、MCP 外部工具接入。
+- 当前功能覆盖：task 驱动的 agent 执行、会话持久化、会话级可合并 workspace、19 个内建工具、3 个模型 provider 适配、workspace skills 系统、短期/长期记忆管理、人工审批/问答、审计追溯、附件上传、提示词管理、用户与模型管理后台、MCP 外部工具接入。
 - `core/rag` 为预留目录，尚未实现；多 agent 编排等能力留待后续扩展。
 
 ## ✅ 运行验证

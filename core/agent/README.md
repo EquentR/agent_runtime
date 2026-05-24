@@ -30,8 +30,10 @@
   6. 构建 `Runner` 并调用 `RunStream`
   7. 持久化结果消息、memory snapshot、usage 和 cost
   8. 处理 interaction/approval 挂起与恢复
+  9. 根据 `workspace_mode` 完成 conversation workspace 的变更检测、合并等待或失败收尾
 - `ModelCatalog`：序列化所有已配置 provider 与模型的目录供前端使用。
 - `RunTaskInput` / `RunTaskResult`：task 输入输出 DTO。
+- Workspace 解析优先使用 `RunTaskInput.ConversationID` 作为可写 workspace id；`readonly` 模式使用当前 task id 创建隔离 workspace，结束后不进入合并流。
 
 ### Conversation Store（`conversation_store.go`）
 
@@ -68,6 +70,7 @@
 - Workspace skills 注入（通过 executor）
 - 附件 hydration 与 draft 提升
 - provider state 无损回放
+- conversation 级 mutable workspace 与 baseline merge 状态
 - task-level event 桥接与 audit 记录
 - token usage 聚合与 cost estimation
 
@@ -92,6 +95,18 @@
 4. Executor 从 conversation store 重载历史消息
 5. Agent 执行完成后，把本轮 user/assistant/tool 消息写回 conversation
 6. Tasks 是一次执行单元，conversation 负责跨轮连续对话
+7. `mutable` workspace 以 `conversation_id` 为长期身份，跨轮累积文件变更；`readonly` workspace 以 task 为单位，不回写 home。
+
+## Conversation Workspace 模型
+
+当 `WorkspaceManager` 已注入时，executor 会把 `workspace_user_id`（或 task 创建者）映射到用户工作区：
+
+- 用户 home workspace 位于 `workspaces.root/users/{user_id}/home`。
+- 可写会话 workspace 位于 `workspaces.root/users/{user_id}/tasks/{conversation_id}`，目录名暂沿用 `tasks` 以兼容既有布局。
+- 首次创建会从 home 复制模板内容，并写入 `.workspace-baseline.json`。
+- 每次 `mutable agent.run` 成功结束后，executor 调用 `FinishMutableWorkspace` 比较当前 manifest 与 baseline；一致时返回 `completed`，不提示合并；不一致时返回 `pending_merge`。
+- 同一用户同时只允许一个其他会话处于 `pending_merge`；被拦截的任务会收到结构化 workspace 错误，前端可据此跳转到待处理会话。
+- 确认合并前会再次检查 home 是否仍匹配 baseline；若 home 已变化，返回 `workspace_home_changed`，避免覆盖其他已合并结果。
 
 ## Conversation Read APIs
 
@@ -102,6 +117,9 @@
 | `GET /conversations` | 按最近活跃排序的会话列表 |
 | `GET /conversations/:id` | 会话元数据 |
 | `GET /conversations/:id/messages` | 按时间顺序的历史消息 |
+| `GET /conversations/:id/workspace` | 会话 workspace 状态，未创建或无待处理状态时可返回 `null` |
+| `POST /conversations/:id/workspace/confirm` | 将会话 workspace 合并回用户 home |
+| `POST /conversations/:id/workspace/discard` | 丢弃会话 workspace 变更 |
 | `DELETE /conversations/:id` | 删除会话及所有消息 |
 
 会话展示字段自动维护：`title`（截断首条 user message）、`last_message`（最后非空消息摘要）、`message_count`。

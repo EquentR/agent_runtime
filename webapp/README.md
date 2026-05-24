@@ -1,6 +1,6 @@
 # Agent Runtime Webapp
 
-`webapp` 是 `agent_runtime` 的参考前端，将后端已具备的会话、任务、审批、人工交互和管理能力完整呈现为可联调、可演示的 UI 基线。
+`webapp` 是 `agent_runtime` 的参考前端，将后端已具备的会话、任务、审批、人工交互、workspace 合并和管理能力完整呈现为可联调、可演示的 UI 基线。
 
 ## 🎯 设计目标
 
@@ -12,7 +12,7 @@
 ## 📄 当前页面与能力
 
 - `/login`：登录页，负责会话进入与重定向。
-- `/chat/:conversationId?`：主聊天页，提供会话列表、模型选择、流式消息展示、任务恢复、取消运行、审批决策和人工问题回复。审批与人工问答通过聊天流内嵌渲染，无独立路由入口。
+- `/chat/:conversationId?`：主聊天页，提供会话列表、模型选择、工作区只读/可写切换、流式消息展示、任务恢复、取消运行、审批决策、人工问题回复和会话 workspace 合并处理。审批与人工问答通过聊天流内嵌渲染，无独立路由入口。
 - `/profile`：个人资料页，支持资料修改、邮箱验证与密码修改；当账号被要求补全信息时由路由守卫强制跳转到这里。
 - `/admin/dashboard`：管理后台总览（管理员）。
 - `/admin/users`：用户管理（管理员）。
@@ -30,6 +30,8 @@
 - 支持思考与工具调用显示切换，便于控制信息密度。
 - 会话草稿与活动任务状态本地持久化，刷新后可恢复界面状态。
 - 在聊天流中内嵌处理工具审批与人工问题回复。
+- 可写 workspace 按会话累积变更，待合并时在只读/可写切换旁显示小型确认控件；未发生文件变更时不显示合并提示。
+- 后端返回 `workspace_home_changed` 或 `workspace_pending_merge` 时，错误横幅显示中文提示，并提供“前往会话处理”跳转到对应会话。
 - 模型选择器仅展示已配置的可用模型，并持久化用户偏好。
 - 动态文档标题与移动端侧边栏适配。
 
@@ -51,6 +53,14 @@
 | `src/lib/user-state.ts` | 当前用户状态与待补全资料判断（被路由守卫使用） |
 | `src/lib/time.ts` | 时间格式化工具 |
 | `src/types/api.ts` | 后端契约在前端侧的类型定义 |
+
+## 🧩 Workspace 交互约定
+
+- 新会话默认使用 `mutable` 模式，用户可切换为 `readonly`。
+- `mutable` 任务会把 `workspace_mode` 发给后端；后端按会话复用 workspace，并在结果里返回 `workspace_state`。
+- 前端通过 `GET /conversations/:id/workspace` 以服务端状态为准恢复待合并提示，localStorage 只作为刷新恢复的辅助缓存。
+- 确认合并调用 `POST /conversations/:id/workspace/confirm`，丢弃调用 `POST /conversations/:id/workspace/discard`。
+- 结构化 workspace 错误由 `ApiError.data` 携带，`ChatView` 根据 `conversation_id` 显示跳转操作。
 
 ## 🛠️ 开发命令
 
@@ -95,7 +105,7 @@ pnpm build
 
 ## 🔗 相关后端依赖
 
-- 聊天页依赖 `tasks`、`conversations`、`models`、`approvals`、`interactions`、`attachments`、`skills` API。
+- 聊天页依赖 `tasks`、`conversations`、`conversations/:id/workspace`、`models`、`approvals`、`interactions`、`attachments`、`skills` API。
 - 个人资料页依赖 `users/me` 与 `settings` API。
 - 管理后台依赖 `admin/users`、`admin/models`、`admin/settings`、`admin/audit-events`、`prompts`、`audit` API。
 - 登录态与路由守卫依赖 `auth` API。
