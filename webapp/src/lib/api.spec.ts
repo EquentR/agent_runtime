@@ -8,7 +8,10 @@ import {
   normalizeAuthUser,
   normalizeToolApproval,
   normalizeConversationMessage,
+  normalizeTaskDetails,
   normalizeRunTaskResult,
+  confirmTaskWorkspaceMerge,
+  discardTaskWorkspaceChanges,
   streamRunTask,
   unwrapEnvelope,
 } from './api'
@@ -1448,6 +1451,7 @@ describe('buildRunTaskRequest', () => {
         providerId: 'openai',
         modelId: 'gpt-5.4',
         message: 'hello',
+        workspaceMode: 'readonly',
       }),
     ).toEqual({
       task_type: 'agent.run',
@@ -1458,7 +1462,144 @@ describe('buildRunTaskRequest', () => {
         model_id: 'gpt-5.4',
         message: 'hello',
         created_by: 'demo-user',
+        workspace_mode: 'readonly',
       },
+    })
+  })
+})
+
+describe('workspace merge actions', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('POSTs a task merge confirmation request for the task id', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      json: async () => ({
+        ok: true,
+        code: 200,
+        message: '',
+        data: { id: 'task_1' },
+        time: '2026-05-24T00:00:00Z',
+      }),
+    } as Response)
+
+    await confirmTaskWorkspaceMerge('task_1')
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      '/api/v1/tasks/task_1/workspace/confirm',
+      expect.objectContaining({
+        method: 'POST',
+        credentials: 'include',
+      }),
+    )
+  })
+
+  it('returns the confirmed workspace state response', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      json: async () => ({
+        ok: true,
+        code: 200,
+        message: '',
+        data: {
+          task_id: 'task_1',
+          user_id: '42',
+          mode: 'mutable',
+          state: 'merged',
+          home_root: 'data/workspaces/users/42/home',
+          task_root: 'data/workspaces/users/42/tasks/task_1',
+          backup_root: 'data/workspaces/users/42/backups/task_1-20260524',
+          created_at: '2026-05-24T00:00:00Z',
+          updated_at: '2026-05-24T00:01:00Z',
+          merged_at: '2026-05-24T00:01:00Z',
+        },
+        time: '2026-05-24T00:00:00Z',
+      }),
+    } as Response)
+
+    const state = await confirmTaskWorkspaceMerge('task_1')
+
+    expect(Object.keys(state).sort()).toEqual([
+      'backup_root',
+      'created_at',
+      'discarded_at',
+      'error_message',
+      'home_root',
+      'merged_at',
+      'mode',
+      'state',
+      'task_id',
+      'task_root',
+      'updated_at',
+      'user_id',
+    ])
+    expect(state).toEqual({
+      task_id: 'task_1',
+      user_id: '42',
+      mode: 'mutable',
+      state: 'merged',
+      home_root: 'data/workspaces/users/42/home',
+      task_root: 'data/workspaces/users/42/tasks/task_1',
+      backup_root: 'data/workspaces/users/42/backups/task_1-20260524',
+      created_at: '2026-05-24T00:00:00Z',
+      updated_at: '2026-05-24T00:01:00Z',
+      merged_at: '2026-05-24T00:01:00Z',
+      discarded_at: undefined,
+      error_message: undefined,
+    })
+  })
+
+  it('POSTs a task merge discard request for the task id', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      json: async () => ({
+        ok: true,
+        code: 200,
+        message: '',
+        data: { id: 'task_1' },
+        time: '2026-05-24T00:00:00Z',
+      }),
+    } as Response)
+
+    await discardTaskWorkspaceChanges('task_1')
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      '/api/v1/tasks/task_1/workspace/discard',
+      expect.objectContaining({
+        method: 'POST',
+        credentials: 'include',
+      }),
+    )
+  })
+
+  it('returns the discarded workspace state response', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      json: async () => ({
+        ok: true,
+        code: 200,
+        message: '',
+        data: {
+          task_id: 'task_1',
+          user_id: '42',
+          mode: 'mutable',
+          state: 'discarded',
+          home_root: 'data/workspaces/users/42/home',
+          task_root: 'data/workspaces/users/42/tasks/task_1',
+          created_at: '2026-05-24T00:00:00Z',
+          updated_at: '2026-05-24T00:01:00Z',
+          discarded_at: '2026-05-24T00:01:00Z',
+        },
+        time: '2026-05-24T00:00:00Z',
+      }),
+    } as Response)
+
+    await expect(discardTaskWorkspaceChanges('task_1')).resolves.toMatchObject({
+      task_id: 'task_1',
+      user_id: '42',
+      mode: 'mutable',
+      state: 'discarded',
+      home_root: 'data/workspaces/users/42/home',
+      task_root: 'data/workspaces/users/42/tasks/task_1',
+      discarded_at: '2026-05-24T00:01:00Z',
     })
   })
 })
@@ -1624,6 +1765,44 @@ describe('normalizeRunTaskResult', () => {
       memory_compression: {
         rendered_summary_tokens_after: 220,
         total_tokens_after: 620,
+      },
+    })
+  })
+
+  it('preserves workspace merge state on task details', () => {
+    expect(
+      normalizeTaskDetails({
+        id: 'task_1',
+        task_type: 'agent.run',
+        status: 'succeeded',
+        input: {
+          conversation_id: 'conv_1',
+          provider_id: 'openai',
+          model_id: 'gpt-5.4',
+          message: 'hello',
+          created_by: 'demo-user',
+          workspace_mode: 'readonly',
+        },
+        result: {
+          conversation_id: 'conv_1',
+          provider_id: 'openai',
+          model_id: 'gpt-5.4',
+          messages_appended: 2,
+          workspace_mode: 'readonly',
+          workspace_state: 'pending_merge',
+          final_message: {
+            Role: 'assistant',
+            Content: 'done',
+          },
+        },
+      } as any),
+    ).toMatchObject({
+      input: {
+        workspace_mode: 'readonly',
+      },
+      result: {
+        workspace_mode: 'readonly',
+        workspace_state: 'pending_merge',
       },
     })
   })

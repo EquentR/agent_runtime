@@ -315,6 +315,55 @@ func TestSwaggerJSONIncludesAuditConversationListDefinitions(t *testing.T) {
 	}
 }
 
+func TestSwaggerJSONIncludesWorkspacePathsAndDefinitions(t *testing.T) {
+	engine := rest.Init()
+	NewSwaggerHandler().Register(engine.Group("/api/v1"))
+	server := httptest.NewServer(engine)
+	t.Cleanup(server.Close)
+
+	response, err := http.Get(server.URL + "/api/v1/swagger/swagger.json")
+	if err != nil {
+		t.Fatalf("GET /swagger/swagger.json error = %v", err)
+	}
+	defer response.Body.Close()
+
+	var document map[string]any
+	if err := json.NewDecoder(response.Body).Decode(&document); err != nil {
+		t.Fatalf("Decode(swagger.json) error = %v", err)
+	}
+	paths, ok := document["paths"].(map[string]any)
+	if !ok {
+		t.Fatalf("paths = %#v, want object", document["paths"])
+	}
+	for _, path := range []string{"/tasks/{id}/workspace/confirm", "/tasks/{id}/workspace/discard", "/admin/workspaces/users/{user_id}"} {
+		if _, ok := paths[path]; !ok {
+			t.Fatalf("swagger paths missing %q", path)
+		}
+	}
+	definitions, ok := document["definitions"].(map[string]any)
+	if !ok {
+		t.Fatalf("definitions = %#v, want object", document["definitions"])
+	}
+	for _, definition := range []string{"handlers.WorkspaceStateSwaggerDoc", "handlers.UserWorkspaceSummarySwaggerDoc", "handlers.TaskWorkspaceSummarySwaggerDoc"} {
+		if _, ok := definitions[definition]; !ok {
+			t.Fatalf("swagger definitions missing %q", definition)
+		}
+	}
+	resultDefinition, ok := definitions["handlers.RunTaskResultSwaggerDoc"].(map[string]any)
+	if !ok {
+		t.Fatalf("handlers.RunTaskResultSwaggerDoc = %#v, want object", definitions["handlers.RunTaskResultSwaggerDoc"])
+	}
+	properties, ok := resultDefinition["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("RunTaskResultSwaggerDoc.properties = %#v, want object", resultDefinition["properties"])
+	}
+	for _, property := range []string{"workspace_mode", "workspace_state"} {
+		if _, ok := properties[property]; !ok {
+			t.Fatalf("RunTaskResultSwaggerDoc properties missing %q", property)
+		}
+	}
+}
+
 func assertSwaggerStatusEnumContainsWaiting(t *testing.T, definitions map[string]any, name string) {
 	t.Helper()
 

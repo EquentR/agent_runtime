@@ -13,6 +13,7 @@ import (
 	coreprompt "github.com/EquentR/agent_runtime/core/prompt"
 	coreskills "github.com/EquentR/agent_runtime/core/skills"
 	coretasks "github.com/EquentR/agent_runtime/core/tasks"
+	"github.com/EquentR/agent_runtime/core/workspaces"
 	"github.com/EquentR/agent_runtime/pkg/mail"
 	"gorm.io/gorm"
 )
@@ -33,6 +34,7 @@ type Dependencies struct {
 	PromptStore        *coreprompt.Store
 	PromptResolver     *coreprompt.Resolver
 	SkillLoader        *coreskills.Loader
+	WorkspaceManager   *workspaces.Manager
 	AuthLogic          *logics.AuthLogic
 	UserDB             *gorm.DB
 	AuthSettings       *logics.SettingsLogic

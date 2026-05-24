@@ -212,11 +212,13 @@ func TestFilesystemStoreOpenDeleteAndGCExpired(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
-	defer reader.Close()
 
 	data, err := io.ReadAll(reader)
 	if err != nil {
 		t.Fatalf("ReadAll() error = %v", err)
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
 	}
 	if string(data) != "hello" {
 		t.Fatalf("stored content = %q, want %q", string(data), "hello")

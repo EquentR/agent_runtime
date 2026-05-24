@@ -1,4 +1,4 @@
-import type { TranscriptEntry } from '../types/api'
+import type { TranscriptEntry, WorkspaceMode } from '../types/api'
 
 const CHAT_STATE_KEY = 'agent-runtime.chat-state'
 const CHAT_STATE_SAVE_DELAY_MS = 75
@@ -12,6 +12,8 @@ interface ChatState {
   entries: TranscriptEntry[]
   draftEntriesByConversation: Record<string, TranscriptEntry[]>
   selectedSkillsByConversation: Record<string, string[]>
+  selectedWorkspaceModeByConversation: Record<string, WorkspaceMode>
+  pendingWorkspaceMergeTaskIdByConversation: Record<string, string>
 }
 
 const EMPTY_STATE: ChatState = {
@@ -23,6 +25,8 @@ const EMPTY_STATE: ChatState = {
   entries: [],
   draftEntriesByConversation: {},
   selectedSkillsByConversation: {},
+  selectedWorkspaceModeByConversation: {},
+  pendingWorkspaceMergeTaskIdByConversation: {},
 }
 
 let pendingSaveTimer: ReturnType<typeof setTimeout> | null = null
@@ -84,6 +88,23 @@ export function loadChatState(): ChatState {
               Object.entries(parsed.selectedSkillsByConversation).filter(
                 ([conversationId, skills]) =>
                   typeof conversationId === 'string' && Array.isArray(skills) && skills.every((skill) => typeof skill === 'string'),
+              ),
+            )
+          : {},
+      selectedWorkspaceModeByConversation:
+        parsed.selectedWorkspaceModeByConversation && typeof parsed.selectedWorkspaceModeByConversation === 'object'
+          ? Object.fromEntries(
+              Object.entries(parsed.selectedWorkspaceModeByConversation).filter(
+                ([conversationId, mode]) =>
+                  typeof conversationId === 'string' && (mode === 'mutable' || mode === 'readonly'),
+              ),
+            )
+          : {},
+      pendingWorkspaceMergeTaskIdByConversation:
+        parsed.pendingWorkspaceMergeTaskIdByConversation && typeof parsed.pendingWorkspaceMergeTaskIdByConversation === 'object'
+          ? Object.fromEntries(
+              Object.entries(parsed.pendingWorkspaceMergeTaskIdByConversation).filter(
+                ([conversationId, taskId]) => typeof conversationId === 'string' && typeof taskId === 'string',
               ),
             )
           : {},

@@ -9,10 +9,12 @@ import MessageComposer from '../components/MessageComposer.vue'
 import MessageList from '../components/MessageList.vue'
 import {
   cancelTask,
+  confirmTaskWorkspaceMerge,
   createRunTask,
   decideTaskApproval,
   deleteAttachment,
   deleteConversation,
+  discardTaskWorkspaceChanges,
   fetchConversationMessages,
   fetchConversations,
   fetchModelCatalog,
@@ -33,6 +35,7 @@ import { getSessionName, getSessionRole, logout } from '../lib/session'
 import {
   buildApprovalEntriesFromList,
   isTaskActive,
+  isTaskPendingWorkspaceMerge,
   isTaskWaitingForInput,
   TASK_WAITING_FOR_INTERACTION_REASON,
   resolveTaskConversationId,
@@ -50,13 +53,17 @@ import type {
   ModelCatalog,
   ModelCatalogEntry,
   QuestionInteractionSubmitInput,
+  RunTaskResult,
   TaskDetails,
+  TaskWorkspaceState,
+  TaskWorkspaceStateStatus,
   TranscriptEntry,
-  TranscriptTokenUsage,
+  WorkspaceMode,
   WorkspaceSkillListItem,
 } from '../types/api'
 
 const NEW_CONVERSATION_SENDING_KEY = '__new__'
+const DEFAULT_WORKSPACE_MODE: WorkspaceMode = 'mutable'
 
 interface DraftAttachmentItem extends Omit<AttachmentRef, 'id'> {
   local_id: string
@@ -94,6 +101,9 @@ const modelCatalog = ref<ModelCatalog | null>(null)
 const catalogLoading = ref(false)
 const availableSkills = ref<WorkspaceSkillListItem[]>([])
 const selectedSkillsByConversation = ref<Record<string, string[]>>({})
+const selectedWorkspaceModeByConversation = ref<Record<string, WorkspaceMode>>({})
+const pendingWorkspaceMergeTaskIdByConversation = ref<Record<string, string>>({})
+const workspaceStateByTaskId = ref<Record<string, TaskWorkspaceStateStatus>>({})
 const selectedProviderId = ref('')
 const selectedModelId = ref('')
 const modelMenuOpen = ref(false)
@@ -102,6 +112,7 @@ const contextStatsOpen = ref(false)
 const contextStatsRef = ref<HTMLElement | null>(null)
 const composerRef = ref<InstanceType<typeof MessageComposer> | null>(null)
 const showThinkingAndTools = ref(true)
+const workspaceMergeActionPending = ref('')
 const initialized = ref(false)
 let activeStreamAbortController: AbortController | null = null
 let activeStreamingTaskId = ''
@@ -133,6 +144,7 @@ const selectedModel = computed<ModelCatalogEntry | null>(
 )
 const selectedModelLabel = computed(() => selectedModel.value?.name || selectedModelId.value || '选择模型')
 const selectedSkillNames = computed(() => selectedSkillsByConversation.value[activeConversationId.value] ?? [])
+const selectedWorkspaceMode = computed(() => selectedWorkspaceModeByConversation.value[activeConversationId.value] ?? DEFAULT_WORKSPACE_MODE)
 const currentAttachmentDraftKey = computed(() => activeConversationId.value || NEW_CONVERSATION_SENDING_KEY)
 const currentDraftAttachments = computed(() => draftAttachmentsByConversation.value[currentAttachmentDraftKey.value] ?? [])
 const attachmentsUploading = computed(() => currentDraftAttachments.value.some((attachment) => attachment.upload_state === 'uploading'))
@@ -152,6 +164,14 @@ const modelMenuDisabled = computed(() => currentConversationBusy.value || catalo
 const noUsableModels = computed(() => !catalogLoading.value && availableProviders.value.length === 0)
 const composerDisabled = computed(() => catalogLoading.value || noUsableModels.value || !selectedProviderId.value || !selectedModelId.value)
 const stoppingTask = ref(false)
+const currentPendingWorkspaceMergeTaskId = computed(() => {
+  const conversationId = activeConversationId.value || routeConversationId.value
+  if (conversationId) {
+    return pendingWorkspaceMergeTaskIdByConversation.value[conversationId] ?? ''
+  }
+  const pendingTaskIds = Object.values(pendingWorkspaceMergeTaskIdByConversation.value)
+  return pendingTaskIds.length === 1 ? pendingTaskIds[0] : ''
+})
 const currentConversationEntries = computed(() => {
   const conversationId = activeConversationId.value || routeConversationId.value
   if (conversationId) {
@@ -249,6 +269,84 @@ function syncActiveTaskStateFromConversation(conversationId: string) {
   activeTaskEventSeq.value = conversationId ? activeTaskEventSeqByConversation.value[conversationId] ?? 0 : 0
 }
 
+function setWorkspaceModeForConversation(conversationId: string, mode: WorkspaceMode) {
+  selectedWorkspaceModeByConversation.value = {
+    ...selectedWorkspaceModeByConversation.value,
+    [conversationId]: mode,
+  }
+}
+
+function handleWorkspaceModeChange(mode: WorkspaceMode) {
+  setWorkspaceModeForConversation(activeConversationId.value, mode)
+}
+
+function setPendingWorkspaceMergeTask(conversationId: string, taskId: string) {
+  if (!conversationId || !taskId) {
+    return
+  }
+  pendingWorkspaceMergeTaskIdByConversation.value = {
+    ...pendingWorkspaceMergeTaskIdByConversation.value,
+    [conversationId]: taskId,
+  }
+}
+
+function clearPendingWorkspaceMergeTask(conversationId: string) {
+  if (!conversationId || !(conversationId in pendingWorkspaceMergeTaskIdByConversation.value)) {
+    return
+  }
+  const nextPending = { ...pendingWorkspaceMergeTaskIdByConversation.value }
+  delete nextPending[conversationId]
+  pendingWorkspaceMergeTaskIdByConversation.value = nextPending
+}
+
+function resolvePendingWorkspaceMergeConversationId(taskId: string) {
+  if (!taskId) {
+    return ''
+  }
+  const entry = Object.entries(pendingWorkspaceMergeTaskIdByConversation.value).find(([, pendingTaskId]) => pendingTaskId === taskId)
+  return entry?.[0] ?? ''
+}
+
+function syncWorkspaceMergeStateFromTask(task: TaskDetails | null | undefined, fallbackConversationId = '') {
+  if (!task) {
+    return
+  }
+  const conversationId = resolveTaskConversationId(task) || fallbackConversationId
+  if (!conversationId) {
+    return
+  }
+  const workspaceState = workspaceStateByTaskId.value[task.id]
+  if (workspaceState && workspaceState !== 'pending_merge') {
+    clearPendingWorkspaceMergeTask(conversationId)
+    return
+  }
+  if (isTaskPendingWorkspaceMerge(task)) {
+    setPendingWorkspaceMergeTask(conversationId, task.id)
+  } else {
+    clearPendingWorkspaceMergeTask(conversationId)
+  }
+}
+
+function syncWorkspaceMergeStateFromWorkspaceState(state: TaskWorkspaceState | null | undefined, fallbackConversationId = '') {
+  if (!state) {
+    return
+  }
+  const conversationId =
+    fallbackConversationId || activeConversationId.value || routeConversationId.value || resolvePendingWorkspaceMergeConversationId(state.task_id)
+  if (!conversationId) {
+    return
+  }
+  workspaceStateByTaskId.value = {
+    ...workspaceStateByTaskId.value,
+    [state.task_id]: state.state,
+  }
+  if (state.state === 'pending_merge') {
+    setPendingWorkspaceMergeTask(conversationId, state.task_id)
+  } else {
+    clearPendingWorkspaceMergeTask(conversationId)
+  }
+}
+
 function currentChatState() {
   return {
     activeConversationId: activeConversationId.value,
@@ -260,6 +358,8 @@ function currentChatState() {
     draftEntriesByConversation: draftEntriesByConversation.value,
     draftAttachmentsByConversation: draftAttachmentsByConversation.value,
     selectedSkillsByConversation: selectedSkillsByConversation.value,
+    selectedWorkspaceModeByConversation: selectedWorkspaceModeByConversation.value,
+    pendingWorkspaceMergeTaskIdByConversation: pendingWorkspaceMergeTaskIdByConversation.value,
   }
 }
 
@@ -275,7 +375,7 @@ function flushChatState() {
 }
 
 watch(
-  [activeConversationId, activeTaskId, activeTaskEventSeq, activeTaskIdByConversation, activeTaskEventSeqByConversation, entries, draftEntriesByConversation, draftAttachmentsByConversation, selectedSkillsByConversation],
+  [activeConversationId, activeTaskId, activeTaskEventSeq, activeTaskIdByConversation, activeTaskEventSeqByConversation, entries, draftEntriesByConversation, draftAttachmentsByConversation, selectedSkillsByConversation, selectedWorkspaceModeByConversation, pendingWorkspaceMergeTaskIdByConversation],
   syncChatState,
   { deep: true },
 )
@@ -625,18 +725,23 @@ function stopActiveStream() {
   activeStreamingTaskId = ''
 }
 
-async function completeTaskConversation(conversationId: string, usage?: TranscriptTokenUsage, providerId = '', modelId = '') {
+async function completeTaskConversation(conversationId: string, taskId: string, result: RunTaskResult) {
   const sourceEntries = currentConversationContextEntries(conversationId).length > 0 ? currentConversationContextEntries(conversationId) : entries.value
   const nextEntries = attachReplyMetaToLatestReply(sourceEntries, {
-    provider_id: providerId || selectedProviderId.value,
-    model_id: modelId || selectedModelId.value,
-    token_usage: usage,
+    provider_id: result.provider_id || selectedProviderId.value,
+    model_id: result.model_id || selectedModelId.value,
+    token_usage: result.usage,
   })
   setDraftEntries(conversationId, nextEntries)
   if (conversationId === activeConversationId.value || routeConversationId.value === conversationId || !routeConversationId.value) {
     entries.value = nextEntries
   }
   dropPendingConversation(conversationId)
+  if (result.workspace_state === 'pending_merge') {
+    setPendingWorkspaceMergeTask(conversationId, taskId)
+  } else {
+    clearPendingWorkspaceMergeTask(conversationId)
+  }
   clearTaskStateForConversation(conversationId)
   await loadConversations(routeConversationId.value || conversationId)
 }
@@ -692,7 +797,7 @@ async function attachTaskStream(taskId: string, conversationId = '') {
     )
 
     streamConversationId = result.conversation_id || streamConversationId
-    await completeTaskConversation(streamConversationId, result.usage, result.provider_id, result.model_id)
+    await completeTaskConversation(streamConversationId, taskId, result)
   } catch (error) {
     if (error instanceof Error && error.message === TASK_STREAM_ABORTED_MESSAGE) {
       return
@@ -703,7 +808,12 @@ async function attachTaskStream(taskId: string, conversationId = '') {
       const task = await fetchTaskDetails(taskId)
       if (!isTaskActive(task)) {
         const taskConversationId = resolveTaskConversationId(task) || streamConversationId || initialConversationId
+        syncWorkspaceMergeStateFromTask(task, taskConversationId)
         if (task.status === 'cancelled') {
+          clearTaskStateForConversation(taskConversationId)
+          return
+        }
+        if (isTaskPendingWorkspaceMerge(task)) {
           clearTaskStateForConversation(taskConversationId)
           return
         }
@@ -744,7 +854,9 @@ async function attachTaskStream(taskId: string, conversationId = '') {
 async function resumeTask(task: TaskDetails | null | undefined, conversationId = '') {
   if (!task || !isTaskActive(task)) {
     if (task) {
-      clearTaskStateForConversation(resolveTaskConversationId(task) || conversationId)
+      const taskConversationId = resolveTaskConversationId(task) || conversationId
+      syncWorkspaceMergeStateFromTask(task, taskConversationId)
+      clearTaskStateForConversation(taskConversationId)
     }
     return
   }
@@ -870,6 +982,32 @@ async function handleInteractionRespond(input: QuestionInteractionSubmitInput) {
   }
 }
 
+async function handleWorkspaceMergeAction(action: 'confirm' | 'discard') {
+  const taskId = currentPendingWorkspaceMergeTaskId.value
+  if (!taskId || workspaceMergeActionPending.value) {
+    return
+  }
+
+  const conversationId = activeConversationId.value || routeConversationId.value || resolvePendingWorkspaceMergeConversationId(taskId)
+  try {
+    errorMessage.value = ''
+    workspaceMergeActionPending.value = action
+    let workspaceState
+    if (action === 'confirm') {
+      workspaceState = await confirmTaskWorkspaceMerge(taskId)
+    } else {
+      workspaceState = await discardTaskWorkspaceChanges(taskId)
+    }
+    syncWorkspaceMergeStateFromWorkspaceState(workspaceState, conversationId)
+    await fetchTaskDetails(taskId)
+    await loadConversations(conversationId || routeConversationId.value)
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '工作区变更处理失败'
+  } finally {
+    workspaceMergeActionPending.value = ''
+  }
+}
+
 async function handleStopTask() {
   const taskId = activeTaskId.value
   if (!taskId || stoppingTask.value) {
@@ -913,6 +1051,7 @@ async function handleSend(message: string) {
   const previousConversationId = activeConversationId.value
   const startedFromRouteConversationId = routeConversationId.value
   const sendingKey = previousConversationId || NEW_CONVERSATION_SENDING_KEY
+  const workspaceModeForRequest = selectedWorkspaceMode.value
   const readyAttachmentIDs = currentDraftAttachments.value
     .filter((attachment) => attachment.upload_state === 'uploaded' && attachment.id)
     .map((attachment) => attachment.id as string)
@@ -943,11 +1082,13 @@ async function handleSend(message: string) {
       message,
       ...(readyAttachmentIDs.length > 0 ? { attachmentIds: readyAttachmentIDs } : {}),
       ...(selectedSkillNames.value.length > 0 ? { skills: selectedSkillNames.value } : {}),
+      workspaceMode: workspaceModeForRequest,
     })
     const createdConversationId = task.input?.conversation_id ?? ''
     clearDraftAttachments(sendingKey)
 
     if (createdConversationId) {
+      setWorkspaceModeForConversation(createdConversationId, workspaceModeForRequest)
       setDraftEntries(createdConversationId, nextEntries)
       setTaskStateForConversation(createdConversationId, task.id, 0)
     }
@@ -1093,6 +1234,7 @@ function startNewConversation() {
   sidebarDrawerOpen.value = false
   entries.value = []
   syncActiveTaskStateFromConversation('')
+  setWorkspaceModeForConversation('', DEFAULT_WORKSPACE_MODE)
   applyDefaultSelection()
   void navigateToConversation('')
   void nextTick(() => {
@@ -1151,6 +1293,8 @@ onMounted(async () => {
   entries.value = saved.entries
   draftEntriesByConversation.value = saved.draftEntriesByConversation
   selectedSkillsByConversation.value = saved.selectedSkillsByConversation
+  selectedWorkspaceModeByConversation.value = saved.selectedWorkspaceModeByConversation
+  pendingWorkspaceMergeTaskIdByConversation.value = saved.pendingWorkspaceMergeTaskIdByConversation
 
   await Promise.all([loadCatalog(), loadAvailableSkills(), loadConversations(routeConversationId.value || saved.activeConversationId)])
   initialized.value = true
@@ -1397,6 +1541,59 @@ onBeforeUnmount(() => {
       </div>
       <div class="chat-composer-dock">
         <p v-if="!noUsableModels" class="composer-welcome">请尽情使唤 ~</p>
+        <div v-if="!noUsableModels" class="workspace-mode-row" data-workspace-mode-toggle>
+          <span class="workspace-mode-label">工作区</span>
+          <div class="workspace-mode-switch auth-switch" role="radiogroup" aria-label="工作区模式">
+            <button
+              class="auth-switch-button"
+              :class="{ active: selectedWorkspaceMode === 'mutable' }"
+              type="button"
+              role="radio"
+              data-workspace-mode="mutable"
+              :aria-checked="selectedWorkspaceMode === 'mutable'"
+              @click="handleWorkspaceModeChange('mutable')"
+            >
+              可写
+            </button>
+            <button
+              class="auth-switch-button"
+              :class="{ active: selectedWorkspaceMode === 'readonly' }"
+              type="button"
+              role="radio"
+              data-workspace-mode="readonly"
+              :aria-checked="selectedWorkspaceMode === 'readonly'"
+              @click="handleWorkspaceModeChange('readonly')"
+            >
+              只读
+            </button>
+          </div>
+        </div>
+        <div v-if="currentPendingWorkspaceMergeTaskId" class="workspace-merge-banner" data-workspace-merge-banner>
+          <div class="workspace-merge-copy">
+            <strong>工作区变更待确认</strong>
+            <span>将本轮任务的文件改动合并到当前工作区，或丢弃这些改动。</span>
+          </div>
+          <div class="workspace-merge-actions">
+            <button
+              class="ghost-button workspace-merge-button"
+              type="button"
+              data-workspace-merge-discard
+              :disabled="workspaceMergeActionPending !== ''"
+              @click="handleWorkspaceMergeAction('discard')"
+            >
+              丢弃
+            </button>
+            <button
+              class="primary-button workspace-merge-button"
+              type="button"
+              data-workspace-merge-confirm
+              :disabled="workspaceMergeActionPending !== ''"
+              @click="handleWorkspaceMergeAction('confirm')"
+            >
+              合并
+            </button>
+          </div>
+        </div>
         <MessageComposer
           ref="composerRef"
           :disabled="composerDisabled"
@@ -1417,3 +1614,88 @@ onBeforeUnmount(() => {
     </section>
   </main>
 </template>
+
+<style scoped>
+.workspace-mode-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.65rem;
+  margin: 0 0 0.55rem;
+}
+
+.workspace-mode-label {
+  flex: 0 0 auto;
+  font-size: 0.78rem;
+  color: rgba(25, 50, 59, 0.58);
+}
+
+.workspace-mode-switch {
+  width: auto;
+  min-width: 11.5rem;
+}
+
+.workspace-mode-switch .auth-switch-button {
+  padding: 0.38rem 0.72rem;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.workspace-merge-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.9rem;
+  margin: 0 0 0.55rem;
+  padding: 0.72rem 0.82rem;
+  border: 1px solid rgba(143, 184, 174, 0.34);
+  border-radius: 12px;
+  background: rgba(241, 248, 246, 0.94);
+  color: #28454e;
+}
+
+.workspace-merge-copy {
+  display: grid;
+  gap: 0.12rem;
+  min-width: 0;
+}
+
+.workspace-merge-copy strong {
+  font-size: 0.9rem;
+}
+
+.workspace-merge-copy span {
+  font-size: 0.78rem;
+  color: rgba(25, 50, 59, 0.62);
+}
+
+.workspace-merge-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex: 0 0 auto;
+}
+
+.workspace-merge-button {
+  padding: 0.44rem 0.75rem;
+  border-radius: 8px;
+  font-size: 0.82rem;
+}
+
+@media (max-width: 640px) {
+  .workspace-mode-row,
+  .workspace-merge-banner {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .workspace-mode-switch,
+  .workspace-merge-actions {
+    width: 100%;
+  }
+
+  .workspace-merge-actions {
+    justify-content: flex-end;
+  }
+}
+</style>

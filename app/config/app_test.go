@@ -56,6 +56,37 @@ tools:
 	}
 }
 
+func TestConfigUnmarshalSupportsWorkspaceTemplateAndRootSettings(t *testing.T) {
+	var cfg Config
+	if err := yaml.Unmarshal([]byte(`
+workspaceDir: workspace
+workspaces:
+  root: ""
+`), &cfg); err != nil {
+		t.Fatalf("yaml.Unmarshal() error = %v", err)
+	}
+
+	if cfg.WorkspaceDir != "workspace" {
+		t.Fatalf("cfg.WorkspaceDir = %q, want workspace", cfg.WorkspaceDir)
+	}
+	if got := cfg.Workspaces.ResolvedRoot(); got != "data/workspaces" {
+		t.Fatalf("cfg.Workspaces.ResolvedRoot() = %q, want data/workspaces", got)
+	}
+}
+
+func TestConfigResolvedWorkspaceTemplateRootDefaultsToWorkspace(t *testing.T) {
+	var cfg Config
+
+	if got := cfg.ResolvedWorkspaceTemplateRoot(); got != "workspace" {
+		t.Fatalf("cfg.ResolvedWorkspaceTemplateRoot() = %q, want workspace", got)
+	}
+
+	cfg.WorkspaceDir = " custom-template "
+	if got := cfg.ResolvedWorkspaceTemplateRoot(); got != "custom-template" {
+		t.Fatalf("cfg.ResolvedWorkspaceTemplateRoot() configured = %q, want custom-template", got)
+	}
+}
+
 func TestConfigMappingsBuildTaskManagerAndWebSearchOptions(t *testing.T) {
 	var cfg Config
 	if err := yaml.Unmarshal([]byte(`

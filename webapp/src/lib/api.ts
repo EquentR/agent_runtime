@@ -41,6 +41,8 @@ import type {
   PublicRegistrationSettings,
   PublicTurnstileSettings,
   TaskDetails,
+  TaskWorkspaceState,
+  TaskWorkspaceStateStatus,
   RunTaskRequest,
   RunTaskResult,
   TaskStreamEvent,
@@ -56,6 +58,8 @@ import type {
   UserRole,
   WorkspaceSkill,
   WorkspaceSkillListItem,
+  WorkspaceMode,
+  WorkspaceState,
   YAMLModel,
   YAMLModelCatalog,
   YAMLModelOverrideInput,
@@ -241,6 +245,7 @@ export function buildRunTaskRequest(input: {
   message: string
   attachmentIds?: string[]
   skills?: string[]
+  workspaceMode?: WorkspaceMode
 }): RunTaskRequest {
   const request: RunTaskRequest = {
     task_type: 'agent.run',
@@ -261,6 +266,9 @@ export function buildRunTaskRequest(input: {
   }
   if (input.attachmentIds && input.attachmentIds.length > 0) {
     request.input.attachment_ids = input.attachmentIds
+  }
+  if (input.workspaceMode) {
+    request.input.workspace_mode = input.workspaceMode
   }
 
   return request
@@ -402,6 +410,27 @@ function normalizeBooleanValue(value: unknown) {
     }
   }
   return undefined
+}
+
+function normalizeWorkspaceMode(value: unknown): WorkspaceMode | undefined {
+  return value === 'mutable' || value === 'readonly' ? value : undefined
+}
+
+function normalizeWorkspaceState(value: unknown): WorkspaceState | undefined {
+  return value === 'pending_merge' || value === 'merged' || value === 'discarded' ? value : undefined
+}
+
+function normalizeTaskWorkspaceStateStatus(value: unknown): TaskWorkspaceStateStatus | undefined {
+  switch (value) {
+    case 'active':
+    case 'pending_merge':
+    case 'merged':
+    case 'discarded':
+    case 'completed':
+      return value
+    default:
+      return undefined
+  }
 }
 
 function normalizeModelScope(value: unknown, fallback: ModelScope): ModelScope {
@@ -724,12 +753,15 @@ export function normalizeRunTaskResult(
     }
   },
 ): RunTaskResult {
+  const raw = result as Record<string, unknown>
   return {
     ...result,
     final_message: normalizeConversationMessage(result.final_message),
     usage: normalizeTranscriptTokenUsage(result.usage),
-    memory_context: normalizeMemoryContextSnapshot((result as Record<string, unknown>).memory_context),
-    memory_compression: normalizeMemoryCompressionSnapshot((result as Record<string, unknown>).memory_compression),
+    memory_context: normalizeMemoryContextSnapshot(raw.memory_context),
+    memory_compression: normalizeMemoryCompressionSnapshot(raw.memory_compression),
+    workspace_mode: normalizeWorkspaceMode(raw.workspace_mode ?? raw.workspaceMode ?? raw.WorkspaceMode),
+    workspace_state: normalizeWorkspaceState(raw.workspace_state ?? raw.workspaceState ?? raw.WorkspaceState),
   }
 }
 
@@ -848,6 +880,24 @@ function normalizeTaskInput(input: TaskDetails['input'] | undefined): TaskDetail
     attachment_ids: attachmentIDs,
     created_by: normalizeFirstOptionalStringValue(raw.created_by, raw.createdBy),
     skills,
+    workspace_mode: normalizeWorkspaceMode(raw.workspace_mode ?? raw.workspaceMode ?? raw.WorkspaceMode),
+  }
+}
+
+export function normalizeTaskWorkspaceState(state: Partial<TaskWorkspaceState> & Record<string, unknown>): TaskWorkspaceState {
+  return {
+    task_id: normalizeFirstStringValue(state.task_id, state.taskId, state.TaskID),
+    user_id: normalizeFirstStringValue(state.user_id, state.userId, state.UserID),
+    mode: normalizeWorkspaceMode(state.mode ?? state.Mode) ?? 'mutable',
+    state: normalizeTaskWorkspaceStateStatus(state.state ?? state.State) ?? 'active',
+    home_root: normalizeFirstStringValue(state.home_root, state.homeRoot, state.HomeRoot),
+    task_root: normalizeFirstStringValue(state.task_root, state.taskRoot, state.TaskRoot),
+    backup_root: normalizeFirstOptionalStringValue(state.backup_root, state.backupRoot, state.BackupRoot),
+    created_at: normalizeFirstStringValue(state.created_at, state.createdAt, state.CreatedAt),
+    updated_at: normalizeFirstStringValue(state.updated_at, state.updatedAt, state.UpdatedAt),
+    merged_at: normalizeFirstOptionalStringValue(state.merged_at, state.mergedAt, state.MergedAt),
+    discarded_at: normalizeFirstOptionalStringValue(state.discarded_at, state.discardedAt, state.DiscardedAt),
+    error_message: normalizeFirstOptionalStringValue(state.error_message, state.errorMessage, state.ErrorMessage),
   }
 }
 
@@ -1302,6 +1352,7 @@ export async function createRunTask(input: {
   message: string
   attachmentIds?: string[]
   skills?: string[]
+  workspaceMode?: WorkspaceMode
 }) {
   return request<TaskSnapshot>('/tasks', {
     method: 'POST',
@@ -1329,6 +1380,20 @@ export async function decideTaskApproval(taskId: string, approvalId: string, inp
     body: JSON.stringify(input),
   })
   return normalizeToolApproval(approval)
+}
+
+export async function confirmTaskWorkspaceMerge(taskId: string) {
+  const state = await request<Partial<TaskWorkspaceState> & Record<string, unknown>>(`/tasks/${encodeURIComponent(taskId)}/workspace/confirm`, {
+    method: 'POST',
+  })
+  return normalizeTaskWorkspaceState(state)
+}
+
+export async function discardTaskWorkspaceChanges(taskId: string) {
+  const state = await request<Partial<TaskWorkspaceState> & Record<string, unknown>>(`/tasks/${encodeURIComponent(taskId)}/workspace/discard`, {
+    method: 'POST',
+  })
+  return normalizeTaskWorkspaceState(state)
 }
 
 export function normalizeInteractionRecord(value: Partial<InteractionRecord> & Record<string, unknown>): InteractionRecord {

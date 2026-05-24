@@ -263,6 +263,24 @@ func TestWriteFileSupportsInsertAndReplace(t *testing.T) {
 	}
 }
 
+func TestWriteFileRejectsWorkspaceStateSidecar(t *testing.T) {
+	workspace := t.TempDir()
+	target := filepath.Join(workspace, ".workspace-state.json")
+	mustWriteFile(t, target, `{"state":"pending_merge"}`)
+	registry := newBuiltinRegistry(t, Options{WorkspaceRoot: workspace})
+
+	_, err := registry.Execute(context.Background(), "write_file", map[string]any{
+		"path":    ".workspace-state.json",
+		"content": `{"home_root":"tampered"}`,
+	})
+	if err == nil || !strings.Contains(err.Error(), "internal workspace state") {
+		t.Fatalf("Execute(write_file) error = %v, want internal workspace state rejection", err)
+	}
+	if got := mustReadText(t, target); got != `{"state":"pending_merge"}` {
+		t.Fatalf("state sidecar content = %q, want unchanged", got)
+	}
+}
+
 func TestReadFileDefaultsToFirst300LinesWhenLineCountOmitted(t *testing.T) {
 	workspace := t.TempDir()
 	mustWriteFile(t, filepath.Join(workspace, "notes.txt"), strings.Repeat("line\n", 320))

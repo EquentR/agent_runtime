@@ -499,6 +499,24 @@ export type TaskStatus =
   | 'failed'
 
 export type TaskSuspendReason = 'waiting_for_tool_approval' | 'waiting_for_interaction' | string
+export type WorkspaceMode = 'mutable' | 'readonly'
+export type WorkspaceState = 'pending_merge' | 'merged' | 'discarded'
+export type TaskWorkspaceStateStatus = 'active' | WorkspaceState | 'completed'
+
+export interface TaskWorkspaceState {
+  task_id: string
+  user_id: string
+  mode: WorkspaceMode
+  state: TaskWorkspaceStateStatus
+  home_root: string
+  task_root: string
+  backup_root?: string
+  created_at: string
+  updated_at: string
+  merged_at?: string
+  discarded_at?: string
+  error_message?: string
+}
 
 export interface TaskSnapshot {
   id: string
@@ -522,6 +540,7 @@ export interface TaskInput {
   attachment_ids?: string[]
   created_by?: string
   skills?: string[]
+  workspace_mode?: WorkspaceMode
 }
 
 export interface TaskDetails extends TaskSnapshot {
@@ -539,6 +558,8 @@ export interface RunTaskResult {
   messages_appended: number
   memory_context?: MemoryContextState
   memory_compression?: MemoryCompression
+  workspace_mode?: WorkspaceMode
+  workspace_state?: WorkspaceState
 }
 
 export interface TaskStreamEvent {
@@ -696,5 +717,6 @@ export interface RunTaskRequest {
     attachment_ids?: string[]
     created_by: string
     skills?: string[]
+    workspace_mode?: WorkspaceMode
   }
 }

@@ -29,6 +29,7 @@ import (
 	coretools "github.com/EquentR/agent_runtime/core/tools"
 	builtin "github.com/EquentR/agent_runtime/core/tools/builtin"
 	coretypes "github.com/EquentR/agent_runtime/core/types"
+	"github.com/EquentR/agent_runtime/core/workspaces"
 	"github.com/EquentR/agent_runtime/pkg/rest"
 	"github.com/EquentR/agent_runtime/pkg/secret"
 	"github.com/glebarez/sqlite"
@@ -643,6 +644,43 @@ func TestResolveEffectiveWorkspaceRootCreatesCanonicalConfiguredDirectory(t *tes
 	}
 }
 
+func TestInitWorkspaceRuntimeSeparatesTemplateAndUserWorkspaceRoots(t *testing.T) {
+	baseDir := t.TempDir()
+	templateRoot := filepath.Join(baseDir, "template")
+	userWorkspacesRoot := filepath.Join(baseDir, "user-workspaces")
+	if err := os.MkdirAll(templateRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(templateRoot) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(templateRoot, "AGENTS.md"), []byte("# Template rules\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(template AGENTS.md) error = %v", err)
+	}
+
+	runtime, err := initWorkspaceRuntime(config.Config{
+		WorkspaceDir: templateRoot,
+		Workspaces:   config.WorkspacesConfig{Root: userWorkspacesRoot},
+	})
+	if err != nil {
+		t.Fatalf("initWorkspaceRuntime() error = %v", err)
+	}
+	if runtime.TemplateRoot != filepath.Clean(templateRoot) {
+		t.Fatalf("runtime.TemplateRoot = %q, want %q", runtime.TemplateRoot, filepath.Clean(templateRoot))
+	}
+	if runtime.Root != filepath.Clean(userWorkspacesRoot) {
+		t.Fatalf("runtime.Root = %q, want %q", runtime.Root, filepath.Clean(userWorkspacesRoot))
+	}
+	if runtime.Manager == nil {
+		t.Fatal("runtime.Manager = nil, want workspace manager")
+	}
+
+	home, err := runtime.Manager.EnsureHomeWorkspace(context.Background(), "alice")
+	if err != nil {
+		t.Fatalf("EnsureHomeWorkspace() error = %v", err)
+	}
+	if !strings.HasPrefix(home.Root, filepath.Join(filepath.Clean(userWorkspacesRoot), "users", "alice")) {
+		t.Fatalf("home.Root = %q, want under user workspaces root %q", home.Root, userWorkspacesRoot)
+	}
+}
+
 func TestNewDefaultToolRegistryUsesConfiguredWebSearchOptions(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/search" {
@@ -714,7 +752,7 @@ func TestNewDefaultToolRegistryPassesImageGenSentRetention(t *testing.T) {
 }
 
 func TestBuildAgentRunExecutorDependenciesProvideSkillsResolver(t *testing.T) {
-	deps := buildAgentRunExecutorDependencies(nil, nil, nil, nil, nil, nil, nil, nil, t.TempDir(), nil, nil)
+	deps := buildAgentRunExecutorDependencies(nil, nil, nil, nil, nil, nil, nil, nil, t.TempDir(), nil, nil, nil, nil)
 	if deps.SkillsResolver == nil {
 		t.Fatal("SkillsResolver = nil, want workspace skills resolver")
 	}
@@ -938,7 +976,7 @@ func TestBuildAgentRunExecutorDependenciesThreadPromptRuntimeAndWorkspaceRoot(t 
 		return &serveStubClient{answer: "hello"}, nil
 	}
 
-	deps := buildAgentRunExecutorDependencies(resolver, conversationStore, nil, nil, nil, nil, nil, promptRuntime.Resolver, workspaceRoot, clientFactory, recorder)
+	deps := buildAgentRunExecutorDependencies(resolver, conversationStore, nil, nil, nil, nil, nil, promptRuntime.Resolver, workspaceRoot, nil, nil, clientFactory, recorder)
 	if deps.Resolver != resolver {
 		t.Fatalf("deps.Resolver = %#v, want %#v", deps.Resolver, resolver)
 	}
@@ -951,11 +989,39 @@ func TestBuildAgentRunExecutorDependenciesThreadPromptRuntimeAndWorkspaceRoot(t 
 	if deps.WorkspaceRoot != workspaceRoot {
 		t.Fatalf("deps.WorkspaceRoot = %q, want %q", deps.WorkspaceRoot, workspaceRoot)
 	}
+	if deps.WorkspaceManager != nil {
+		t.Fatalf("deps.WorkspaceManager = %#v, want nil when not configured", deps.WorkspaceManager)
+	}
 	if deps.ClientFactory == nil {
 		t.Fatal("deps.ClientFactory = nil, want client factory")
 	}
 	if deps.AuditRecorder != recorder {
 		t.Fatalf("deps.AuditRecorder = %#v, want %#v", deps.AuditRecorder, recorder)
+	}
+}
+
+func TestBuildAgentRunExecutorDependenciesThreadsWorkspaceManagerAndRegistryFactory(t *testing.T) {
+	templateRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(templateRoot, "AGENTS.md"), []byte("# Template\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(template AGENTS.md) error = %v", err)
+	}
+	workspaceManager, err := workspaces.NewManager(workspaces.Config{
+		TemplateRoot: templateRoot,
+		Root:         t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("workspaces.NewManager() error = %v", err)
+	}
+	factory := func(workspaceRoot string) (*coretools.Registry, error) {
+		return coretools.NewRegistry(), nil
+	}
+
+	deps := buildAgentRunExecutorDependencies(nil, nil, nil, nil, nil, nil, nil, nil, templateRoot, workspaceManager, factory, nil, nil)
+	if deps.WorkspaceManager != workspaceManager {
+		t.Fatalf("deps.WorkspaceManager = %#v, want %#v", deps.WorkspaceManager, workspaceManager)
+	}
+	if deps.ToolRegistryFactory == nil {
+		t.Fatal("deps.ToolRegistryFactory = nil, want configured factory")
 	}
 }
 
@@ -1002,7 +1068,7 @@ func TestRegisterAgentRunExecutorPromptWiringKeepsAuditRecorder(t *testing.T) {
 	if err := registerAgentRunExecutor(manager, nil, nil, nil, nil, &coreagent.ModelResolver{Providers: []coretypes.LLMProvider{{
 		BaseProvider: coretypes.BaseProvider{Name: "openai"},
 		Models:       []coretypes.LLMModel{{BaseModel: coretypes.BaseModel{ID: "gpt-5.4", Name: "GPT 5.4"}, Type: coretypes.LLMTypeOpenAIResponses}},
-	}}}, conversationStore, nil, promptRuntime.Resolver, workspaceRoot, func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) {
+	}}}, conversationStore, nil, promptRuntime.Resolver, workspaceRoot, nil, nil, func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) {
 		return &serveStubClient{answer: "hello"}, nil
 	}, recorder); err != nil {
 		t.Fatalf("registerAgentRunExecutor() error = %v", err)

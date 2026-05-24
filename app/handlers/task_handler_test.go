@@ -20,8 +20,10 @@ import (
 	model "github.com/EquentR/agent_runtime/core/providers/types"
 	coretasks "github.com/EquentR/agent_runtime/core/tasks"
 	coretypes "github.com/EquentR/agent_runtime/core/types"
+	coreworkspaces "github.com/EquentR/agent_runtime/core/workspaces"
 	"github.com/EquentR/agent_runtime/pkg/rest"
 	"github.com/EquentR/agent_runtime/pkg/secret"
+	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 )
@@ -206,8 +208,8 @@ func TestTaskHandlerCreateAgentRunTaskCreatesConversationWhenMissing(t *testing.
 	if !ok || conversationID == "" {
 		t.Fatalf("input.conversation_id = %#v, want generated conversation id", decodedInput["conversation_id"])
 	}
-	if created.ConcurrencyKey != conversationID {
-		t.Fatalf("created concurrency key = %q, want %q", created.ConcurrencyKey, conversationID)
+	if created.ConcurrencyKey != "workspace:demo-user:mutable" {
+		t.Fatalf("created concurrency key = %q, want per-user mutable workspace lock", created.ConcurrencyKey)
 	}
 
 	persisted, err := manager.GetTask(context.Background(), created.ID)
@@ -426,11 +428,177 @@ func TestTaskHandlerOverridesSpoofedUserIDBeforePersistingModelSelection(t *test
 	}
 }
 
+func TestTaskHandlerCanonicalizesWorkspaceFieldsFromAuthenticatedUser(t *testing.T) {
+	manager, conversationStore, server := newTaskHandlerTestServerWithAuthUser(t, &models.User{ID: 42, Username: "alice", Role: models.UserRoleUser}, nil)
+	if _, err := conversationStore.CreateConversation(context.Background(), coreagent.CreateConversationInput{
+		ID:         "conv_workspace",
+		ProviderID: "openai",
+		ModelID:    "gpt-5.4",
+		CreatedBy:  "alice",
+	}); err != nil {
+		t.Fatalf("CreateConversation() error = %v", err)
+	}
+
+	created := createTaskViaHTTP(t, server.URL, map[string]any{
+		"task_type":      "agent.run",
+		"workspace_mode": "readonly",
+		"input": map[string]any{
+			"conversation_id":     "conv_workspace",
+			"workspace_user_id":   "999",
+			"WorkspaceUserID":     "888",
+			"workspace_mode":      "mutable",
+			"WorkspaceMode":       "mutable",
+			"user_id":             "777",
+			"UserID":              "666",
+			"message":             "hello",
+			"workspace_task_root": "client-controlled",
+		},
+	})
+
+	persisted, err := manager.GetTask(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("GetTask() error = %v", err)
+	}
+	input := decodeJSONRaw(t, persisted.InputJSON)
+	if input["workspace_user_id"] != "42" {
+		t.Fatalf("workspace_user_id = %#v, want authenticated user id", input["workspace_user_id"])
+	}
+	if input["workspace_mode"] != string(coreworkspaces.ModeReadonly) {
+		t.Fatalf("workspace_mode = %#v, want readonly", input["workspace_mode"])
+	}
+	if input["user_id"] != "42" {
+		t.Fatalf("user_id = %#v, want authenticated user id", input["user_id"])
+	}
+	for _, key := range []string{"WorkspaceUserID", "WorkspaceMode", "UserID", "workspace_task_root"} {
+		if _, exists := input[key]; exists {
+			t.Fatalf("input[%q] exists = %#v, want removed", key, input[key])
+		}
+	}
+	if persisted.ConcurrencyKey != "conv_workspace" {
+		t.Fatalf("readonly concurrency key = %q, want conversation key", persisted.ConcurrencyKey)
+	}
+}
+
+func TestTaskHandlerMutableWorkspaceModeUsesPerUserConcurrencyKey(t *testing.T) {
+	manager, conversationStore, server := newTaskHandlerTestServerWithAuthUser(t, &models.User{ID: 42, Username: "alice", Role: models.UserRoleUser}, nil)
+	if _, err := conversationStore.CreateConversation(context.Background(), coreagent.CreateConversationInput{
+		ID:         "conv_1",
+		ProviderID: "openai",
+		ModelID:    "gpt-5.4",
+		CreatedBy:  "alice",
+	}); err != nil {
+		t.Fatalf("CreateConversation() error = %v", err)
+	}
+
+	created := createTaskViaHTTP(t, server.URL, map[string]any{
+		"task_type": "agent.run",
+		"input": map[string]any{
+			"conversation_id": "conv_1",
+			"message":         "hello",
+		},
+	})
+
+	persisted, err := manager.GetTask(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("GetTask() error = %v", err)
+	}
+	if persisted.ConcurrencyKey != "workspace:42:mutable" {
+		t.Fatalf("mutable concurrency key = %q, want per-user workspace lock", persisted.ConcurrencyKey)
+	}
+	input := decodeJSONRaw(t, persisted.InputJSON)
+	if input["workspace_mode"] != string(coreworkspaces.ModeMutable) {
+		t.Fatalf("workspace_mode = %#v, want mutable default", input["workspace_mode"])
+	}
+}
+
+func TestTaskHandlerConfirmAndDiscardWorkspaceUseOwnedWorkspaceUser(t *testing.T) {
+	manager, conversationStore, server := newTaskHandlerTestServerWithAuthUser(t, &models.User{ID: 42, Username: "alice", Role: models.UserRoleUser}, &recordingTaskWorkspaceManager{
+		confirmState: coreworkspaces.WorkspaceStateFile{TaskID: "tsk_confirmed", UserID: "42", State: coreworkspaces.StateMerged},
+		discardState: coreworkspaces.WorkspaceStateFile{TaskID: "tsk_discarded", UserID: "42", State: coreworkspaces.StateDiscarded},
+	})
+	_ = conversationStore
+
+	created := createTaskViaHTTP(t, server.URL, map[string]any{
+		"task_type": "agent.run",
+		"input": map[string]any{
+			"message": "hello",
+		},
+	})
+
+	recorder := mustTaskWorkspaceManager(t, server)
+	confirm := postWorkspaceAction(t, server.URL, "/api/v1/tasks/"+created.ID+"/workspace/confirm")
+	if confirm.State != coreworkspaces.StateMerged {
+		t.Fatalf("confirm state = %q, want merged", confirm.State)
+	}
+	if recorder.confirmUserID != "42" || recorder.confirmTaskID != created.ID {
+		t.Fatalf("confirm input = user %q task %q, want authenticated user/task", recorder.confirmUserID, recorder.confirmTaskID)
+	}
+
+	discard := postWorkspaceAction(t, server.URL, "/api/v1/tasks/"+created.ID+"/workspace/discard")
+	if discard.State != coreworkspaces.StateDiscarded {
+		t.Fatalf("discard state = %q, want discarded", discard.State)
+	}
+	if recorder.discardUserID != "42" || recorder.discardTaskID != created.ID {
+		t.Fatalf("discard input = user %q task %q, want authenticated user/task", recorder.discardUserID, recorder.discardTaskID)
+	}
+
+	if _, err := manager.GetTask(context.Background(), created.ID); err != nil {
+		t.Fatalf("created task should remain readable after workspace actions: %v", err)
+	}
+}
+
+func TestTaskHandlerWorkspaceActionsRejectAdminForAnotherUsersTask(t *testing.T) {
+	recorder := &recordingTaskWorkspaceManager{
+		confirmState: coreworkspaces.WorkspaceStateFile{State: coreworkspaces.StateMerged},
+		discardState: coreworkspaces.WorkspaceStateFile{State: coreworkspaces.StateDiscarded},
+	}
+	manager, _, server := newTaskHandlerTestServerWithAuthUser(t, &models.User{ID: 1, Username: "root", Role: models.UserRoleAdmin}, recorder)
+	created, err := manager.CreateTask(context.Background(), coretasks.CreateTaskInput{
+		TaskType:  "agent.run",
+		CreatedBy: "alice",
+		Input: map[string]any{
+			"workspace_user_id": "42",
+			"message":           "hello",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateTask() error = %v", err)
+	}
+
+	for _, path := range []string{
+		"/api/v1/tasks/" + created.ID + "/workspace/confirm",
+		"/api/v1/tasks/" + created.ID + "/workspace/discard",
+	} {
+		raw, err := json.Marshal(map[string]any{})
+		if err != nil {
+			t.Fatalf("Marshal() error = %v", err)
+		}
+		response, err := http.Post(server.URL+path, "application/json", bytes.NewReader(raw))
+		if err != nil {
+			t.Fatalf("Post(%s) error = %v", path, err)
+		}
+		var envelope taskTestResponse
+		if err := json.NewDecoder(response.Body).Decode(&envelope); err != nil {
+			response.Body.Close()
+			t.Fatalf("Decode(%s) error = %v", path, err)
+		}
+		response.Body.Close()
+		if envelope.OK || envelope.Code != http.StatusUnauthorized {
+			t.Fatalf("%s response ok/code = %v/%d, want unauthorized", path, envelope.OK, envelope.Code)
+		}
+	}
+
+	if recorder.confirmTaskID != "" || recorder.discardTaskID != "" {
+		t.Fatalf("workspace manager was called: confirm task %q discard task %q", recorder.confirmTaskID, recorder.discardTaskID)
+	}
+}
+
 func TestCreateTaskPersistsConversationConcurrencyKey(t *testing.T) {
 	manager, server := newTaskHandlerTestServer(t, nil, false)
 
 	created := createTaskViaHTTP(t, server.URL, map[string]any{
-		"task_type": "agent.run",
+		"task_type":      "agent.run",
+		"workspace_mode": "readonly",
 		"input": map[string]any{
 			"conversation_id": "  conv_1  ",
 			"provider_id":     "openai",
@@ -630,6 +798,44 @@ func newTaskHandlerTestServerWithConversationStore(t *testing.T, executor coreta
 	return manager, conversationStore, server
 }
 
+func newTaskHandlerTestServerWithAuthUser(t *testing.T, user *models.User, workspaceManager taskWorkspaceManager) (*coretasks.Manager, *coreagent.ConversationStore, *httptest.Server) {
+	t.Helper()
+
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	store := coretasks.NewStore(db)
+	if err := store.AutoMigrate(); err != nil {
+		t.Fatalf("AutoMigrate() error = %v", err)
+	}
+	conversationStore := coreagent.NewConversationStore(db)
+	if err := conversationStore.AutoMigrate(); err != nil {
+		t.Fatalf("conversation AutoMigrate() error = %v", err)
+	}
+	manager := coretasks.NewManager(store, coretasks.ManagerOptions{})
+	engine := rest.Init()
+	authMiddleware := func(c *gin.Context) {
+		c.Set(authUserContextKey, user)
+		c.Next()
+	}
+	handler := NewTaskHandler(manager, conversationStore, authMiddleware)
+	if workspaceManager != nil {
+		handler.WithWorkspaceManager(workspaceManager)
+	}
+	handler.Register(engine.Group("/api/v1"))
+	server := httptest.NewServer(engine)
+	if recording, ok := workspaceManager.(*recordingTaskWorkspaceManager); ok {
+		taskWorkspaceManagerByServer[server.URL] = recording
+		t.Cleanup(func() {
+			delete(taskWorkspaceManagerByServer, server.URL)
+		})
+	}
+	t.Cleanup(server.Close)
+	return manager, conversationStore, server
+}
+
 // createTaskViaHTTP 通过 HTTP 调用创建任务接口。
 func createTaskViaHTTP(t *testing.T, baseURL string, payload map[string]any) coretasks.Task {
 	t.Helper()
@@ -640,6 +846,31 @@ func createTaskViaHTTP(t *testing.T, baseURL string, payload map[string]any) cor
 func postTaskAction(t *testing.T, baseURL string, path string) coretasks.Task {
 	t.Helper()
 	return postTask(t, baseURL+path, map[string]any{})
+}
+
+func postWorkspaceAction(t *testing.T, baseURL string, path string) coreworkspaces.WorkspaceStateFile {
+	t.Helper()
+	raw, err := json.Marshal(map[string]any{})
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	response, err := http.Post(baseURL+path, "application/json", bytes.NewReader(raw))
+	if err != nil {
+		t.Fatalf("Post() error = %v", err)
+	}
+	defer response.Body.Close()
+	var envelope taskTestResponse
+	if err := json.NewDecoder(response.Body).Decode(&envelope); err != nil {
+		t.Fatalf("Decode() envelope error = %v", err)
+	}
+	if !envelope.OK {
+		t.Fatalf("response ok = false, message = %s, data = %s", envelope.Message, string(envelope.Data))
+	}
+	var state coreworkspaces.WorkspaceStateFile
+	if err := json.Unmarshal(envelope.Data, &state); err != nil {
+		t.Fatalf("Unmarshal workspace state error = %v", err)
+	}
+	return state
 }
 
 // postTask 统一发送 POST 请求并解析任务响应。
@@ -727,6 +958,44 @@ func waitForLine(t *testing.T, lines <-chan string, want string, timeout time.Du
 			return false
 		}
 	}
+}
+
+type recordingTaskWorkspaceManager struct {
+	confirmUserID string
+	confirmTaskID string
+	discardUserID string
+	discardTaskID string
+	confirmState  coreworkspaces.WorkspaceStateFile
+	discardState  coreworkspaces.WorkspaceStateFile
+}
+
+func (m *recordingTaskWorkspaceManager) ConfirmTaskWorkspace(_ context.Context, userID string, taskID string) (*coreworkspaces.WorkspaceStateFile, error) {
+	m.confirmUserID = userID
+	m.confirmTaskID = taskID
+	state := m.confirmState
+	state.TaskID = taskID
+	state.UserID = userID
+	return &state, nil
+}
+
+func (m *recordingTaskWorkspaceManager) DiscardTaskWorkspace(_ context.Context, userID string, taskID string) (*coreworkspaces.WorkspaceStateFile, error) {
+	m.discardUserID = userID
+	m.discardTaskID = taskID
+	state := m.discardState
+	state.TaskID = taskID
+	state.UserID = userID
+	return &state, nil
+}
+
+var taskWorkspaceManagerByServer = map[string]*recordingTaskWorkspaceManager{}
+
+func mustTaskWorkspaceManager(t *testing.T, server *httptest.Server) *recordingTaskWorkspaceManager {
+	t.Helper()
+	manager, ok := taskWorkspaceManagerByServer[server.URL]
+	if !ok {
+		t.Fatalf("recording task workspace manager not registered for %s", server.URL)
+	}
+	return manager
 }
 
 func newAgentRunTaskTestServer(t *testing.T) (*coretasks.Manager, *httptest.Server) {

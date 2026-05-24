@@ -711,6 +711,8 @@ definitions:
         type: object
       task_type:
         type: string
+      workspace_mode:
+        type: string
     type: object
   handlers.CustomModelCreateSwaggerRequest:
     properties:
@@ -1261,6 +1263,19 @@ definitions:
         type: string
       provider_id:
         type: string
+      workspace_mode:
+        enum:
+        - mutable
+        - readonly
+        type: string
+      workspace_state:
+        enum:
+        - active
+        - pending_merge
+        - merged
+        - discarded
+        - completed
+        type: string
     type: object
   handlers.SkillListItemDoc:
     properties:
@@ -1382,6 +1397,36 @@ definitions:
       time:
         type: string
     type: object
+  handlers.TaskWorkspaceSummarySwaggerDoc:
+    properties:
+      backup_root:
+        type: string
+      created_at:
+        type: string
+      discarded_at:
+        type: string
+      merged_at:
+        type: string
+      mode:
+        enum:
+        - mutable
+        - readonly
+        type: string
+      state:
+        enum:
+        - active
+        - pending_merge
+        - merged
+        - discarded
+        - completed
+        type: string
+      task_id:
+        type: string
+      task_root:
+        type: string
+      updated_at:
+        type: string
+    type: object
   handlers.TokenPriceSwaggerDoc:
     properties:
       amount_usd:
@@ -1415,6 +1460,79 @@ definitions:
   handlers.UserProfileUpdateSwaggerRequest:
     properties:
       display_name:
+        type: string
+    type: object
+  handlers.UserWorkspaceSummarySwaggerDoc:
+    properties:
+      home_root:
+        type: string
+      tasks:
+        items:
+          $ref: '#/definitions/handlers.TaskWorkspaceSummarySwaggerDoc'
+        type: array
+      user_id:
+        type: string
+    type: object
+  handlers.UserWorkspaceSummarySwaggerResponse:
+    properties:
+      code:
+        type: integer
+      data:
+        $ref: '#/definitions/handlers.UserWorkspaceSummarySwaggerDoc'
+      message:
+        type: string
+      ok:
+        type: boolean
+      time:
+        type: string
+    type: object
+  handlers.WorkspaceStateSwaggerDoc:
+    properties:
+      backup_root:
+        type: string
+      created_at:
+        type: string
+      discarded_at:
+        type: string
+      error_message:
+        type: string
+      home_root:
+        type: string
+      merged_at:
+        type: string
+      mode:
+        enum:
+        - mutable
+        - readonly
+        type: string
+      state:
+        enum:
+        - active
+        - pending_merge
+        - merged
+        - discarded
+        - completed
+        type: string
+      task_id:
+        type: string
+      task_root:
+        type: string
+      updated_at:
+        type: string
+      user_id:
+        type: string
+    type: object
+  handlers.WorkspaceStateSwaggerResponse:
+    properties:
+      code:
+        type: integer
+      data:
+        $ref: '#/definitions/handlers.WorkspaceStateSwaggerDoc'
+      message:
+        type: string
+      ok:
+        type: boolean
+      time:
         type: string
     type: object
 info:
@@ -1626,6 +1744,37 @@ paths:
       summary: 管理员更新 YAML 模型可用范围
       tags:
       - admin-models
+  /admin/workspaces/users/{user_id}:
+    get:
+      description: 管理员查看指定用户 home/task workspace 状态，并写入后台审计记录。
+      parameters:
+      - description: 用户 ID
+        in: path
+        name: user_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.UserWorkspaceSummarySwaggerResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+      summary: 查看用户工作区摘要
+      tags:
+      - admin-workspaces
   /attachments:
     post:
       consumes:
@@ -2829,6 +2978,68 @@ paths:
           schema:
             $ref: '#/definitions/handlers.ErrorSwaggerResponse'
       summary: 重试任务
+      tags:
+      - tasks
+  /tasks/{id}/workspace/confirm:
+    post:
+      description: 将 pending_merge 状态的 mutable task workspace 备份并整目录回写到用户 home workspace。
+      parameters:
+      - description: 任务 ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.WorkspaceStateSwaggerResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+      summary: 确认合并任务工作区
+      tags:
+      - tasks
+  /tasks/{id}/workspace/discard:
+    post:
+      description: 将 task workspace 标记为 discarded，保留目录但不回写用户 home workspace。
+      parameters:
+      - description: 任务 ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.WorkspaceStateSwaggerResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorSwaggerResponse'
+      summary: 放弃任务工作区变更
       tags:
       - tasks
   /tasks/running:

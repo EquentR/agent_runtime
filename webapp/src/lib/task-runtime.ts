@@ -20,6 +20,10 @@ export function isTaskWaitingForInput(task: TaskDetails | null | undefined) {
   )
 }
 
+export function isTaskPendingWorkspaceMerge(task: TaskDetails | null | undefined) {
+  return task?.result?.workspace_state === 'pending_merge' || task?.result_json?.workspace_state === 'pending_merge'
+}
+
 export function buildApprovalEntriesFromList(nextApprovals: ToolApproval[], initialEntries: TranscriptEntry[] = []) {
   let nextEntries: TranscriptEntry[] = [...initialEntries]
   for (const approval of nextApprovals) {

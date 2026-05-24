@@ -23,6 +23,7 @@ import (
 	coretasks "github.com/EquentR/agent_runtime/core/tasks"
 	"github.com/EquentR/agent_runtime/core/tools"
 	coretypes "github.com/EquentR/agent_runtime/core/types"
+	"github.com/EquentR/agent_runtime/core/workspaces"
 )
 
 type ModelResolver struct {
@@ -65,16 +66,18 @@ type ModelOptionEntry struct {
 }
 
 type RunTaskInput struct {
-	ConversationID string   `json:"conversation_id"`
-	ProviderID     string   `json:"provider_id"`
-	ModelID        string   `json:"model_id"`
-	UserID         string   `json:"user_id,omitempty"`
-	Message        string   `json:"message"`
-	AttachmentIDs  []string `json:"attachment_ids,omitempty"`
-	Scene          string   `json:"scene,omitempty"`
-	SystemPrompt   string   `json:"system_prompt,omitempty"`
-	CreatedBy      string   `json:"created_by,omitempty"`
-	Skills         []string `json:"skills,omitempty"`
+	ConversationID  string          `json:"conversation_id"`
+	ProviderID      string          `json:"provider_id"`
+	ModelID         string          `json:"model_id"`
+	UserID          string          `json:"user_id,omitempty"`
+	Message         string          `json:"message"`
+	AttachmentIDs   []string        `json:"attachment_ids,omitempty"`
+	Scene           string          `json:"scene,omitempty"`
+	SystemPrompt    string          `json:"system_prompt,omitempty"`
+	CreatedBy       string          `json:"created_by,omitempty"`
+	Skills          []string        `json:"skills,omitempty"`
+	WorkspaceUserID string          `json:"workspace_user_id,omitempty"`
+	WorkspaceMode   workspaces.Mode `json:"workspace_mode,omitempty"`
 }
 
 const defaultRunTaskScene = "agent.run.default"
@@ -89,6 +92,8 @@ type RunTaskResult struct {
 	MessagesAppended  int                        `json:"messages_appended"`
 	MemoryContext     *MemoryContextSnapshot     `json:"memory_context,omitempty"`
 	MemoryCompression *MemoryCompressionSnapshot `json:"memory_compression,omitempty"`
+	WorkspaceMode     workspaces.Mode            `json:"workspace_mode,omitempty"`
+	WorkspaceState    workspaces.State           `json:"workspace_state,omitempty"`
 }
 
 type ClientFactory func(provider *coretypes.LLMProvider, llmModel *coretypes.LLMModel) (model.LlmClient, error)
@@ -97,21 +102,25 @@ type MemoryFactory func(model *coretypes.LLMModel) (*memory.Manager, error)
 
 type EventSinkFactory func(runtime *coretasks.Runtime) EventSink
 
+type ToolRegistryFactory func(workspaceRoot string) (*tools.Registry, error)
+
 type ExecutorDependencies struct {
-	Resolver          *ModelResolver
-	ConversationStore *ConversationStore
-	AttachmentStore   *attachments.Store
-	AttachmentStorage attachments.Storage
-	Registry          *tools.Registry
-	ApprovalStore     *approvals.Store
-	InteractionStore  *interactions.Store
-	PromptResolver    *coreprompt.Resolver
-	SkillsResolver    *coreskills.Resolver
-	WorkspaceRoot     string
-	ClientFactory     ClientFactory
-	MemoryFactory     MemoryFactory
-	NewEventSink      EventSinkFactory
-	AuditRecorder     coreaudit.Recorder
+	Resolver            *ModelResolver
+	ConversationStore   *ConversationStore
+	AttachmentStore     *attachments.Store
+	AttachmentStorage   attachments.Storage
+	Registry            *tools.Registry
+	ApprovalStore       *approvals.Store
+	InteractionStore    *interactions.Store
+	PromptResolver      *coreprompt.Resolver
+	SkillsResolver      *coreskills.Resolver
+	WorkspaceRoot       string
+	WorkspaceManager    *workspaces.Manager
+	ToolRegistryFactory ToolRegistryFactory
+	ClientFactory       ClientFactory
+	MemoryFactory       MemoryFactory
+	NewEventSink        EventSinkFactory
+	AuditRecorder       coreaudit.Recorder
 }
 
 const (
@@ -251,8 +260,11 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 
 		auditor := newExecutorAuditor(deps.AuditRecorder, task, RunTaskInput{CreatedBy: task.CreatedBy})
 		var (
-			partialMessages []model.Message
-			snapshotErr     error
+			partialMessages     []model.Message
+			snapshotErr         error
+			workspaceInfo       executorWorkspaceInfo
+			workspaceFinalized  bool
+			workspaceFailureErr error
 		)
 		defer func() {
 			if execErr == nil {
@@ -263,6 +275,16 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 				auditErr = snapshotErr
 			}
 			auditor.recordErrorSnapshot(ctx, auditErr, partialMessages)
+		}()
+		defer func() {
+			if execErr == nil || workspaceFinalized || errors.Is(execErr, coretasks.ErrTaskSuspended) {
+				return
+			}
+			cause := execErr
+			if workspaceFailureErr != nil {
+				cause = workspaceFailureErr
+			}
+			_, _ = completeExecutorWorkspace(ctx, deps, workspaceInfo, cause)
 		}()
 
 		var input RunTaskInput
@@ -276,6 +298,10 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 		input.Skills = coreskills.NormalizeNames(input.Skills)
 		auditor.setInput(input)
 
+		workspaceRoot, registry, skillsResolver, workspaceInfo, err := resolveExecutorWorkspace(ctx, deps, task, input)
+		if err != nil {
+			return nil, err
+		}
 		resolved, err := deps.Resolver.ResolveTask(ctx, input)
 		if err != nil {
 			return nil, err
@@ -287,17 +313,17 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 			ProviderID:         provider.ProviderName(),
 			ModelID:            llmModel.ModelID(),
 			LegacySystemPrompt: input.SystemPrompt,
-			WorkspaceRoot:      deps.WorkspaceRoot,
+			WorkspaceRoot:      workspaceRoot,
 		})
 		if err != nil {
 			return nil, err
 		}
 		var conversationPrelude []model.Message
 		if len(input.Skills) > 0 {
-			if deps.SkillsResolver == nil {
+			if skillsResolver == nil {
 				return nil, fmt.Errorf("skills resolver is required when skills are selected")
 			}
-			resolvedSkills, err := deps.SkillsResolver.Resolve(ctx, coreskills.ResolveInput{Names: input.Skills})
+			resolvedSkills, err := skillsResolver.Resolve(ctx, coreskills.ResolveInput{Names: input.Skills})
 			if err != nil {
 				return nil, err
 			}
@@ -352,7 +378,7 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 			sink = NewTaskRuntimeSink(runtime)
 		}
 		runID := auditor.ensureRun(ctx)
-		runner, err := NewRunner(client, deps.Registry, Options{
+		runner, err := NewRunner(client, registry, Options{
 			LLMModel:             llmModel,
 			Memory:               memoryManager,
 			ResolvedPrompt:       resolvedPrompt,
@@ -418,6 +444,7 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 			if errors.Is(err, ErrInteractionPending) {
 				return nil, coretasks.ErrTaskSuspended
 			}
+			workspaceFailureErr = err
 			snapshotErr = err
 			// Trim trailing incomplete tool-call assistant messages before persisting,
 			// so that the conversation history remains valid for the next turn.
@@ -449,6 +476,11 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 		if err != nil {
 			return nil, err
 		}
+		workspaceState, err := finishSuccessfulExecutorWorkspace(ctx, deps, workspaceInfo)
+		if err != nil {
+			return nil, err
+		}
+		workspaceFinalized = true
 		return RunTaskResult{
 			ConversationID:    conversation.ID,
 			ProviderID:        conversation.ProviderID,
@@ -459,8 +491,78 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 			MessagesAppended:  len(result.Messages) + boolToInt(checkpoint == nil),
 			MemoryContext:     memoryContext,
 			MemoryCompression: latestCompression,
+			WorkspaceMode:     workspaceInfo.Mode,
+			WorkspaceState:    workspaceState,
 		}, nil
 	}
+}
+
+type executorWorkspaceInfo struct {
+	UserID string
+	TaskID string
+	Mode   workspaces.Mode
+}
+
+func resolveExecutorWorkspace(ctx context.Context, deps ExecutorDependencies, task *coretasks.Task, input RunTaskInput) (string, *tools.Registry, *coreskills.Resolver, executorWorkspaceInfo, error) {
+	workspaceRoot := deps.WorkspaceRoot
+	registry := deps.Registry
+	skillsResolver := deps.SkillsResolver
+	info := executorWorkspaceInfo{Mode: normalizeWorkspaceMode(input.WorkspaceMode)}
+	if deps.WorkspaceManager == nil {
+		return workspaceRoot, registry, skillsResolver, info, nil
+	}
+
+	workspaceUserID := firstNonEmpty(input.WorkspaceUserID, task.CreatedBy, input.CreatedBy)
+	if workspaceUserID == "" {
+		return workspaceRoot, registry, skillsResolver, info, nil
+	}
+	info.UserID = workspaceUserID
+	info.TaskID = task.ID
+	taskWorkspace, err := deps.WorkspaceManager.CreateTaskWorkspace(ctx, workspaceUserID, task.ID, info.Mode)
+	if err != nil {
+		return "", nil, nil, info, err
+	}
+	workspaceRoot = taskWorkspace.Root
+	skillsResolver = coreskills.NewResolver(coreskills.NewLoader(workspaceRoot))
+	if deps.ToolRegistryFactory != nil {
+		registry, err = deps.ToolRegistryFactory(workspaceRoot)
+		if err != nil {
+			return "", nil, nil, info, err
+		}
+	}
+	return workspaceRoot, registry, skillsResolver, info, nil
+}
+
+func finishSuccessfulExecutorWorkspace(ctx context.Context, deps ExecutorDependencies, info executorWorkspaceInfo) (workspaces.State, error) {
+	if deps.WorkspaceManager == nil || info.UserID == "" || info.TaskID == "" {
+		return "", nil
+	}
+	if info.Mode == workspaces.ModeMutable {
+		state, err := deps.WorkspaceManager.MarkTaskWorkspacePendingMerge(ctx, info.UserID, info.TaskID)
+		if err != nil {
+			return "", err
+		}
+		return state.State, nil
+	}
+	state, err := deps.WorkspaceManager.DiscardTaskWorkspace(ctx, info.UserID, info.TaskID)
+	if err != nil {
+		return "", err
+	}
+	return state.State, nil
+}
+
+func completeExecutorWorkspace(ctx context.Context, deps ExecutorDependencies, info executorWorkspaceInfo, cause error) (*workspaces.WorkspaceStateFile, error) {
+	if deps.WorkspaceManager == nil || info.UserID == "" || info.TaskID == "" {
+		return nil, nil
+	}
+	if info.Mode == workspaces.ModeReadonly {
+		return deps.WorkspaceManager.DiscardTaskWorkspace(ctx, info.UserID, info.TaskID)
+	}
+	message := ""
+	if cause != nil {
+		message = cause.Error()
+	}
+	return deps.WorkspaceManager.CompleteTaskWorkspace(ctx, info.UserID, info.TaskID, message)
 }
 
 func hydrateReplayMessages(ctx context.Context, store *attachments.Store, storage attachments.Storage, messages []model.Message, conversationID string, allowExpiredHistoryContinuation bool) ([]model.Message, error) {
@@ -784,6 +886,15 @@ func resolveRunTaskScene(scene string) string {
 		return trimmed
 	}
 	return defaultRunTaskScene
+}
+
+func normalizeWorkspaceMode(mode workspaces.Mode) workspaces.Mode {
+	switch mode {
+	case workspaces.ModeReadonly:
+		return workspaces.ModeReadonly
+	default:
+		return workspaces.ModeMutable
+	}
 }
 
 // trimIncompleteToolCallMessages removes trailing assistant messages that have

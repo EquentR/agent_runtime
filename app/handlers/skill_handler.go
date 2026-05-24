@@ -4,23 +4,36 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
+	"strings"
 
+	"github.com/EquentR/agent_runtime/app/models"
 	coreskills "github.com/EquentR/agent_runtime/core/skills"
+	"github.com/EquentR/agent_runtime/core/workspaces"
 	resp "github.com/EquentR/agent_runtime/pkg/rest"
 	"github.com/gin-gonic/gin"
 )
 
 type SkillHandler struct {
-	loader      *coreskills.Loader
-	middlewares []gin.HandlerFunc
+	loader           *coreskills.Loader
+	workspaceManager *workspaces.Manager
+	middlewares      []gin.HandlerFunc
 }
 
 func NewSkillHandler(loader *coreskills.Loader, middlewares ...gin.HandlerFunc) *SkillHandler {
 	return &SkillHandler{loader: loader, middlewares: middlewares}
 }
 
+func (h *SkillHandler) WithWorkspaceManager(manager *workspaces.Manager) *SkillHandler {
+	if h == nil {
+		return h
+	}
+	h.workspaceManager = manager
+	return h
+}
+
 func (h *SkillHandler) Register(rg *gin.RouterGroup) {
-	if h == nil || h.loader == nil {
+	if h == nil || (h.loader == nil && h.workspaceManager == nil) {
 		return
 	}
 	options := []resp.WrapperOption{}
@@ -44,10 +57,11 @@ func (h *SkillHandler) Register(rg *gin.RouterGroup) {
 // @Router /skills [get]
 func (h *SkillHandler) handleListSkills() (method, relativePath string, wrapper resp.JsonOptionsResultWrapper, opts []resp.WrapperOption) {
 	return http.MethodGet, "", func(c *gin.Context) (any, []resp.ResOpt, error) {
-		if h == nil || h.loader == nil {
-			return nil, nil, fmt.Errorf("skill loader is not configured")
+		loader, err := h.loaderForRequest(c)
+		if err != nil {
+			return nil, nil, err
 		}
-		items, err := h.loader.List(c.Request.Context())
+		items, err := loader.List(c.Request.Context())
 		if err != nil {
 			return nil, nil, err
 		}
@@ -74,10 +88,11 @@ func (h *SkillHandler) handleListSkills() (method, relativePath string, wrapper 
 // @Router /skills/{name} [get]
 func (h *SkillHandler) handleGetSkill() (method, relativePath string, wrapper resp.JsonOptionsResultWrapper, opts []resp.WrapperOption) {
 	return http.MethodGet, "/:name", func(c *gin.Context) (any, []resp.ResOpt, error) {
-		if h == nil || h.loader == nil {
-			return nil, nil, fmt.Errorf("skill loader is not configured")
+		loader, err := h.loaderForRequest(c)
+		if err != nil {
+			return nil, nil, err
 		}
-		skill, err := h.loader.Get(c.Request.Context(), c.Param("name"))
+		skill, err := loader.Get(c.Request.Context(), c.Param("name"))
 		if err != nil {
 			if errors.Is(err, coreskills.ErrSkillNotFound) {
 				return nil, []resp.ResOpt{resp.WithCode(http.StatusNotFound)}, err
@@ -86,4 +101,36 @@ func (h *SkillHandler) handleGetSkill() (method, relativePath string, wrapper re
 		}
 		return skill, nil, nil
 	}, nil
+}
+
+func (h *SkillHandler) loaderForRequest(c *gin.Context) (*coreskills.Loader, error) {
+	if h == nil {
+		return nil, fmt.Errorf("skill loader is not configured")
+	}
+	if h.workspaceManager == nil {
+		if h.loader == nil {
+			return nil, fmt.Errorf("skill loader is not configured")
+		}
+		return h.loader, nil
+	}
+	user := currentAuthUser(c)
+	userID := workspaceUserIDForAuthenticatedUser(user)
+	if userID == "" {
+		return nil, fmt.Errorf("authenticated user is required to resolve workspace skills")
+	}
+	home, err := h.workspaceManager.EnsureHomeWorkspace(c.Request.Context(), userID)
+	if err != nil {
+		return nil, err
+	}
+	return coreskills.NewLoader(home.Root), nil
+}
+
+func workspaceUserIDForAuthenticatedUser(user *models.User) string {
+	if user == nil {
+		return ""
+	}
+	if user.ID != 0 {
+		return strconv.FormatUint(user.ID, 10)
+	}
+	return strings.TrimSpace(user.Username)
 }

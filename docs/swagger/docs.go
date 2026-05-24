@@ -322,6 +322,53 @@ const docTemplate = `{
                 }
             }
         },
+        "/admin/workspaces/users/{user_id}": {
+            "get": {
+                "description": "管理员查看指定用户 home/task workspace 状态，并写入后台审计记录。",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-workspaces"
+                ],
+                "summary": "查看用户工作区摘要",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "用户 ID",
+                        "name": "user_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.UserWorkspaceSummarySwaggerResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/attachments": {
             "post": {
                 "description": "上传一个 multipart 文件，创建 draft 附件并返回展示元数据。",
@@ -2181,6 +2228,100 @@ const docTemplate = `{
                 }
             }
         },
+        "/tasks/{id}/workspace/confirm": {
+            "post": {
+                "description": "将 pending_merge 状态的 mutable task workspace 备份并整目录回写到用户 home workspace。",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "确认合并任务工作区",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "任务 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.WorkspaceStateSwaggerResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/tasks/{id}/workspace/discard": {
+            "post": {
+                "description": "将 task workspace 标记为 discarded，保留目录但不回写用户 home workspace。",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "放弃任务工作区变更",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "任务 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.WorkspaceStateSwaggerResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/users/me": {
             "get": {
                 "description": "返回当前 session 用户资料、邮箱验证状态和 required actions。",
@@ -3716,6 +3857,9 @@ const docTemplate = `{
                 },
                 "task_type": {
                     "type": "string"
+                },
+                "workspace_mode": {
+                    "type": "string"
                 }
             }
         },
@@ -4559,6 +4703,23 @@ const docTemplate = `{
                 },
                 "provider_id": {
                     "type": "string"
+                },
+                "workspace_mode": {
+                    "type": "string",
+                    "enum": [
+                        "mutable",
+                        "readonly"
+                    ]
+                },
+                "workspace_state": {
+                    "type": "string",
+                    "enum": [
+                        "active",
+                        "pending_merge",
+                        "merged",
+                        "discarded",
+                        "completed"
+                    ]
                 }
             }
         },
@@ -4742,6 +4903,49 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.TaskWorkspaceSummarySwaggerDoc": {
+            "type": "object",
+            "properties": {
+                "backup_root": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "discarded_at": {
+                    "type": "string"
+                },
+                "merged_at": {
+                    "type": "string"
+                },
+                "mode": {
+                    "type": "string",
+                    "enum": [
+                        "mutable",
+                        "readonly"
+                    ]
+                },
+                "state": {
+                    "type": "string",
+                    "enum": [
+                        "active",
+                        "pending_merge",
+                        "merged",
+                        "discarded",
+                        "completed"
+                    ]
+                },
+                "task_id": {
+                    "type": "string"
+                },
+                "task_root": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
         "handlers.TokenPriceSwaggerDoc": {
             "type": "object",
             "properties": {
@@ -4793,6 +4997,115 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "display_name": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.UserWorkspaceSummarySwaggerDoc": {
+            "type": "object",
+            "properties": {
+                "home_root": {
+                    "type": "string"
+                },
+                "tasks": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.TaskWorkspaceSummarySwaggerDoc"
+                    }
+                },
+                "user_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.UserWorkspaceSummarySwaggerResponse": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "integer"
+                },
+                "data": {
+                    "$ref": "#/definitions/handlers.UserWorkspaceSummarySwaggerDoc"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "ok": {
+                    "type": "boolean"
+                },
+                "time": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.WorkspaceStateSwaggerDoc": {
+            "type": "object",
+            "properties": {
+                "backup_root": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "discarded_at": {
+                    "type": "string"
+                },
+                "error_message": {
+                    "type": "string"
+                },
+                "home_root": {
+                    "type": "string"
+                },
+                "merged_at": {
+                    "type": "string"
+                },
+                "mode": {
+                    "type": "string",
+                    "enum": [
+                        "mutable",
+                        "readonly"
+                    ]
+                },
+                "state": {
+                    "type": "string",
+                    "enum": [
+                        "active",
+                        "pending_merge",
+                        "merged",
+                        "discarded",
+                        "completed"
+                    ]
+                },
+                "task_id": {
+                    "type": "string"
+                },
+                "task_root": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "user_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.WorkspaceStateSwaggerResponse": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "integer"
+                },
+                "data": {
+                    "$ref": "#/definitions/handlers.WorkspaceStateSwaggerDoc"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "ok": {
+                    "type": "boolean"
+                },
+                "time": {
                     "type": "string"
                 }
             }

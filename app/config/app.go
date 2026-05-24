@@ -18,9 +18,12 @@ const defaultAttachmentDraftTTL = 24 * time.Hour
 const defaultAttachmentSentRetention = 30 * 24 * time.Hour
 const defaultAttachmentGCInterval = 1 * time.Hour
 const defaultAttachmentFilesystemRoot = "data/attachments"
+const defaultWorkspaceTemplateRoot = "workspace"
+const defaultWorkspacesRoot = "data/workspaces"
 
 type Config struct {
 	WorkspaceDir      string                      `yaml:"workspaceDir"`
+	Workspaces        WorkspacesConfig            `yaml:"workspaces"`
 	Server            rest.Config                 `yaml:"server"`
 	Sqlite            db.Database                 `yaml:"sqlite"`
 	Log               log.Config                  `yaml:"log"`
@@ -39,6 +42,13 @@ func (c Config) ResolvedLLMRequestTimeout() time.Duration {
 		return c.LLMRequestTimeout
 	}
 	return defaultLLMRequestTimeout
+}
+
+func (c Config) ResolvedWorkspaceTemplateRoot() string {
+	if root := strings.TrimSpace(c.WorkspaceDir); root != "" {
+		return root
+	}
+	return defaultWorkspaceTemplateRoot
 }
 
 type SecurityConfig struct {
@@ -95,6 +105,17 @@ func (c TaskManagerConfig) ManagerOptions(auditRecorder coretasks.AuditRecorder)
 		WorkerCount:   c.WorkerCount,
 		AuditRecorder: auditRecorder,
 	}
+}
+
+type WorkspacesConfig struct {
+	Root string `yaml:"root"`
+}
+
+func (c WorkspacesConfig) ResolvedRoot() string {
+	if root := strings.TrimSpace(c.Root); root != "" {
+		return root
+	}
+	return defaultWorkspacesRoot
 }
 
 type ToolsConfig struct {

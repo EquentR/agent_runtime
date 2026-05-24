@@ -1,4 +1,6 @@
 workspaceDir: "workspace"
+workspaces:
+  root: data/workspaces
 
 server:
   host: "0.0.0.0"

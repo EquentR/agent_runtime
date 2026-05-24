@@ -26,6 +26,12 @@ describe('chat-state', () => {
       selectedSkillsByConversation: {
         conv_1: ['debugging'],
       },
+      selectedWorkspaceModeByConversation: {
+        conv_1: 'readonly',
+      },
+      pendingWorkspaceMergeTaskIdByConversation: {
+        conv_1: 'task_merge',
+      },
     })
 
     expect(loadChatState()).toEqual({
@@ -40,6 +46,12 @@ describe('chat-state', () => {
       },
       selectedSkillsByConversation: {
         conv_1: ['debugging'],
+      },
+      selectedWorkspaceModeByConversation: {
+        conv_1: 'readonly',
+      },
+      pendingWorkspaceMergeTaskIdByConversation: {
+        conv_1: 'task_merge',
       },
     })
   })
@@ -57,6 +69,8 @@ describe('chat-state', () => {
       entries: [{ id: 'a', kind: 'user', title: 'You', content: 'hello' }],
       draftEntriesByConversation: {},
       selectedSkillsByConversation: {},
+      selectedWorkspaceModeByConversation: {},
+      pendingWorkspaceMergeTaskIdByConversation: {},
     })
     scheduleChatStateSave({
       activeConversationId: 'conv_2',
@@ -70,6 +84,12 @@ describe('chat-state', () => {
       },
       selectedSkillsByConversation: {
         conv_2: ['review'],
+      },
+      selectedWorkspaceModeByConversation: {
+        conv_2: 'mutable',
+      },
+      pendingWorkspaceMergeTaskIdByConversation: {
+        conv_2: 'task_merge',
       },
     })
 
@@ -91,6 +111,12 @@ describe('chat-state', () => {
       selectedSkillsByConversation: {
         conv_2: ['review'],
       },
+      selectedWorkspaceModeByConversation: {
+        conv_2: 'mutable',
+      },
+      pendingWorkspaceMergeTaskIdByConversation: {
+        conv_2: 'task_merge',
+      },
     })
   })
 
@@ -104,6 +130,8 @@ describe('chat-state', () => {
       entries: [{ id: 'a', kind: 'user', title: 'You', content: 'hi' }],
       draftEntriesByConversation: { conv_1: [{ id: 'b', kind: 'reply', title: '', content: 'partial' }] },
       selectedSkillsByConversation: { conv_1: ['review'] },
+      selectedWorkspaceModeByConversation: { conv_1: 'readonly' },
+      pendingWorkspaceMergeTaskIdByConversation: { conv_1: 'task_merge' },
     })
 
     clearChatState()
@@ -117,6 +145,8 @@ describe('chat-state', () => {
       entries: [],
       draftEntriesByConversation: {},
       selectedSkillsByConversation: {},
+      selectedWorkspaceModeByConversation: {},
+      pendingWorkspaceMergeTaskIdByConversation: {},
     })
   })
 })

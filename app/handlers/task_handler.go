@@ -13,6 +13,7 @@ import (
 	"github.com/EquentR/agent_runtime/app/logics"
 	coreagent "github.com/EquentR/agent_runtime/core/agent"
 	coretasks "github.com/EquentR/agent_runtime/core/tasks"
+	coreworkspaces "github.com/EquentR/agent_runtime/core/workspaces"
 	resp "github.com/EquentR/agent_runtime/pkg/rest"
 	"github.com/gin-gonic/gin"
 )
@@ -20,10 +21,21 @@ import (
 var errConversationAccessDenied = errors.New("无权访问该会话")
 
 // TaskHandler 提供任务创建、查询、取消、重试与事件订阅接口。
+type taskWorkspaceManager interface {
+	ConfirmTaskWorkspace(ctx context.Context, userID string, taskID string) (*coreworkspaces.WorkspaceStateFile, error)
+	DiscardTaskWorkspace(ctx context.Context, userID string, taskID string) (*coreworkspaces.WorkspaceStateFile, error)
+}
+
+type taskWorkspaceActionInput struct {
+	UserID string
+	TaskID string
+}
+
 type TaskHandler struct {
 	manager       *coretasks.Manager
 	conversations *coreagent.ConversationStore
 	modelLogic    *logics.ModelLogic
+	workspaces    taskWorkspaceManager
 	middlewares   []gin.HandlerFunc
 	authRequired  bool
 }
@@ -36,6 +48,7 @@ type CreateTaskRequest struct {
 	Metadata       map[string]any `json:"metadata"`
 	CreatedBy      string         `json:"created_by"`
 	IdempotencyKey string         `json:"idempotency_key"`
+	WorkspaceMode  string         `json:"workspace_mode"`
 }
 
 // NewTaskHandler 创建任务接口处理器。
@@ -45,6 +58,11 @@ func NewTaskHandler(manager *coretasks.Manager, conversations *coreagent.Convers
 
 func (h *TaskHandler) WithModelLogic(modelLogic *logics.ModelLogic) *TaskHandler {
 	h.modelLogic = modelLogic
+	return h
+}
+
+func (h *TaskHandler) WithWorkspaceManager(workspaces taskWorkspaceManager) *TaskHandler {
+	h.workspaces = workspaces
 	return h
 }
 
@@ -60,6 +78,8 @@ func (h *TaskHandler) Register(rg *gin.RouterGroup) {
 		resp.NewJsonHandler(h.handleGetTask),
 		resp.NewJsonHandler(h.handleCancelTask),
 		resp.NewJsonHandler(h.handleRetryTask),
+		resp.NewJsonOptionsHandler(h.handleConfirmTaskWorkspace),
+		resp.NewJsonOptionsHandler(h.handleDiscardTaskWorkspace),
 		resp.NewHandler(http.MethodGet, "/:id/events", h.handleEvents),
 	}, options...)
 }
@@ -88,9 +108,15 @@ func (h *TaskHandler) handleCreateTask() (method, relativePath string, wrapper r
 		if request.Input == nil {
 			request.Input = map[string]any{}
 		}
+		workspaceMode, err := h.resolveWorkspaceMode(&request)
+		if err != nil {
+			return nil, []resp.ResOpt{resp.WithCode(http.StatusBadRequest)}, err
+		}
 		request.CreatedBy = h.resolveCreatedBy(c, request.CreatedBy)
 		h.canonicalizeTaskInputCreatedBy(request.Input, request.CreatedBy)
 		h.canonicalizeTaskInputUserID(c, request.Input)
+		workspaceUserID := h.resolveWorkspaceUserID(c, request.CreatedBy)
+		h.canonicalizeTaskInputWorkspace(request.Input, workspaceUserID, workspaceMode)
 		if err := h.ensureModelAuthorized(c, &request); err != nil {
 			return gin.H{}, modelAuthorizationErrorOptions(err), err
 		}
@@ -111,13 +137,36 @@ func (h *TaskHandler) handleCreateTask() (method, relativePath string, wrapper r
 			Metadata:       request.Metadata,
 			CreatedBy:      request.CreatedBy,
 			IdempotencyKey: request.IdempotencyKey,
-			ConcurrencyKey: conversationConcurrencyKey(request.Input),
+			ConcurrencyKey: workspaceConcurrencyKey(request.Input, workspaceUserID, workspaceMode),
 		})
 		if err != nil {
 			return nil, nil, err
 		}
 		return task, nil, nil
 	}, nil
+}
+
+func (h *TaskHandler) resolveWorkspaceMode(request *CreateTaskRequest) (coreworkspaces.Mode, error) {
+	if request == nil {
+		return coreworkspaces.ModeMutable, nil
+	}
+	raw := strings.TrimSpace(request.WorkspaceMode)
+	if raw == "" && request.Input != nil {
+		if value, ok := request.Input["workspace_mode"].(string); ok {
+			raw = strings.TrimSpace(value)
+		}
+	}
+	if raw == "" {
+		return coreworkspaces.ModeMutable, nil
+	}
+	switch coreworkspaces.Mode(raw) {
+	case coreworkspaces.ModeMutable:
+		return coreworkspaces.ModeMutable, nil
+	case coreworkspaces.ModeReadonly:
+		return coreworkspaces.ModeReadonly, nil
+	default:
+		return "", fmt.Errorf("invalid workspace_mode: %s", raw)
+	}
 }
 
 func (h *TaskHandler) ensureModelAuthorized(c *gin.Context, request *CreateTaskRequest) error {
@@ -191,6 +240,32 @@ func (h *TaskHandler) canonicalizeTaskInputUserID(c *gin.Context, input map[stri
 	delete(input, "user_id")
 }
 
+func (h *TaskHandler) canonicalizeTaskInputWorkspace(input map[string]any, workspaceUserID string, mode coreworkspaces.Mode) {
+	if input == nil {
+		return
+	}
+	delete(input, "WorkspaceUserID")
+	delete(input, "WorkspaceMode")
+	delete(input, "workspace_task_root")
+	delete(input, "WorkspaceTaskRoot")
+	delete(input, "task_workspace_root")
+	delete(input, "workspace_root")
+	if workspaceUserID != "" {
+		input["workspace_user_id"] = workspaceUserID
+	}
+	input["workspace_mode"] = string(mode)
+}
+
+func (h *TaskHandler) resolveWorkspaceUserID(c *gin.Context, createdBy string) string {
+	if user := currentAuthUser(c); user != nil && user.ID != 0 {
+		return strconv.FormatUint(user.ID, 10)
+	}
+	if trimmed := strings.TrimSpace(createdBy); trimmed != "" {
+		return trimmed
+	}
+	return "local"
+}
+
 func conversationConcurrencyKey(input map[string]any) string {
 	if len(input) == 0 {
 		return ""
@@ -204,6 +279,13 @@ func conversationConcurrencyKey(input map[string]any) string {
 		return ""
 	}
 	return strings.TrimSpace(conversationID)
+}
+
+func workspaceConcurrencyKey(input map[string]any, workspaceUserID string, mode coreworkspaces.Mode) string {
+	if mode == coreworkspaces.ModeMutable && strings.TrimSpace(workspaceUserID) != "" {
+		return "workspace:" + strings.TrimSpace(workspaceUserID) + ":mutable"
+	}
+	return conversationConcurrencyKey(input)
 }
 
 func (h *TaskHandler) ensureConversationOwnership(c *gin.Context, input map[string]any) error {
@@ -332,6 +414,114 @@ func (h *TaskHandler) handleRetryTask() (method, relativePath string, wrapper re
 		}
 		return h.manager.RetryTask(c.Request.Context(), c.Param("id"))
 	}, nil
+}
+
+// handleConfirmTaskWorkspace returns the route definition for confirming task workspace merge.
+//
+// @Summary 确认合并任务工作区
+// @Description 将 pending_merge 状态的 mutable task workspace 备份并整目录回写到用户 home workspace。
+// @Tags tasks
+// @Produce json
+// @Param id path string true "任务 ID"
+// @Success 200 {object} WorkspaceStateSwaggerResponse
+// @Failure 400 {object} ErrorSwaggerResponse
+// @Failure 401 {object} ErrorSwaggerResponse
+// @Failure 404 {object} ErrorSwaggerResponse
+// @Router /tasks/{id}/workspace/confirm [post]
+func (h *TaskHandler) handleConfirmTaskWorkspace() (method, relativePath string, wrapper resp.JsonOptionsResultWrapper, opts []resp.WrapperOption) {
+	return http.MethodPost, "/:id/workspace/confirm", func(c *gin.Context) (any, []resp.ResOpt, error) {
+		if h.workspaces == nil {
+			return nil, []resp.ResOpt{resp.WithCode(http.StatusServiceUnavailable)}, fmt.Errorf("workspace manager is not configured")
+		}
+		task, resOpts, err := loadTaskForOwnerMutation(c, h.manager, h.authRequired)
+		if err != nil {
+			return nil, resOpts, err
+		}
+		input, err := h.taskWorkspaceInput(c, task)
+		if err != nil {
+			return nil, []resp.ResOpt{resp.WithCode(http.StatusBadRequest)}, err
+		}
+		state, err := h.workspaces.ConfirmTaskWorkspace(c.Request.Context(), input.UserID, input.TaskID)
+		return state, workspaceActionErrorOptions(err), err
+	}, nil
+}
+
+// handleDiscardTaskWorkspace returns the route definition for discarding task workspace changes.
+//
+// @Summary 放弃任务工作区变更
+// @Description 将 task workspace 标记为 discarded，保留目录但不回写用户 home workspace。
+// @Tags tasks
+// @Produce json
+// @Param id path string true "任务 ID"
+// @Success 200 {object} WorkspaceStateSwaggerResponse
+// @Failure 400 {object} ErrorSwaggerResponse
+// @Failure 401 {object} ErrorSwaggerResponse
+// @Failure 404 {object} ErrorSwaggerResponse
+// @Router /tasks/{id}/workspace/discard [post]
+func (h *TaskHandler) handleDiscardTaskWorkspace() (method, relativePath string, wrapper resp.JsonOptionsResultWrapper, opts []resp.WrapperOption) {
+	return http.MethodPost, "/:id/workspace/discard", func(c *gin.Context) (any, []resp.ResOpt, error) {
+		if h.workspaces == nil {
+			return nil, []resp.ResOpt{resp.WithCode(http.StatusServiceUnavailable)}, fmt.Errorf("workspace manager is not configured")
+		}
+		task, resOpts, err := loadTaskForOwnerMutation(c, h.manager, h.authRequired)
+		if err != nil {
+			return nil, resOpts, err
+		}
+		input, err := h.taskWorkspaceInput(c, task)
+		if err != nil {
+			return nil, []resp.ResOpt{resp.WithCode(http.StatusBadRequest)}, err
+		}
+		state, err := h.workspaces.DiscardTaskWorkspace(c.Request.Context(), input.UserID, input.TaskID)
+		return state, workspaceActionErrorOptions(err), err
+	}, nil
+}
+
+func (h *TaskHandler) taskWorkspaceInput(c *gin.Context, task *coretasks.Task) (taskWorkspaceActionInput, error) {
+	if task == nil {
+		return taskWorkspaceActionInput{}, fmt.Errorf("task is required")
+	}
+	userID, err := workspaceUserIDFromTask(c, task)
+	if err != nil {
+		return taskWorkspaceActionInput{}, err
+	}
+	return taskWorkspaceActionInput{UserID: userID, TaskID: task.ID}, nil
+}
+
+func workspaceUserIDFromTask(c *gin.Context, task *coretasks.Task) (string, error) {
+	input := map[string]any{}
+	if len(task.InputJSON) > 0 {
+		if err := json.Unmarshal(task.InputJSON, &input); err != nil {
+			return "", fmt.Errorf("decode task input: %w", err)
+		}
+	}
+	if raw, ok := input["workspace_user_id"].(string); ok && strings.TrimSpace(raw) != "" {
+		return strings.TrimSpace(raw), nil
+	}
+	if user := currentAuthUser(c); user != nil && user.ID != 0 {
+		return strconv.FormatUint(user.ID, 10), nil
+	}
+	if raw, ok := input["user_id"].(string); ok && strings.TrimSpace(raw) != "" {
+		return strings.TrimSpace(raw), nil
+	}
+	if trimmed := strings.TrimSpace(task.CreatedBy); trimmed != "" {
+		return trimmed, nil
+	}
+	return "", fmt.Errorf("workspace_user_id is missing")
+}
+
+func workspaceActionErrorOptions(err error) []resp.ResOpt {
+	if err == nil {
+		return nil
+	}
+	message := err.Error()
+	switch {
+	case strings.Contains(message, "not found"):
+		return []resp.ResOpt{resp.WithCode(http.StatusNotFound)}
+	case strings.Contains(message, "not ready"), strings.Contains(message, "invalid"):
+		return []resp.ResOpt{resp.WithCode(http.StatusBadRequest)}
+	default:
+		return nil
+	}
 }
 
 // handleEvents 以 SSE 形式输出指定任务的历史事件与实时事件。

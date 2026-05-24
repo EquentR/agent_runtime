@@ -3,5 +3,8 @@
 /logs/
 node_modules/
 dist/
-workspace/
+workspace/*
+!workspace/AGENTS.md
+!workspace/skills/
+!workspace/skills/**
 .worktrees/

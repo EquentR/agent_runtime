@@ -698,6 +698,62 @@ type RunTaskResultSwaggerDoc struct {
 	MessagesAppended  int                          `json:"messages_appended"`
 	MemoryContext     *MemoryContextSwaggerDoc     `json:"memory_context,omitempty"`
 	MemoryCompression *MemoryCompressionSwaggerDoc `json:"memory_compression,omitempty"`
+	WorkspaceMode     string                       `json:"workspace_mode,omitempty" enums:"mutable,readonly"`
+	WorkspaceState    string                       `json:"workspace_state,omitempty" enums:"active,pending_merge,merged,discarded,completed"`
+}
+
+// WorkspaceStateSwaggerResponse describes a task workspace state response.
+type WorkspaceStateSwaggerResponse struct {
+	Code    int                      `json:"code"`
+	Message string                   `json:"message"`
+	Data    WorkspaceStateSwaggerDoc `json:"data"`
+	OK      bool                     `json:"ok"`
+	Time    string                   `json:"time"`
+}
+
+// WorkspaceStateSwaggerDoc describes persisted task workspace state.
+type WorkspaceStateSwaggerDoc struct {
+	TaskID       string  `json:"task_id"`
+	UserID       string  `json:"user_id"`
+	Mode         string  `json:"mode" enums:"mutable,readonly"`
+	State        string  `json:"state" enums:"active,pending_merge,merged,discarded,completed"`
+	HomeRoot     string  `json:"home_root"`
+	TaskRoot     string  `json:"task_root"`
+	BackupRoot   string  `json:"backup_root,omitempty"`
+	CreatedAt    string  `json:"created_at"`
+	UpdatedAt    string  `json:"updated_at"`
+	MergedAt     *string `json:"merged_at,omitempty"`
+	DiscardedAt  *string `json:"discarded_at,omitempty"`
+	ErrorMessage string  `json:"error_message,omitempty"`
+}
+
+// UserWorkspaceSummarySwaggerResponse describes an admin workspace summary response.
+type UserWorkspaceSummarySwaggerResponse struct {
+	Code    int                            `json:"code"`
+	Message string                         `json:"message"`
+	Data    UserWorkspaceSummarySwaggerDoc `json:"data"`
+	OK      bool                           `json:"ok"`
+	Time    string                         `json:"time"`
+}
+
+// UserWorkspaceSummarySwaggerDoc describes one user's workspace roots and task snapshots.
+type UserWorkspaceSummarySwaggerDoc struct {
+	UserID   string                           `json:"user_id"`
+	HomeRoot string                           `json:"home_root"`
+	Tasks    []TaskWorkspaceSummarySwaggerDoc `json:"tasks"`
+}
+
+// TaskWorkspaceSummarySwaggerDoc describes one task workspace snapshot.
+type TaskWorkspaceSummarySwaggerDoc struct {
+	TaskID      string  `json:"task_id"`
+	Mode        string  `json:"mode" enums:"mutable,readonly"`
+	State       string  `json:"state" enums:"active,pending_merge,merged,discarded,completed"`
+	TaskRoot    string  `json:"task_root"`
+	BackupRoot  string  `json:"backup_root,omitempty"`
+	CreatedAt   string  `json:"created_at"`
+	UpdatedAt   string  `json:"updated_at"`
+	MergedAt    *string `json:"merged_at,omitempty"`
+	DiscardedAt *string `json:"discarded_at,omitempty"`
 }
 
 // ApprovalSwaggerDoc 描述工具审批记录的文档结构。

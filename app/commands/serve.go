@@ -29,6 +29,7 @@ import (
 	coretools "github.com/EquentR/agent_runtime/core/tools"
 	builtin "github.com/EquentR/agent_runtime/core/tools/builtin"
 	coretypes "github.com/EquentR/agent_runtime/core/types"
+	"github.com/EquentR/agent_runtime/core/workspaces"
 	"github.com/EquentR/agent_runtime/pkg/db"
 	"github.com/EquentR/agent_runtime/pkg/log"
 	"github.com/EquentR/agent_runtime/pkg/mail"
@@ -73,11 +74,11 @@ func Serve(c *config.Config, version, commit string) {
 	if err != nil {
 		log.Panicf("Failed to init prompt runtime: %v", err)
 	}
-	workspaceRoot, err := resolveEffectiveWorkspaceRoot(c.WorkspaceDir)
+	workspaceRuntime, err := initWorkspaceRuntime(*c)
 	if err != nil {
-		log.Panicf("Failed to resolve workspace root: %v", err)
+		log.Panicf("Failed to init workspace runtime: %v", err)
 	}
-	skillLoader := coreskills.NewLoader(workspaceRoot)
+	skillLoader := coreskills.NewLoader(workspaceRuntime.TemplateRoot)
 	authRuntime, err := initAuthRuntime(db.DB(), c.Security)
 	if err != nil {
 		log.Panicf("Failed to init auth runtime: %v", err)
@@ -90,16 +91,21 @@ func Serve(c *config.Config, version, commit string) {
 	authRuntime.ModelLogic = modelLogic
 	authRuntime.ModelTester = &modelConnectionTester{clientFactory: buildConfiguredLLMClientFactory(c)}
 	resolver = modelLogic.Resolver()
-	toolRegistry, err := newDefaultToolRegistry(workspaceRoot, c.Tools.WebSearch.BuiltinOptions(), c.Tools.ImageGen.BuiltinOptions(), attachmentStore, attachmentStorage, c.Attachments.ResolvedSentRetention())
+	toolRegistryFactory := func(workspaceRoot string) (*coretools.Registry, error) {
+		return newDefaultToolRegistry(workspaceRoot, c.Tools.WebSearch.BuiltinOptions(), c.Tools.ImageGen.BuiltinOptions(), attachmentStore, attachmentStorage, c.Attachments.ResolvedSentRetention())
+	}
+	toolRegistry, err := toolRegistryFactory(workspaceRuntime.TemplateRoot)
 	if err != nil {
 		log.Panicf("Failed to register builtin tools: %v", err)
 	}
-	if err := registerAgentRunExecutor(taskManager, approvalStore, interactionStore, attachmentStore, attachmentStorage, resolver, conversationStore, toolRegistry, promptRuntime.Resolver, workspaceRoot, buildConfiguredLLMClientFactory(c), auditRuntime.RunRecorder); err != nil {
+	if err := registerAgentRunExecutor(taskManager, approvalStore, interactionStore, attachmentStore, attachmentStorage, resolver, conversationStore, toolRegistry, promptRuntime.Resolver, workspaceRuntime.TemplateRoot, workspaceRuntime.Manager, toolRegistryFactory, buildConfiguredLLMClientFactory(c), auditRuntime.RunRecorder); err != nil {
 		log.Panicf("Failed to register agent.run executor: %v", err)
 	}
 	taskManager.Start(globalCtx)
 
-	router.Init(engine, c.Server.ApiBasePath, c.Server.StaticPaths, buildRouterDependencies(taskManager, approvalStore, attachmentStore, attachmentStorage, c.Attachments.ResolvedDraftTTL(), conversationStore, auditRuntime.Store, resolver, promptRuntime.Store, promptRuntime.Resolver, skillLoader, authRuntime.AuthLogic, authRuntime, interactionStore))
+	deps := buildRouterDependencies(taskManager, approvalStore, attachmentStore, attachmentStorage, c.Attachments.ResolvedDraftTTL(), conversationStore, auditRuntime.Store, resolver, promptRuntime.Store, promptRuntime.Resolver, skillLoader, authRuntime.AuthLogic, authRuntime, interactionStore)
+	deps.WorkspaceManager = workspaceRuntime.Manager
+	router.Init(engine, c.Server.ApiBasePath, c.Server.StaticPaths, deps)
 
 	addr := fmt.Sprintf("%s:%d", c.Server.Host, c.Server.Port)
 	ln, err := net.Listen("tcp", addr)
@@ -145,11 +151,11 @@ func buildConfiguredLLMClientFactory(cfg *config.Config) coreagent.ClientFactory
 	return buildLLMClientFactory(cfg.ResolvedLLMRequestTimeout())
 }
 
-func registerAgentRunExecutor(taskManager *coretasks.Manager, approvalStore *approvals.Store, interactionStore *interactions.Store, attachmentStore *attachments.Store, attachmentStorage attachments.Storage, resolver *coreagent.ModelResolver, conversationStore *coreagent.ConversationStore, toolRegistry *coretools.Registry, promptResolver *coreprompt.Resolver, workspaceRoot string, clientFactory coreagent.ClientFactory, auditRecorder coreaudit.Recorder) error {
+func registerAgentRunExecutor(taskManager *coretasks.Manager, approvalStore *approvals.Store, interactionStore *interactions.Store, attachmentStore *attachments.Store, attachmentStorage attachments.Storage, resolver *coreagent.ModelResolver, conversationStore *coreagent.ConversationStore, toolRegistry *coretools.Registry, promptResolver *coreprompt.Resolver, workspaceRoot string, workspaceManager *workspaces.Manager, toolRegistryFactory coreagent.ToolRegistryFactory, clientFactory coreagent.ClientFactory, auditRecorder coreaudit.Recorder) error {
 	if taskManager == nil {
 		return fmt.Errorf("task manager is required")
 	}
-	return taskManager.RegisterExecutor("agent.run", coreagent.NewTaskExecutor(buildAgentRunExecutorDependencies(resolver, conversationStore, attachmentStore, attachmentStorage, toolRegistry, approvalStore, interactionStore, promptResolver, workspaceRoot, clientFactory, auditRecorder)))
+	return taskManager.RegisterExecutor("agent.run", coreagent.NewTaskExecutor(buildAgentRunExecutorDependencies(resolver, conversationStore, attachmentStore, attachmentStorage, toolRegistry, approvalStore, interactionStore, promptResolver, workspaceRoot, workspaceManager, toolRegistryFactory, clientFactory, auditRecorder)))
 }
 
 type authRuntime struct {
@@ -415,6 +421,35 @@ func initPromptRuntime(database *gorm.DB) (*promptRuntime, error) {
 	}, nil
 }
 
+type workspaceRuntime struct {
+	Manager      *workspaces.Manager
+	TemplateRoot string
+	Root         string
+}
+
+func initWorkspaceRuntime(cfg config.Config) (*workspaceRuntime, error) {
+	templateRoot, err := resolveEffectiveWorkspaceRoot(cfg.ResolvedWorkspaceTemplateRoot())
+	if err != nil {
+		return nil, fmt.Errorf("resolve workspace template root: %w", err)
+	}
+	root, err := resolveEffectiveWorkspaceRoot(cfg.Workspaces.ResolvedRoot())
+	if err != nil {
+		return nil, fmt.Errorf("resolve workspaces root: %w", err)
+	}
+	manager, err := workspaces.NewManager(workspaces.Config{
+		TemplateRoot: templateRoot,
+		Root:         root,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &workspaceRuntime{
+		Manager:      manager,
+		TemplateRoot: templateRoot,
+		Root:         root,
+	}, nil
+}
+
 func resolveEffectiveWorkspaceRoot(configuredRoot string) (string, error) {
 	workspaceRoot := configuredRoot
 	if workspaceRoot == "" {
@@ -435,20 +470,22 @@ func resolveEffectiveWorkspaceRoot(configuredRoot string) (string, error) {
 	return filepath.Clean(workspaceRoot), nil
 }
 
-func buildAgentRunExecutorDependencies(resolver *coreagent.ModelResolver, conversationStore *coreagent.ConversationStore, attachmentStore *attachments.Store, attachmentStorage attachments.Storage, toolRegistry *coretools.Registry, approvalStore *approvals.Store, interactionStore *interactions.Store, promptResolver *coreprompt.Resolver, workspaceRoot string, clientFactory coreagent.ClientFactory, auditRecorder coreaudit.Recorder) coreagent.ExecutorDependencies {
+func buildAgentRunExecutorDependencies(resolver *coreagent.ModelResolver, conversationStore *coreagent.ConversationStore, attachmentStore *attachments.Store, attachmentStorage attachments.Storage, toolRegistry *coretools.Registry, approvalStore *approvals.Store, interactionStore *interactions.Store, promptResolver *coreprompt.Resolver, workspaceRoot string, workspaceManager *workspaces.Manager, toolRegistryFactory coreagent.ToolRegistryFactory, clientFactory coreagent.ClientFactory, auditRecorder coreaudit.Recorder) coreagent.ExecutorDependencies {
 	return coreagent.ExecutorDependencies{
-		Resolver:          resolver,
-		ConversationStore: conversationStore,
-		AttachmentStore:   attachmentStore,
-		AttachmentStorage: attachmentStorage,
-		Registry:          toolRegistry,
-		ApprovalStore:     approvalStore,
-		InteractionStore:  interactionStore,
-		PromptResolver:    promptResolver,
-		SkillsResolver:    coreskills.NewResolver(coreskills.NewLoader(workspaceRoot)),
-		WorkspaceRoot:     workspaceRoot,
-		ClientFactory:     clientFactory,
-		AuditRecorder:     auditRecorder,
+		Resolver:            resolver,
+		ConversationStore:   conversationStore,
+		AttachmentStore:     attachmentStore,
+		AttachmentStorage:   attachmentStorage,
+		Registry:            toolRegistry,
+		ApprovalStore:       approvalStore,
+		InteractionStore:    interactionStore,
+		PromptResolver:      promptResolver,
+		SkillsResolver:      coreskills.NewResolver(coreskills.NewLoader(workspaceRoot)),
+		WorkspaceRoot:       workspaceRoot,
+		WorkspaceManager:    workspaceManager,
+		ToolRegistryFactory: toolRegistryFactory,
+		ClientFactory:       clientFactory,
+		AuditRecorder:       auditRecorder,
 	}
 }
 

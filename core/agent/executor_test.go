@@ -26,6 +26,7 @@ import (
 	coretasks "github.com/EquentR/agent_runtime/core/tasks"
 	coretools "github.com/EquentR/agent_runtime/core/tools"
 	coretypes "github.com/EquentR/agent_runtime/core/types"
+	"github.com/EquentR/agent_runtime/core/workspaces"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -332,6 +333,87 @@ func TestAgentExecutorPromptUsesExplicitScene(t *testing.T) {
 		{Role: model.RoleSystem, Content: "Review scene prompt"},
 		{Role: model.RoleUser, Content: "hi"},
 	})
+}
+
+func TestAgentExecutorUsesTaskWorkspaceFromWorkspaceManager(t *testing.T) {
+	store := newConversationStoreForTest(t)
+	templateRoot := t.TempDir()
+	writeExecutorWorkspacePrompt(t, templateRoot, "Template prompt")
+	workspacesRoot := t.TempDir()
+	workspaceManager := newExecutorWorkspaceManager(t, templateRoot, workspacesRoot)
+	home, err := workspaceManager.EnsureHomeWorkspace(context.Background(), "alice")
+	if err != nil {
+		t.Fatalf("EnsureHomeWorkspace() error = %v", err)
+	}
+	writeExecutorWorkspacePrompt(t, home.Root, "Alice home prompt")
+	client := &stubClient{streams: []model.Stream{newStubStream(
+		[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "hello"}}},
+		model.Message{Role: model.RoleAssistant, Content: "hello"},
+		nil,
+	)}}
+	executor := newTaskExecutorForTest(t, ExecutorDependencies{
+		Resolver:          newExecutorResolverForTest(),
+		ConversationStore: store,
+		PromptResolver:    newExecutorPromptResolverForTest(t, nil),
+		WorkspaceRoot:     templateRoot,
+		WorkspaceManager:  workspaceManager,
+		ClientFactory:     func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return client, nil },
+	})
+
+	payload := marshalExecutorTaskInput(t, map[string]any{
+		"provider_id": "openai",
+		"model_id":    "gpt-5.4",
+		"message":     "hi",
+	})
+	task := &coretasks.Task{ID: "task_workspace_manager", TaskType: "agent.run", CreatedBy: "alice", InputJSON: payload}
+
+	_, err = executor(context.Background(), task, nil)
+	if err != nil {
+		t.Fatalf("executor() error = %v", err)
+	}
+	assertExecutorRequestMessagesIgnoringForced(t, client, []model.Message{
+		{Role: model.RoleSystem, Content: "The following AGENTS.md file was injected from the user's working directory. Treat it as guidance and operating rules for the current workspace.\n---\nAlice home prompt"},
+		{Role: model.RoleUser, Content: "hi"},
+	})
+	assertExecutorFileContent(t, filepath.Join(workspacesRoot, "users", "alice", "tasks", "task_workspace_manager", "AGENTS.md"), "Alice home prompt")
+}
+
+func TestAgentExecutorCreatesAndCompletesTaskWorkspaceWhenModelResolutionFails(t *testing.T) {
+	store := newConversationStoreForTest(t)
+	templateRoot := t.TempDir()
+	writeExecutorWorkspacePrompt(t, templateRoot, "Template prompt")
+	workspacesRoot := t.TempDir()
+	workspaceManager := newExecutorWorkspaceManager(t, templateRoot, workspacesRoot)
+	home, err := workspaceManager.EnsureHomeWorkspace(context.Background(), "alice")
+	if err != nil {
+		t.Fatalf("EnsureHomeWorkspace() error = %v", err)
+	}
+	writeExecutorWorkspacePrompt(t, home.Root, "Alice home prompt")
+	resolutionErr := errors.New("model not allowed")
+	executor := newTaskExecutorForTest(t, ExecutorDependencies{
+		Resolver: &ModelResolver{ResolveTaskFunc: func(context.Context, RunTaskInput) (*ResolvedModel, error) {
+			return nil, resolutionErr
+		}},
+		ConversationStore:  store,
+		WorkspaceRoot:      templateRoot,
+		WorkspaceManager:   workspaceManager,
+		ClientFactory:      func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return nil, nil },
+	})
+
+	payload := marshalExecutorTaskInput(t, map[string]any{
+		"provider_id": "missing",
+		"model_id":    "missing",
+		"message":     "hi",
+	})
+	_, err = executor(context.Background(), &coretasks.Task{ID: "task_model_resolution_failure", TaskType: "agent.run", CreatedBy: "alice", InputJSON: payload}, nil)
+	if !errors.Is(err, resolutionErr) {
+		t.Fatalf("executor() error = %v, want %v", err, resolutionErr)
+	}
+	state := readExecutorWorkspaceState(t, filepath.Join(workspacesRoot, "users", "alice", "tasks", "task_model_resolution_failure"))
+	if state.State != workspaces.StateCompleted || state.ErrorMessage != resolutionErr.Error() {
+		t.Fatalf("workspace state = %#v, want completed with model error", state)
+	}
+	assertExecutorFileContent(t, filepath.Join(workspacesRoot, "users", "alice", "tasks", "task_model_resolution_failure", "AGENTS.md"), "Alice home prompt")
 }
 
 func TestAgentExecutorPromptRoutesLegacySystemPromptThroughResolver(t *testing.T) {
@@ -3604,6 +3686,42 @@ func writeExecutorWorkspacePrompt(t *testing.T, workspaceRoot string, content st
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("os.WriteFile(%q) error = %v", path, err)
 	}
+}
+
+func newExecutorWorkspaceManager(t *testing.T, templateRoot string, workspacesRoot string) *workspaces.Manager {
+	t.Helper()
+	manager, err := workspaces.NewManager(workspaces.Config{
+		TemplateRoot: templateRoot,
+		Root:         workspacesRoot,
+	})
+	if err != nil {
+		t.Fatalf("workspaces.NewManager() error = %v", err)
+	}
+	return manager
+}
+
+func assertExecutorFileContent(t *testing.T, path string, want string) {
+	t.Helper()
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("os.ReadFile(%q) error = %v", path, err)
+	}
+	if got := string(content); got != want {
+		t.Fatalf("%s content = %q, want %q", path, got, want)
+	}
+}
+
+func readExecutorWorkspaceState(t *testing.T, root string) workspaces.WorkspaceStateFile {
+	t.Helper()
+	content, err := os.ReadFile(filepath.Join(root, workspaces.StateFileName))
+	if err != nil {
+		t.Fatalf("ReadFile(workspace state) error = %v", err)
+	}
+	var state workspaces.WorkspaceStateFile
+	if err := json.Unmarshal(content, &state); err != nil {
+		t.Fatalf("json.Unmarshal(workspace state) error = %v", err)
+	}
+	return state
 }
 
 func writeExecutorSkillPrompt(t *testing.T, workspaceRoot string, name string, content string) {
