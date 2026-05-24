@@ -122,33 +122,6 @@ func persistedResponseItems(items []responses.ResponseOutputItemUnion) []persist
 	return out
 }
 
-func providerStateItemReferences(state *model.ProviderState) ([]responses.ResponseInputItemUnionParam, bool, error) {
-	if state == nil || state.Provider != providerName || state.Format != responseStateFormat {
-		return nil, false, nil
-	}
-	if state.Version != messageVersion {
-		return nil, true, fmt.Errorf("unsupported provider state version: %s", state.Version)
-	}
-	var persisted persistedResponseState
-	if err := json.Unmarshal(state.Payload, &persisted); err != nil {
-		return nil, true, err
-	}
-	if len(persisted.Items) == 0 {
-		return nil, false, nil
-	}
-	refs := make([]responses.ResponseInputItemUnionParam, 0, len(persisted.Items))
-	for _, item := range persisted.Items {
-		if item.ID == "" {
-			continue
-		}
-		refs = append(refs, responses.ResponseInputItemParamOfItemReference(item.ID))
-	}
-	if len(refs) == 0 {
-		return nil, false, nil
-	}
-	return refs, true, nil
-}
-
 func finalAssistantMessageFromResponse(content string, reasoning string, reasoningItems []model.ReasoningItem, toolCalls []types.ToolCall, state *model.ProviderState) model.Message {
 	message := model.Message{
 		Role:           model.RoleAssistant,
