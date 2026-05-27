@@ -15,6 +15,8 @@ import {
 import { formatConversationTitle } from '../lib/chat'
 import type { Conversation } from '../types/api'
 
+const THEME_KEY = 'app-theme'
+
 const props = defineProps<{
   activeConversationId: string
   collapsed?: boolean
@@ -36,6 +38,26 @@ const emit = defineEmits<{
   'toggle-collapse': []
   'open-profile': []
 }>()
+
+const isTealTheme = ref(localStorage.getItem(THEME_KEY) === 'teal')
+
+function toggleTheme() {
+  isTealTheme.value = !isTealTheme.value
+  if (isTealTheme.value) {
+    document.documentElement.classList.add('theme-teal')
+    localStorage.setItem(THEME_KEY, 'teal')
+  } else {
+    document.documentElement.classList.remove('theme-teal')
+    localStorage.setItem(THEME_KEY, 'default')
+  }
+}
+
+// Apply saved theme on mount
+onMounted(() => {
+  if (isTealTheme.value) {
+    document.documentElement.classList.add('theme-teal')
+  }
+})
 
 type ConfirmState =
   | { kind: 'delete'; conversationId: string; title: string; message: string; confirmLabel: string }
@@ -217,20 +239,34 @@ onBeforeUnmount(() => {
         <span class="sidebar-account-label">当前账号</span>
         <strong class="sidebar-account-name">{{ username }}</strong>
       </div>
-      <div ref="userMenuAnchor" class="sidebar-user-menu-anchor">
+      <div class="sidebar-account-actions">
         <button
-          v-if="compact && !mobile"
-          class="ghost-button icon-button sidebar-user-menu-trigger compact"
+          class="ghost-button icon-button sidebar-theme-toggle"
           type="button"
-          aria-label="打开用户菜单"
-          @click="toggleUserMenu"
+          :aria-label="isTealTheme ? '切换默认主题' : '切换 Teal 主题'"
+          :title="isTealTheme ? '切换默认主题' : '切换 Teal 主题'"
+          @click="toggleTheme"
         >
-          <Menu />
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="8" cy="8" r="5" />
+            <path d="M8 3v10" />
+            <path d="M8 3a5 5 0 0 1 0 10" :fill="isTealTheme ? 'currentColor' : 'none'" />
+          </svg>
         </button>
-        <button v-else class="ghost-button icon-button sidebar-user-menu-trigger" type="button" aria-label="打开用户菜单" @click="toggleUserMenu">
-          <Menu />
-        </button>
-
+        <div ref="userMenuAnchor" class="sidebar-user-menu-anchor">
+          <button
+            v-if="compact && !mobile"
+            class="ghost-button icon-button sidebar-user-menu-trigger compact"
+            type="button"
+            aria-label="打开用户菜单"
+            @click="toggleUserMenu"
+          >
+            <Menu />
+          </button>
+          <button v-else class="ghost-button icon-button sidebar-user-menu-trigger" type="button" aria-label="打开用户菜单" @click="toggleUserMenu">
+            <Menu />
+          </button>
+        </div>
       </div>
     </div>
 

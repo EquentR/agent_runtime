@@ -140,13 +140,6 @@ const emailStatus = computed(() => {
   return profile.value.email_verified ? '已验证' : '待验证'
 })
 
-function formatNumber(value: number | undefined) {
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
-    return '-'
-  }
-  return value.toLocaleString('en-US')
-}
-
 function syncProfile(nextProfile: AuthUser) {
   profile.value = nextProfile
   profileDraft.displayName = nextProfile.display_name
@@ -589,9 +582,6 @@ function resetTurnstileWidget() {
       <div class="admin-table profile-model-table">
         <div class="admin-table-row profile-model-row profile-model-head">
           <span>名称</span>
-          <span>Provider</span>
-          <span>Context Max</span>
-          <span>API Key</span>
           <span>状态</span>
           <span>操作</span>
         </div>
@@ -604,11 +594,9 @@ function resetTurnstileWidget() {
           <button class="profile-model-name" type="button" :data-user-model-row="model.id" @click="syncModelDraft(model)">
             {{ model.display_name }}
           </button>
-          <span>{{ model.provider_type }} · {{ model.provider_id }} / {{ model.model_id }}</span>
-          <span>{{ formatNumber(model.context_max_tokens) }}</span>
-          <span>{{ model.api_key_masked || '未保存' }}</span>
-          <span>{{ model.enabled ? '启用' : '停用' }}</span>
+          <span :class="model.enabled ? 'profile-model-enabled' : 'profile-model-disabled'">{{ model.enabled ? '启用' : '停用' }}</span>
           <span class="profile-model-actions">
+            <button class="ghost-button small" type="button" @click="syncModelDraft(model)">编辑</button>
             <button class="ghost-button small" type="button" :data-user-model-test="model.id" @click="testUserModel(model)">测试</button>
             <button class="ghost-button small" type="button" :disabled="modelSaving === `model-delete:${model.id}`" @click="removeUserModel(model)">删除</button>
           </span>
@@ -694,8 +682,12 @@ function resetTurnstileWidget() {
   color: #36535c;
 }
 
+.profile-model-table {
+  overflow-x: auto;
+}
+
 .profile-model-row {
-  grid-template-columns: minmax(120px, 0.9fr) minmax(170px, 1.4fr) minmax(100px, 0.65fr) minmax(110px, 0.7fr) minmax(70px, 0.45fr) minmax(140px, 0.8fr);
+  grid-template-columns: minmax(120px, 1fr) minmax(56px, 80px) minmax(140px, auto);
 }
 
 .profile-model-row.active {
@@ -716,6 +708,18 @@ function resetTurnstileWidget() {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.profile-model-enabled {
+  color: #2e6658;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.profile-model-disabled {
+  color: #946b2d;
+  font-size: 0.82rem;
+  font-weight: 600;
 }
 
 .ghost-button.small {

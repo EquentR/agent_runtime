@@ -1973,6 +1973,41 @@ describe('updateTranscriptFromStreamEvent', () => {
 		expect(toolEntries[0].group_key).toBe('step-5')
 		expect(toolEntries[0].details).toHaveLength(2)
 	})
+
+	it('does not merge second-turn tool calls into first-turn group when step numbers repeat', () => {
+		let entries: TranscriptEntry[] = [{ id: 'user-1', kind: 'user', title: '', content: 'first question' }]
+
+		// First turn: tool with step=1
+		entries = updateTranscriptFromStreamEvent(entries, {
+			type: 'tool.started',
+			payload: { tool_call_id: 'call_1', tool_name: 'read_file', step: 1 },
+		})
+		entries = updateTranscriptFromStreamEvent(entries, {
+			type: 'tool.finished',
+			payload: { tool_call_id: 'call_1', tool_name: 'read_file', Output: 'content', step: 1 },
+		})
+		entries = updateTranscriptFromStreamEvent(entries, {
+			type: 'log.message',
+			payload: { Kind: 'text_delta', Text: 'first answer' },
+		})
+		entries = updateTranscriptFromStreamEvent(entries, {
+			type: 'task.finished',
+			payload: { status: 'succeeded' },
+		})
+
+		// Second turn: user message then tool with step=1 again
+		entries = [...entries, { id: 'user-2', kind: 'user', title: '', content: 'second question' }]
+		entries = updateTranscriptFromStreamEvent(entries, {
+			type: 'tool.started',
+			payload: { tool_call_id: 'call_2', tool_name: 'glob', step: 1 },
+		})
+
+		const toolEntries = entries.filter((e) => e.kind === 'tool')
+		expect(toolEntries).toHaveLength(2)
+		expect(toolEntries[0].details?.map((d) => d.key)).toEqual(['call_1'])
+		expect(toolEntries[1].details?.map((d) => d.key)).toEqual(['call_2'])
+		expect(toolEntries[1].group_key).toBe('step-1')
+	})
 })
 
 describe('summarizeToolResult', () => {

@@ -205,8 +205,7 @@ describe('ProfileView', () => {
     expect(api.fetchUserCustomModels).toHaveBeenCalledTimes(1)
     expect(wrapper.text()).toContain('我的模型')
     expect(wrapper.text()).toContain('GPT Me')
-    expect(wrapper.text()).toContain('65,536')
-    expect(wrapper.text()).toContain('sk-****mine')
+    expect(wrapper.text()).toContain('启用')
 
     await wrapper.get('[data-user-model-provider-type]').setValue('openai_responses')
     await wrapper.get('[data-user-model-provider-id]').setValue(' me-openai-2 ')

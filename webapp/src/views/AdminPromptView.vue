@@ -928,7 +928,7 @@ onBeforeUnmount(() => {
 }
 
 .admin-prompt-shell {
-  height: 100svh;
+  height: 100%;
 }
 
 .admin-prompt-content {

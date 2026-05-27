@@ -513,7 +513,18 @@ function upsertImageAttachmentsReply(entries: TranscriptEntry[], attachments: At
 }
 
 function findToolGroupIndex(entries: TranscriptEntry[], groupKey: string) {
-  return entries.findIndex((entry) => entry.kind === 'tool' && entry.group_key === groupKey)
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const entry = entries[i]
+    if (entry.kind === 'tool' && entry.group_key === groupKey) {
+      return i
+    }
+    // Stop searching past a turn boundary — tool groups from earlier turns
+    // with the same key (e.g. step-1) must not be reused.
+    if (entry.kind === 'user' || entry.kind === 'reply' || entry.kind === 'error' || entry.kind === 'approval' || entry.kind === 'question') {
+      break
+    }
+  }
+  return -1
 }
 
 function findReusableLiveToolGroupKey(entries: TranscriptEntry[]) {
@@ -525,7 +536,7 @@ function findReusableLiveToolGroupKey(entries: TranscriptEntry[]) {
       }
       return ''
     }
-    if (entry.kind === 'reasoning') {
+    if (entry.kind === 'reasoning' || entry.kind === 'memory') {
       continue
     }
     if (entry.kind === 'user' || entry.kind === 'reply' || entry.kind === 'error' || entry.kind === 'approval' || entry.kind === 'question') {
