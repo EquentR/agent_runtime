@@ -148,16 +148,25 @@ p {
 }
 
 .github-link {
+  position: fixed;
+  bottom: 3vh;
+  left: 50%;
+  transform: translateX(-50%);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  margin-top: 1rem;
   color: rgba(25, 50, 59, 0.45);
   transition: color 0.2s ease;
 }
 
 .github-link:hover {
   color: rgba(25, 50, 59, 0.8);
+}
+
+@media (max-height: 650px) {
+  .github-link {
+    display: none;
+  }
 }
 
 .login-hero {
