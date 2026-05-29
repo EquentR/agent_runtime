@@ -36,21 +36,22 @@ func isRecoverableStreamError(err error) bool {
 		return false
 	}
 	// Context cancellation / deadline are never recoverable.
+	// errors.Is traverses the Unwrap chain, so wrapped context errors are covered.
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
-	}
-	// If the context itself is done, not recoverable.
-	// (handles wrapped context errors)
-	var ctxErr interface{ Unwrap() error }
-	if errors.As(err, &ctxErr) {
-		inner := ctxErr.Unwrap()
-		if errors.Is(inner, context.Canceled) || errors.Is(inner, context.DeadlineExceeded) {
-			return false
-		}
 	}
 	// Everything else (JSON parse errors, HTTP 5xx, unexpected responses, etc.)
 	// is considered recoverable.
 	return true
+}
+
+// buildStreamRecoveryMessage constructs a user-role message that informs the LLM
+// about a transient error so it can adjust its response on the next step.
+func buildStreamRecoveryMessage(prefix string, err error) model.Message {
+	return model.Message{
+		Role:    model.RoleUser,
+		Content: fmt.Sprintf("[system error] %s: %s. Please adjust your response and try again.", prefix, err.Error()),
+	}
 }
 
 type StreamEventKind string
@@ -234,10 +235,7 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 			if err != nil {
 				if isRecoverableStreamError(err) && consecutiveRecoveries < maxConsecutiveStreamRecoveries {
 					consecutiveRecoveries++
-					recoveryMsg := model.Message{
-						Role:    model.RoleUser,
-						Content: fmt.Sprintf("[system error] LLM API request failed: %s. Please adjust your response and try again.", err.Error()),
-					}
+					recoveryMsg := buildStreamRecoveryMessage("LLM API request failed", err)
 					baseConversation = append(baseConversation, recoveryMsg)
 					produced = append(produced, recoveryMsg)
 					if r.options.Memory != nil {
@@ -302,10 +300,7 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 			if streamRecvErr != nil {
 				if isRecoverableStreamError(streamRecvErr) && consecutiveRecoveries < maxConsecutiveStreamRecoveries {
 					consecutiveRecoveries++
-					recoveryMsg := model.Message{
-						Role:    model.RoleUser,
-						Content: fmt.Sprintf("[system error] LLM stream error: %s. Please adjust your response and try again.", streamRecvErr.Error()),
-					}
+					recoveryMsg := buildStreamRecoveryMessage("LLM stream error", streamRecvErr)
 					baseConversation = append(baseConversation, recoveryMsg)
 					produced = append(produced, recoveryMsg)
 					if r.options.Memory != nil {
@@ -325,10 +320,7 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 			if err != nil {
 				if isRecoverableStreamError(err) && consecutiveRecoveries < maxConsecutiveStreamRecoveries {
 					consecutiveRecoveries++
-					recoveryMsg := model.Message{
-						Role:    model.RoleUser,
-						Content: fmt.Sprintf("[system error] LLM response error: %s. Please adjust your response and try again.", err.Error()),
-					}
+					recoveryMsg := buildStreamRecoveryMessage("LLM response error", err)
 					baseConversation = append(baseConversation, recoveryMsg)
 					produced = append(produced, recoveryMsg)
 					if r.options.Memory != nil {

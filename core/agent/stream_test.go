@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -1248,5 +1249,31 @@ t.Fatalf("Run() error = %v, want nil (recovered)", err)
 }
 if result.FinalMessage.Content != "success" {
 t.Fatalf("FinalMessage.Content = %q, want %q", result.FinalMessage.Content, "success")
+}
+}
+
+func TestIsRecoverableStreamError(t *testing.T) {
+tests := []struct {
+name string
+err  error
+want bool
+}{
+{"nil error", nil, false},
+{"context.Canceled", context.Canceled, false},
+{"context.DeadlineExceeded", context.DeadlineExceeded, false},
+{"wrapped context.Canceled", fmt.Errorf("wrap: %w", context.Canceled), false},
+{"wrapped context.DeadlineExceeded", fmt.Errorf("wrap: %w", context.DeadlineExceeded), false},
+{"JSON parse error", errors.New("invalid character '<' looking for beginning of value"), true},
+{"generic API error", errors.New("unexpected HTML response"), true},
+{"no stream prepared", errors.New("no stream prepared"), true},
+{"stream did not complete", errors.New("stream did not complete normally"), true},
+}
+for _, tt := range tests {
+t.Run(tt.name, func(t *testing.T) {
+got := isRecoverableStreamError(tt.err)
+if got != tt.want {
+t.Errorf("isRecoverableStreamError(%v) = %v, want %v", tt.err, got, tt.want)
+}
+})
 }
 }
