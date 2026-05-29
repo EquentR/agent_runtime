@@ -22,6 +22,37 @@ var ErrInteractionPending = errors.New("interaction pending")
 
 var ErrToolApprovalPending = ErrInteractionPending
 
+// maxConsecutiveStreamRecoveries limits how many consecutive recoverable errors
+// (e.g. JSON parse failures, transient API errors) can be absorbed before the
+// agent loop gives up.  This prevents infinite retry loops.
+const maxConsecutiveStreamRecoveries = 3
+
+// isRecoverableStreamError returns true when the error is likely transient or
+// indicates the upstream returned an unexpected payload (e.g. HTML instead of
+// JSON) that can be surfaced to the LLM for self-correction rather than causing
+// a hard abort.
+func isRecoverableStreamError(err error) bool {
+	if err == nil {
+		return false
+	}
+	// Context cancellation / deadline are never recoverable.
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	// If the context itself is done, not recoverable.
+	// (handles wrapped context errors)
+	var ctxErr interface{ Unwrap() error }
+	if errors.As(err, &ctxErr) {
+		inner := ctxErr.Unwrap()
+		if errors.Is(inner, context.Canceled) || errors.Is(inner, context.DeadlineExceeded) {
+			return false
+		}
+	}
+	// Everything else (JSON parse errors, HTTP 5xx, unexpected responses, etc.)
+	// is considered recoverable.
+	return true
+}
+
 type StreamEventKind string
 
 const (
@@ -95,6 +126,7 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 		produced := make([]model.Message, 0, r.options.MaxSteps*2)
 		toolCalls := 0
 		afterToolTurn := false
+		consecutiveRecoveries := 0
 		ephemeralConversationTail := make([]model.Message, 0, 4)
 		var usage model.TokenUsage
 		var totalUsage model.TokenUsage
@@ -200,6 +232,21 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 
 			stream, err := r.client.ChatStream(ctx, request)
 			if err != nil {
+				if isRecoverableStreamError(err) && consecutiveRecoveries < maxConsecutiveStreamRecoveries {
+					consecutiveRecoveries++
+					recoveryMsg := model.Message{
+						Role:    model.RoleUser,
+						Content: fmt.Sprintf("[system error] LLM API request failed: %s. Please adjust your response and try again.", err.Error()),
+					}
+					baseConversation = append(baseConversation, recoveryMsg)
+					produced = append(produced, recoveryMsg)
+					if r.options.Memory != nil {
+						r.options.Memory.AddMessage(recoveryMsg)
+						memoryInsertedCount++
+					}
+					r.emitStepFinish(ctx, step, title, map[string]any{"error": err.Error(), "recovered": true})
+					continue
+				}
 				r.emitStepFinish(ctx, step, title, map[string]any{"error": err.Error()})
 				snapshotResult(step - 1)
 				runErr = err
@@ -209,13 +256,12 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 			closer = stream
 			mu.Unlock()
 
+			var streamRecvErr error
 			for {
 				event, err := stream.RecvEvent()
 				if err != nil {
-					r.emitStepFinish(ctx, step, title, map[string]any{"error": err.Error()})
-					snapshotResult(step - 1)
-					runErr = err
-					return
+					streamRecvErr = err
+					break
 				}
 				if event.Type == "" && event.Text == "" && event.Reasoning == "" && event.Message.Role == "" && event.Usage == (model.TokenUsage{}) && event.ToolCall.Name == "" && event.ToolCall.Arguments == "" && event.ToolCall.ID == "" {
 					break
@@ -253,14 +299,52 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 				}
 			}
 
+			if streamRecvErr != nil {
+				if isRecoverableStreamError(streamRecvErr) && consecutiveRecoveries < maxConsecutiveStreamRecoveries {
+					consecutiveRecoveries++
+					recoveryMsg := model.Message{
+						Role:    model.RoleUser,
+						Content: fmt.Sprintf("[system error] LLM stream error: %s. Please adjust your response and try again.", streamRecvErr.Error()),
+					}
+					baseConversation = append(baseConversation, recoveryMsg)
+					produced = append(produced, recoveryMsg)
+					if r.options.Memory != nil {
+						r.options.Memory.AddMessage(recoveryMsg)
+						memoryInsertedCount++
+					}
+					r.emitStepFinish(ctx, step, title, map[string]any{"error": streamRecvErr.Error(), "recovered": true})
+					continue
+				}
+				r.emitStepFinish(ctx, step, title, map[string]any{"error": streamRecvErr.Error()})
+				snapshotResult(step - 1)
+				runErr = streamRecvErr
+				return
+			}
+
 			assistant, err := stream.FinalMessage()
 			if err != nil {
+				if isRecoverableStreamError(err) && consecutiveRecoveries < maxConsecutiveStreamRecoveries {
+					consecutiveRecoveries++
+					recoveryMsg := model.Message{
+						Role:    model.RoleUser,
+						Content: fmt.Sprintf("[system error] LLM response error: %s. Please adjust your response and try again.", err.Error()),
+					}
+					baseConversation = append(baseConversation, recoveryMsg)
+					produced = append(produced, recoveryMsg)
+					if r.options.Memory != nil {
+						r.options.Memory.AddMessage(recoveryMsg)
+						memoryInsertedCount++
+					}
+					r.emitStepFinish(ctx, step, title, map[string]any{"error": err.Error(), "recovered": true})
+					continue
+				}
 				r.emitStepFinish(ctx, step, title, map[string]any{"error": err.Error()})
 				snapshotResult(step - 1)
 				runErr = err
 				return
 			}
 			assistant = normalizeAssistantMessage(model.ChatResponse{Message: assistant})
+			consecutiveRecoveries = 0 // reset on successful model response
 			responseArtifactID := r.attachAuditArtifact(ctx, coreaudit.ArtifactKindModelResponse, runnerModelResponseArtifact{
 				Message: cloneMessage(assistant),
 				Usage:   usage,
