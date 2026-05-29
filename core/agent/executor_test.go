@@ -722,7 +722,7 @@ func TestAgentExecutorFailurePreservesPendingConversationWorkspace(t *testing.T)
 		t.Fatalf("FinishMutableWorkspace(pending) error = %v", err)
 	}
 	runErr := errors.New("model stream failed")
-	client := &stubClient{streamErrs: []error{runErr}}
+	client := &stubClient{streamErrs: []error{runErr, runErr, runErr, runErr}}
 	executor := newTaskExecutorForTest(t, ExecutorDependencies{
 		Resolver:          newExecutorResolverForTest(),
 		ConversationStore: store,
