@@ -45,11 +45,13 @@ func isRecoverableStreamError(err error) bool {
 	return true
 }
 
-// buildStreamRecoveryMessage constructs a user-role message that informs the LLM
+// buildStreamRecoveryMessage constructs a system-role message that informs the LLM
 // about a transient error so it can adjust its response on the next step.
+// Using system role prevents the message from being rendered as a user bubble
+// in the frontend if it is ever persisted.
 func buildStreamRecoveryMessage(prefix string, err error) model.Message {
 	return model.Message{
-		Role:    model.RoleUser,
+		Role:    model.RoleSystem,
 		Content: fmt.Sprintf("[system error] %s: %s. Please adjust your response and try again.", prefix, err.Error()),
 	}
 }
@@ -62,6 +64,7 @@ const (
 	EventToolCallDelta  StreamEventKind = "tool_call_delta"
 	EventUsage          StreamEventKind = "usage"
 	EventCompleted      StreamEventKind = "completed"
+	EventStreamRecovery StreamEventKind = "stream_recovery"
 )
 
 type RunStreamEvent struct {
@@ -237,11 +240,13 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 					consecutiveRecoveries++
 					recoveryMsg := buildStreamRecoveryMessage("LLM API request failed", err)
 					baseConversation = append(baseConversation, recoveryMsg)
-					produced = append(produced, recoveryMsg)
 					if r.options.Memory != nil {
 						r.options.Memory.AddMessage(recoveryMsg)
 						memoryInsertedCount++
 					}
+					recoveryEvent := RunStreamEvent{Kind: EventStreamRecovery, Step: step, Err: err, Metadata: map[string]any{"attempt": consecutiveRecoveries, "max_attempts": maxConsecutiveStreamRecoveries}}
+					events <- recoveryEvent
+					r.emitStreamEvent(ctx, recoveryEvent)
 					r.emitStepFinish(ctx, step, title, map[string]any{"error": err.Error(), "recovered": true})
 					continue
 				}
