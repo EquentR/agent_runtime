@@ -70,6 +70,30 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
+/**
+ * Safely convert any value to a displayable string.
+ * - strings are returned as-is
+ * - objects/arrays are JSON-stringified (pretty-printed)
+ * - null/undefined become empty string
+ * - other primitives use String()
+ */
+function safeStringify(value: unknown): string {
+  if (value === null || value === undefined) {
+    return ''
+  }
+  if (typeof value === 'string') {
+    return value
+  }
+  if (typeof value === 'object') {
+    try {
+      return JSON.stringify(value, null, 2)
+    } catch {
+      return '[Unserializable Object]'
+    }
+  }
+  return String(value)
+}
+
 function firstString(...values: unknown[]) {
   for (const value of values) {
     if (typeof value === 'string' && value.trim()) {
@@ -1071,7 +1095,7 @@ export function updateTranscriptFromStreamEvent(entries: TranscriptEntry[], even
             ? toolCall.arguments
             : typeof toolCall.Arguments === 'string'
               ? toolCall.Arguments
-              : '',
+              : safeStringify(toolCall.arguments ?? toolCall.Arguments ?? ''),
         resultText: 'Running...',
         loading: true,
       })
@@ -1091,16 +1115,16 @@ export function updateTranscriptFromStreamEvent(entries: TranscriptEntry[], even
       groupKey,
       toolCallId: String(payload.tool_call_id ?? payload.toolCallId ?? payload.ToolCallId ?? payload.ToolCallID ?? ''),
       name: String(payload.tool_name ?? payload.toolName ?? payload.ToolName ?? 'Tool'),
-      argumentsText: typeof payload.Arguments === 'string' ? String(payload.Arguments) : '',
+      argumentsText: typeof payload.Arguments === 'string' ? payload.Arguments : safeStringify(payload.Arguments ?? ''),
       resultText: 'Running...',
       loading: true,
     })
   }
 
   if (event.type === 'tool.finished') {
-    const err = payload.Err ? String(payload.Err) : ''
+    const err = payload.Err ? safeStringify(payload.Err) : ''
     const toolName = String(payload.tool_name ?? payload.toolName ?? payload.ToolName ?? 'Tool')
-    const output = err || String(payload.Output ?? '')
+    const output = err || safeStringify(payload.Output ?? '')
     const next = upsertToolInGroup(entries, {
       groupKey,
       toolCallId: String(payload.tool_call_id ?? payload.toolCallId ?? payload.ToolCallId ?? payload.ToolCallID ?? ''),

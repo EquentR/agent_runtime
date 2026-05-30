@@ -5,7 +5,7 @@ import { CircleCheckFilled, CopyDocument, Operation, WarningFilled } from '@elem
 
 import ApprovalRecordCard from './ApprovalRecordCard.vue'
 import { getAttachmentContentURL } from '../lib/api'
-import { formatMessageContent } from '../lib/chat'
+import { formatMessageContent, formatToolResult } from '../lib/chat'
 import { normalizeQuestionEntry } from '../lib/question-entry'
 import type { AttachmentRef, QuestionInteractionSubmitInput, TranscriptEntry, TranscriptEntryDetail } from '../types/api'
 
@@ -423,6 +423,14 @@ function primaryBlockValue(detail: TranscriptEntryDetail) {
   return detail.blocks?.[0]?.value ?? ''
 }
 
+function formatToolBlockValue(detail: TranscriptEntryDetail, block: { label: string; value: string }) {
+  if (block.label === 'Result') {
+    return formatToolResult(detail.label, block.value)
+  }
+  // For Params blocks, try to pretty-print JSON
+  return formatMessageContent(block.value)
+}
+
 function hasUsage(entry: TranscriptEntry) {
   return entry.kind === 'reply' && Boolean(entry.token_usage || entry.provider_id || entry.model_id)
 }
@@ -755,7 +763,7 @@ function showCopyToast(message: string, variant: 'success' | 'error') {
                       <span>{{ block.label }}</span>
                       <span v-if="block.loading" class="trace-loading small" aria-hidden="true"></span>
                     </div>
-                    <pre class="trace-detail-content">{{ formatMessageContent(block.value) }}</pre>
+                    <pre class="trace-detail-content">{{ formatToolBlockValue(detail, block) }}</pre>
                   </div>
                 </div>
               </details>
@@ -808,7 +816,7 @@ function showCopyToast(message: string, variant: 'success' | 'error') {
                     <span>{{ block.label }}</span>
                     <span v-if="block.loading" class="trace-loading small" aria-hidden="true"></span>
                   </div>
-                  <pre class="trace-detail-content">{{ formatMessageContent(block.value) }}</pre>
+                  <pre class="trace-detail-content">{{ entry.kind === 'tool' ? formatToolBlockValue(detail, block) : formatMessageContent(block.value) }}</pre>
                 </div>
               </div>
             </details>
