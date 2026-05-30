@@ -1878,14 +1878,6 @@ p {
   background: transparent;
 }
 
-.trace-tool-item-sealed {
-  cursor: default;
-}
-
-.trace-tool-item-sealed > .trace-detail-summary {
-  cursor: default;
-}
-
 .trace-flat-shell {
   border: 0;
   border-radius: 0;
