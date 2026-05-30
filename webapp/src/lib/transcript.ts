@@ -318,11 +318,11 @@ function makeToolDetail(input: {
   loading?: boolean
   error?: boolean
 }): TranscriptEntryDetail {
-  const preview = input.loading ? 'Running' : previewText(input.resultText ?? '')
+  const preview = input.loading ? 'Running' : (input.error ? 'Failed' : '')
   return {
     key: input.toolCallId || `${input.name}-${Math.random().toString(36).slice(2, 8)}`,
     label: input.name || 'Tool',
-    preview: preview || (input.error ? 'Failed' : 'Ready'),
+    preview,
     collapsed: true,
     loading: input.loading,
     blocks: makeBlocks(input.argumentsText, input.resultText || (input.loading ? 'Running...' : ''), input.loading),

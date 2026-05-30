@@ -754,7 +754,7 @@ function showCopyToast(message: string, variant: 'success' | 'error') {
               >
                 <summary class="trace-detail-summary">
                   <span class="trace-detail-label">{{ detail.label }}</span>
-                  <span class="trace-detail-preview">{{ detail.preview }}</span>
+                  <span v-if="detail.preview" class="trace-detail-preview">{{ detail.preview }}</span>
                   <span v-if="detail.loading" class="trace-loading" aria-hidden="true"></span>
                 </summary>
                 <div class="trace-detail-blocks">
