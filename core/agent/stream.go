@@ -307,11 +307,13 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 					consecutiveRecoveries++
 					recoveryMsg := buildStreamRecoveryMessage("LLM stream error", streamRecvErr)
 					baseConversation = append(baseConversation, recoveryMsg)
-					produced = append(produced, recoveryMsg)
 					if r.options.Memory != nil {
 						r.options.Memory.AddMessage(recoveryMsg)
 						memoryInsertedCount++
 					}
+					recoveryEvent := RunStreamEvent{Kind: EventStreamRecovery, Step: step, Err: streamRecvErr, Metadata: map[string]any{"attempt": consecutiveRecoveries, "max_attempts": maxConsecutiveStreamRecoveries}}
+					events <- recoveryEvent
+					r.emitStreamEvent(ctx, recoveryEvent)
 					r.emitStepFinish(ctx, step, title, map[string]any{"error": streamRecvErr.Error(), "recovered": true})
 					continue
 				}
@@ -327,11 +329,13 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 					consecutiveRecoveries++
 					recoveryMsg := buildStreamRecoveryMessage("LLM response error", err)
 					baseConversation = append(baseConversation, recoveryMsg)
-					produced = append(produced, recoveryMsg)
 					if r.options.Memory != nil {
 						r.options.Memory.AddMessage(recoveryMsg)
 						memoryInsertedCount++
 					}
+					recoveryEvent := RunStreamEvent{Kind: EventStreamRecovery, Step: step, Err: err, Metadata: map[string]any{"attempt": consecutiveRecoveries, "max_attempts": maxConsecutiveStreamRecoveries}}
+					events <- recoveryEvent
+					r.emitStreamEvent(ctx, recoveryEvent)
 					r.emitStepFinish(ctx, step, title, map[string]any{"error": err.Error(), "recovered": true})
 					continue
 				}
