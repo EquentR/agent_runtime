@@ -11,19 +11,29 @@ export function formatDocumentTitle(title?: string) {
 }
 
 /**
- * Try to pretty-print a JSON string. Returns formatted JSON or null if not valid JSON.
+ * Try to parse a string as JSON. Returns the parsed value or null if not valid JSON.
  */
-function tryPrettyJSON(content: string): string | null {
+function tryParseJSON(content: string): unknown {
   const trimmed = content.trim()
   if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) {
     return null
   }
   try {
-    const parsed = JSON.parse(trimmed)
-    return JSON.stringify(parsed, null, 2)
+    return JSON.parse(trimmed)
   } catch {
     return null
   }
+}
+
+/**
+ * Try to pretty-print a JSON string. Returns formatted JSON or null if not valid JSON.
+ */
+function tryPrettyJSON(content: string): string | null {
+  const parsed = tryParseJSON(content)
+  if (parsed === null) {
+    return null
+  }
+  return JSON.stringify(parsed, null, 2)
 }
 
 /**
@@ -153,10 +163,7 @@ const toolResultFormatters: Record<string, (content: string) => string | null> =
     return null
   },
 
-  grep_file(content: string) {
-    // Same formatter as search_file
-    return toolResultFormatters.search_file(content)
-  },
+  grep_file: (content: string) => toolResultFormatters.search_file(content),
 
   get_system_info(content: string) {
     const json = tryParseJSON(content)
@@ -263,18 +270,6 @@ const toolResultFormatters: Record<string, (content: string) => string | null> =
     }
     return null
   },
-}
-
-function tryParseJSON(content: string): unknown {
-  const trimmed = content.trim()
-  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) {
-    return null
-  }
-  try {
-    return JSON.parse(trimmed)
-  } catch {
-    return null
-  }
 }
 
 /**
