@@ -5,7 +5,7 @@ import { CircleCheckFilled, CopyDocument, Operation, WarningFilled } from '@elem
 
 import ApprovalRecordCard from './ApprovalRecordCard.vue'
 import { getAttachmentContentURL } from '../lib/api'
-import { formatMessageContent, formatToolResult } from '../lib/chat'
+import { formatMessageContent, formatToolParams, formatToolResult } from '../lib/chat'
 import { normalizeQuestionEntry } from '../lib/question-entry'
 import type { AttachmentRef, QuestionInteractionSubmitInput, TranscriptEntry, TranscriptEntryDetail } from '../types/api'
 
@@ -427,8 +427,8 @@ function formatToolBlockValue(detail: TranscriptEntryDetail, block: { label: str
   if (block.label === 'Result') {
     return formatToolResult(detail.label, block.value)
   }
-  // For Params blocks, try to pretty-print JSON
-  return formatMessageContent(block.value)
+  // For Params blocks, use tool-specific formatter
+  return formatToolParams(detail.label, block.value)
 }
 
 function hasUsage(entry: TranscriptEntry) {
