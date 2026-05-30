@@ -42,7 +42,7 @@ function isRenderableSystemMessage(message: ConversationMessage) {
  * Returns true if the string looks like raw JSON data (object or array literal).
  * Such strings should not be shown as preview text to avoid leaking JSON schema.
  */
-function looksLikeJson(value: string): boolean {
+export function looksLikeJson(value: string): boolean {
   const trimmed = value.trim()
   // Detect complete JSON objects/arrays
   if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {

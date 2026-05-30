@@ -6,6 +6,7 @@ import { CircleCheckFilled, CopyDocument, Operation, WarningFilled } from '@elem
 import ApprovalRecordCard from './ApprovalRecordCard.vue'
 import { getAttachmentContentURL } from '../lib/api'
 import { formatMessageContent, formatToolParams, formatToolResult } from '../lib/chat'
+import { looksLikeJson } from '../lib/transcript'
 import { normalizeQuestionEntry } from '../lib/question-entry'
 import type { AttachmentRef, QuestionInteractionSubmitInput, TranscriptEntry, TranscriptEntryDetail } from '../types/api'
 
@@ -417,7 +418,7 @@ function previewError(content: string | undefined) {
     return '查看详情'
   }
   // Do not expose JSON-formatted data as error preview
-  if ((trimmed.startsWith('{') || trimmed.startsWith('[')) && /["':,\[\]{}]/.test(trimmed.slice(1, 20))) {
+  if (looksLikeJson(trimmed)) {
     return '查看详情'
   }
   return trimmed.length > 72 ? `${trimmed.slice(0, 72)}...` : trimmed
