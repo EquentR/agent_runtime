@@ -38,9 +38,30 @@ function isRenderableSystemMessage(message: ConversationMessage) {
   return message.provider_data?.system_message?.visible_to_user === true
 }
 
+/**
+ * Returns true if the string looks like raw JSON data (object or array literal).
+ * Such strings should not be shown as preview text to avoid leaking JSON schema.
+ */
+function looksLikeJson(value: string): boolean {
+  const trimmed = value.trim()
+  // Detect complete JSON objects/arrays
+  if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+    return true
+  }
+  // Also detect truncated JSON that starts with { or [ (e.g. from failed parse or truncated content)
+  if ((trimmed.startsWith('{') || trimmed.startsWith('[')) && /["':,\[\]{}]/.test(trimmed.slice(1, 20))) {
+    return true
+  }
+  return false
+}
+
 function previewText(value: string, maxLength = 64) {
   const normalized = compactWhitespace(value)
   if (!normalized) {
+    return ''
+  }
+  // Do not expose JSON-formatted data as preview summary
+  if (looksLikeJson(normalized)) {
     return ''
   }
   if (normalized.length <= maxLength) {

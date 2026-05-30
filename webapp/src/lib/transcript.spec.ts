@@ -2011,8 +2011,12 @@ describe('updateTranscriptFromStreamEvent', () => {
 })
 
 describe('summarizeToolResult', () => {
-  it('condenses json output into a short summary', () => {
-    expect(summarizeToolResult('{"forecast":"sunny","city":"Beijing","temp":26}')).toContain('forecast')
+  it('hides json output from preview summary', () => {
+    expect(summarizeToolResult('{"forecast":"sunny","city":"Beijing","temp":26}')).toBe('No output')
+  })
+
+  it('shows plain text output as summary', () => {
+    expect(summarizeToolResult('Operation completed successfully')).toContain('Operation completed')
   })
 })
 

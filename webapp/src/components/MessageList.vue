@@ -416,6 +416,10 @@ function previewError(content: string | undefined) {
   if (!trimmed) {
     return '查看详情'
   }
+  // Do not expose JSON-formatted data as error preview
+  if ((trimmed.startsWith('{') || trimmed.startsWith('[')) && /["':,\[\]{}]/.test(trimmed.slice(1, 20))) {
+    return '查看详情'
+  }
   return trimmed.length > 72 ? `${trimmed.slice(0, 72)}...` : trimmed
 }
 
