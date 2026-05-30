@@ -110,7 +110,7 @@ describe('buildTranscriptEntries', () => {
       {
         key: 'call_1',
         label: 'weather.lookup',
-        preview: '',
+        preview: 'Beijing',
         collapsed: true,
         loading: false,
         blocks: [
@@ -617,7 +617,7 @@ describe('updateTranscriptFromStreamEvent', () => {
       {
         key: 'call_1',
         label: 'read_file',
-        preview: '',
+        preview: 'README.md',
         collapsed: true,
         loading: false,
         blocks: [
@@ -1276,7 +1276,7 @@ describe('updateTranscriptFromStreamEvent', () => {
     expect(entries[0].details?.[0]).toMatchObject({
       key: 'call_1',
       loading: false,
-      preview: '',
+      preview: 'README.md',
     })
   })
 
@@ -1316,7 +1316,7 @@ describe('updateTranscriptFromStreamEvent', () => {
     expect(entries[0].details?.[0]).toMatchObject({
       key: 'call_1',
       loading: false,
-      preview: '',
+      preview: 'README.md',
     })
   })
 

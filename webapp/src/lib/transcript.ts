@@ -310,6 +310,47 @@ function makeToolGroupEntry(groupKey: string, details: TranscriptEntryDetail[]):
   }
 }
 
+/**
+ * Generate a short preview for a completed tool call based on its arguments.
+ * Extracts the most meaningful field (path, command, query, url, etc.) to show
+ * a one-line summary in the collapsed state.
+ */
+function toolArgsPreview(name: string, argumentsText?: string): string {
+  if (!argumentsText || !argumentsText.trim()) return ''
+  const trimmed = argumentsText.trim()
+  if (!trimmed.startsWith('{')) return previewText(trimmed, 80)
+
+  try {
+    const args = JSON.parse(trimmed) as Record<string, unknown>
+
+    // Try common fields that provide a meaningful summary
+    const path = args.path || args.file_path || args.filename || ''
+    const command = args.command || ''
+    const query = args.query || args.pattern || ''
+    const url = args.url || ''
+
+    if (name === 'exec_command' && command) {
+      const cmdArgs = Array.isArray(args.args) ? (args.args as string[]).join(' ') : ''
+      const full = cmdArgs ? `${command} ${cmdArgs}` : String(command)
+      return full.length > 80 ? `$ ${full.slice(0, 77)}...` : `$ ${full}`
+    }
+    if (path) return String(path)
+    if (url) return String(url)
+    if (query) return String(query).length > 60 ? `"${String(query).slice(0, 57)}..."` : `"${query}"`
+    if (command) return `$ ${command}`
+
+    // Fallback: show first string value
+    for (const val of Object.values(args)) {
+      if (typeof val === 'string' && val.trim()) {
+        return previewText(val, 80)
+      }
+    }
+  } catch {
+    // Not valid JSON, fall through
+  }
+  return previewText(trimmed, 80)
+}
+
 function makeToolDetail(input: {
   toolCallId?: string
   name: string
@@ -318,7 +359,14 @@ function makeToolDetail(input: {
   loading?: boolean
   error?: boolean
 }): TranscriptEntryDetail {
-  const preview = input.loading ? 'Running' : (input.error ? 'Failed' : '')
+  let preview: string
+  if (input.loading) {
+    preview = 'Running'
+  } else if (input.error) {
+    preview = 'Failed'
+  } else {
+    preview = toolArgsPreview(input.name, input.argumentsText)
+  }
   return {
     key: input.toolCallId || `${input.name}-${Math.random().toString(36).slice(2, 8)}`,
     label: input.name || 'Tool',
