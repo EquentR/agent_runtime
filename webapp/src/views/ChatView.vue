@@ -921,7 +921,7 @@ async function attachTaskStream(taskId: string, conversationId = '') {
           clearTaskStateForConversation(taskConversationId)
           return
         }
-        if (taskConversationId === activeConversationId.value) {
+        if (workspaceErrorActionFromError(error) && taskConversationId === activeConversationId.value) {
           applyErrorState(error, '发送消息失败')
         }
         const currentEntries = currentConversationContextEntries(taskConversationId)
@@ -934,7 +934,7 @@ async function attachTaskStream(taskId: string, conversationId = '') {
       }
     } catch {
       if (taskError !== 'Task event stream disconnected') {
-        if (streamConversationId === activeConversationId.value) {
+        if (workspaceErrorActionFromError(error) && streamConversationId === activeConversationId.value) {
           applyErrorState(error, '发送消息失败')
         }
         const currentEntries = currentConversationContextEntries(streamConversationId)
