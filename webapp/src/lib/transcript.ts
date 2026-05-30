@@ -330,7 +330,7 @@ function toolArgsPreview(name: string, argumentsText?: string): string {
     const url = args.url || ''
 
     if (name === 'exec_command' && command) {
-      const cmdArgs = Array.isArray(args.args) ? (args.args as string[]).join(' ') : ''
+      const cmdArgs = Array.isArray(args.args) ? (args.args as unknown[]).map(String).join(' ') : ''
       const full = cmdArgs ? `${command} ${cmdArgs}` : String(command)
       return full.length > 80 ? `$ ${full.slice(0, 77)}...` : `$ ${full}`
     }
