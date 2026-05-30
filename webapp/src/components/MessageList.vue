@@ -5,7 +5,8 @@ import { CircleCheckFilled, CopyDocument, Operation, WarningFilled } from '@elem
 
 import ApprovalRecordCard from './ApprovalRecordCard.vue'
 import { getAttachmentContentURL } from '../lib/api'
-import { formatMessageContent } from '../lib/chat'
+import { formatMessageContent, formatToolParams, formatToolResult } from '../lib/chat'
+import { looksLikeJson } from '../lib/transcript'
 import { normalizeQuestionEntry } from '../lib/question-entry'
 import type { AttachmentRef, QuestionInteractionSubmitInput, TranscriptEntry, TranscriptEntryDetail } from '../types/api'
 
@@ -416,11 +417,23 @@ function previewError(content: string | undefined) {
   if (!trimmed) {
     return '查看详情'
   }
+  // Do not expose JSON-formatted data as error preview
+  if (looksLikeJson(trimmed)) {
+    return '查看详情'
+  }
   return trimmed.length > 72 ? `${trimmed.slice(0, 72)}...` : trimmed
 }
 
 function primaryBlockValue(detail: TranscriptEntryDetail) {
   return detail.blocks?.[0]?.value ?? ''
+}
+
+function formatToolBlockValue(detail: TranscriptEntryDetail, block: { label: string; value: string }) {
+  if (block.label === 'Result') {
+    return formatToolResult(detail.label, block.value)
+  }
+  // For Params blocks, use tool-specific formatter
+  return formatToolParams(detail.label, block.value)
 }
 
 function hasUsage(entry: TranscriptEntry) {
@@ -746,7 +759,7 @@ function showCopyToast(message: string, variant: 'success' | 'error') {
               >
                 <summary class="trace-detail-summary">
                   <span class="trace-detail-label">{{ detail.label }}</span>
-                  <span class="trace-detail-preview">{{ detail.preview }}</span>
+                  <span v-if="detail.preview" class="trace-detail-preview">{{ detail.preview }}</span>
                   <span v-if="detail.loading" class="trace-loading" aria-hidden="true"></span>
                 </summary>
                 <div class="trace-detail-blocks">
@@ -755,7 +768,7 @@ function showCopyToast(message: string, variant: 'success' | 'error') {
                       <span>{{ block.label }}</span>
                       <span v-if="block.loading" class="trace-loading small" aria-hidden="true"></span>
                     </div>
-                    <pre class="trace-detail-content">{{ formatMessageContent(block.value) }}</pre>
+                    <pre class="trace-detail-content">{{ formatToolBlockValue(detail, block) }}</pre>
                   </div>
                 </div>
               </details>
@@ -808,7 +821,7 @@ function showCopyToast(message: string, variant: 'success' | 'error') {
                     <span>{{ block.label }}</span>
                     <span v-if="block.loading" class="trace-loading small" aria-hidden="true"></span>
                   </div>
-                  <pre class="trace-detail-content">{{ formatMessageContent(block.value) }}</pre>
+                  <pre class="trace-detail-content">{{ entry.kind === 'tool' ? formatToolBlockValue(detail, block) : formatMessageContent(block.value) }}</pre>
                 </div>
               </div>
             </details>

@@ -38,9 +38,30 @@ function isRenderableSystemMessage(message: ConversationMessage) {
   return message.provider_data?.system_message?.visible_to_user === true
 }
 
+/**
+ * Returns true if the string looks like raw JSON data (object or array literal).
+ * Such strings should not be shown as preview text to avoid leaking JSON schema.
+ */
+export function looksLikeJson(value: string): boolean {
+  const trimmed = value.trim()
+  // Detect complete JSON objects/arrays
+  if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+    return true
+  }
+  // Also detect truncated JSON that starts with { or [ (e.g. from failed parse or truncated content)
+  if ((trimmed.startsWith('{') || trimmed.startsWith('[')) && /["':,\[\]{}]/.test(trimmed.slice(1, 20))) {
+    return true
+  }
+  return false
+}
+
 function previewText(value: string, maxLength = 64) {
   const normalized = compactWhitespace(value)
   if (!normalized) {
+    return ''
+  }
+  // Do not expose JSON-formatted data as preview summary
+  if (looksLikeJson(normalized)) {
     return ''
   }
   if (normalized.length <= maxLength) {
@@ -68,6 +89,30 @@ function summarizeReasoning(message: ConversationMessage) {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+/**
+ * Safely convert any value to a displayable string.
+ * - strings are returned as-is
+ * - objects/arrays are JSON-stringified (pretty-printed)
+ * - null/undefined become empty string
+ * - other primitives use String()
+ */
+function safeStringify(value: unknown): string {
+  if (value === null || value === undefined) {
+    return ''
+  }
+  if (typeof value === 'string') {
+    return value
+  }
+  if (typeof value === 'object') {
+    try {
+      return JSON.stringify(value, null, 2)
+    } catch {
+      return '[Unserializable Object]'
+    }
+  }
+  return String(value)
 }
 
 function firstString(...values: unknown[]) {
@@ -286,6 +331,47 @@ function makeToolGroupEntry(groupKey: string, details: TranscriptEntryDetail[]):
   }
 }
 
+/**
+ * Generate a short preview for a completed tool call based on its arguments.
+ * Extracts the most meaningful field (path, command, query, url, etc.) to show
+ * a one-line summary in the collapsed state.
+ */
+function toolArgsPreview(name: string, argumentsText?: string): string {
+  if (!argumentsText || !argumentsText.trim()) return ''
+  const trimmed = argumentsText.trim()
+  if (!trimmed.startsWith('{')) return previewText(trimmed, 80)
+
+  try {
+    const args = JSON.parse(trimmed) as Record<string, unknown>
+
+    // Try common fields that provide a meaningful summary
+    const path = args.path || args.file_path || args.filename || ''
+    const command = args.command || ''
+    const query = args.query || args.pattern || ''
+    const url = args.url || ''
+
+    if (name === 'exec_command' && command) {
+      const cmdArgs = Array.isArray(args.args) ? (args.args as unknown[]).map(String).join(' ') : ''
+      const full = cmdArgs ? `${command} ${cmdArgs}` : String(command)
+      return full.length > 80 ? `$ ${full.slice(0, 77)}...` : `$ ${full}`
+    }
+    if (path) return String(path)
+    if (url) return String(url)
+    if (query) return String(query).length > 60 ? `"${String(query).slice(0, 57)}..."` : `"${query}"`
+    if (command) return `$ ${command}`
+
+    // Fallback: show first string value
+    for (const val of Object.values(args)) {
+      if (typeof val === 'string' && val.trim()) {
+        return previewText(val, 80)
+      }
+    }
+  } catch {
+    // Not valid JSON, fall through
+  }
+  return previewText(trimmed, 80)
+}
+
 function makeToolDetail(input: {
   toolCallId?: string
   name: string
@@ -294,11 +380,18 @@ function makeToolDetail(input: {
   loading?: boolean
   error?: boolean
 }): TranscriptEntryDetail {
-  const preview = input.loading ? 'Running' : previewText(input.resultText ?? '')
+  let preview: string
+  if (input.loading) {
+    preview = 'Running'
+  } else if (input.error) {
+    preview = 'Failed'
+  } else {
+    preview = toolArgsPreview(input.name, input.argumentsText)
+  }
   return {
     key: input.toolCallId || `${input.name}-${Math.random().toString(36).slice(2, 8)}`,
     label: input.name || 'Tool',
-    preview: preview || (input.error ? 'Failed' : 'Ready'),
+    preview,
     collapsed: true,
     loading: input.loading,
     blocks: makeBlocks(input.argumentsText, input.resultText || (input.loading ? 'Running...' : ''), input.loading),
@@ -1071,7 +1164,7 @@ export function updateTranscriptFromStreamEvent(entries: TranscriptEntry[], even
             ? toolCall.arguments
             : typeof toolCall.Arguments === 'string'
               ? toolCall.Arguments
-              : '',
+              : safeStringify(toolCall.arguments ?? toolCall.Arguments ?? ''),
         resultText: 'Running...',
         loading: true,
       })
@@ -1091,16 +1184,16 @@ export function updateTranscriptFromStreamEvent(entries: TranscriptEntry[], even
       groupKey,
       toolCallId: String(payload.tool_call_id ?? payload.toolCallId ?? payload.ToolCallId ?? payload.ToolCallID ?? ''),
       name: String(payload.tool_name ?? payload.toolName ?? payload.ToolName ?? 'Tool'),
-      argumentsText: typeof payload.Arguments === 'string' ? String(payload.Arguments) : '',
+      argumentsText: typeof payload.Arguments === 'string' ? payload.Arguments : safeStringify(payload.Arguments ?? ''),
       resultText: 'Running...',
       loading: true,
     })
   }
 
   if (event.type === 'tool.finished') {
-    const err = payload.Err ? String(payload.Err) : ''
+    const err = payload.Err ? safeStringify(payload.Err) : ''
     const toolName = String(payload.tool_name ?? payload.toolName ?? payload.ToolName ?? 'Tool')
-    const output = err || String(payload.Output ?? '')
+    const output = err || safeStringify(payload.Output ?? '')
     const next = upsertToolInGroup(entries, {
       groupKey,
       toolCallId: String(payload.tool_call_id ?? payload.toolCallId ?? payload.ToolCallId ?? payload.ToolCallID ?? ''),

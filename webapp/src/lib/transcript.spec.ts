@@ -110,7 +110,7 @@ describe('buildTranscriptEntries', () => {
       {
         key: 'call_1',
         label: 'weather.lookup',
-        preview: '{"city":"Beijing","forecast":"sunny"}',
+        preview: 'Beijing',
         collapsed: true,
         loading: false,
         blocks: [
@@ -617,7 +617,7 @@ describe('updateTranscriptFromStreamEvent', () => {
       {
         key: 'call_1',
         label: 'read_file',
-        preview: 'README line 3',
+        preview: 'README.md',
         collapsed: true,
         loading: false,
         blocks: [
@@ -683,7 +683,7 @@ describe('updateTranscriptFromStreamEvent', () => {
       key: 'call_1',
       loading: false,
     })
-    expect(entries[0].details?.[0].preview).toContain('Cannot read "image.png"')
+    expect(entries[0].details?.[0].preview).toBe('Failed')
   })
 
   it('does not append a duplicate terminal error when the latest tool already carries the same failure', () => {
@@ -1276,7 +1276,7 @@ describe('updateTranscriptFromStreamEvent', () => {
     expect(entries[0].details?.[0]).toMatchObject({
       key: 'call_1',
       loading: false,
-      preview: 'README line 3',
+      preview: 'README.md',
     })
   })
 
@@ -1316,7 +1316,7 @@ describe('updateTranscriptFromStreamEvent', () => {
     expect(entries[0].details?.[0]).toMatchObject({
       key: 'call_1',
       loading: false,
-      preview: 'README line 3',
+      preview: 'README.md',
     })
   })
 
@@ -2011,8 +2011,12 @@ describe('updateTranscriptFromStreamEvent', () => {
 })
 
 describe('summarizeToolResult', () => {
-  it('condenses json output into a short summary', () => {
-    expect(summarizeToolResult('{"forecast":"sunny","city":"Beijing","temp":26}')).toContain('forecast')
+  it('hides json output from preview summary', () => {
+    expect(summarizeToolResult('{"forecast":"sunny","city":"Beijing","temp":26}')).toBe('No output')
+  })
+
+  it('shows plain text output as summary', () => {
+    expect(summarizeToolResult('Operation completed successfully')).toContain('Operation completed')
   })
 })
 
