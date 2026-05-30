@@ -69,7 +69,7 @@ const toolParamsFormatters: Record<string, (args: Record<string, unknown>) => st
     if (!path) return null
     const content = typeof args.content === 'string' ? args.content : ''
     if (content.length > 0) {
-      return `📝 ${path} (写入 ${content.length} chars)`
+      return `📝 ${path} (${content.length} bytes)`
     }
     return `📝 ${path}`
   },
