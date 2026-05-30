@@ -251,14 +251,13 @@ describe('MessageList', () => {
 
     const reasoningDetails = wrapper.findAll('.trace-block.reasoning details.trace-detail')
     const toolGroups = wrapper.findAll('details.trace-tool-group')
-    const toolItems = wrapper.findAll('details.trace-tool-item')
+    const toolItems = wrapper.findAll('.trace-tool-item-sealed')
 
     expect(reasoningDetails).toHaveLength(1)
     expect(toolGroups).toHaveLength(1)
     expect(toolItems).toHaveLength(2)
     expect(reasoningDetails[0].attributes('open')).toBeUndefined()
     expect(toolGroups[0].attributes('open')).toBeUndefined()
-    expect(toolItems[0].attributes('open')).toBeUndefined()
     expect(wrapper.find('.trace-block.user .trace-header').exists()).toBe(false)
     expect(wrapper.find('.trace-block.reply .trace-header').exists()).toBe(false)
     expect(wrapper.find('.trace-block.user').classes()).toContain('bubble-right')

@@ -5,7 +5,7 @@ import { CircleCheckFilled, CopyDocument, Operation, WarningFilled } from '@elem
 
 import ApprovalRecordCard from './ApprovalRecordCard.vue'
 import { getAttachmentContentURL } from '../lib/api'
-import { formatMessageContent, formatToolParams, formatToolResult } from '../lib/chat'
+import { formatMessageContent } from '../lib/chat'
 import { normalizeQuestionEntry } from '../lib/question-entry'
 import type { AttachmentRef, QuestionInteractionSubmitInput, TranscriptEntry, TranscriptEntryDetail } from '../types/api'
 
@@ -411,6 +411,16 @@ function toolSummary(details: TranscriptEntryDetail[]) {
   return [`${counts.running} running`, `${counts.done} done`].join(' / ')
 }
 
+function toolDetailStatus(detail: TranscriptEntryDetail) {
+  if (detail.loading) {
+    return '执行中'
+  }
+  if (detail.preview === 'Failed') {
+    return '失败'
+  }
+  return '已完成'
+}
+
 function previewError(content: string | undefined) {
   const trimmed = (content ?? '').replace(/\s+/g, ' ').trim()
   if (!trimmed) {
@@ -421,14 +431,6 @@ function previewError(content: string | undefined) {
 
 function primaryBlockValue(detail: TranscriptEntryDetail) {
   return detail.blocks?.[0]?.value ?? ''
-}
-
-function formatToolBlockValue(detail: TranscriptEntryDetail, block: { label: string; value: string }) {
-  if (block.label === 'Result') {
-    return formatToolResult(detail.label, block.value)
-  }
-  // For Params blocks, use tool-specific formatter
-  return formatToolParams(detail.label, block.value)
 }
 
 function hasUsage(entry: TranscriptEntry) {
@@ -746,27 +748,17 @@ function showCopyToast(message: string, variant: 'success' | 'error') {
               <span v-if="entry.status === 'running'" class="trace-loading" aria-hidden="true"></span>
             </summary>
             <div class="trace-tool-items">
-              <details
+              <div
                 v-for="detail in detailSections(entry)"
                 :key="detail.key ?? `${entry.id}-${detail.label}`"
-                class="trace-detail trace-tool-item trace-flat-shell"
-                :open="detail.collapsed ? undefined : true"
+                class="trace-detail trace-tool-item trace-flat-shell trace-tool-item-sealed"
               >
-                <summary class="trace-detail-summary">
+                <div class="trace-detail-summary">
                   <span class="trace-detail-label">{{ detail.label }}</span>
-                  <span v-if="detail.preview" class="trace-detail-preview">{{ detail.preview }}</span>
+                  <span class="trace-status subtle">{{ toolDetailStatus(detail) }}</span>
                   <span v-if="detail.loading" class="trace-loading" aria-hidden="true"></span>
-                </summary>
-                <div class="trace-detail-blocks">
-                  <div v-for="block in detail.blocks ?? []" :key="`${detail.key ?? detail.label}-${block.label}`" class="trace-detail-block">
-                    <div class="trace-detail-block-header">
-                      <span>{{ block.label }}</span>
-                      <span v-if="block.loading" class="trace-loading small" aria-hidden="true"></span>
-                    </div>
-                    <pre class="trace-detail-content">{{ formatToolBlockValue(detail, block) }}</pre>
-                  </div>
                 </div>
-              </details>
+              </div>
             </div>
           </details>
           <template v-else-if="entry.kind === 'reasoning'">
@@ -788,26 +780,33 @@ function showCopyToast(message: string, variant: 'success' | 'error') {
             </details>
           </template>
           <template v-else>
-            <details
-              v-for="detail in detailSections(entry)"
-              :key="detail.key ?? `${entry.id}-${detail.label}`"
-              class="trace-detail"
-              :class="{ 'trace-flat-shell': entry.kind === 'tool' }"
-              :open="detail.collapsed ? undefined : true"
-            >
-              <summary class="trace-detail-summary">
-                <template v-if="entry.kind === 'tool'">
+            <template v-if="entry.kind === 'tool'">
+              <div
+                v-for="detail in detailSections(entry)"
+                :key="detail.key ?? `${entry.id}-${detail.label}`"
+                class="trace-detail trace-flat-shell trace-tool-item-sealed"
+              >
+                <div class="trace-detail-summary">
                   <span class="trace-summary-leading">
                     <span class="trace-kind-badge tool operation-badge" aria-hidden="true"><Operation /></span>
                     <span class="trace-detail-label" :class="{ 'loading-marquee': detail.loading }">{{ entry.title }}</span>
                     <span class="trace-tool-name">{{ detail.label }}</span>
                   </span>
-                  <span v-if="detail.preview" class="trace-status subtle">{{ detail.preview }}</span>
-                </template>
-                <template v-else>
-                  <span class="trace-detail-label" :class="{ 'loading-marquee': detail.loading }">{{ detail.label }}</span>
-                  <span class="trace-detail-preview">{{ detail.preview }}</span>
-                </template>
+                  <span class="trace-status subtle">{{ toolDetailStatus(detail) }}</span>
+                  <span v-if="detail.loading" class="trace-loading" aria-hidden="true"></span>
+                </div>
+              </div>
+            </template>
+            <details
+              v-else
+              v-for="detail in detailSections(entry)"
+              :key="detail.key ?? `${entry.id}-${detail.label}`"
+              class="trace-detail"
+              :open="detail.collapsed ? undefined : true"
+            >
+              <summary class="trace-detail-summary">
+                <span class="trace-detail-label" :class="{ 'loading-marquee': detail.loading }">{{ detail.label }}</span>
+                <span class="trace-detail-preview">{{ detail.preview }}</span>
                 <span v-if="detail.loading" class="trace-loading" aria-hidden="true"></span>
               </summary>
               <div class="trace-detail-blocks">
@@ -816,7 +815,7 @@ function showCopyToast(message: string, variant: 'success' | 'error') {
                     <span>{{ block.label }}</span>
                     <span v-if="block.loading" class="trace-loading small" aria-hidden="true"></span>
                   </div>
-                  <pre class="trace-detail-content">{{ entry.kind === 'tool' ? formatToolBlockValue(detail, block) : formatMessageContent(block.value) }}</pre>
+                  <pre class="trace-detail-content">{{ formatMessageContent(block.value) }}</pre>
                 </div>
               </div>
             </details>
