@@ -12,17 +12,13 @@ describe('chat-state', () => {
     vi.restoreAllMocks()
   })
 
-  it('persists active conversation and transcript entries', () => {
+  it('persists active conversation and metadata (no entries)', () => {
     saveChatState({
       activeConversationId: 'conv_1',
       activeTaskId: 'task_1',
       activeTaskEventSeq: 12,
       activeTaskIdByConversation: {},
       activeTaskEventSeqByConversation: {},
-      entries: [{ id: 'a', kind: 'error', title: 'Failed', content: 'boom' }],
-      draftEntriesByConversation: {
-        conv_1: [{ id: 'b', kind: 'reply', title: '', content: 'partial' }],
-      },
       selectedSkillsByConversation: {
         conv_1: ['debugging'],
       },
@@ -40,10 +36,6 @@ describe('chat-state', () => {
       activeTaskEventSeq: 12,
       activeTaskIdByConversation: {},
       activeTaskEventSeqByConversation: {},
-      entries: [{ id: 'a', kind: 'error', title: 'Failed', content: 'boom' }],
-      draftEntriesByConversation: {
-        conv_1: [{ id: 'b', kind: 'reply', title: '', content: 'partial' }],
-      },
       selectedSkillsByConversation: {
         conv_1: ['debugging'],
       },
@@ -66,8 +58,6 @@ describe('chat-state', () => {
       activeTaskEventSeq: 1,
       activeTaskIdByConversation: {},
       activeTaskEventSeqByConversation: {},
-      entries: [{ id: 'a', kind: 'user', title: 'You', content: 'hello' }],
-      draftEntriesByConversation: {},
       selectedSkillsByConversation: {},
       selectedWorkspaceModeByConversation: {},
       pendingWorkspaceMergeTaskIdByConversation: {},
@@ -78,10 +68,6 @@ describe('chat-state', () => {
       activeTaskEventSeq: 2,
       activeTaskIdByConversation: {},
       activeTaskEventSeqByConversation: {},
-      entries: [{ id: 'b', kind: 'reply', title: '', content: 'latest' }],
-      draftEntriesByConversation: {
-        conv_2: [{ id: 'c', kind: 'reply', title: '', content: 'draft' }],
-      },
       selectedSkillsByConversation: {
         conv_2: ['review'],
       },
@@ -104,10 +90,6 @@ describe('chat-state', () => {
       activeTaskEventSeq: 2,
       activeTaskIdByConversation: {},
       activeTaskEventSeqByConversation: {},
-      entries: [{ id: 'b', kind: 'reply', title: '', content: 'latest' }],
-      draftEntriesByConversation: {
-        conv_2: [{ id: 'c', kind: 'reply', title: '', content: 'draft' }],
-      },
       selectedSkillsByConversation: {
         conv_2: ['review'],
       },
@@ -127,8 +109,6 @@ describe('chat-state', () => {
       activeTaskEventSeq: 4,
       activeTaskIdByConversation: {},
       activeTaskEventSeqByConversation: {},
-      entries: [{ id: 'a', kind: 'user', title: 'You', content: 'hi' }],
-      draftEntriesByConversation: { conv_1: [{ id: 'b', kind: 'reply', title: '', content: 'partial' }] },
       selectedSkillsByConversation: { conv_1: ['review'] },
       selectedWorkspaceModeByConversation: { conv_1: 'readonly' },
       pendingWorkspaceMergeTaskIdByConversation: { conv_1: 'task_merge' },
@@ -142,8 +122,6 @@ describe('chat-state', () => {
       activeTaskEventSeq: 0,
       activeTaskIdByConversation: {},
       activeTaskEventSeqByConversation: {},
-      entries: [],
-      draftEntriesByConversation: {},
       selectedSkillsByConversation: {},
       selectedWorkspaceModeByConversation: {},
       pendingWorkspaceMergeTaskIdByConversation: {},
