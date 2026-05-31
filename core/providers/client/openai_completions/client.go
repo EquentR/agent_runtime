@@ -24,11 +24,11 @@ func NewOpenAiCompletionsClient(baseUrl, apiKey string, requestTimeout time.Dura
 	if baseUrl != "" {
 		cfg.BaseURL = baseUrl
 	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
 	if requestTimeout > 0 {
-		transport := http.DefaultTransport.(*http.Transport).Clone()
 		transport.ResponseHeaderTimeout = requestTimeout
-		cfg.HTTPClient = &http.Client{Transport: transport}
 	}
+	cfg.HTTPClient = &http.Client{Transport: newPromptCacheTransport(transport)}
 	return &Client{
 		client:         openai.NewClientWithConfig(cfg),
 		requestTimeout: requestTimeout,

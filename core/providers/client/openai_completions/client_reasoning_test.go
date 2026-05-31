@@ -97,6 +97,48 @@ func TestNewOpenAiCompletionsClient_DoesNotTimeoutActiveLongStreamAfterFirstChun
 	}
 }
 
+func TestClientChatStreamSendsPromptCacheKey(t *testing.T) {
+	var payload map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			http.NotFound(w, r)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request body error = %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-5.5\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"ok\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1100,\"completion_tokens\":1,\"total_tokens\":1101,\"prompt_tokens_details\":{\"cached_tokens\":1024}}}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	client := NewOpenAiCompletionsClient(server.URL+"/v1", "test-key", 0)
+	stream, err := client.ChatStream(context.Background(), model.ChatRequest{
+		Model:          "gpt-5.5",
+		Messages:       []model.Message{{Role: model.RoleUser, Content: "hello"}},
+		PromptCacheKey: "agent-runtime-cache-key",
+	})
+	if err != nil {
+		t.Fatalf("ChatStream() error = %v", err)
+	}
+	for {
+		event, err := stream.RecvEvent()
+		if err != nil {
+			t.Fatalf("RecvEvent() error = %v", err)
+		}
+		if event.Type == "" {
+			break
+		}
+	}
+	if payload["prompt_cache_key"] != "agent-runtime-cache-key" {
+		t.Fatalf("prompt_cache_key = %#v, want agent-runtime-cache-key", payload["prompt_cache_key"])
+	}
+	if payload["user"] != "agent-runtime-cache-key" {
+		t.Fatalf("user = %#v, want cache key fallback", payload["user"])
+	}
+}
+
 func TestChatResponseFromStream_UsesFinalMessage(t *testing.T) {
 	resp, err := chatResponseFromStream(time.Now(), &fakeChatStream{
 		ctx:  context.Background(),

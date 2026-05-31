@@ -76,6 +76,9 @@ func buildResponseRequestParams(req model.ChatRequest) (responses.ResponseNewPar
 	if strings.TrimSpace(req.PromptCacheKey) != "" {
 		params.PromptCacheKey = openai.String(strings.TrimSpace(req.PromptCacheKey))
 	}
+	if strings.TrimSpace(req.PromptCacheRetention) != "" {
+		params.PromptCacheRetention = responses.ResponseNewParamsPromptCacheRetention(strings.TrimSpace(req.PromptCacheRetention))
+	}
 
 	if req.MaxTokens > 0 {
 		params.MaxOutputTokens = openai.Int(req.MaxTokens)

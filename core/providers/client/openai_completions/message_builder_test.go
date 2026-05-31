@@ -33,6 +33,20 @@ func TestBuildOpenAIMessages_TextOnly(t *testing.T) {
 	}
 }
 
+func TestBuildChatCompletionRequest_ForwardsPromptCacheKeyAsStableUserBucket(t *testing.T) {
+	req, err := buildChatCompletionRequest(model.ChatRequest{
+		Model:          "gpt-5.5",
+		Messages:       []model.Message{{Role: model.RoleUser, Content: "hello"}},
+		PromptCacheKey: " agent-runtime-conv-abc ",
+	})
+	if err != nil {
+		t.Fatalf("buildChatCompletionRequest() error = %v", err)
+	}
+	if req.User != "agent-runtime-conv-abc" {
+		t.Fatalf("request.User = %q, want stable prompt cache key bucket", req.User)
+	}
+}
+
 func TestBuildOpenAIMessages_WithAttachments(t *testing.T) {
 	msgs, promptMessages, err := buildOpenAIMessages([]model.Message{{
 		Role:    model.RoleUser,

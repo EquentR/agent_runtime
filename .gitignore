@@ -8,3 +8,4 @@ workspace/*
 !workspace/skills/
 !workspace/skills/**
 .worktrees/
+.worktree/

@@ -206,6 +206,33 @@ func TestBuildResponseRequestParams_MessageAndToolMapping(t *testing.T) {
 	}
 }
 
+func TestBuildResponseRequestParams_ForwardsPromptCacheOptions(t *testing.T) {
+	params, err := buildResponseRequestParams(model.ChatRequest{
+		Model:                "gpt-5.5",
+		Messages:             []model.Message{{Role: model.RoleUser, Content: "hi"}},
+		PromptCacheKey:       " agent-runtime-conv-123 ",
+		PromptCacheRetention: "24h",
+	})
+	if err != nil {
+		t.Fatalf("buildResponseRequestParams() error = %v", err)
+	}
+
+	data, err := json.Marshal(params)
+	if err != nil {
+		t.Fatalf("json.Marshal(params) error = %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("json.Unmarshal(payload) error = %v", err)
+	}
+	if payload["prompt_cache_key"] != "agent-runtime-conv-123" {
+		t.Fatalf("prompt_cache_key = %#v, want trimmed key", payload["prompt_cache_key"])
+	}
+	if payload["prompt_cache_retention"] != "24h" {
+		t.Fatalf("prompt_cache_retention = %#v, want 24h", payload["prompt_cache_retention"])
+	}
+}
+
 func TestBuildResponseRequestParams_ReplaysAssistantReasoningItems(t *testing.T) {
 	req := model.ChatRequest{
 		Model: "gpt-5.4",

@@ -60,6 +60,64 @@ func TestRunnerRunStreamEmitsTextAndCompletedEvents(t *testing.T) {
 	}
 }
 
+func TestRunnerRunStreamSetsStablePromptCacheKeyForConversation(t *testing.T) {
+	registry := newTestRegistry(t, map[string]func(context.Context, map[string]interface{}) (string, error){
+		"lookup_weather": func(context.Context, map[string]interface{}) (string, error) {
+			return "sunny", nil
+		},
+	})
+	client := &stubClient{
+		streams: []model.Stream{
+			newStubStream(
+				[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "lookup_weather", Arguments: `{"city":"Shanghai"}`}}}}},
+				model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "lookup_weather", Arguments: `{"city":"Shanghai"}`}}},
+				nil,
+			),
+			newStubStream(
+				[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "sunny"}}},
+				model.Message{Role: model.RoleAssistant, Content: "sunny"},
+				nil,
+			),
+		},
+	}
+	runner, err := NewRunner(client, registry, Options{
+		Model: "gpt-5.5",
+		Metadata: map[string]string{
+			"conversation_id": "conv_public_123",
+			"provider_id":     "openai",
+			"model_id":        "gpt-5.5",
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRunner() error = %v", err)
+	}
+
+	result, err := runner.Run(context.Background(), RunInput{Messages: []model.Message{{Role: model.RoleUser, Content: "weather?"}}, Tools: registry.List()})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.FinalMessage.Content != "sunny" {
+		t.Fatalf("final content = %q, want sunny", result.FinalMessage.Content)
+	}
+	if len(client.streamRequests) != 2 {
+		t.Fatalf("stream request count = %d, want 2", len(client.streamRequests))
+	}
+	firstKey := client.streamRequests[0].PromptCacheKey
+	secondKey := client.streamRequests[1].PromptCacheKey
+	if firstKey == "" {
+		t.Fatal("first PromptCacheKey is empty, want stable cache bucket")
+	}
+	if firstKey != secondKey {
+		t.Fatalf("PromptCacheKey mismatch: first=%q second=%q", firstKey, secondKey)
+	}
+	if strings.Contains(firstKey, "conv_public_123") {
+		t.Fatalf("PromptCacheKey = %q, want hashed conversation id", firstKey)
+	}
+	if client.streamRequests[0].ConversationID != "conv_public_123" {
+		t.Fatalf("ConversationID = %q, want conv_public_123", client.streamRequests[0].ConversationID)
+	}
+}
+
 func TestRunStreamSkipsProviderCallWhenFinalBudgetGuardFails(t *testing.T) {
 	client := &stubClient{}
 	runner, err := NewRunner(client, nil, Options{
@@ -1134,160 +1192,160 @@ func TestRunnerRunStreamRecordsUsingSkillsAuditEvent(t *testing.T) {
 }
 
 func TestRunnerRunStreamRecoversChatStreamError(t *testing.T) {
-// First call to ChatStream returns a recoverable error;
-// the runner should recover and retry on the next step.
-// The second call succeeds with a normal assistant message.
-client := &stubClient{
-streamErrs: []error{errors.New("unexpected HTML response from API")},
-streams: []model.Stream{newStubStream(
-[]model.StreamEvent{
-{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "recovered response"}},
-},
-model.Message{Role: model.RoleAssistant, Content: "recovered response"},
-nil,
-)},
-}
-runner, err := NewRunner(client, nil, Options{Model: "test-model"})
-if err != nil {
-t.Fatalf("NewRunner() error = %v", err)
-}
+	// First call to ChatStream returns a recoverable error;
+	// the runner should recover and retry on the next step.
+	// The second call succeeds with a normal assistant message.
+	client := &stubClient{
+		streamErrs: []error{errors.New("unexpected HTML response from API")},
+		streams: []model.Stream{newStubStream(
+			[]model.StreamEvent{
+				{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "recovered response"}},
+			},
+			model.Message{Role: model.RoleAssistant, Content: "recovered response"},
+			nil,
+		)},
+	}
+	runner, err := NewRunner(client, nil, Options{Model: "test-model"})
+	if err != nil {
+		t.Fatalf("NewRunner() error = %v", err)
+	}
 
-streamResult, err := runner.RunStream(context.Background(), RunInput{Messages: []model.Message{{Role: model.RoleUser, Content: "hello"}}})
-if err != nil {
-t.Fatalf("RunStream() error = %v, want nil (recovered)", err)
-}
-var gotEvents []StreamEventKind
-for event := range streamResult.Events {
-gotEvents = append(gotEvents, event.Kind)
-}
-result, err := streamResult.Wait()
-if err != nil {
-t.Fatalf("Wait() error = %v, want nil (recovered)", err)
-}
-if result.FinalMessage.Content != "recovered response" {
-t.Fatalf("FinalMessage.Content = %q, want %q", result.FinalMessage.Content, "recovered response")
-}
-// Verify a stream_recovery event was emitted instead of polluting produced messages
-found := false
-for _, k := range gotEvents {
-if k == EventStreamRecovery {
-found = true
-break
-}
-}
-if !found {
-t.Fatal("expected EventStreamRecovery event to be emitted")
-}
-// Recovery messages must NOT appear in result.Messages (they are not real conversation turns)
-for _, msg := range result.Messages {
-if strings.Contains(msg.Content, "[system error]") {
-t.Fatal("recovery message must not appear in result.Messages")
-}
-}
+	streamResult, err := runner.RunStream(context.Background(), RunInput{Messages: []model.Message{{Role: model.RoleUser, Content: "hello"}}})
+	if err != nil {
+		t.Fatalf("RunStream() error = %v, want nil (recovered)", err)
+	}
+	var gotEvents []StreamEventKind
+	for event := range streamResult.Events {
+		gotEvents = append(gotEvents, event.Kind)
+	}
+	result, err := streamResult.Wait()
+	if err != nil {
+		t.Fatalf("Wait() error = %v, want nil (recovered)", err)
+	}
+	if result.FinalMessage.Content != "recovered response" {
+		t.Fatalf("FinalMessage.Content = %q, want %q", result.FinalMessage.Content, "recovered response")
+	}
+	// Verify a stream_recovery event was emitted instead of polluting produced messages
+	found := false
+	for _, k := range gotEvents {
+		if k == EventStreamRecovery {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected EventStreamRecovery event to be emitted")
+	}
+	// Recovery messages must NOT appear in result.Messages (they are not real conversation turns)
+	for _, msg := range result.Messages {
+		if strings.Contains(msg.Content, "[system error]") {
+			t.Fatal("recovery message must not appear in result.Messages")
+		}
+	}
 }
 
 func TestRunnerRunStreamDoesNotRecoverContextCanceled(t *testing.T) {
-// Context cancellation should NOT be recovered - should fail immediately.
-ctx, cancel := context.WithCancel(context.Background())
-cancel()
-client := &stubClient{
-streams: []model.Stream{newStubStream(
-[]model.StreamEvent{},
-model.Message{},
-nil,
-)},
-}
-runner, err := NewRunner(client, nil, Options{Model: "test-model"})
-if err != nil {
-t.Fatalf("NewRunner() error = %v", err)
-}
+	// Context cancellation should NOT be recovered - should fail immediately.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	client := &stubClient{
+		streams: []model.Stream{newStubStream(
+			[]model.StreamEvent{},
+			model.Message{},
+			nil,
+		)},
+	}
+	runner, err := NewRunner(client, nil, Options{Model: "test-model"})
+	if err != nil {
+		t.Fatalf("NewRunner() error = %v", err)
+	}
 
-_, err = runner.Run(ctx, RunInput{Messages: []model.Message{{Role: model.RoleUser, Content: "hello"}}})
-if err == nil {
-t.Fatal("Run() error = nil, want context.Canceled")
-}
-if !errors.Is(err, context.Canceled) {
-t.Fatalf("Run() error = %v, want context.Canceled", err)
-}
+	_, err = runner.Run(ctx, RunInput{Messages: []model.Message{{Role: model.RoleUser, Content: "hello"}}})
+	if err == nil {
+		t.Fatal("Run() error = nil, want context.Canceled")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run() error = %v, want context.Canceled", err)
+	}
 }
 
 func TestRunnerRunStreamExhaustsRecoveryLimit(t *testing.T) {
-// When errors keep happening beyond the recovery limit, it should eventually fail.
-persistentErr := errors.New("persistent API failure")
-client := &stubClient{
-streamErrs: []error{persistentErr, persistentErr, persistentErr, persistentErr},
-}
-runner, err := NewRunner(client, nil, Options{Model: "test-model"})
-if err != nil {
-t.Fatalf("NewRunner() error = %v", err)
-}
+	// When errors keep happening beyond the recovery limit, it should eventually fail.
+	persistentErr := errors.New("persistent API failure")
+	client := &stubClient{
+		streamErrs: []error{persistentErr, persistentErr, persistentErr, persistentErr},
+	}
+	runner, err := NewRunner(client, nil, Options{Model: "test-model"})
+	if err != nil {
+		t.Fatalf("NewRunner() error = %v", err)
+	}
 
-_, err = runner.Run(context.Background(), RunInput{Messages: []model.Message{{Role: model.RoleUser, Content: "hello"}}})
-if err == nil {
-t.Fatal("Run() error = nil, want persistent error after exhausting retries")
-}
-if !errors.Is(err, persistentErr) {
-t.Fatalf("Run() error = %v, want %v", err, persistentErr)
-}
+	_, err = runner.Run(context.Background(), RunInput{Messages: []model.Message{{Role: model.RoleUser, Content: "hello"}}})
+	if err == nil {
+		t.Fatal("Run() error = nil, want persistent error after exhausting retries")
+	}
+	if !errors.Is(err, persistentErr) {
+		t.Fatalf("Run() error = %v, want %v", err, persistentErr)
+	}
 }
 
 func TestRunnerRunStreamRecoversFinalMessageError(t *testing.T) {
-// FinalMessage returns a recoverable error on the first call;
-// the runner should recover and succeed on the next step.
-client := &stubClient{
-streams: []model.Stream{
-newStubStream(
-[]model.StreamEvent{
-{Type: model.StreamEventTextDelta, Text: "partial"},
-},
-model.Message{},
-errors.New("stream did not complete normally"),
-),
-newStubStream(
-[]model.StreamEvent{
-{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "success"}},
-},
-model.Message{Role: model.RoleAssistant, Content: "success"},
-nil,
-),
-},
-}
-runner, err := NewRunner(client, nil, Options{Model: "test-model"})
-if err != nil {
-t.Fatalf("NewRunner() error = %v", err)
-}
+	// FinalMessage returns a recoverable error on the first call;
+	// the runner should recover and succeed on the next step.
+	client := &stubClient{
+		streams: []model.Stream{
+			newStubStream(
+				[]model.StreamEvent{
+					{Type: model.StreamEventTextDelta, Text: "partial"},
+				},
+				model.Message{},
+				errors.New("stream did not complete normally"),
+			),
+			newStubStream(
+				[]model.StreamEvent{
+					{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "success"}},
+				},
+				model.Message{Role: model.RoleAssistant, Content: "success"},
+				nil,
+			),
+		},
+	}
+	runner, err := NewRunner(client, nil, Options{Model: "test-model"})
+	if err != nil {
+		t.Fatalf("NewRunner() error = %v", err)
+	}
 
-result, err := runner.Run(context.Background(), RunInput{Messages: []model.Message{{Role: model.RoleUser, Content: "hello"}}})
-if err != nil {
-t.Fatalf("Run() error = %v, want nil (recovered)", err)
-}
-if result.FinalMessage.Content != "success" {
-t.Fatalf("FinalMessage.Content = %q, want %q", result.FinalMessage.Content, "success")
-}
+	result, err := runner.Run(context.Background(), RunInput{Messages: []model.Message{{Role: model.RoleUser, Content: "hello"}}})
+	if err != nil {
+		t.Fatalf("Run() error = %v, want nil (recovered)", err)
+	}
+	if result.FinalMessage.Content != "success" {
+		t.Fatalf("FinalMessage.Content = %q, want %q", result.FinalMessage.Content, "success")
+	}
 }
 
 func TestIsRecoverableStreamError(t *testing.T) {
-tests := []struct {
-name string
-err  error
-want bool
-}{
-{"nil error", nil, false},
-{"context.Canceled", context.Canceled, false},
-{"context.DeadlineExceeded", context.DeadlineExceeded, false},
-{"wrapped context.Canceled", fmt.Errorf("wrap: %w", context.Canceled), false},
-{"wrapped context.DeadlineExceeded", fmt.Errorf("wrap: %w", context.DeadlineExceeded), false},
-{"JSON parse error", errors.New("invalid character '<' looking for beginning of value"), true},
-{"generic API error", errors.New("unexpected HTML response"), true},
-{"no stream prepared", errors.New("no stream prepared"), true},
-{"stream did not complete", errors.New("stream did not complete normally"), true},
-}
-for _, tt := range tests {
-t.Run(tt.name, func(t *testing.T) {
-got := isRecoverableStreamError(tt.err)
-if got != tt.want {
-t.Errorf("isRecoverableStreamError(%v) = %v, want %v", tt.err, got, tt.want)
-}
-})
-}
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil error", nil, false},
+		{"context.Canceled", context.Canceled, false},
+		{"context.DeadlineExceeded", context.DeadlineExceeded, false},
+		{"wrapped context.Canceled", fmt.Errorf("wrap: %w", context.Canceled), false},
+		{"wrapped context.DeadlineExceeded", fmt.Errorf("wrap: %w", context.DeadlineExceeded), false},
+		{"JSON parse error", errors.New("invalid character '<' looking for beginning of value"), true},
+		{"generic API error", errors.New("unexpected HTML response"), true},
+		{"no stream prepared", errors.New("no stream prepared"), true},
+		{"stream did not complete", errors.New("stream did not complete normally"), true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isRecoverableStreamError(tt.err)
+			if got != tt.want {
+				t.Errorf("isRecoverableStreamError(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
 }

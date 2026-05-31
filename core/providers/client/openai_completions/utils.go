@@ -2,6 +2,7 @@ package openai
 
 import (
 	"errors"
+	"strings"
 
 	model "github.com/EquentR/agent_runtime/core/providers/types"
 	"github.com/EquentR/agent_runtime/core/types"
@@ -44,6 +45,9 @@ func buildChatCompletionRequest(req model.ChatRequest) (openai.ChatCompletionReq
 		Messages:            msgs,
 		MaxCompletionTokens: int(req.MaxTokens),
 		Tools:               modelToolsToOpenAI(req.Tools),
+	}
+	if promptCacheKey := strings.TrimSpace(req.PromptCacheKey); promptCacheKey != "" {
+		oaiReq.User = promptCacheKey
 	}
 
 	toolChoice, err := modelToolChoiceToOpenAI(req.ToolChoice)
