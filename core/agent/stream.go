@@ -79,6 +79,23 @@ type RunStreamEvent struct {
 	Metadata  map[string]any
 }
 
+// MarshalJSON implements json.Marshaler so that the Err field is serialized as
+// a string (the error message) instead of the default empty-object `{}` that
+// json.Marshal produces for the error interface.
+func (e RunStreamEvent) MarshalJSON() ([]byte, error) {
+	type Alias RunStreamEvent
+	aux := struct {
+		Alias
+		Err string `json:"Err,omitempty"`
+	}{
+		Alias: Alias(e),
+	}
+	if e.Err != nil {
+		aux.Err = e.Err.Error()
+	}
+	return json.Marshal(aux)
+}
+
 type RunStreamResult struct {
 	Events <-chan RunStreamEvent
 	Wait   func() (RunResult, error)
