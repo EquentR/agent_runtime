@@ -803,38 +803,56 @@ function showCopyToast(message: string, variant: 'success' | 'error') {
             </details>
           </template>
           <template v-else>
-            <details
+            <template
               v-for="detail in detailSections(entry)"
               :key="detail.key ?? `${entry.id}-${detail.label}`"
-              class="trace-detail"
-              :class="{ 'trace-flat-shell': entry.kind === 'tool' }"
-              :open="detail.collapsed ? undefined : true"
             >
-              <summary class="trace-detail-summary">
-                <template v-if="entry.kind === 'tool'">
+              <div
+                v-if="entry.kind === 'tool' && !(detail.blocks && detail.blocks.length)"
+                class="trace-detail trace-flat-shell trace-detail-no-expand"
+              >
+                <div class="trace-detail-summary">
                   <span class="trace-summary-leading">
                     <span class="trace-kind-badge tool operation-badge" aria-hidden="true"><Operation /></span>
                     <span class="trace-detail-label" :class="{ 'loading-marquee': detail.loading }">{{ entry.title }}</span>
                     <span class="trace-tool-name">{{ detail.label }}</span>
                   </span>
                   <span v-if="detail.preview" class="trace-status subtle">{{ detail.preview }}</span>
-                </template>
-                <template v-else>
-                  <span class="trace-detail-label" :class="{ 'loading-marquee': detail.loading }">{{ detail.label }}</span>
-                  <span class="trace-detail-preview">{{ detail.preview }}</span>
-                </template>
-                <span v-if="detail.loading" class="trace-loading" aria-hidden="true"></span>
-              </summary>
-              <div class="trace-detail-blocks">
-                <div v-for="block in detail.blocks ?? []" :key="`${detail.key ?? detail.label}-${block.label}`" class="trace-detail-block">
-                  <div class="trace-detail-block-header">
-                    <span>{{ block.label }}</span>
-                    <span v-if="block.loading" class="trace-loading small" aria-hidden="true"></span>
-                  </div>
-                  <pre class="trace-detail-content">{{ entry.kind === 'tool' ? formatToolBlockValue(detail, block) : formatMessageContent(block.value) }}</pre>
+                  <span v-if="detail.loading" class="trace-loading" aria-hidden="true"></span>
                 </div>
               </div>
-            </details>
+              <details
+                v-else
+                class="trace-detail"
+                :class="{ 'trace-flat-shell': entry.kind === 'tool' }"
+                :open="detail.collapsed ? undefined : true"
+              >
+                <summary class="trace-detail-summary">
+                  <template v-if="entry.kind === 'tool'">
+                    <span class="trace-summary-leading">
+                      <span class="trace-kind-badge tool operation-badge" aria-hidden="true"><Operation /></span>
+                      <span class="trace-detail-label" :class="{ 'loading-marquee': detail.loading }">{{ entry.title }}</span>
+                      <span class="trace-tool-name">{{ detail.label }}</span>
+                    </span>
+                    <span v-if="detail.preview" class="trace-status subtle">{{ detail.preview }}</span>
+                  </template>
+                  <template v-else>
+                    <span class="trace-detail-label" :class="{ 'loading-marquee': detail.loading }">{{ detail.label }}</span>
+                    <span class="trace-detail-preview">{{ detail.preview }}</span>
+                  </template>
+                  <span v-if="detail.loading" class="trace-loading" aria-hidden="true"></span>
+                </summary>
+                <div class="trace-detail-blocks">
+                  <div v-for="block in detail.blocks ?? []" :key="`${detail.key ?? detail.label}-${block.label}`" class="trace-detail-block">
+                    <div class="trace-detail-block-header">
+                      <span>{{ block.label }}</span>
+                      <span v-if="block.loading" class="trace-loading small" aria-hidden="true"></span>
+                    </div>
+                    <pre class="trace-detail-content">{{ entry.kind === 'tool' ? formatToolBlockValue(detail, block) : formatMessageContent(block.value) }}</pre>
+                  </div>
+                </div>
+              </details>
+            </template>
           </template>
         </article>
         <div v-if="props.loading" class="messages-generating-indicator" aria-live="polite">

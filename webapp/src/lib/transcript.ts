@@ -332,6 +332,62 @@ function makeToolGroupEntry(groupKey: string, details: TranscriptEntryDetail[]):
 }
 
 /**
+ * Extract the skill name from using_skills tool call arguments.
+ */
+function extractSkillName(argumentsText?: string): string {
+  if (!argumentsText) return ''
+  try {
+    const args = JSON.parse(argumentsText) as Record<string, unknown>
+    return String(args.name ?? '')
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * Create or update a simplified skill usage entry.
+ * Shows just the skill name without raw JSON arguments or full skill.md content.
+ */
+function upsertSkillEntry(entries: TranscriptEntry[], input: {
+  toolCallId: string
+  skillName: string
+  loading: boolean
+  error?: boolean
+}): TranscriptEntry[] {
+  const next = completeLatestReasoning(entries)
+  const entryId = `skill-${input.toolCallId}`
+
+  // Find existing skill entry by toolCallId
+  const existingIndex = next.findIndex(
+    (e) => e.id === entryId || (e.kind === 'tool' && e.group_key === `skill-${input.toolCallId}`),
+  )
+
+  const status = input.loading ? 'running' : input.error ? 'error' : 'done'
+  const preview = input.loading ? '加载中...' : input.error ? '加载失败' : '已加载'
+  const entry: TranscriptEntry = {
+    id: entryId,
+    kind: 'tool',
+    title: '使用技能',
+    details: [{
+      key: input.toolCallId,
+      label: input.skillName || 'Skill',
+      preview,
+      collapsed: true,
+      loading: input.loading,
+    }],
+    status,
+    group_key: `skill-${input.toolCallId}`,
+  }
+
+  if (existingIndex >= 0) {
+    next[existingIndex] = entry
+    return next
+  }
+  next.push(entry)
+  return next
+}
+
+/**
  * Generate a short preview for a completed tool call based on its arguments.
  * Extracts the most meaningful field (path, command, query, url, etc.) to show
  * a one-line summary in the collapsed state.
@@ -1181,16 +1237,25 @@ export function updateTranscriptFromStreamEvent(entries: TranscriptEntry[], even
       if (!toolCall) {
         return entries
       }
+      const toolName = String(toolCall.name ?? toolCall.Name ?? 'Tool')
+      const argsText =
+        typeof toolCall.arguments === 'string'
+          ? toolCall.arguments
+          : typeof toolCall.Arguments === 'string'
+            ? toolCall.Arguments
+            : safeStringify(toolCall.arguments ?? toolCall.Arguments ?? '')
+      if (toolName === 'using_skills') {
+        return upsertSkillEntry(entries, {
+          toolCallId: String(toolCall.id ?? toolCall.ID ?? ''),
+          skillName: extractSkillName(argsText),
+          loading: true,
+        })
+      }
       return upsertToolInGroup(entries, {
         groupKey,
         toolCallId: String(toolCall.id ?? toolCall.ID ?? ''),
-        name: String(toolCall.name ?? toolCall.Name ?? 'Tool'),
-        argumentsText:
-          typeof toolCall.arguments === 'string'
-            ? toolCall.arguments
-            : typeof toolCall.Arguments === 'string'
-              ? toolCall.Arguments
-              : safeStringify(toolCall.arguments ?? toolCall.Arguments ?? ''),
+        name: toolName,
+        argumentsText: argsText,
         resultText: 'Running...',
         loading: true,
       })
@@ -1206,10 +1271,20 @@ export function updateTranscriptFromStreamEvent(entries: TranscriptEntry[], even
   }
 
   if (event.type === 'tool.started') {
+    const toolName = String(payload.tool_name ?? payload.toolName ?? payload.ToolName ?? 'Tool')
+    const toolCallId = String(payload.tool_call_id ?? payload.toolCallId ?? payload.ToolCallId ?? payload.ToolCallID ?? '')
+    if (toolName === 'using_skills') {
+      const argsText = typeof payload.Arguments === 'string' ? payload.Arguments : safeStringify(payload.Arguments ?? '')
+      return upsertSkillEntry(entries, {
+        toolCallId,
+        skillName: extractSkillName(argsText),
+        loading: true,
+      })
+    }
     return upsertToolInGroup(entries, {
       groupKey,
-      toolCallId: String(payload.tool_call_id ?? payload.toolCallId ?? payload.ToolCallId ?? payload.ToolCallID ?? ''),
-      name: String(payload.tool_name ?? payload.toolName ?? payload.ToolName ?? 'Tool'),
+      toolCallId,
+      name: toolName,
       argumentsText: typeof payload.Arguments === 'string' ? payload.Arguments : safeStringify(payload.Arguments ?? ''),
       resultText: 'Running...',
       loading: true,
@@ -1219,10 +1294,20 @@ export function updateTranscriptFromStreamEvent(entries: TranscriptEntry[], even
   if (event.type === 'tool.finished') {
     const err = payload.Err ? safeStringify(payload.Err) : ''
     const toolName = String(payload.tool_name ?? payload.toolName ?? payload.ToolName ?? 'Tool')
+    const toolCallId = String(payload.tool_call_id ?? payload.toolCallId ?? payload.ToolCallId ?? payload.ToolCallID ?? '')
+    if (toolName === 'using_skills') {
+      const argsText = typeof payload.Arguments === 'string' ? String(payload.Arguments) : ''
+      return upsertSkillEntry(entries, {
+        toolCallId,
+        skillName: extractSkillName(argsText),
+        loading: false,
+        error: Boolean(err),
+      })
+    }
     const output = err || safeStringify(payload.Output ?? '')
     const next = upsertToolInGroup(entries, {
       groupKey,
-      toolCallId: String(payload.tool_call_id ?? payload.toolCallId ?? payload.ToolCallId ?? payload.ToolCallID ?? ''),
+      toolCallId,
       name: toolName,
       argumentsText: typeof payload.Arguments === 'string' ? String(payload.Arguments) : '',
       resultText: output,

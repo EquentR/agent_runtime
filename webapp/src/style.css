@@ -1911,6 +1911,10 @@ p {
   padding: 0;
 }
 
+.trace-detail-no-expand > .trace-detail-summary {
+  cursor: default;
+}
+
 .trace-detail-summary {
   list-style: none;
   display: flex;
