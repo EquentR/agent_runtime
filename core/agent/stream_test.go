@@ -1152,23 +1152,37 @@ if err != nil {
 t.Fatalf("NewRunner() error = %v", err)
 }
 
-result, err := runner.Run(context.Background(), RunInput{Messages: []model.Message{{Role: model.RoleUser, Content: "hello"}}})
+streamResult, err := runner.RunStream(context.Background(), RunInput{Messages: []model.Message{{Role: model.RoleUser, Content: "hello"}}})
 if err != nil {
-t.Fatalf("Run() error = %v, want nil (recovered)", err)
+t.Fatalf("RunStream() error = %v, want nil (recovered)", err)
+}
+var gotEvents []StreamEventKind
+for event := range streamResult.Events {
+gotEvents = append(gotEvents, event.Kind)
+}
+result, err := streamResult.Wait()
+if err != nil {
+t.Fatalf("Wait() error = %v, want nil (recovered)", err)
 }
 if result.FinalMessage.Content != "recovered response" {
 t.Fatalf("FinalMessage.Content = %q, want %q", result.FinalMessage.Content, "recovered response")
 }
-// Verify recovery message was injected into conversation
+// Verify a stream_recovery event was emitted instead of polluting produced messages
 found := false
-for _, msg := range result.Messages {
-if strings.Contains(msg.Content, "[system error]") {
+for _, k := range gotEvents {
+if k == EventStreamRecovery {
 found = true
 break
 }
 }
 if !found {
-t.Fatal("expected recovery message in produced messages")
+t.Fatal("expected EventStreamRecovery event to be emitted")
+}
+// Recovery messages must NOT appear in result.Messages (they are not real conversation turns)
+for _, msg := range result.Messages {
+if strings.Contains(msg.Content, "[system error]") {
+t.Fatal("recovery message must not appear in result.Messages")
+}
 }
 }
 

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/EquentR/agent_runtime/core/approvals"
 	coreaudit "github.com/EquentR/agent_runtime/core/audit"
@@ -27,6 +28,15 @@ var ErrToolApprovalPending = ErrInteractionPending
 // agent loop gives up.  This prevents infinite retry loops.
 const maxConsecutiveStreamRecoveries = 3
 
+// streamRecoveryDelay is the default duration to wait between consecutive retry attempts
+// to avoid overwhelming the upstream service.
+const streamRecoveryDelay = 10 * time.Second
+
+// recoveryDelay returns the configured recovery delay.
+func (r *Runner) recoveryDelay() time.Duration {
+	return r.options.RecoveryDelay
+}
+
 // isRecoverableStreamError returns true when the error is likely transient or
 // indicates the upstream returned an unexpected payload (e.g. HTML instead of
 // JSON) that can be surfaced to the LLM for self-correction rather than causing
@@ -45,11 +55,13 @@ func isRecoverableStreamError(err error) bool {
 	return true
 }
 
-// buildStreamRecoveryMessage constructs a user-role message that informs the LLM
+// buildStreamRecoveryMessage constructs a system-role message that informs the LLM
 // about a transient error so it can adjust its response on the next step.
+// Using system role prevents the message from being rendered as a user bubble
+// in the frontend if it is ever persisted.
 func buildStreamRecoveryMessage(prefix string, err error) model.Message {
 	return model.Message{
-		Role:    model.RoleUser,
+		Role:    model.RoleSystem,
 		Content: fmt.Sprintf("[system error] %s: %s. Please adjust your response and try again.", prefix, err.Error()),
 	}
 }
@@ -62,6 +74,7 @@ const (
 	EventToolCallDelta  StreamEventKind = "tool_call_delta"
 	EventUsage          StreamEventKind = "usage"
 	EventCompleted      StreamEventKind = "completed"
+	EventStreamRecovery StreamEventKind = "stream_recovery"
 )
 
 type RunStreamEvent struct {
@@ -74,6 +87,23 @@ type RunStreamEvent struct {
 	Message   *model.Message
 	Err       error
 	Metadata  map[string]any
+}
+
+// MarshalJSON implements json.Marshaler so that the Err field is serialized as
+// a string (the error message) instead of the default empty-object `{}` that
+// json.Marshal produces for the error interface.
+func (e RunStreamEvent) MarshalJSON() ([]byte, error) {
+	type Alias RunStreamEvent
+	aux := struct {
+		Alias
+		Err string `json:"Err,omitempty"`
+	}{
+		Alias: Alias(e),
+	}
+	if e.Err != nil {
+		aux.Err = e.Err.Error()
+	}
+	return json.Marshal(aux)
 }
 
 type RunStreamResult struct {
@@ -237,12 +267,20 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 					consecutiveRecoveries++
 					recoveryMsg := buildStreamRecoveryMessage("LLM API request failed", err)
 					baseConversation = append(baseConversation, recoveryMsg)
-					produced = append(produced, recoveryMsg)
 					if r.options.Memory != nil {
 						r.options.Memory.AddMessage(recoveryMsg)
 						memoryInsertedCount++
 					}
+					recoveryEvent := RunStreamEvent{Kind: EventStreamRecovery, Step: step, Err: err, Metadata: map[string]any{"attempt": consecutiveRecoveries, "max_attempts": maxConsecutiveStreamRecoveries}}
+					events <- recoveryEvent
+					r.emitStreamEvent(ctx, recoveryEvent)
 					r.emitStepFinish(ctx, step, title, map[string]any{"error": err.Error(), "recovered": true})
+					select {
+					case <-time.After(r.recoveryDelay()):
+					case <-ctx.Done():
+						runErr = ctx.Err()
+						return
+					}
 					continue
 				}
 				r.emitStepFinish(ctx, step, title, map[string]any{"error": err.Error()})
@@ -302,12 +340,20 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 					consecutiveRecoveries++
 					recoveryMsg := buildStreamRecoveryMessage("LLM stream error", streamRecvErr)
 					baseConversation = append(baseConversation, recoveryMsg)
-					produced = append(produced, recoveryMsg)
 					if r.options.Memory != nil {
 						r.options.Memory.AddMessage(recoveryMsg)
 						memoryInsertedCount++
 					}
+					recoveryEvent := RunStreamEvent{Kind: EventStreamRecovery, Step: step, Err: streamRecvErr, Metadata: map[string]any{"attempt": consecutiveRecoveries, "max_attempts": maxConsecutiveStreamRecoveries}}
+					events <- recoveryEvent
+					r.emitStreamEvent(ctx, recoveryEvent)
 					r.emitStepFinish(ctx, step, title, map[string]any{"error": streamRecvErr.Error(), "recovered": true})
+					select {
+					case <-time.After(r.recoveryDelay()):
+					case <-ctx.Done():
+						runErr = ctx.Err()
+						return
+					}
 					continue
 				}
 				r.emitStepFinish(ctx, step, title, map[string]any{"error": streamRecvErr.Error()})
@@ -322,12 +368,20 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 					consecutiveRecoveries++
 					recoveryMsg := buildStreamRecoveryMessage("LLM response error", err)
 					baseConversation = append(baseConversation, recoveryMsg)
-					produced = append(produced, recoveryMsg)
 					if r.options.Memory != nil {
 						r.options.Memory.AddMessage(recoveryMsg)
 						memoryInsertedCount++
 					}
+					recoveryEvent := RunStreamEvent{Kind: EventStreamRecovery, Step: step, Err: err, Metadata: map[string]any{"attempt": consecutiveRecoveries, "max_attempts": maxConsecutiveStreamRecoveries}}
+					events <- recoveryEvent
+					r.emitStreamEvent(ctx, recoveryEvent)
 					r.emitStepFinish(ctx, step, title, map[string]any{"error": err.Error(), "recovered": true})
+					select {
+					case <-time.After(r.recoveryDelay()):
+					case <-ctx.Done():
+						runErr = ctx.Err()
+						return
+					}
 					continue
 				}
 				r.emitStepFinish(ctx, step, title, map[string]any{"error": err.Error()})

@@ -2021,6 +2021,27 @@ p {
   background: currentColor;
 }
 
+.trace-kind-badge.recovery {
+  background: rgba(210, 160, 60, 0.14);
+  color: #a88832;
+}
+
+.trace-kind-badge.recovery::before {
+  content: '';
+  position: absolute;
+  left: 0.35rem;
+  top: 0.28rem;
+  width: 0;
+  height: 0;
+  border-left: 0.18rem solid transparent;
+  border-right: 0.18rem solid transparent;
+  border-bottom: 0.32rem solid currentColor;
+}
+
+.trace-recovery-detail {
+  opacity: 0.8;
+}
+
 .trace-tool-name {
   font-size: 0.77rem;
   font-weight: 600;

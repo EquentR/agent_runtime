@@ -389,6 +389,7 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 			AuditRecorder:        deps.AuditRecorder,
 			AuditRunID:           runID,
 			Actor:                "agent.run",
+			RecoveryDelay:        streamRecoveryDelay,
 			Metadata: map[string]string{
 				"conversation_id": conversation.ID,
 				"provider_id":     conversation.ProviderID,
