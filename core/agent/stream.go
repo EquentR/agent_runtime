@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/EquentR/agent_runtime/core/approvals"
 	coreaudit "github.com/EquentR/agent_runtime/core/audit"
@@ -26,6 +27,15 @@ var ErrToolApprovalPending = ErrInteractionPending
 // (e.g. JSON parse failures, transient API errors) can be absorbed before the
 // agent loop gives up.  This prevents infinite retry loops.
 const maxConsecutiveStreamRecoveries = 3
+
+// streamRecoveryDelay is the default duration to wait between consecutive retry attempts
+// to avoid overwhelming the upstream service.
+const streamRecoveryDelay = 10 * time.Second
+
+// recoveryDelay returns the configured recovery delay.
+func (r *Runner) recoveryDelay() time.Duration {
+	return r.options.RecoveryDelay
+}
 
 // isRecoverableStreamError returns true when the error is likely transient or
 // indicates the upstream returned an unexpected payload (e.g. HTML instead of
@@ -265,6 +275,12 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 					events <- recoveryEvent
 					r.emitStreamEvent(ctx, recoveryEvent)
 					r.emitStepFinish(ctx, step, title, map[string]any{"error": err.Error(), "recovered": true})
+					select {
+					case <-time.After(r.recoveryDelay()):
+					case <-ctx.Done():
+						runErr = ctx.Err()
+						return
+					}
 					continue
 				}
 				r.emitStepFinish(ctx, step, title, map[string]any{"error": err.Error()})
@@ -332,6 +348,12 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 					events <- recoveryEvent
 					r.emitStreamEvent(ctx, recoveryEvent)
 					r.emitStepFinish(ctx, step, title, map[string]any{"error": streamRecvErr.Error(), "recovered": true})
+					select {
+					case <-time.After(r.recoveryDelay()):
+					case <-ctx.Done():
+						runErr = ctx.Err()
+						return
+					}
 					continue
 				}
 				r.emitStepFinish(ctx, step, title, map[string]any{"error": streamRecvErr.Error()})
@@ -354,6 +376,12 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 					events <- recoveryEvent
 					r.emitStreamEvent(ctx, recoveryEvent)
 					r.emitStepFinish(ctx, step, title, map[string]any{"error": err.Error(), "recovered": true})
+					select {
+					case <-time.After(r.recoveryDelay()):
+					case <-ctx.Done():
+						runErr = ctx.Err()
+						return
+					}
 					continue
 				}
 				r.emitStepFinish(ctx, step, title, map[string]any{"error": err.Error()})

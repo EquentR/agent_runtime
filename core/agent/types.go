@@ -46,6 +46,7 @@ type Options struct {
 	AuditRecorder        coreaudit.Recorder
 	AuditRunID           string
 	Now                  func() time.Time
+	RecoveryDelay        time.Duration
 }
 
 type RunInput struct {
