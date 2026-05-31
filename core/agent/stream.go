@@ -32,6 +32,12 @@ const maxConsecutiveStreamRecoveries = 3
 // to avoid overwhelming the upstream service.
 const streamRecoveryDelay = 10 * time.Second
 
+const (
+	loopGuardSafeCompletionStopReason = "loop_guard_safe_completion"
+	loopGuardFailedLoopStopReason     = "loop_guard_failed_loop"
+	loopGuardSkippedToolOutput        = "Tool execution skipped because the runtime loop guard stopped this run."
+)
+
 // recoveryDelay returns the configured recovery delay.
 func (r *Runner) recoveryDelay() time.Duration {
 	return r.options.RecoveryDelay
@@ -117,6 +123,11 @@ type runnerModelResponseArtifact struct {
 	Usage   model.TokenUsage `json:"usage"`
 }
 
+type toolExecutionOutcome struct {
+	Suspended     bool
+	LoopGuardStop *LoopGuardResult
+}
+
 func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResult, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -159,6 +170,9 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 		afterToolTurn := false
 		consecutiveRecoveries := 0
 		ephemeralConversationTail := make([]model.Message, 0, 4)
+		pendingLoopGuardWarnings := make([]model.Message, 0, 1)
+		pendingStreamRecoveryMessages := make([]model.Message, 0, 1)
+		loopGuard := NewLoopGuard(r.options.LoopGuard)
 		var usage model.TokenUsage
 		var totalUsage model.TokenUsage
 		var totalCost coretypes.CostBreakdown
@@ -188,14 +202,21 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 					memoryInsertedCount += len(checkpointMessages)
 				}
 				title := fmt.Sprintf("Agent step %d", resume.Checkpoint.Step)
-				suspended, execErr := r.executeAssistantToolCalls(ctx, resume.Checkpoint.Step, title, resume.Checkpoint.AssistantMessage, resume.Checkpoint.ToolCallIndex, resume, &baseConversation, &ephemeralConversationTail, &produced, &memoryInsertedCount, &toolCalls)
+				outcome, execErr := r.executeAssistantToolCalls(ctx, resume.Checkpoint.Step, title, resume.Checkpoint.AssistantMessage, resume.Checkpoint.ToolCallIndex, resume, &baseConversation, &ephemeralConversationTail, &produced, &memoryInsertedCount, &toolCalls, loopGuard, &pendingLoopGuardWarnings)
 				if execErr != nil {
 					r.emitStepFinish(ctx, resume.Checkpoint.Step, title, map[string]any{"error": execErr.Error()})
 					snapshotResult(resume.Checkpoint.Step)
+					if outcome.LoopGuardStop != nil && outcome.LoopGuardStop.StopStrategy == LoopGuardStopStrategyFailedLoop {
+						result.StopReason = loopGuardFailedLoopStopReason
+					}
 					runErr = execErr
 					return
 				}
-				if suspended {
+				if outcome.LoopGuardStop != nil && outcome.LoopGuardStop.StopStrategy == LoopGuardStopStrategySafeCompletion {
+					result = r.finishLoopGuardSafeCompletion(ctx, resume.Checkpoint.Step, title, outcome.LoopGuardStop, &baseConversation, &produced, &memoryInsertedCount, toolCalls, totalUsage, pricing, totalCost)
+					return
+				}
+				if outcome.Suspended {
 					snapshotResult(resume.Checkpoint.Step)
 					result.StopReason = "waiting_for_interaction"
 					runErr = ErrInteractionPending
@@ -225,13 +246,16 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 				budgetDecision  requestBudgetDecision
 				err             error
 			)
+			requestExtraTail := make([]model.Message, 0, len(ephemeralConversationTail)+len(pendingLoopGuardWarnings)+len(pendingStreamRecoveryMessages))
+			requestExtraTail = append(requestExtraTail, cloneMessages(ephemeralConversationTail)...)
+			requestExtraTail = append(requestExtraTail, cloneMessages(pendingLoopGuardWarnings)...)
+			requestExtraTail = append(requestExtraTail, cloneMessages(pendingStreamRecoveryMessages)...)
 			if r.options.Memory != nil {
-				buildResult, requestMessages, budgetDecision, err = r.buildBudgetedRequest(stepCtx, ephemeralConversationTail, afterToolTurn)
+				buildResult, requestMessages, budgetDecision, err = r.buildBudgetedRequest(stepCtx, requestExtraTail, afterToolTurn)
 			} else {
-				body := append(cloneMessages(baseConversation), cloneMessages(ephemeralConversationTail)...)
+				body := append(cloneMessages(baseConversation), requestExtraTail...)
 				buildResult, requestMessages, budgetDecision, err = r.buildBudgetedRequestFromContext(stepCtx, memory.RuntimeContext{Tail: body}, afterToolTurn)
 			}
-			ephemeralConversationTail = nil
 			usage = model.TokenUsage{}
 			title := fmt.Sprintf("Agent step %d", step)
 			r.emitStepStart(ctx, step, title)
@@ -273,11 +297,7 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 				if isRecoverableStreamError(err) && consecutiveRecoveries < maxConsecutiveStreamRecoveries {
 					consecutiveRecoveries++
 					recoveryMsg := buildStreamRecoveryMessage("LLM API request failed", err)
-					baseConversation = append(baseConversation, recoveryMsg)
-					if r.options.Memory != nil {
-						r.options.Memory.AddMessage(recoveryMsg)
-						memoryInsertedCount++
-					}
+					pendingStreamRecoveryMessages = append(pendingStreamRecoveryMessages, recoveryMsg)
 					recoveryEvent := RunStreamEvent{Kind: EventStreamRecovery, Step: step, Err: err, Metadata: map[string]any{"attempt": consecutiveRecoveries, "max_attempts": maxConsecutiveStreamRecoveries}}
 					events <- recoveryEvent
 					r.emitStreamEvent(ctx, recoveryEvent)
@@ -346,11 +366,7 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 				if isRecoverableStreamError(streamRecvErr) && consecutiveRecoveries < maxConsecutiveStreamRecoveries {
 					consecutiveRecoveries++
 					recoveryMsg := buildStreamRecoveryMessage("LLM stream error", streamRecvErr)
-					baseConversation = append(baseConversation, recoveryMsg)
-					if r.options.Memory != nil {
-						r.options.Memory.AddMessage(recoveryMsg)
-						memoryInsertedCount++
-					}
+					pendingStreamRecoveryMessages = append(pendingStreamRecoveryMessages, recoveryMsg)
 					recoveryEvent := RunStreamEvent{Kind: EventStreamRecovery, Step: step, Err: streamRecvErr, Metadata: map[string]any{"attempt": consecutiveRecoveries, "max_attempts": maxConsecutiveStreamRecoveries}}
 					events <- recoveryEvent
 					r.emitStreamEvent(ctx, recoveryEvent)
@@ -374,11 +390,7 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 				if isRecoverableStreamError(err) && consecutiveRecoveries < maxConsecutiveStreamRecoveries {
 					consecutiveRecoveries++
 					recoveryMsg := buildStreamRecoveryMessage("LLM response error", err)
-					baseConversation = append(baseConversation, recoveryMsg)
-					if r.options.Memory != nil {
-						r.options.Memory.AddMessage(recoveryMsg)
-						memoryInsertedCount++
-					}
+					pendingStreamRecoveryMessages = append(pendingStreamRecoveryMessages, recoveryMsg)
 					recoveryEvent := RunStreamEvent{Kind: EventStreamRecovery, Step: step, Err: err, Metadata: map[string]any{"attempt": consecutiveRecoveries, "max_attempts": maxConsecutiveStreamRecoveries}}
 					events <- recoveryEvent
 					r.emitStreamEvent(ctx, recoveryEvent)
@@ -397,6 +409,9 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 				return
 			}
 			assistant = normalizeAssistantMessage(model.ChatResponse{Message: assistant})
+			ephemeralConversationTail = nil
+			pendingLoopGuardWarnings = nil
+			pendingStreamRecoveryMessages = nil
 			consecutiveRecoveries = 0 // reset on successful model response
 			responseArtifactID := r.attachAuditArtifact(ctx, coreaudit.ArtifactKindModelResponse, runnerModelResponseArtifact{
 				Message: cloneMessage(assistant),
@@ -443,14 +458,21 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 				return
 			}
 
-			suspended, execErr := r.executeAssistantToolCalls(ctx, step, title, assistant, 0, nil, &baseConversation, &ephemeralConversationTail, &produced, &memoryInsertedCount, &toolCalls)
+			outcome, execErr := r.executeAssistantToolCalls(ctx, step, title, assistant, 0, nil, &baseConversation, &ephemeralConversationTail, &produced, &memoryInsertedCount, &toolCalls, loopGuard, &pendingLoopGuardWarnings)
 			if execErr != nil {
 				r.emitStepFinish(ctx, step, title, map[string]any{"error": execErr.Error()})
 				snapshotResult(step)
+				if outcome.LoopGuardStop != nil && outcome.LoopGuardStop.StopStrategy == LoopGuardStopStrategyFailedLoop {
+					result.StopReason = loopGuardFailedLoopStopReason
+				}
 				runErr = execErr
 				return
 			}
-			if suspended {
+			if outcome.LoopGuardStop != nil && outcome.LoopGuardStop.StopStrategy == LoopGuardStopStrategySafeCompletion {
+				result = r.finishLoopGuardSafeCompletion(ctx, step, title, outcome.LoopGuardStop, &baseConversation, &produced, &memoryInsertedCount, toolCalls, totalUsage, pricing, totalCost)
+				return
+			}
+			if outcome.Suspended {
 				snapshotResult(step)
 				result.StopReason = "waiting_for_interaction"
 				runErr = ErrInteractionPending
@@ -493,13 +515,41 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 	}, nil
 }
 
-func (r *Runner) executeAssistantToolCalls(ctx context.Context, step int, title string, assistant model.Message, startIndex int, resume *interactionResume, baseConversation *[]model.Message, ephemeralTail *[]model.Message, produced *[]model.Message, memoryInsertedCount *int, toolCalls *int) (bool, error) {
+func (r *Runner) finishLoopGuardSafeCompletion(ctx context.Context, step int, title string, guardResult *LoopGuardResult, baseConversation *[]model.Message, produced *[]model.Message, memoryInsertedCount *int, toolCalls int, totalUsage model.TokenUsage, pricing *coretypes.ModelPricing, totalCost coretypes.CostBreakdown) RunResult {
+	final := model.Message{Role: model.RoleAssistant}
+	if guardResult != nil {
+		final.Content = guardResult.FinalMessage
+	}
+	*baseConversation = append(*baseConversation, final)
+	*produced = append(*produced, final)
+	if r.options.Memory != nil {
+		r.options.Memory.AddMessage(final)
+		*memoryInsertedCount = *memoryInsertedCount + 1
+	}
+	r.emitStepFinish(ctx, step, title, map[string]any{"stop_reason": loopGuardSafeCompletionStopReason})
+	result := RunResult{
+		Messages:          append([]model.Message(nil), (*produced)...),
+		FinalMessage:      final,
+		StepsExecuted:     step,
+		ToolCalls:         toolCalls,
+		StopReason:        loopGuardSafeCompletionStopReason,
+		Usage:             totalUsage,
+		MemoryCompression: r.lastMemoryCompressionSnapshot(),
+	}
+	if pricing != nil {
+		cost := totalCost
+		result.Cost = &cost
+	}
+	return result
+}
+
+func (r *Runner) executeAssistantToolCalls(ctx context.Context, step int, title string, assistant model.Message, startIndex int, resume *interactionResume, baseConversation *[]model.Message, ephemeralTail *[]model.Message, produced *[]model.Message, memoryInsertedCount *int, toolCalls *int, loopGuard *LoopGuard, pendingLoopGuardWarnings *[]model.Message) (toolExecutionOutcome, error) {
 	if startIndex < 0 || startIndex > len(assistant.ToolCalls) {
-		return false, fmt.Errorf("resume tool call index %d out of range", startIndex)
+		return toolExecutionOutcome{}, fmt.Errorf("resume tool call index %d out of range", startIndex)
 	}
 	for callIndex := startIndex; callIndex < len(assistant.ToolCalls); callIndex++ {
 		if err := ctx.Err(); err != nil {
-			return false, err
+			return toolExecutionOutcome{}, err
 		}
 		call := assistant.ToolCalls[callIndex]
 		*toolCalls = *toolCalls + 1
@@ -513,6 +563,13 @@ func (r *Runner) executeAssistantToolCalls(ctx context.Context, step int, title 
 			if r.options.Memory != nil {
 				r.options.Memory.AddMessage(toolMessage)
 				*memoryInsertedCount = *memoryInsertedCount + 1
+			}
+			outcome, guardErr := r.observeLoopGuardResult(ctx, step, loopGuard, pendingLoopGuardWarnings, call, nil, "", err)
+			if outcome.LoopGuardStop != nil || guardErr != nil {
+				if outcome.LoopGuardStop != nil {
+					r.appendLoopGuardSkippedToolMessages(assistant.ToolCalls[callIndex+1:], baseConversation, produced, memoryInsertedCount)
+				}
+				return outcome, guardErr
 			}
 			continue
 		}
@@ -532,19 +589,19 @@ func (r *Runner) executeAssistantToolCalls(ctx context.Context, step int, title 
 			if call.Name == "ask_user" {
 				required, suspendErr := r.maybeSuspendForQuestion(ctx, step, callIndex, assistant, call, arguments, *produced)
 				if suspendErr != nil {
-					return false, suspendErr
+					return toolExecutionOutcome{}, suspendErr
 				}
 				if required {
-					return true, nil
+					return toolExecutionOutcome{Suspended: true}, nil
 				}
 				continue
 			}
 			required, suspendErr := r.maybeSuspendForInteraction(ctx, step, callIndex, assistant, call, arguments, *produced)
 			if suspendErr != nil {
-				return false, suspendErr
+				return toolExecutionOutcome{}, suspendErr
 			}
 			if required {
-				return true, nil
+				return toolExecutionOutcome{Suspended: true}, nil
 			}
 		}
 
@@ -571,6 +628,13 @@ func (r *Runner) executeAssistantToolCalls(ctx context.Context, step int, title 
 				r.options.Memory.AddMessage(toolMessage)
 				*memoryInsertedCount = *memoryInsertedCount + 1
 			}
+			outcome, guardErr := r.observeLoopGuardResult(ctx, step, loopGuard, pendingLoopGuardWarnings, call, arguments, "", err)
+			if outcome.LoopGuardStop != nil || guardErr != nil {
+				if outcome.LoopGuardStop != nil {
+					r.appendLoopGuardSkippedToolMessages(assistant.ToolCalls[callIndex+1:], baseConversation, produced, memoryInsertedCount)
+				}
+				return outcome, guardErr
+			}
 			continue
 		}
 		toolMessage := model.Message{Role: model.RoleTool, ToolCallId: call.ID, Content: output.Content}
@@ -588,8 +652,73 @@ func (r *Runner) executeAssistantToolCalls(ctx context.Context, step int, title 
 		if call.Name == "using_skills" {
 			r.emitUsingSkillsAudit(ctx, step, call, arguments, output.Content)
 		}
+		outcome, guardErr := r.observeLoopGuardResult(ctx, step, loopGuard, pendingLoopGuardWarnings, call, arguments, output.Content, nil)
+		if outcome.LoopGuardStop != nil || guardErr != nil {
+			if outcome.LoopGuardStop != nil {
+				r.appendLoopGuardSkippedToolMessages(assistant.ToolCalls[callIndex+1:], baseConversation, produced, memoryInsertedCount)
+			}
+			return outcome, guardErr
+		}
 	}
-	return false, nil
+	return toolExecutionOutcome{}, nil
+}
+
+func (r *Runner) appendLoopGuardSkippedToolMessages(toolCalls []coretypes.ToolCall, baseConversation *[]model.Message, produced *[]model.Message, memoryInsertedCount *int) {
+	if len(toolCalls) == 0 {
+		return
+	}
+	for _, call := range toolCalls {
+		toolMessage := model.Message{Role: model.RoleTool, ToolCallId: call.ID, Content: loopGuardSkippedToolOutput}
+		*baseConversation = append(*baseConversation, toolMessage)
+		*produced = append(*produced, toolMessage)
+		if r.options.Memory != nil {
+			r.options.Memory.AddMessage(toolMessage)
+			*memoryInsertedCount = *memoryInsertedCount + 1
+		}
+	}
+}
+
+func (r *Runner) observeLoopGuardResult(ctx context.Context, step int, loopGuard *LoopGuard, pendingWarnings *[]model.Message, call coretypes.ToolCall, arguments map[string]interface{}, output string, toolErr error) (toolExecutionOutcome, error) {
+	if loopGuard == nil {
+		return toolExecutionOutcome{}, nil
+	}
+	guardResult := loopGuard.AfterToolResult(call, arguments, output, toolErr)
+	switch guardResult.Decision {
+	case LoopGuardWarn:
+		if strings.TrimSpace(guardResult.WarningText) != "" && pendingWarnings != nil {
+			*pendingWarnings = append(*pendingWarnings, model.Message{Role: model.RoleSystem, Content: guardResult.WarningText})
+		}
+		r.appendAuditEvent(ctx, step, coreaudit.PhaseTool, "loop.guard.warning", loopGuardAuditPayload(guardResult), "")
+	case LoopGuardStop:
+		r.appendAuditEvent(ctx, step, coreaudit.PhaseTool, "loop.guard.stopped", loopGuardAuditPayload(guardResult), "")
+		stopResult := guardResult
+		outcome := toolExecutionOutcome{LoopGuardStop: &stopResult}
+		if stopResult.StopStrategy == LoopGuardStopStrategySafeCompletion {
+			return outcome, nil
+		}
+		if stopResult.Err == nil {
+			stopResult.Err = fmt.Errorf("%w: %s repeated tool call", ErrToolLoopDetected, stopResult.ToolName)
+			outcome.LoopGuardStop = &stopResult
+		}
+		return outcome, stopResult.Err
+	}
+	return toolExecutionOutcome{}, nil
+}
+
+func loopGuardAuditPayload(result LoopGuardResult) map[string]any {
+	payload := map[string]any{
+		"reason":       result.Reason,
+		"tool_name":    result.ToolName,
+		"target":       result.Target,
+		"operation":    result.Operation,
+		"repeat_count": result.RepeatCount,
+		"soft_limit":   result.SoftLimit,
+		"hard_limit":   result.HardLimit,
+	}
+	if result.StopStrategy != "" {
+		payload["stop_strategy"] = result.StopStrategy
+	}
+	return payload
 }
 
 func (r *Runner) maybeSuspendForInteraction(ctx context.Context, step int, toolCallIndex int, assistant model.Message, call coretypes.ToolCall, arguments map[string]interface{}, produced []model.Message) (bool, error) {

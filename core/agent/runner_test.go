@@ -209,6 +209,674 @@ func TestRunnerExecutesConsecutiveToolCallTurns(t *testing.T) {
 	}
 }
 
+func TestRunnerLoopGuardInjectsWarningAfterRepeatedWriteSuccess(t *testing.T) {
+	registry := newTestRegistry(t, map[string]func(context.Context, map[string]interface{}) (string, error){
+		"write_file": func(context.Context, map[string]interface{}) (string, error) {
+			return `{"path":"skills/foo.md","written":true}`, nil
+		},
+	})
+	client := &stubClient{streams: []model.Stream{
+		newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "write_file", Arguments: `{"path":"skills/foo.md","mode":"overwrite","content":"one"}`}}}}},
+			model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "write_file", Arguments: `{"path":"skills/foo.md","mode":"overwrite","content":"one"}`}}},
+			nil,
+		),
+		newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_2", Name: "write_file", Arguments: `{"path":"skills/foo.md","mode":"overwrite","content":"two"}`}}}}},
+			model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_2", Name: "write_file", Arguments: `{"path":"skills/foo.md","mode":"overwrite","content":"two"}`}}},
+			nil,
+		),
+		newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "done"}}},
+			model.Message{Role: model.RoleAssistant, Content: "done"},
+			nil,
+		),
+	}}
+
+	runner, err := NewRunner(client, registry, Options{Model: "test-model", RuntimePromptBuilder: runtimeprompt.NewBuilder(nil), MaxSteps: 5})
+	if err != nil {
+		t.Fatalf("NewRunner() error = %v", err)
+	}
+	result, err := runner.Run(context.Background(), RunInput{Messages: []model.Message{{Role: model.RoleUser, Content: "write it"}}, Tools: registry.List()})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.FinalMessage.Content != "done" {
+		t.Fatalf("final content = %q, want done", result.FinalMessage.Content)
+	}
+	if len(client.streamRequests) != 3 {
+		t.Fatalf("stream request count = %d, want 3", len(client.streamRequests))
+	}
+	lastRequest := client.streamRequests[2].Messages
+	found := false
+	for _, message := range lastRequest {
+		if message.Role == model.RoleSystem && strings.Contains(message.Content, "previous write_file call already succeeded") && strings.Contains(message.Content, "skills/foo.md") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("third request messages = %#v, want loop guard warning system message", lastRequest)
+	}
+	for _, message := range result.Messages {
+		if message.Role == model.RoleSystem && strings.Contains(message.Content, "previous write_file call already succeeded") {
+			t.Fatalf("result messages = %#v, want warning to stay request-only", result.Messages)
+		}
+	}
+}
+
+func TestRunnerLoopGuardKeepsEphemeralToolResultBeforeWarning(t *testing.T) {
+	registry := coretools.NewRegistry()
+	if err := registry.Register(
+		coretools.Tool{
+			Name: "write_file",
+			Handler: func(context.Context, map[string]interface{}) (string, error) {
+				return `{"path":"skills/foo.md","written":true}`, nil
+			},
+		},
+		coretools.Tool{
+			Name: "load_skill",
+			ResultHandler: func(context.Context, map[string]interface{}) (coretools.Result, error) {
+				return coretools.Result{Content: "skill", Ephemeral: true}, nil
+			},
+		},
+	); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	client := &stubClient{streams: []model.Stream{
+		newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "write_file", Arguments: `{"path":"skills/foo.md","mode":"overwrite","content":"one"}`}}}}},
+			model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "write_file", Arguments: `{"path":"skills/foo.md","mode":"overwrite","content":"one"}`}}},
+			nil,
+		),
+		newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{
+				{ID: "call_2", Name: "write_file", Arguments: `{"path":"skills/foo.md","mode":"overwrite","content":"two"}`},
+				{ID: "call_3", Name: "load_skill", Arguments: `{"name":"debugging"}`},
+			}}}},
+			model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{
+				{ID: "call_2", Name: "write_file", Arguments: `{"path":"skills/foo.md","mode":"overwrite","content":"two"}`},
+				{ID: "call_3", Name: "load_skill", Arguments: `{"name":"debugging"}`},
+			}},
+			nil,
+		),
+		newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "done"}}},
+			model.Message{Role: model.RoleAssistant, Content: "done"},
+			nil,
+		),
+	}}
+
+	runner, err := NewRunner(client, registry, Options{Model: "test-model", RuntimePromptBuilder: runtimeprompt.NewBuilder(nil), MaxSteps: 5})
+	if err != nil {
+		t.Fatalf("NewRunner() error = %v", err)
+	}
+	result, err := runner.Run(context.Background(), RunInput{Messages: []model.Message{{Role: model.RoleUser, Content: "write it"}}, Tools: registry.List()})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.FinalMessage.Content != "done" {
+		t.Fatalf("FinalMessage.Content = %q, want done", result.FinalMessage.Content)
+	}
+	if len(client.streamRequests) != 3 {
+		t.Fatalf("stream request count = %d, want 3", len(client.streamRequests))
+	}
+
+	thirdReq := client.streamRequests[2].Messages
+	assistantIndex := -1
+	for i, message := range thirdReq {
+		if message.Role == model.RoleAssistant && len(message.ToolCalls) == 2 && message.ToolCalls[0].ID == "call_2" && message.ToolCalls[1].ID == "call_3" {
+			assistantIndex = i
+			break
+		}
+	}
+	if assistantIndex < 0 {
+		t.Fatalf("third request messages = %#v, want assistant message with call_2 and call_3", thirdReq)
+	}
+	if assistantIndex+3 >= len(thirdReq) {
+		t.Fatalf("third request messages = %#v, want two tool results followed by loop guard warning", thirdReq)
+	}
+	writeResult := thirdReq[assistantIndex+1]
+	if writeResult.Role != model.RoleTool || writeResult.ToolCallId != "call_2" {
+		t.Fatalf("message after assistant = %#v, want write_file tool result before warning", writeResult)
+	}
+	ephemeralResult := thirdReq[assistantIndex+2]
+	if ephemeralResult.Role != model.RoleTool || ephemeralResult.ToolCallId != "call_3" || ephemeralResult.Content != "skill" {
+		t.Fatalf("second message after assistant = %#v, want ephemeral tool result before warning", ephemeralResult)
+	}
+	warning := thirdReq[assistantIndex+3]
+	if warning.Role != model.RoleSystem || !strings.Contains(warning.Content, "previous write_file call already succeeded") {
+		t.Fatalf("third message after assistant = %#v, want loop guard warning after all tool results", warning)
+	}
+}
+
+func TestRunnerLoopGuardStopsRepeatedWriteOverwriteAsSafeCompletion(t *testing.T) {
+	calls := 0
+	registry := newTestRegistry(t, map[string]func(context.Context, map[string]interface{}) (string, error){
+		"write_file": func(context.Context, map[string]interface{}) (string, error) {
+			calls++
+			return `{"path":"skills/foo.md","written":true}`, nil
+		},
+	})
+	client := &stubClient{streams: []model.Stream{
+		newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "write_file", Arguments: `{"path":"skills/foo.md","mode":"overwrite","content":"one"}`}}}}},
+			model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "write_file", Arguments: `{"path":"skills/foo.md","mode":"overwrite","content":"one"}`}}},
+			nil,
+		),
+		newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_2", Name: "write_file", Arguments: `{"path":"skills/foo.md","mode":"overwrite","content":"two"}`}}}}},
+			model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_2", Name: "write_file", Arguments: `{"path":"skills/foo.md","mode":"overwrite","content":"two"}`}}},
+			nil,
+		),
+		newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_3", Name: "write_file", Arguments: `{"path":"skills/foo.md","mode":"overwrite","content":"three"}`}}}}},
+			model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_3", Name: "write_file", Arguments: `{"path":"skills/foo.md","mode":"overwrite","content":"three"}`}}},
+			nil,
+		),
+	}}
+
+	runner, err := NewRunner(client, registry, Options{Model: "test-model", RuntimePromptBuilder: runtimeprompt.NewBuilder(nil), MaxSteps: 9})
+	if err != nil {
+		t.Fatalf("NewRunner() error = %v", err)
+	}
+	result, err := runner.Run(context.Background(), RunInput{Messages: []model.Message{{Role: model.RoleUser, Content: "write it"}}, Tools: registry.List()})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if calls != 3 {
+		t.Fatalf("write_file calls = %d, want third call executed then safe completion", calls)
+	}
+	if result.StopReason != "loop_guard_safe_completion" {
+		t.Fatalf("StopReason = %q, want loop_guard_safe_completion", result.StopReason)
+	}
+	wantFinal := "文件已写入 `skills/foo.md`。运行时检测到模型正在重复覆盖同一文件，因此已停止继续调用工具。"
+	if result.FinalMessage.Role != model.RoleAssistant || result.FinalMessage.Content != wantFinal {
+		t.Fatalf("FinalMessage = %#v, want deterministic assistant safe-completion message", result.FinalMessage)
+	}
+	if len(result.Messages) == 0 || result.Messages[len(result.Messages)-1].Role != result.FinalMessage.Role || result.Messages[len(result.Messages)-1].Content != result.FinalMessage.Content {
+		t.Fatalf("Messages = %#v, want deterministic assistant final message appended", result.Messages)
+	}
+	if result.StepsExecuted != 3 {
+		t.Fatalf("StepsExecuted = %d, want 3", result.StepsExecuted)
+	}
+	if result.ToolCalls != 3 {
+		t.Fatalf("ToolCalls = %d, want 3", result.ToolCalls)
+	}
+}
+
+func TestRunnerLoopGuardRecordsWarningAndStoppedAuditEvents(t *testing.T) {
+	recorder := newRecordingRunnerAuditRecorder()
+	registry := newTestRegistry(t, map[string]func(context.Context, map[string]interface{}) (string, error){
+		"write_file": func(context.Context, map[string]interface{}) (string, error) {
+			return `{"path":"skills/foo.md","written":true}`, nil
+		},
+	})
+	client := &stubClient{streams: []model.Stream{
+		newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "write_file", Arguments: `{"path":"skills/foo.md","mode":"overwrite","content":"one"}`}}}}},
+			model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "write_file", Arguments: `{"path":"skills/foo.md","mode":"overwrite","content":"one"}`}}},
+			nil,
+		),
+		newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_2", Name: "write_file", Arguments: `{"path":"skills/foo.md","mode":"overwrite","content":"two"}`}}}}},
+			model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_2", Name: "write_file", Arguments: `{"path":"skills/foo.md","mode":"overwrite","content":"two"}`}}},
+			nil,
+		),
+		newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_3", Name: "write_file", Arguments: `{"path":"skills/foo.md","mode":"overwrite","content":"three"}`}}}}},
+			model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_3", Name: "write_file", Arguments: `{"path":"skills/foo.md","mode":"overwrite","content":"three"}`}}},
+			nil,
+		),
+	}}
+
+	runner, err := NewRunner(client, registry, Options{
+		Model:                "test-model",
+		RuntimePromptBuilder: runtimeprompt.NewBuilder(nil),
+		MaxSteps:             9,
+		AuditRecorder:        recorder,
+		AuditRunID:           "run_loop_guard_audit",
+	})
+	if err != nil {
+		t.Fatalf("NewRunner() error = %v", err)
+	}
+	if _, err := runner.Run(context.Background(), RunInput{Messages: []model.Message{{Role: model.RoleUser, Content: "write"}}, Tools: registry.List()}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	warning := recorder.requireEventForStep(t, "run_loop_guard_audit", "loop.guard.warning", 2)
+	warningPayload := decodeAuditPayload(t, warning)
+	if warningPayload["reason"] != LoopGuardReasonSameTargetWriteRepeated {
+		t.Fatalf("warning payload = %#v, want reason %q", warningPayload, LoopGuardReasonSameTargetWriteRepeated)
+	}
+	if warningPayload["target"] != "skills/foo.md" {
+		t.Fatalf("warning payload = %#v, want target skills/foo.md", warningPayload)
+	}
+	if warningPayload["repeat_count"] != float64(2) {
+		t.Fatalf("warning payload = %#v, want repeat_count=2", warningPayload)
+	}
+
+	stopped := recorder.requireEventForStep(t, "run_loop_guard_audit", "loop.guard.stopped", 3)
+	stoppedPayload := decodeAuditPayload(t, stopped)
+	if stoppedPayload["stop_strategy"] != LoopGuardStopStrategySafeCompletion {
+		t.Fatalf("stopped payload = %#v, want stop_strategy %q", stoppedPayload, LoopGuardStopStrategySafeCompletion)
+	}
+}
+
+func TestRunnerLoopGuardStopsRepeatedToolErrorAsFailure(t *testing.T) {
+	registry := newTestRegistry(t, map[string]func(context.Context, map[string]interface{}) (string, error){
+		"list_files": func(context.Context, map[string]interface{}) (string, error) {
+			return "", errors.New("path is required")
+		},
+	})
+	client := &stubClient{streams: []model.Stream{
+		newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "list_files", Arguments: `{}`}}}}},
+			model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "list_files", Arguments: `{}`}}},
+			nil,
+		),
+		newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_2", Name: "list_files", Arguments: `{}`}}}}},
+			model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_2", Name: "list_files", Arguments: `{}`}}},
+			nil,
+		),
+		newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_3", Name: "list_files", Arguments: `{}`}}}}},
+			model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_3", Name: "list_files", Arguments: `{}`}}},
+			nil,
+		),
+	}}
+
+	runner, err := NewRunner(client, registry, Options{Model: "test-model", RuntimePromptBuilder: runtimeprompt.NewBuilder(nil), MaxSteps: 9})
+	if err != nil {
+		t.Fatalf("NewRunner() error = %v", err)
+	}
+	result, err := runner.Run(context.Background(), RunInput{Messages: []model.Message{{Role: model.RoleUser, Content: "list"}}, Tools: registry.List()})
+	if !errors.Is(err, ErrToolLoopDetected) {
+		t.Fatalf("Run() error = %v, want ErrToolLoopDetected", err)
+	}
+	if result.StopReason != "loop_guard_failed_loop" {
+		t.Fatalf("StopReason = %q, want loop_guard_failed_loop", result.StopReason)
+	}
+	if result.FinalMessage.Role != "" {
+		t.Fatalf("FinalMessage = %#v, want empty on failed loop", result.FinalMessage)
+	}
+	if result.StepsExecuted != 3 {
+		t.Fatalf("StepsExecuted = %d, want 3", result.StepsExecuted)
+	}
+	if result.ToolCalls != 3 {
+		t.Fatalf("ToolCalls = %d, want 3", result.ToolCalls)
+	}
+}
+
+func TestRunnerLoopGuardCompletesUnexecutedToolCallsBeforeSafeCompletion(t *testing.T) {
+	const wantSkipped = "Tool execution skipped because the runtime loop guard stopped this run."
+
+	calls := 0
+	registry := newTestRegistry(t, map[string]func(context.Context, map[string]interface{}) (string, error){
+		"write_file": func(context.Context, map[string]interface{}) (string, error) {
+			calls++
+			return `{"path":"skills/foo.md","written":true}`, nil
+		},
+	})
+	client := &stubClient{streams: []model.Stream{
+		newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "write_file", Arguments: `{"path":"skills/foo.md","mode":"overwrite","content":"one"}`}}}}},
+			model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "write_file", Arguments: `{"path":"skills/foo.md","mode":"overwrite","content":"one"}`}}},
+			nil,
+		),
+		newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_2", Name: "write_file", Arguments: `{"path":"skills/foo.md","mode":"overwrite","content":"two"}`}}}}},
+			model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_2", Name: "write_file", Arguments: `{"path":"skills/foo.md","mode":"overwrite","content":"two"}`}}},
+			nil,
+		),
+		newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{
+				{ID: "call_3", Name: "write_file", Arguments: `{"path":"skills/foo.md","mode":"overwrite","content":"three"}`},
+				{ID: "call_4", Name: "write_file", Arguments: `{"path":"skills/bar.md","mode":"overwrite","content":"four"}`},
+			}}}},
+			model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{
+				{ID: "call_3", Name: "write_file", Arguments: `{"path":"skills/foo.md","mode":"overwrite","content":"three"}`},
+				{ID: "call_4", Name: "write_file", Arguments: `{"path":"skills/bar.md","mode":"overwrite","content":"four"}`},
+			}},
+			nil,
+		),
+	}}
+
+	runner, err := NewRunner(client, registry, Options{Model: "test-model", RuntimePromptBuilder: runtimeprompt.NewBuilder(nil), MaxSteps: 9})
+	if err != nil {
+		t.Fatalf("NewRunner() error = %v", err)
+	}
+	result, err := runner.Run(context.Background(), RunInput{Messages: []model.Message{{Role: model.RoleUser, Content: "write it"}}, Tools: registry.List()})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.StopReason != "loop_guard_safe_completion" {
+		t.Fatalf("StopReason = %q, want loop_guard_safe_completion", result.StopReason)
+	}
+	if calls != 3 {
+		t.Fatalf("write_file calls = %d, want only executed calls before guard stop", calls)
+	}
+	skipped := findToolMessage(result.Messages, "call_4")
+	if skipped == nil || skipped.Content != wantSkipped {
+		t.Fatalf("skipped tool message = %#v, want synthetic skipped output for call_4", skipped)
+	}
+	assertNoDanglingToolCalls(t, result.Messages)
+}
+
+func TestRunnerLoopGuardCompletesUnexecutedToolCallsBeforeFailedLoop(t *testing.T) {
+	const wantSkipped = "Tool execution skipped because the runtime loop guard stopped this run."
+
+	calls := 0
+	registry := newTestRegistry(t, map[string]func(context.Context, map[string]interface{}) (string, error){
+		"list_files": func(context.Context, map[string]interface{}) (string, error) {
+			calls++
+			return "", errors.New("path is required")
+		},
+	})
+	client := &stubClient{streams: []model.Stream{
+		newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "list_files", Arguments: `{}`}}}}},
+			model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "list_files", Arguments: `{}`}}},
+			nil,
+		),
+		newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_2", Name: "list_files", Arguments: `{}`}}}}},
+			model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_2", Name: "list_files", Arguments: `{}`}}},
+			nil,
+		),
+		newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{
+				{ID: "call_3", Name: "list_files", Arguments: `{}`},
+				{ID: "call_4", Name: "list_files", Arguments: `{"path":"."}`},
+			}}}},
+			model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{
+				{ID: "call_3", Name: "list_files", Arguments: `{}`},
+				{ID: "call_4", Name: "list_files", Arguments: `{"path":"."}`},
+			}},
+			nil,
+		),
+	}}
+
+	runner, err := NewRunner(client, registry, Options{Model: "test-model", RuntimePromptBuilder: runtimeprompt.NewBuilder(nil), MaxSteps: 9})
+	if err != nil {
+		t.Fatalf("NewRunner() error = %v", err)
+	}
+	result, err := runner.Run(context.Background(), RunInput{Messages: []model.Message{{Role: model.RoleUser, Content: "list"}}, Tools: registry.List()})
+	if !errors.Is(err, ErrToolLoopDetected) {
+		t.Fatalf("Run() error = %v, want ErrToolLoopDetected", err)
+	}
+	if result.StopReason != "loop_guard_failed_loop" {
+		t.Fatalf("StopReason = %q, want loop_guard_failed_loop", result.StopReason)
+	}
+	if calls != 3 {
+		t.Fatalf("list_files calls = %d, want only executed calls before guard stop", calls)
+	}
+	skipped := findToolMessage(result.Messages, "call_4")
+	if skipped == nil || skipped.Content != wantSkipped {
+		t.Fatalf("skipped tool message = %#v, want synthetic skipped output for call_4", skipped)
+	}
+	assertNoDanglingToolCalls(t, result.Messages)
+}
+
+func TestRunnerLoopGuardIgnoresSyntheticResumeOutput(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		syntheticOutput string
+	}{
+		{name: "rejected", syntheticOutput: "Tool execution was skipped because approval was rejected. Reason: not safe"},
+		{name: "expired", syntheticOutput: "Tool execution was skipped because approval was expired. Reason: timed out"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			registry := newTestRegistry(t, map[string]func(context.Context, map[string]interface{}) (string, error){
+				"write_file": func(context.Context, map[string]interface{}) (string, error) {
+					calls++
+					return `{"path":"skills/foo.md","written":true}`, nil
+				},
+			})
+			client := &stubClient{streams: []model.Stream{
+				newStubStream(
+					[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_2", Name: "write_file", Arguments: `{"path":"skills/foo.md","mode":"overwrite","content":"two"}`}}}}},
+					model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_2", Name: "write_file", Arguments: `{"path":"skills/foo.md","mode":"overwrite","content":"two"}`}}},
+					nil,
+				),
+				newStubStream(
+					[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_3", Name: "write_file", Arguments: `{"path":"skills/foo.md","mode":"overwrite","content":"three"}`}}}}},
+					model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_3", Name: "write_file", Arguments: `{"path":"skills/foo.md","mode":"overwrite","content":"three"}`}}},
+					nil,
+				),
+				newStubStream(
+					[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "done"}}},
+					model.Message{Role: model.RoleAssistant, Content: "done"},
+					nil,
+				),
+			}}
+			assistant := model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "write_file", Arguments: `{"path":"skills/foo.md","mode":"overwrite","content":"one"}`}}}
+			runner, err := NewRunner(client, registry, Options{Model: "test-model", RuntimePromptBuilder: runtimeprompt.NewBuilder(nil), MaxSteps: 5})
+			if err != nil {
+				t.Fatalf("NewRunner() error = %v", err)
+			}
+
+			result, err := runner.Run(context.Background(), RunInput{
+				Messages: []model.Message{{Role: model.RoleUser, Content: "write it"}},
+				Tools:    registry.List(),
+				InteractionResume: &interactionResume{Checkpoint: interactionCheckpoint{
+					InteractionID:                    "approval_1",
+					Step:                             1,
+					AssistantMessage:                 assistant,
+					ToolCallIndex:                    0,
+					ProducedMessagesBeforeCheckpoint: []model.Message{assistant},
+				}, SyntheticOutput: tc.syntheticOutput},
+			})
+			if err != nil {
+				t.Fatalf("Run() error = %v", err)
+			}
+			if result.StopReason == "loop_guard_safe_completion" {
+				t.Fatalf("StopReason = %q, want synthetic resume output ignored by loop guard", result.StopReason)
+			}
+			if result.FinalMessage.Content != "done" {
+				t.Fatalf("FinalMessage.Content = %q, want done", result.FinalMessage.Content)
+			}
+			if calls != 2 {
+				t.Fatalf("write_file calls = %d, want two real calls after synthetic resume", calls)
+			}
+		})
+	}
+}
+
+func TestRunnerLoopGuardKeepsWarningAfterRecoverableRequestError(t *testing.T) {
+	registry := newTestRegistry(t, map[string]func(context.Context, map[string]interface{}) (string, error){
+		"write_file": func(context.Context, map[string]interface{}) (string, error) {
+			return `{"path":"skills/foo.md","written":true}`, nil
+		},
+	})
+	client := &stubClient{
+		streamErrs: []error{nil, nil, errors.New("temporary request failure"), nil},
+		streams: []model.Stream{
+			newStubStream(
+				[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "write_file", Arguments: `{"path":"skills/foo.md","mode":"overwrite","content":"one"}`}}}}},
+				model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "write_file", Arguments: `{"path":"skills/foo.md","mode":"overwrite","content":"one"}`}}},
+				nil,
+			),
+			newStubStream(
+				[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_2", Name: "write_file", Arguments: `{"path":"skills/foo.md","mode":"overwrite","content":"two"}`}}}}},
+				model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_2", Name: "write_file", Arguments: `{"path":"skills/foo.md","mode":"overwrite","content":"two"}`}}},
+				nil,
+			),
+			newStubStream(
+				[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "done"}}},
+				model.Message{Role: model.RoleAssistant, Content: "done"},
+				nil,
+			),
+		},
+	}
+
+	runner, err := NewRunner(client, registry, Options{Model: "test-model", RuntimePromptBuilder: runtimeprompt.NewBuilder(nil), MaxSteps: 6})
+	if err != nil {
+		t.Fatalf("NewRunner() error = %v", err)
+	}
+	result, err := runner.Run(context.Background(), RunInput{Messages: []model.Message{{Role: model.RoleUser, Content: "write it"}}, Tools: registry.List()})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.FinalMessage.Content != "done" {
+		t.Fatalf("FinalMessage.Content = %q, want done", result.FinalMessage.Content)
+	}
+	if len(client.streamRequests) != 4 {
+		t.Fatalf("stream request count = %d, want 4", len(client.streamRequests))
+	}
+	if !messagesContainLoopGuardWarning(client.streamRequests[2].Messages) {
+		t.Fatalf("failed request messages = %#v, want loop guard warning", client.streamRequests[2].Messages)
+	}
+	if !messagesContainLoopGuardWarning(client.streamRequests[3].Messages) {
+		t.Fatalf("retry request messages = %#v, want loop guard warning preserved after recoverable error", client.streamRequests[3].Messages)
+	}
+}
+
+func TestRunnerLoopGuardKeepsEphemeralToolResultBeforeWarningAfterRecoverableRequestError(t *testing.T) {
+	registry := coretools.NewRegistry()
+	if err := registry.Register(
+		coretools.Tool{
+			Name: "write_file",
+			Handler: func(context.Context, map[string]interface{}) (string, error) {
+				return `{"path":"skills/foo.md","written":true}`, nil
+			},
+		},
+		coretools.Tool{
+			Name: "load_skill",
+			ResultHandler: func(context.Context, map[string]interface{}) (coretools.Result, error) {
+				return coretools.Result{Content: "skill", Ephemeral: true}, nil
+			},
+		},
+	); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	client := &stubClient{
+		streamErrs: []error{nil, nil, errors.New("temporary request failure"), nil},
+		streams: []model.Stream{
+			newStubStream(
+				[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "write_file", Arguments: `{"path":"skills/foo.md","mode":"overwrite","content":"one"}`}}}}},
+				model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "write_file", Arguments: `{"path":"skills/foo.md","mode":"overwrite","content":"one"}`}}},
+				nil,
+			),
+			newStubStream(
+				[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{
+					{ID: "call_2", Name: "write_file", Arguments: `{"path":"skills/foo.md","mode":"overwrite","content":"two"}`},
+					{ID: "call_3", Name: "load_skill", Arguments: `{"name":"debugging"}`},
+				}}}},
+				model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{
+					{ID: "call_2", Name: "write_file", Arguments: `{"path":"skills/foo.md","mode":"overwrite","content":"two"}`},
+					{ID: "call_3", Name: "load_skill", Arguments: `{"name":"debugging"}`},
+				}},
+				nil,
+			),
+			newStubStream(
+				[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "done"}}},
+				model.Message{Role: model.RoleAssistant, Content: "done"},
+				nil,
+			),
+		},
+	}
+
+	runner, err := NewRunner(client, registry, Options{Model: "test-model", RuntimePromptBuilder: runtimeprompt.NewBuilder(nil), MaxSteps: 6})
+	if err != nil {
+		t.Fatalf("NewRunner() error = %v", err)
+	}
+	result, err := runner.Run(context.Background(), RunInput{Messages: []model.Message{{Role: model.RoleUser, Content: "write it"}}, Tools: registry.List()})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.FinalMessage.Content != "done" {
+		t.Fatalf("FinalMessage.Content = %q, want done", result.FinalMessage.Content)
+	}
+	if len(client.streamRequests) != 4 {
+		t.Fatalf("stream request count = %d, want 4", len(client.streamRequests))
+	}
+
+	retryReq := client.streamRequests[3].Messages
+	assistantIndex := -1
+	for i, message := range retryReq {
+		if message.Role == model.RoleAssistant && len(message.ToolCalls) == 2 && message.ToolCalls[0].ID == "call_2" && message.ToolCalls[1].ID == "call_3" {
+			assistantIndex = i
+			break
+		}
+	}
+	if assistantIndex < 0 {
+		t.Fatalf("retry request messages = %#v, want assistant message with call_2 and call_3", retryReq)
+	}
+	if assistantIndex+3 >= len(retryReq) {
+		t.Fatalf("retry request messages = %#v, want write_file result, ephemeral result, then loop guard warning after assistant", retryReq)
+	}
+	writeResult := retryReq[assistantIndex+1]
+	if writeResult.Role != model.RoleTool || writeResult.ToolCallId != "call_2" {
+		t.Fatalf("message after assistant = %#v, want write_file tool result before warning", writeResult)
+	}
+	ephemeralResult := retryReq[assistantIndex+2]
+	if ephemeralResult.Role != model.RoleTool || ephemeralResult.ToolCallId != "call_3" || ephemeralResult.Content != "skill" {
+		t.Fatalf("second message after assistant = %#v, want ephemeral tool result preserved on retry", ephemeralResult)
+	}
+	warning := retryReq[assistantIndex+3]
+	if warning.Role != model.RoleSystem || !strings.Contains(warning.Content, "previous write_file call already succeeded") {
+		t.Fatalf("third message after assistant = %#v, want loop guard warning after all tool results", warning)
+	}
+}
+
+func TestRunnerLoopGuardKeepsEphemeralToolResultBeforeWarningAfterRecoverableStreamRecvError(t *testing.T) {
+	registry := newLoopGuardEphemeralRegistry(t)
+	client := &stubClient{streams: append(loopGuardEphemeralStreams(),
+		newRecvErrorStream(errors.New("temporary stream recv failure")),
+		newLoopGuardDoneStream(),
+	)}
+
+	runner, err := NewRunner(client, registry, Options{Model: "test-model", RuntimePromptBuilder: runtimeprompt.NewBuilder(nil), MaxSteps: 6})
+	if err != nil {
+		t.Fatalf("NewRunner() error = %v", err)
+	}
+	result, err := runner.Run(context.Background(), RunInput{Messages: []model.Message{{Role: model.RoleUser, Content: "write it"}}, Tools: registry.List()})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.FinalMessage.Content != "done" {
+		t.Fatalf("FinalMessage.Content = %q, want done", result.FinalMessage.Content)
+	}
+	if len(client.streamRequests) != 4 {
+		t.Fatalf("stream request count = %d, want 4", len(client.streamRequests))
+	}
+
+	assertLoopGuardEphemeralRetryTailOrder(t, client.streamRequests[3].Messages, "LLM stream error")
+}
+
+func TestRunnerLoopGuardKeepsEphemeralToolResultBeforeWarningAfterRecoverableFinalMessageError(t *testing.T) {
+	registry := newLoopGuardEphemeralRegistry(t)
+	client := &stubClient{streams: append(loopGuardEphemeralStreams(),
+		newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "partial done"}}},
+			model.Message{Role: model.RoleAssistant, Content: "partial done"},
+			errors.New("temporary final message failure"),
+		),
+		newLoopGuardDoneStream(),
+	)}
+
+	runner, err := NewRunner(client, registry, Options{Model: "test-model", RuntimePromptBuilder: runtimeprompt.NewBuilder(nil), MaxSteps: 6})
+	if err != nil {
+		t.Fatalf("NewRunner() error = %v", err)
+	}
+	result, err := runner.Run(context.Background(), RunInput{Messages: []model.Message{{Role: model.RoleUser, Content: "write it"}}, Tools: registry.List()})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.FinalMessage.Content != "done" {
+		t.Fatalf("FinalMessage.Content = %q, want done", result.FinalMessage.Content)
+	}
+	if len(client.streamRequests) != 4 {
+		t.Fatalf("stream request count = %d, want 4", len(client.streamRequests))
+	}
+
+	assertLoopGuardEphemeralRetryTailOrder(t, client.streamRequests[3].Messages, "LLM response error")
+}
+
 func TestRunnerToolContextCarriesMetadataToolCallAndEmitter(t *testing.T) {
 	recorder := &recordingTaskRuntime{taskID: "task_1"}
 	registry := coretools.NewRegistry()
@@ -1122,6 +1790,136 @@ func assertMessageOrder(t *testing.T, messages []model.Message, orderedSubstring
 			t.Fatalf("request messages = %#v, want ordered content containing %q", messages, want)
 		}
 	}
+}
+
+func findToolMessage(messages []model.Message, toolCallID string) *model.Message {
+	for i := range messages {
+		if messages[i].Role == model.RoleTool && messages[i].ToolCallId == toolCallID {
+			return &messages[i]
+		}
+	}
+	return nil
+}
+
+func assertNoDanglingToolCalls(t *testing.T, messages []model.Message) {
+	t.Helper()
+
+	for i, message := range messages {
+		if message.Role != model.RoleAssistant || len(message.ToolCalls) == 0 {
+			continue
+		}
+		resultsByCallID := map[string]bool{}
+		for j := i + 1; j < len(messages); j++ {
+			if messages[j].Role != model.RoleTool {
+				break
+			}
+			resultsByCallID[messages[j].ToolCallId] = true
+		}
+		for _, call := range message.ToolCalls {
+			if !resultsByCallID[call.ID] {
+				t.Fatalf("messages = %#v, want tool result for assistant tool call %q", messages, call.ID)
+			}
+		}
+	}
+}
+
+func newLoopGuardEphemeralRegistry(t *testing.T) *coretools.Registry {
+	t.Helper()
+
+	registry := coretools.NewRegistry()
+	if err := registry.Register(
+		coretools.Tool{
+			Name: "write_file",
+			Handler: func(context.Context, map[string]interface{}) (string, error) {
+				return `{"path":"skills/foo.md","written":true}`, nil
+			},
+		},
+		coretools.Tool{
+			Name: "load_skill",
+			ResultHandler: func(context.Context, map[string]interface{}) (coretools.Result, error) {
+				return coretools.Result{Content: "skill", Ephemeral: true}, nil
+			},
+		},
+	); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	return registry
+}
+
+func loopGuardEphemeralStreams() []model.Stream {
+	return []model.Stream{
+		newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "write_file", Arguments: `{"path":"skills/foo.md","mode":"overwrite","content":"one"}`}}}}},
+			model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: "call_1", Name: "write_file", Arguments: `{"path":"skills/foo.md","mode":"overwrite","content":"one"}`}}},
+			nil,
+		),
+		newStubStream(
+			[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{
+				{ID: "call_2", Name: "write_file", Arguments: `{"path":"skills/foo.md","mode":"overwrite","content":"two"}`},
+				{ID: "call_3", Name: "load_skill", Arguments: `{"name":"debugging"}`},
+			}}}},
+			model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{
+				{ID: "call_2", Name: "write_file", Arguments: `{"path":"skills/foo.md","mode":"overwrite","content":"two"}`},
+				{ID: "call_3", Name: "load_skill", Arguments: `{"name":"debugging"}`},
+			}},
+			nil,
+		),
+	}
+}
+
+func newLoopGuardDoneStream() model.Stream {
+	return newStubStream(
+		[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "done"}}},
+		model.Message{Role: model.RoleAssistant, Content: "done"},
+		nil,
+	)
+}
+
+func newRecvErrorStream(err error) model.Stream {
+	return &stubStream{recvErr: err}
+}
+
+func assertLoopGuardEphemeralRetryTailOrder(t *testing.T, messages []model.Message, recoveryPrefix string) {
+	t.Helper()
+
+	assistantIndex := -1
+	for i, message := range messages {
+		if message.Role == model.RoleAssistant && len(message.ToolCalls) == 2 && message.ToolCalls[0].ID == "call_2" && message.ToolCalls[1].ID == "call_3" {
+			assistantIndex = i
+			break
+		}
+	}
+	if assistantIndex < 0 {
+		t.Fatalf("retry request messages = %#v, want assistant message with call_2 and call_3", messages)
+	}
+	if assistantIndex+4 >= len(messages) {
+		t.Fatalf("retry request messages = %#v, want write_file result, ephemeral result, loop guard warning, then recovery message after assistant", messages)
+	}
+	writeResult := messages[assistantIndex+1]
+	if writeResult.Role != model.RoleTool || writeResult.ToolCallId != "call_2" {
+		t.Fatalf("message after assistant = %#v, want write_file tool result before warning", writeResult)
+	}
+	ephemeralResult := messages[assistantIndex+2]
+	if ephemeralResult.Role != model.RoleTool || ephemeralResult.ToolCallId != "call_3" || ephemeralResult.Content != "skill" {
+		t.Fatalf("second message after assistant = %#v, want ephemeral tool result preserved on retry", ephemeralResult)
+	}
+	warning := messages[assistantIndex+3]
+	if warning.Role != model.RoleSystem || !strings.Contains(warning.Content, "previous write_file call already succeeded") {
+		t.Fatalf("third message after assistant = %#v, want loop guard warning after all tool results", warning)
+	}
+	recovery := messages[assistantIndex+4]
+	if recovery.Role != model.RoleSystem || !strings.Contains(recovery.Content, "[system error] "+recoveryPrefix) {
+		t.Fatalf("fourth message after assistant = %#v, want stream recovery message after loop guard warning", recovery)
+	}
+}
+
+func messagesContainLoopGuardWarning(messages []model.Message) bool {
+	for _, message := range messages {
+		if message.Role == model.RoleSystem && strings.Contains(message.Content, "previous write_file call already succeeded") && strings.Contains(message.Content, "skills/foo.md") {
+			return true
+		}
+	}
+	return false
 }
 
 func TestRunnerReturnsErrorWhenMaxStepsExceeded(t *testing.T) {
@@ -2113,6 +2911,7 @@ type stubStream struct {
 	events     []model.StreamEvent
 	final      model.Message
 	finalErr   error
+	recvErr    error
 	closed     bool
 	allowFinal <-chan struct{}
 }
@@ -2140,6 +2939,9 @@ func (s *stubStream) Recv() (string, error) {
 
 func (s *stubStream) RecvEvent() (model.StreamEvent, error) {
 	if len(s.events) == 0 {
+		if s.recvErr != nil {
+			return model.StreamEvent{}, s.recvErr
+		}
 		return model.StreamEvent{}, nil
 	}
 	event := s.events[0]

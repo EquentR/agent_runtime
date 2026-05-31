@@ -258,6 +258,167 @@ func TestAgentExecutorDoesNotReplayVisibleSystemFailureMessagesIntoNextModelRequ
 	}
 }
 
+func TestAgentExecutorLoopGuardSafeCompletionPersistsFinalAssistant(t *testing.T) {
+	ctx := context.Background()
+	store := newConversationStoreForTest(t)
+	registry := coretools.NewRegistry()
+	writeCalls := 0
+	if err := registry.Register(coretools.Tool{
+		Name: "write_file",
+		Handler: func(context.Context, map[string]interface{}) (string, error) {
+			writeCalls++
+			return `{"path":"skills/foo.md","written":true}`, nil
+		},
+	}); err != nil {
+		t.Fatalf("Register(write_file) error = %v", err)
+	}
+	client := &stubClient{streams: []model.Stream{
+		newExecutorToolCallStream("call_1", "write_file", `{"path":"skills/foo.md","mode":"overwrite","content":"one"}`),
+		newExecutorToolCallStream("call_2", "write_file", `{"path":"skills/foo.md","mode":"overwrite","content":"two"}`),
+		newExecutorToolCallStream("call_3", "write_file", `{"path":"skills/foo.md","mode":"overwrite","content":"three"}`),
+	}}
+	executor := newTaskExecutorForTest(t, ExecutorDependencies{
+		Resolver:          newExecutorResolverForTest(),
+		ConversationStore: store,
+		Registry:          registry,
+		ClientFactory:     func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return client, nil },
+	})
+	payload := marshalExecutorTaskInput(t, map[string]any{
+		"conversation_id": "conv_loop_safe",
+		"provider_id":     "openai",
+		"model_id":        "gpt-5.4",
+		"message":         "write the file",
+	})
+	task := &coretasks.Task{ID: "task_loop_safe", TaskType: "agent.run", InputJSON: payload}
+
+	output, err := executor(ctx, task, nil)
+	if err != nil {
+		t.Fatalf("executor() error = %v", err)
+	}
+	runResult, ok := output.(RunTaskResult)
+	if !ok {
+		t.Fatalf("output type = %T, want RunTaskResult", output)
+	}
+	wantFinal := "文件已写入 `skills/foo.md`。运行时检测到模型正在重复覆盖同一文件，因此已停止继续调用工具。"
+	if runResult.FinalMessage.Role != model.RoleAssistant || runResult.FinalMessage.Content != wantFinal {
+		t.Fatalf("FinalMessage = %#v, want deterministic safe-completion assistant message", runResult.FinalMessage)
+	}
+	if runResult.MessagesAppended != 8 {
+		t.Fatalf("MessagesAppended = %d, want user plus 3 tool-call turns plus final assistant", runResult.MessagesAppended)
+	}
+	if writeCalls != 3 {
+		t.Fatalf("write_file calls = %d, want three successful overwrite calls before safe completion", writeCalls)
+	}
+	if len(client.streamRequests) != 3 {
+		t.Fatalf("stream request count = %d, want three tool-call turns", len(client.streamRequests))
+	}
+
+	messages, err := store.ListMessages(ctx, "conv_loop_safe")
+	if err != nil {
+		t.Fatalf("ListMessages() error = %v", err)
+	}
+	if len(messages) != 8 {
+		t.Fatalf("len(messages) = %d, want user + 3 assistant tool-call messages + 3 tool results + final assistant", len(messages))
+	}
+	if messages[0].Role != model.RoleUser || messages[0].Content != "write the file" {
+		t.Fatalf("messages[0] = %#v, want original user message", messages[0])
+	}
+	for i := 0; i < 3; i++ {
+		callID := fmt.Sprintf("call_%d", i+1)
+		assistant := messages[1+i*2]
+		if assistant.Role != model.RoleAssistant || len(assistant.ToolCalls) != 1 || assistant.ToolCalls[0].ID != callID || assistant.ToolCalls[0].Name != "write_file" {
+			t.Fatalf("messages[%d] = %#v, want assistant write_file tool call %s", 1+i*2, assistant, callID)
+		}
+		toolResult := messages[2+i*2]
+		if toolResult.Role != model.RoleTool || toolResult.ToolCallId != callID {
+			t.Fatalf("messages[%d] = %#v, want tool result for %s", 2+i*2, toolResult, callID)
+		}
+	}
+	final := messages[len(messages)-1]
+	if final.Role != model.RoleAssistant || final.Content != wantFinal || len(final.ToolCalls) != 0 {
+		t.Fatalf("final persisted message = %#v, want deterministic assistant final message without tool calls", final)
+	}
+	assertNoDanglingToolCalls(t, messages)
+}
+
+func TestAgentExecutorLoopGuardFailedLoopPersistsVisibleFailureMessage(t *testing.T) {
+	ctx := context.Background()
+	store := newConversationStoreForTest(t)
+	registry := coretools.NewRegistry()
+	listCalls := 0
+	if err := registry.Register(coretools.Tool{
+		Name: "list_files",
+		Handler: func(context.Context, map[string]interface{}) (string, error) {
+			listCalls++
+			return "", errors.New("path is required")
+		},
+	}); err != nil {
+		t.Fatalf("Register(list_files) error = %v", err)
+	}
+	client := &stubClient{streams: []model.Stream{
+		newExecutorToolCallStream("call_1", "list_files", `{}`),
+		newExecutorToolCallStream("call_2", "list_files", `{}`),
+		newExecutorToolCallStream("call_3", "list_files", `{}`),
+	}}
+	executor := newTaskExecutorForTest(t, ExecutorDependencies{
+		Resolver:          newExecutorResolverForTest(),
+		ConversationStore: store,
+		Registry:          registry,
+		ClientFactory:     func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return client, nil },
+	})
+	payload := marshalExecutorTaskInput(t, map[string]any{
+		"conversation_id": "conv_loop_failed",
+		"provider_id":     "openai",
+		"model_id":        "gpt-5.4",
+		"message":         "list the files",
+	})
+	task := &coretasks.Task{ID: "task_loop_failed", TaskType: "agent.run", InputJSON: payload}
+
+	_, err := executor(ctx, task, nil)
+	if !errors.Is(err, ErrToolLoopDetected) {
+		t.Fatalf("executor() error = %v, want ErrToolLoopDetected", err)
+	}
+	if listCalls != 3 {
+		t.Fatalf("list_files calls = %d, want three repeated failures before loop detection", listCalls)
+	}
+	if len(client.streamRequests) != 3 {
+		t.Fatalf("stream request count = %d, want three tool-call turns", len(client.streamRequests))
+	}
+
+	messages, err := store.ListMessages(ctx, "conv_loop_failed")
+	if err != nil {
+		t.Fatalf("ListMessages() error = %v", err)
+	}
+	if len(messages) != 8 {
+		t.Fatalf("len(messages) = %d, want user + 3 assistant/tool failure turns + visible failure message", len(messages))
+	}
+	if messages[0].Role != model.RoleUser || messages[0].Content != "list the files" {
+		t.Fatalf("messages[0] = %#v, want original user message", messages[0])
+	}
+	for i := 0; i < 3; i++ {
+		callID := fmt.Sprintf("call_%d", i+1)
+		assistant := messages[1+i*2]
+		if assistant.Role != model.RoleAssistant || len(assistant.ToolCalls) != 1 || assistant.ToolCalls[0].ID != callID || assistant.ToolCalls[0].Name != "list_files" {
+			t.Fatalf("messages[%d] = %#v, want assistant list_files tool call %s", 1+i*2, assistant, callID)
+		}
+		toolResult := messages[2+i*2]
+		if toolResult.Role != model.RoleTool || toolResult.ToolCallId != callID {
+			t.Fatalf("messages[%d] = %#v, want tool result for %s", 2+i*2, toolResult, callID)
+		}
+		if !strings.Contains(toolResult.Content, "path is required") {
+			t.Fatalf("messages[%d].Content = %q, want list_files error", 2+i*2, toolResult.Content)
+		}
+	}
+	final := messages[len(messages)-1]
+	if final.Role != model.RoleSystem || !systemMessageVisibleToUser(final) {
+		t.Fatalf("final persisted message = %#v, want UI-visible system failure message", final)
+	}
+	if !strings.Contains(final.Content, "Run failed:") || !strings.Contains(final.Content, "tool loop detected") || !strings.Contains(final.Content, "list_files") {
+		t.Fatalf("final failure content = %q, want visible loop-guard failure details", final.Content)
+	}
+	assertNoDanglingToolCalls(t, messages)
+}
+
 func TestAgentExecutorPromptSceneDefaultsToAgentRunDefault(t *testing.T) {
 	store := newConversationStoreForTest(t)
 	workspaceRoot := t.TempDir()
@@ -3614,6 +3775,11 @@ func newExecutorResolverForTest() *ModelResolver {
 		BaseProvider: coretypes.BaseProvider{Name: "openai"},
 		Models:       []coretypes.LLMModel{{BaseModel: coretypes.BaseModel{ID: "gpt-5.4", Name: "GPT 5.4"}, Type: coretypes.LLMTypeOpenAIResponses}},
 	}}}
+}
+
+func newExecutorToolCallStream(id string, name string, arguments string) model.Stream {
+	message := model.Message{Role: model.RoleAssistant, ToolCalls: []coretypes.ToolCall{{ID: id, Name: name, Arguments: arguments}}}
+	return newStubStream([]model.StreamEvent{{Type: model.StreamEventCompleted, Message: message}}, message, nil)
 }
 
 func TestRunTaskInputDeserializesSkillsFromJSON(t *testing.T) {

@@ -40,6 +40,7 @@ type Options struct {
 	EventSink            EventSink
 	TraceID              string
 	ToolChoice           coretypes.ToolChoice
+	LoopGuard            LoopGuardOptions
 	Metadata             map[string]string
 	Actor                string
 	TaskID               string
