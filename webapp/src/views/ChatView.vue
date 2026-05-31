@@ -780,6 +780,7 @@ async function loadConversationForRoute(conversationId: string) {
       const messages = await fetchConversationMessages(conversationId)
       const nextEntries = buildTranscriptEntries(messages)
       setDraftEntries(conversationId, nextEntries)
+      // Update entries if user is viewing this conversation (via route or programmatic selection)
       if (conversationId === routeConversationId.value || conversationId === activeConversationId.value) {
         entries.value = nextEntries
       }
@@ -856,6 +857,8 @@ async function completeTaskConversation(conversationId: string, taskId: string, 
     const messages = await fetchConversationMessages(conversationId)
     const freshEntries = buildTranscriptEntries(messages)
     setDraftEntries(conversationId, freshEntries)
+    // Update displayed entries if this conversation is currently visible:
+    // - directly selected, matched by route, or user is on the home route
     if (conversationId === activeConversationId.value || routeConversationId.value === conversationId || !routeConversationId.value) {
       entries.value = freshEntries
     }
