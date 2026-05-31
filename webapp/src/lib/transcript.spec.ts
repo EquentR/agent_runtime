@@ -705,6 +705,23 @@ describe('updateTranscriptFromStreamEvent', () => {
     expect(entries.map((entry) => entry.kind)).toEqual(['tool'])
   })
 
+  it('does not duplicate error when task.finished failed is followed by task.failed with same message', () => {
+    let entries: TranscriptEntry[] = []
+
+    entries = updateTranscriptFromStreamEvent(entries, {
+      type: 'task.finished',
+      payload: { status: 'failed', error: '401 Unauthorized' },
+    })
+    entries = updateTranscriptFromStreamEvent(entries, {
+      type: 'task.failed',
+      payload: { error: '401 Unauthorized' },
+    })
+
+    const errorEntries = entries.filter((entry) => entry.kind === 'error')
+    expect(errorEntries).toHaveLength(1)
+    expect(errorEntries[0].content).toBe('401 Unauthorized')
+  })
+
   it('extracts thinking and running tools from completed assistant messages with empty content', () => {
     let entries: TranscriptEntry[] = []
 
@@ -2226,5 +2243,36 @@ describe('stream_recovery event', () => {
     expect(result).toHaveLength(1)
     expect(result[0].kind).toBe('recovery')
     expect(result[0].content).toBe('timeout (1/3)')
+  })
+
+  it('merges consecutive recovery entries into one', () => {
+    let result = updateTranscriptFromStreamEvent([], {
+      type: 'log.message',
+      payload: {
+        Kind: 'stream_recovery',
+        Err: '401 Unauthorized',
+        Metadata: { attempt: 1, max_attempts: 3 },
+      },
+    })
+    result = updateTranscriptFromStreamEvent(result, {
+      type: 'log.message',
+      payload: {
+        Kind: 'stream_recovery',
+        Err: '401 Unauthorized',
+        Metadata: { attempt: 2, max_attempts: 3 },
+      },
+    })
+    result = updateTranscriptFromStreamEvent(result, {
+      type: 'log.message',
+      payload: {
+        Kind: 'stream_recovery',
+        Err: '401 Unauthorized',
+        Metadata: { attempt: 3, max_attempts: 3 },
+      },
+    })
+
+    expect(result).toHaveLength(1)
+    expect(result[0].kind).toBe('recovery')
+    expect(result[0].content).toBe('401 Unauthorized (3/3)')
   })
 })

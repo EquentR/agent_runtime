@@ -1135,6 +1135,17 @@ export function updateTranscriptFromStreamEvent(entries: TranscriptEntry[], even
       const attempt = Number(payload.Metadata?.attempt ?? payload.metadata?.attempt ?? 1)
       const maxAttempts = Number(payload.Metadata?.max_attempts ?? payload.metadata?.max_attempts ?? 3)
       const errorMessage = String(payload.Err ?? payload.err ?? 'transient error')
+      // Merge consecutive recovery entries into a single entry that updates in place
+      const existingIndex = entries.findLastIndex((e) => e.kind === 'recovery')
+      if (existingIndex >= 0 && existingIndex === entries.length - 1) {
+        const next = [...entries]
+        next[existingIndex] = {
+          ...next[existingIndex],
+          title: '自动重试',
+          content: `${errorMessage} (${attempt}/${maxAttempts})`,
+        }
+        return next
+      }
       return [
         ...entries,
         {
@@ -1259,6 +1270,11 @@ export function updateTranscriptFromStreamEvent(entries: TranscriptEntry[], even
     const settledEntries = stopAllLoading(entries, 'error')
     const message = String(payload.error ?? 'Unknown error')
     if (compactWhitespace(message) && compactWhitespace(message) === latestToolFailureMessage(settledEntries)) {
+      return settledEntries
+    }
+    // Deduplicate: if the last error entry already shows the same message, don't append again
+    const lastError = settledEntries.findLast((e) => e.kind === 'error')
+    if (lastError && compactWhitespace(lastError.content ?? '') === compactWhitespace(message)) {
       return settledEntries
     }
     return [

@@ -681,6 +681,7 @@ function showCopyToast(message: string, variant: 'success' | 'error') {
               </span>
               <span v-if="entry.content" class="trace-detail-preview">{{ entry.content }}</span>
             </summary>
+            <pre v-if="entry.content" class="trace-detail-content">{{ entry.content }}</pre>
           </details>
           <div
             v-if="entry.kind === 'reply' && entry.content"
