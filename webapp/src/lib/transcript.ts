@@ -791,6 +791,11 @@ function upsertToolInGroup(
 function updatePendingToolGroupFromMessage(entries: TranscriptEntry[], groupKey: string, toolCalls: NonNullable<ConversationMessage['tool_calls']>) {
   let next = [...entries]
   for (const toolCall of toolCalls) {
+    // Skip using_skills — they are rendered as dedicated skill entries, not as
+    // generic tool calls in the tool group.
+    if (toolCall.name === 'using_skills') {
+      continue
+    }
     next = upsertToolInGroup(next, {
       groupKey,
       toolCallId: toolCall.id,
@@ -1061,11 +1066,10 @@ export function buildTranscriptEntries(messages: ConversationMessage[]): Transcr
   // question entries instead of plain tool entries for history.
   const askUserArgsByCallId = new Map<string, Record<string, unknown>>()
 
-  // Pre-scan: collect using_skills tool call IDs so we can skip them during
-  // replay — their assistant-side call is persisted, but the tool result is
-  // ephemeral and never stored, which would otherwise produce orphaned tool
-  // entries with no params and no result.
+  // Pre-scan: collect using_skills tool call IDs and their arguments so we can
+  // render skill entries during replay instead of raw tool entries.
   const usingSkillsCallIds = new Set<string>()
+  const usingSkillsArgsByCallId = new Map<string, string>()
 
   for (const message of messages) {
     if (message.role === 'assistant') {
@@ -1081,6 +1085,7 @@ export function buildTranscriptEntries(messages: ConversationMessage[]): Transcr
         }
         if (tc.name === 'using_skills') {
           usingSkillsCallIds.add(tc.id)
+          usingSkillsArgsByCallId.set(tc.id, tc.arguments ?? '')
         }
       }
     }
@@ -1093,6 +1098,18 @@ export function buildTranscriptEntries(messages: ConversationMessage[]): Transcr
       )
       if (nonSpecialToolCalls.length > 0) {
         assistantToolGroupIndex += 1
+      }
+
+      // Create skill entries for using_skills tool calls in this assistant message
+      for (const tc of message.tool_calls ?? []) {
+        if (usingSkillsCallIds.has(tc.id)) {
+          const argsText = usingSkillsArgsByCallId.get(tc.id) ?? ''
+          entries = upsertSkillEntry(entries, {
+            toolCallId: tc.id,
+            skillName: extractSkillName(argsText),
+            loading: false,
+          })
+        }
       }
     }
 

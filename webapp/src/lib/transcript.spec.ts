@@ -534,43 +534,51 @@ describe('buildTranscriptEntries', () => {
     expect(questionEntries[0].question_interaction?.response_json).toEqual({ custom_text: 'Alice' })
   })
 
-  it('skips using_skills tool calls and their ephemeral results so no orphan tool entries appear in replay', () => {
+  it('creates skill entries for using_skills tool calls during replay instead of orphan tool entries', () => {
     const entries = buildTranscriptEntries([
       {
         role: 'assistant',
         content: 'Let me load your workspace skills.',
         tool_calls: [
-          { id: 'call_skills_1', name: 'using_skills', arguments: '{}' },
+          { id: 'call_skills_1', name: 'using_skills', arguments: '{"name":"code-review"}' },
         ],
       },
       // The tool result would never be persisted because the tool is ephemeral,
       // but even if a stale tool message somehow existed, we skip it in replay.
     ] as any)
 
-    expect(entries.filter((e) => e.kind === 'tool')).toHaveLength(0)
-    expect(entries).toEqual([
+    // Should have a reply entry and a skill entry (kind: 'tool' with title '使用技能')
+    const skillEntries = entries.filter((e) => e.kind === 'tool' && e.title === '使用技能')
+    expect(skillEntries).toHaveLength(1)
+    expect(skillEntries[0].status).toBe('done')
+    expect(skillEntries[0].details?.[0]?.label).toBe('code-review')
+    expect(entries).toContainEqual(
       expect.objectContaining({ kind: 'reply', content: 'Let me load your workspace skills.' }),
-    ])
+    )
   })
 
-  it('skips using_skills tool calls when mixed with normal tool calls in the same assistant message', () => {
+  it('creates skill entry for using_skills without adding it to normal tool group when mixed with other calls', () => {
     const entries = buildTranscriptEntries([
       {
         role: 'assistant',
         content: '',
         tool_calls: [
-          { id: 'call_skills_1', name: 'using_skills', arguments: '{}' },
+          { id: 'call_skills_1', name: 'using_skills', arguments: '{"name":"pdf"}' },
           { id: 'call_read_1', name: 'read_file', arguments: '{"path":"main.go"}' },
         ],
       },
       { role: 'tool', content: 'package main', tool_call_id: 'call_read_1' },
     ] as any)
 
-    expect(entries.map((e) => e.kind)).toEqual(['tool'])
-    expect(entries.filter((e) => e.kind === 'tool')).toHaveLength(1)
-    // only the normal tool call should produce an entry
-    expect(entries[0].details?.map((d) => d.label)).toEqual(['read_file'])
-    expect(entries[0].details?.map((d) => d.key)).toEqual(['call_read_1'])
+    // Should have a skill entry and a normal tool group entry
+    const skillEntries = entries.filter((e) => e.kind === 'tool' && e.title === '使用技能')
+    const toolGroupEntries = entries.filter((e) => e.kind === 'tool' && e.title !== '使用技能')
+    expect(skillEntries).toHaveLength(1)
+    expect(skillEntries[0].details?.[0]?.label).toBe('pdf')
+    expect(toolGroupEntries).toHaveLength(1)
+    // only the normal tool call should produce an entry in the tool group
+    expect(toolGroupEntries[0].details?.map((d) => d.label)).toEqual(['read_file'])
+    expect(toolGroupEntries[0].details?.map((d) => d.key)).toEqual(['call_read_1'])
   })
 })
 
