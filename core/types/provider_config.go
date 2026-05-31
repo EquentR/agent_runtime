@@ -14,6 +14,7 @@ const (
 
 const (
 	LLMTypeGoogle            = "google"
+	LLMTypeOpenAIChat        = "openai_chat"
 	LLMTypeOpenAICompletions = "openai_completions"
 	LLMTypeOpenAIResponses   = "openai_responses"
 )
@@ -113,7 +114,7 @@ func (m *LLMModel) ModelType() string {
 
 func (m LLMModel) Validate() error {
 	switch m.ModelType() {
-	case LLMTypeGoogle, LLMTypeOpenAICompletions, LLMTypeOpenAIResponses:
+	case LLMTypeGoogle, LLMTypeOpenAIChat, LLMTypeOpenAICompletions, LLMTypeOpenAIResponses:
 		return nil
 	case "":
 		return fmt.Errorf("llm model %q type is required", m.ModelName())

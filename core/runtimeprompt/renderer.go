@@ -47,26 +47,7 @@ func segmentMessages(segments []Segment, phase string) []model.Message {
 }
 
 func injectToolResultPromptMessages(conversation []model.Message, prompts []model.Message) []model.Message {
-	if len(conversation) == 0 {
-		return appendPromptMessages(conversation, prompts)
-	}
-
-	firstTrailingTool := len(conversation)
-	for firstTrailingTool > 0 && conversation[firstTrailingTool-1].Role == model.RoleTool {
-		firstTrailingTool--
-	}
-	if firstTrailingTool == len(conversation) {
-		return appendPromptMessages(conversation, prompts)
-	}
-	if firstTrailingTool == 0 || conversation[firstTrailingTool-1].Role != model.RoleAssistant {
-		return appendPromptMessages(conversation, prompts)
-	}
-
-	result := make([]model.Message, 0, len(conversation)+len(prompts))
-	result = append(result, conversation[:firstTrailingTool]...)
-	result = appendPromptMessages(result, prompts)
-	result = append(result, conversation[firstTrailingTool:]...)
-	return result
+	return appendPromptMessages(conversation, prompts)
 }
 
 func appendPromptMessages(dst []model.Message, prompts []model.Message) []model.Message {

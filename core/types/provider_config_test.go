@@ -204,6 +204,26 @@ llmProvider:
 	}
 }
 
+func TestLLMModelValidateAcceptsOpenAIChat(t *testing.T) {
+	provider := mustLoadLLMProvider(t, `
+llmProvider:
+  name: openai
+  baseUrl: https://api.openai.com/v1
+  apiKey: test-key
+  models:
+    - id: gpt-5.5
+      name: GPT 5.5 Chat
+      type: openai_chat
+`)
+	model := provider.FindModel("gpt-5.5")
+	if model == nil {
+		t.Fatal("model = nil, want configured openai_chat model")
+	}
+	if model.ModelType() != "openai_chat" {
+		t.Fatalf("model.ModelType() = %q, want openai_chat", model.ModelType())
+	}
+}
+
 func TestLLMProviderExposesProviderNameAndPackageAlignedModelType(t *testing.T) {
 	provider := mustLoadLLMProvider(t, `
 llmProvider:

@@ -207,6 +207,8 @@ describe('ProfileView', () => {
     expect(wrapper.text()).toContain('GPT Me')
     expect(wrapper.text()).toContain('启用')
 
+    expect(wrapper.findAll('[data-user-model-provider-type] option').map((option) => option.attributes('value'))).toContain('openai_chat')
+
     await wrapper.get('[data-user-model-provider-type]').setValue('openai_responses')
     await wrapper.get('[data-user-model-provider-id]').setValue(' me-openai-2 ')
     await wrapper.get('[data-user-model-model-id]').setValue(' gpt-me-2 ')

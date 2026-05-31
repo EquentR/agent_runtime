@@ -6,6 +6,8 @@ import (
 	"strings"
 )
 
+const defaultPromptCacheRetention = "24h"
+
 func (r *Runner) promptCacheKey() string {
 	if r == nil {
 		return ""
@@ -19,4 +21,11 @@ func (r *Runner) promptCacheKey() string {
 	material := strings.Join([]string{"agent-runtime", providerID, modelID, conversationID}, "\n")
 	sum := sha256.Sum256([]byte(material))
 	return "agent-runtime-" + hex.EncodeToString(sum[:16])
+}
+
+func promptCacheRetentionForKey(key string) string {
+	if strings.TrimSpace(key) == "" {
+		return ""
+	}
+	return defaultPromptCacheRetention
 }

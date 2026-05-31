@@ -246,15 +246,17 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 				return
 			}
 
+			promptCacheKey := r.promptCacheKey()
 			request := model.ChatRequest{
-				Model:          r.options.Model,
-				Messages:       cloneMessages(requestMessages),
-				MaxTokens:      r.options.MaxTokens,
-				ConversationID: firstNonEmpty(r.options.Metadata["conversation_id"]),
-				PromptCacheKey: r.promptCacheKey(),
-				Tools:          cloneTools(requestTools),
-				ToolChoice:     r.options.ToolChoice,
-				TraceID:        r.options.TraceID,
+				Model:                r.options.Model,
+				Messages:             cloneMessages(requestMessages),
+				MaxTokens:            r.options.MaxTokens,
+				ConversationID:       firstNonEmpty(r.options.Metadata["conversation_id"]),
+				PromptCacheKey:       promptCacheKey,
+				PromptCacheRetention: promptCacheRetentionForKey(promptCacheKey),
+				Tools:                cloneTools(requestTools),
+				ToolChoice:           r.options.ToolChoice,
+				TraceID:              r.options.TraceID,
 			}
 			requestArtifactID := r.attachAuditArtifact(ctx, coreaudit.ArtifactKindModelRequest, request)
 			r.appendAuditEvent(ctx, step, coreaudit.PhaseRequest, "request.built", map[string]any{

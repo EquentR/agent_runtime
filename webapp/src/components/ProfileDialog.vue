@@ -649,7 +649,8 @@ function resetTurnstileWidget() {
             <span class="field-label">Provider Type</span>
             <select v-model="modelDraft.providerType" class="text-input" data-user-model-provider-type required>
               <option value="openai_responses">OpenAI Responses</option>
-              <option value="openai_completions">OpenAI Completions</option>
+              <option value="openai_chat">OpenAI Chat（官方）</option>
+              <option value="openai_completions">OpenAI Completions（兼容）</option>
               <option value="google">Google</option>
             </select>
           </label>

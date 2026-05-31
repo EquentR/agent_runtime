@@ -179,7 +179,7 @@ func TestBuilderBuildUsesLegacySystemPromptFallbackWhenResolvedPromptAbsent(t *t
 	}
 }
 
-func TestRendererRenderPlacesSessionBeforeBodyAndToolResultBeforeTrailingToolMessages(t *testing.T) {
+func TestRendererRenderPlacesToolResultPromptAfterTrailingToolMessages(t *testing.T) {
 	renderer := NewRenderer()
 
 	got := renderer.Render(BuildResult{
@@ -208,9 +208,9 @@ func TestRendererRenderPlacesSessionBeforeBodyAndToolResultBeforeTrailingToolMes
 		{Role: model.RoleUser, Content: "Selected skills summary"},
 		{Role: model.RoleUser, Content: "weather?"},
 		{Role: model.RoleAssistant, Content: ""},
-		{Role: model.RoleSystem, Content: "Resolved tool-result"},
 		{Role: model.RoleTool, ToolCallId: "call_1", Content: "sunny"},
 		{Role: model.RoleTool, ToolCallId: "call_2", Content: "08:00"},
+		{Role: model.RoleSystem, Content: "Resolved tool-result"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Render() = %#v, want %#v", got, want)

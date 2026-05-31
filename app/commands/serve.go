@@ -21,6 +21,7 @@ import (
 	corelog "github.com/EquentR/agent_runtime/core/log"
 	coreprompt "github.com/EquentR/agent_runtime/core/prompt"
 	googleclient "github.com/EquentR/agent_runtime/core/providers/client/google"
+	openaichat "github.com/EquentR/agent_runtime/core/providers/client/openai_chat"
 	openaicompletions "github.com/EquentR/agent_runtime/core/providers/client/openai_completions"
 	openairesponses "github.com/EquentR/agent_runtime/core/providers/client/openai_responses"
 	model "github.com/EquentR/agent_runtime/core/providers/types"
@@ -134,6 +135,8 @@ func buildLLMClientFactory(requestTimeout time.Duration) coreagent.ClientFactory
 		switch llmModel.ModelType() {
 		case coretypes.LLMTypeOpenAIResponses:
 			return openairesponses.NewOpenAiResponsesClient(provider.AuthKey(), provider.BaseURL(), requestTimeout), nil
+		case coretypes.LLMTypeOpenAIChat:
+			return openaichat.NewOpenAIChatClient(provider.AuthKey(), provider.BaseURL(), requestTimeout), nil
 		case coretypes.LLMTypeOpenAICompletions:
 			return openaicompletions.NewOpenAiCompletionsClient(provider.BaseURL(), provider.AuthKey(), requestTimeout), nil
 		case coretypes.LLMTypeGoogle:

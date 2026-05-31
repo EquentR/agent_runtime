@@ -116,6 +116,9 @@ func TestRunnerRunStreamSetsStablePromptCacheKeyForConversation(t *testing.T) {
 	if client.streamRequests[0].ConversationID != "conv_public_123" {
 		t.Fatalf("ConversationID = %q, want conv_public_123", client.streamRequests[0].ConversationID)
 	}
+	if client.streamRequests[0].PromptCacheRetention != "24h" || client.streamRequests[1].PromptCacheRetention != "24h" {
+		t.Fatalf("PromptCacheRetention = %q/%q, want 24h for both requests", client.streamRequests[0].PromptCacheRetention, client.streamRequests[1].PromptCacheRetention)
+	}
 }
 
 func TestRunStreamSkipsProviderCallWhenFinalBudgetGuardFails(t *testing.T) {
@@ -708,8 +711,11 @@ func TestRunnerRunStreamRecordsPromptArtifactsPerStepWithPhaseAwareInjection(t *
 	if secondPrompt.Messages[3].Role != model.RoleAssistant || len(secondPrompt.Messages[3].ToolCalls) != 1 {
 		t.Fatalf("step 2 runtime prompt assistant replay = %#v, want assistant tool call", secondPrompt.Messages[3])
 	}
-	if secondPrompt.Messages[4].Content != "Tool-result prompt" {
-		t.Fatalf("step 2 runtime prompt insertion = %#v, want tool-result after assistant", secondPrompt.Messages)
+	if secondPrompt.Messages[4].Role != model.RoleTool || secondPrompt.Messages[4].ToolCallId != "call_1" {
+		t.Fatalf("step 2 runtime prompt tool replay = %#v, want tool message immediately after assistant", secondPrompt.Messages[4])
+	}
+	if secondPrompt.Messages[5].Content != "Tool-result prompt" {
+		t.Fatalf("step 2 runtime prompt insertion = %#v, want tool-result after tool message", secondPrompt.Messages)
 	}
 	if len(secondPrompt.Segments) != 3 {
 		t.Fatalf("step 2 runtime prompt segment count = %d, want 3", len(secondPrompt.Segments))
@@ -731,8 +737,11 @@ func TestRunnerRunStreamRecordsPromptArtifactsPerStepWithPhaseAwareInjection(t *
 	firstRequest := decodeModelRequestArtifact(t, requestArtifacts[0])
 	assertMessagesDoNotContainContent(t, firstRequest.Messages, "Tool-result prompt")
 	secondRequest := decodeModelRequestArtifact(t, requestArtifacts[1])
-	if secondRequest.Messages[4].Content != "Tool-result prompt" {
-		t.Fatalf("step 2 request messages = %#v, want tool-result prompt between assistant and tool", secondRequest.Messages)
+	if secondRequest.Messages[4].Role != model.RoleTool || secondRequest.Messages[4].ToolCallId != "call_1" {
+		t.Fatalf("step 2 request messages = %#v, want tool message immediately after assistant", secondRequest.Messages)
+	}
+	if secondRequest.Messages[5].Content != "Tool-result prompt" {
+		t.Fatalf("step 2 request messages = %#v, want tool-result prompt after tool message", secondRequest.Messages)
 	}
 }
 

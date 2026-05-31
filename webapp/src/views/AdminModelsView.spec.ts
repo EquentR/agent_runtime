@@ -150,6 +150,10 @@ describe('AdminModelsView', () => {
     api.fetchAdminCustomModels.mockResolvedValueOnce([])
     const wrapper = await mountAdminModelsView()
 
+    await wrapper.get('[data-admin-model-create]').trigger('click')
+
+    expect(wrapper.findAll('[data-admin-model-provider-type] option').map((option) => option.attributes('value'))).toContain('openai_chat')
+
     await wrapper.get('[data-admin-model-provider-type]').setValue('openai_completions')
     await wrapper.get('[data-admin-model-provider-id]').setValue(' team-openai ')
     await wrapper.get('[data-admin-model-model-id]').setValue(' gpt-custom ')

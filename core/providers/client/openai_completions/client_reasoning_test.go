@@ -115,9 +115,10 @@ func TestClientChatStreamSendsPromptCacheKey(t *testing.T) {
 
 	client := NewOpenAiCompletionsClient(server.URL+"/v1", "test-key", 0)
 	stream, err := client.ChatStream(context.Background(), model.ChatRequest{
-		Model:          "gpt-5.5",
-		Messages:       []model.Message{{Role: model.RoleUser, Content: "hello"}},
-		PromptCacheKey: "agent-runtime-cache-key",
+		Model:                "gpt-5.5",
+		Messages:             []model.Message{{Role: model.RoleUser, Content: "hello"}},
+		PromptCacheKey:       "agent-runtime-cache-key",
+		PromptCacheRetention: "24h",
 	})
 	if err != nil {
 		t.Fatalf("ChatStream() error = %v", err)
@@ -136,6 +137,12 @@ func TestClientChatStreamSendsPromptCacheKey(t *testing.T) {
 	}
 	if payload["user"] != "agent-runtime-cache-key" {
 		t.Fatalf("user = %#v, want cache key fallback", payload["user"])
+	}
+	if payload["prompt_cache_retention"] != "24h" {
+		t.Fatalf("prompt_cache_retention = %#v, want 24h", payload["prompt_cache_retention"])
+	}
+	if _, ok := payload["metadata"]; ok {
+		t.Fatalf("metadata = %#v, want prompt-cache transport sentinel removed", payload["metadata"])
 	}
 }
 

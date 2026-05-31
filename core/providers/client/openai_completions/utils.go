@@ -9,6 +9,8 @@ import (
 	"github.com/sashabaranov/go-openai"
 )
 
+const promptCacheRetentionMetadataKey = "_agent_runtime_prompt_cache_retention"
+
 // buildChatCompletionStreamRequest 构建流式请求。
 //
 // 在普通聊天请求基础上开启 stream，并统一开启 usage 回传，
@@ -48,6 +50,11 @@ func buildChatCompletionRequest(req model.ChatRequest) (openai.ChatCompletionReq
 	}
 	if promptCacheKey := strings.TrimSpace(req.PromptCacheKey); promptCacheKey != "" {
 		oaiReq.User = promptCacheKey
+	}
+	if promptCacheRetention := strings.TrimSpace(req.PromptCacheRetention); promptCacheRetention != "" {
+		oaiReq.Metadata = map[string]string{
+			promptCacheRetentionMetadataKey: promptCacheRetention,
+		}
 	}
 
 	toolChoice, err := modelToolChoiceToOpenAI(req.ToolChoice)

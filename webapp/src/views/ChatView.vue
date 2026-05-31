@@ -315,6 +315,18 @@ function clearTaskStateForConversation(conversationId: string) {
   }
 }
 
+function taskEventSeqForStream(conversationId: string, taskId: string) {
+  if (!taskId) {
+    return 0
+  }
+  if (!conversationId) {
+    return activeTaskId.value === taskId ? activeTaskEventSeq.value : 0
+  }
+  return activeTaskIdByConversation.value[conversationId] === taskId
+    ? activeTaskEventSeqByConversation.value[conversationId] ?? 0
+    : 0
+}
+
 function syncActiveTaskStateFromConversation(conversationId: string) {
   activeConversationId.value = conversationId
   activeTaskId.value = conversationId ? activeTaskIdByConversation.value[conversationId] ?? '' : ''
@@ -877,7 +889,8 @@ async function attachTaskStream(taskId: string, conversationId = '') {
   activeStreamAbortController = abortController
   activeStreamingTaskId = taskId
   const initialConversationId = conversationId || activeConversationId.value
-  setTaskStateForConversation(initialConversationId, taskId, activeTaskEventSeqByConversation.value[initialConversationId] ?? 0)
+  const initialAfterSeq = taskEventSeqForStream(initialConversationId, taskId)
+  setTaskStateForConversation(initialConversationId, taskId, initialAfterSeq)
 
   let streamConversationId = initialConversationId
   let firstVisibleChunkSeen = false
@@ -895,7 +908,8 @@ async function attachTaskStream(taskId: string, conversationId = '') {
           streamConversationId = eventConversationId
         }
 
-        const nextSeq = Math.max(activeTaskEventSeqByConversation.value[eventConversationId] ?? 0, event.seq ?? 0)
+        const currentSeq = taskEventSeqForStream(eventConversationId, taskId)
+        const nextSeq = Math.max(currentSeq, event.seq ?? 0)
         setTaskStateForConversation(eventConversationId, taskId, nextSeq)
         const currentEntries = currentConversationContextEntries(eventConversationId)
         const nextEntries = updateTranscriptFromStreamEvent(currentEntries, event)
@@ -914,7 +928,7 @@ async function attachTaskStream(taskId: string, conversationId = '') {
           void loadConversations(eventConversationId)
         }
       },
-      { signal: abortController.signal, afterSeq: activeTaskEventSeqByConversation.value[initialConversationId] ?? 0 },
+      { signal: abortController.signal, afterSeq: initialAfterSeq },
     )
 
     streamConversationId = result.conversation_id || streamConversationId
@@ -988,7 +1002,7 @@ async function resumeTask(task: TaskDetails | null | undefined, conversationId =
   }
 
   const targetConversationId = taskConversationId || conversationId
-  setTaskStateForConversation(targetConversationId, task.id, activeTaskEventSeqByConversation.value[targetConversationId] ?? 0)
+  setTaskStateForConversation(targetConversationId, task.id, taskEventSeqForStream(targetConversationId, task.id))
   await hydratePendingApprovals(task, targetConversationId)
   await attachTaskStream(task.id, targetConversationId)
 }

@@ -99,6 +99,8 @@ llmProviders:
   models:
     - id: gpt-5.5
       name: GPT-5.5
+#      type: openai_chat        # official SDK Chat Completions with native prompt cache fields
+#      type: openai_completions # legacy third-party-compatible Chat Completions
       type: openai_responses
       capabilities:
         attachments: true

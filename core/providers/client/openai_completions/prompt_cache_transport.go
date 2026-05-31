@@ -61,10 +61,51 @@ func injectPromptCacheKey(body []byte) ([]byte, bool) {
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return body, false
 	}
-	if strings.TrimSpace(rawString(payload["prompt_cache_key"])) != "" {
+
+	retention, metadataChanged := extractPromptCacheRetention(payload)
+	if !metadataChanged {
+		if strings.TrimSpace(rawString(payload["prompt_cache_key"])) != "" {
+			return body, false
+		}
+		return appendPromptCacheKey(body, strings.TrimSpace(rawString(payload["user"])))
+	}
+
+	changed := false
+	if strings.TrimSpace(rawString(payload["prompt_cache_key"])) == "" {
+		cacheKey := strings.TrimSpace(rawString(payload["user"]))
+		if cacheKey != "" {
+			cacheKeyJSON, err := json.Marshal(cacheKey)
+			if err != nil {
+				return body, false
+			}
+			payload["prompt_cache_key"] = cacheKeyJSON
+			changed = true
+		}
+	}
+
+	if metadataChanged {
+		changed = true
+		if retention != "" && strings.TrimSpace(rawString(payload["prompt_cache_retention"])) == "" {
+			retentionJSON, err := json.Marshal(retention)
+			if err != nil {
+				return body, false
+			}
+			payload["prompt_cache_retention"] = retentionJSON
+		}
+	}
+
+	if !changed {
 		return body, false
 	}
-	cacheKey := strings.TrimSpace(rawString(payload["user"]))
+
+	rewritten, err := json.Marshal(payload)
+	if err != nil {
+		return body, false
+	}
+	return rewritten, true
+}
+
+func appendPromptCacheKey(body []byte, cacheKey string) ([]byte, bool) {
 	if cacheKey == "" {
 		return body, false
 	}
@@ -87,6 +128,28 @@ func injectPromptCacheKey(body []byte) ([]byte, bool) {
 	rewritten = append(rewritten, cacheKeyJSON...)
 	rewritten = append(rewritten, '}')
 	return rewritten, true
+}
+
+func extractPromptCacheRetention(payload map[string]json.RawMessage) (string, bool) {
+	if len(payload["metadata"]) == 0 {
+		return "", false
+	}
+
+	var metadata map[string]string
+	if err := json.Unmarshal(payload["metadata"], &metadata); err != nil {
+		return "", false
+	}
+	retention, ok := metadata[promptCacheRetentionMetadataKey]
+	if !ok {
+		return "", false
+	}
+	delete(metadata, promptCacheRetentionMetadataKey)
+	if len(metadata) == 0 {
+		delete(payload, "metadata")
+	} else if metadataJSON, err := json.Marshal(metadata); err == nil {
+		payload["metadata"] = metadataJSON
+	}
+	return strings.TrimSpace(retention), true
 }
 
 func rawString(raw json.RawMessage) string {

@@ -91,6 +91,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
+function findLastTranscriptEntry(entries: TranscriptEntry[], predicate: (entry: TranscriptEntry) => boolean) {
+  const index = findLastTranscriptEntryIndex(entries, predicate)
+  return index >= 0 ? entries[index] : undefined
+}
+
+function findLastTranscriptEntryIndex(entries: TranscriptEntry[], predicate: (entry: TranscriptEntry) => boolean) {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    if (predicate(entries[index])) {
+      return index
+    }
+  }
+  return -1
+}
+
 /**
  * Safely convert any value to a displayable string.
  * - strings are returned as-is
@@ -1205,11 +1219,13 @@ export function updateTranscriptFromStreamEvent(entries: TranscriptEntry[], even
     }
 
     if (kind === 'stream_recovery') {
-      const attempt = Number(payload.Metadata?.attempt ?? payload.metadata?.attempt ?? 1)
-      const maxAttempts = Number(payload.Metadata?.max_attempts ?? payload.metadata?.max_attempts ?? 3)
+      const upperMetadata = isRecord(payload.Metadata) ? payload.Metadata : {}
+      const lowerMetadata = isRecord(payload.metadata) ? payload.metadata : {}
+      const attempt = Number(upperMetadata.attempt ?? lowerMetadata.attempt ?? 1)
+      const maxAttempts = Number(upperMetadata.max_attempts ?? lowerMetadata.max_attempts ?? 3)
       const errorMessage = String(payload.Err ?? payload.err ?? 'transient error')
       // Merge consecutive recovery entries into a single entry that updates in place
-      const existingIndex = entries.findLastIndex((e) => e.kind === 'recovery')
+      const existingIndex = findLastTranscriptEntryIndex(entries, (entry) => entry.kind === 'recovery')
       if (existingIndex >= 0 && existingIndex === entries.length - 1) {
         const next = [...entries]
         next[existingIndex] = {
@@ -1375,7 +1391,7 @@ export function updateTranscriptFromStreamEvent(entries: TranscriptEntry[], even
       return settledEntries
     }
     // Deduplicate: if the last error entry already shows the same message, don't append again
-    const lastError = settledEntries.findLast((e) => e.kind === 'error')
+    const lastError = findLastTranscriptEntry(settledEntries, (entry) => entry.kind === 'error')
     if (lastError && compactWhitespace(lastError.content ?? '') === compactWhitespace(message)) {
       return settledEntries
     }

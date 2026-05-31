@@ -273,7 +273,7 @@ func TestRunnerToolContextCarriesMetadataToolCallAndEmitter(t *testing.T) {
 	}
 }
 
-func TestRunnerInjectsStepPreModelOnEveryTurnAndToolResultOnlyAfterToolContinuation(t *testing.T) {
+func TestRunnerInjectsStepPreModelOnEveryTurnAndToolResultAfterToolContinuation(t *testing.T) {
 	registry := coretools.NewRegistry()
 	if err := registry.Register(coretools.Tool{
 		Name: "lookup_weather",
@@ -346,15 +346,15 @@ func TestRunnerInjectsStepPreModelOnEveryTurnAndToolResultOnlyAfterToolContinuat
 	if secondReq[3].Role != model.RoleAssistant || len(secondReq[3].ToolCalls) != 1 {
 		t.Fatalf("second request assistant replay = %#v, want assistant tool call replay", secondReq[3])
 	}
-	if secondReq[4].Role != model.RoleSystem || secondReq[4].Content != "Tool-result prompt" {
-		t.Fatalf("second request tool-result prompt = %#v, want prompt between assistant and tool", secondReq[4])
+	if secondReq[4].Role != model.RoleTool || secondReq[4].ToolCallId != "call_1" || secondReq[4].Content != "sunny" {
+		t.Fatalf("second request tool replay = %#v, want tool output replay immediately after assistant", secondReq[4])
 	}
-	if secondReq[5].Role != model.RoleTool || secondReq[5].Content != "sunny" {
-		t.Fatalf("second request tool replay = %#v, want tool output replay", secondReq[5])
+	if secondReq[5].Role != model.RoleSystem || secondReq[5].Content != "Tool-result prompt" {
+		t.Fatalf("second request tool-result prompt = %#v, want prompt after tool output", secondReq[5])
 	}
 }
 
-func TestRunnerInjectsToolResultPromptBetweenAssistantAndMultipleToolMessagesOncePerTurn(t *testing.T) {
+func TestRunnerInjectsToolResultPromptAfterMultipleToolMessagesOncePerTurn(t *testing.T) {
 	registry := coretools.NewRegistry()
 	if err := registry.Register(coretools.Tool{
 		Name: "lookup_weather",
@@ -427,17 +427,17 @@ func TestRunnerInjectsToolResultPromptBetweenAssistantAndMultipleToolMessagesOnc
 	if secondReq[3].Role != model.RoleAssistant || len(secondReq[3].ToolCalls) != 2 {
 		t.Fatalf("second request assistant replay = %#v, want assistant tool-call replay", secondReq[3])
 	}
-	if secondReq[4].Role != model.RoleSystem || secondReq[4].Content != "Tool-result prompt one" {
-		t.Fatalf("second request first tool-result prompt = %#v, want first tool-result prompt after assistant", secondReq[4])
+	if secondReq[4].Role != model.RoleTool || secondReq[4].ToolCallId != "call_1" || secondReq[4].Content != "sunny" {
+		t.Fatalf("second request first tool replay = %#v, want weather tool result immediately after assistant", secondReq[4])
 	}
-	if secondReq[5].Role != model.RoleSystem || secondReq[5].Content != "Tool-result prompt two" {
-		t.Fatalf("second request second tool-result prompt = %#v, want second tool-result prompt after assistant", secondReq[5])
+	if secondReq[5].Role != model.RoleTool || secondReq[5].ToolCallId != "call_2" || secondReq[5].Content != "08:00" {
+		t.Fatalf("second request second tool replay = %#v, want time tool result immediately after first tool", secondReq[5])
 	}
-	if secondReq[6].Role != model.RoleTool || secondReq[6].ToolCallId != "call_1" || secondReq[6].Content != "sunny" {
-		t.Fatalf("second request first tool replay = %#v, want weather tool result", secondReq[6])
+	if secondReq[6].Role != model.RoleSystem || secondReq[6].Content != "Tool-result prompt one" {
+		t.Fatalf("second request first tool-result prompt = %#v, want first tool-result prompt after tool messages", secondReq[6])
 	}
-	if secondReq[7].Role != model.RoleTool || secondReq[7].ToolCallId != "call_2" || secondReq[7].Content != "08:00" {
-		t.Fatalf("second request second tool replay = %#v, want time tool result", secondReq[7])
+	if secondReq[7].Role != model.RoleSystem || secondReq[7].Content != "Tool-result prompt two" {
+		t.Fatalf("second request second tool-result prompt = %#v, want second tool-result prompt after tool messages", secondReq[7])
 	}
 
 	assertMessagesContainContentOnce(t, secondReq, "Tool-result prompt one")

@@ -282,6 +282,26 @@ func TestModelLogicRejectsCustomModelMissingRequiredFields(t *testing.T) {
 	}
 }
 
+func TestModelLogicAcceptsOpenAIChatCustomModel(t *testing.T) {
+	logic := newModelLogicForTest(t, nil)
+
+	created, err := logic.CreateCustomModel(context.Background(), CreateCustomModelInput{
+		OwnerUserID:      1,
+		ProviderID:       "official-openai-chat",
+		ModelID:          "gpt-5.5",
+		DisplayName:      "Official Chat",
+		ProviderType:     coretypes.LLMTypeOpenAIChat,
+		APIKey:           "secret",
+		ContextMaxTokens: 32768,
+	})
+	if err != nil {
+		t.Fatalf("CreateCustomModel(openai_chat) error = %v", err)
+	}
+	if created.ProviderType != coretypes.LLMTypeOpenAIChat {
+		t.Fatalf("ProviderType = %q, want %q", created.ProviderType, coretypes.LLMTypeOpenAIChat)
+	}
+}
+
 func TestModelLogicRejectsCustomProviderIDCollidingWithYAMLProvider(t *testing.T) {
 	logic := newModelLogicForTest(t, []coretypes.LLMProvider{{
 		BaseProvider: coretypes.BaseProvider{Name: "openai"},

@@ -20,7 +20,8 @@ type YAMLModelRow = {
 
 const providerTypes = [
   { value: 'openai_responses', label: 'OpenAI Responses' },
-  { value: 'openai_completions', label: 'OpenAI Completions' },
+  { value: 'openai_chat', label: 'OpenAI Chat（官方）' },
+  { value: 'openai_completions', label: 'OpenAI Completions（兼容）' },
   { value: 'google', label: 'Google' },
 ]
 
@@ -369,7 +370,7 @@ onMounted(() => {
     <section class="admin-section">
       <div class="admin-section-heading">
         <h2>自定义模型</h2>
-        <button class="ghost-button" type="button" @click="openCreateDialog">新增模型</button>
+        <button class="ghost-button" type="button" data-admin-model-create @click="openCreateDialog">新增模型</button>
       </div>
       <div class="admin-table admin-model-table">
         <div class="admin-table-row admin-custom-model-row admin-table-head">

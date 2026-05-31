@@ -1190,6 +1190,58 @@ describe('ChatView', () => {
     )
   })
 
+  it('does not reuse a stale conversation event sequence for a different running task', async () => {
+    localStorage.setItem(
+      'agent-runtime.chat-state',
+      JSON.stringify({
+        activeConversationId: 'conv_1',
+        activeTaskId: '',
+        activeTaskIdByConversation: {},
+        activeTaskEventSeqByConversation: { conv_1: 12 },
+        selectedSkillsByConversation: {},
+      }),
+    )
+    api.fetchConversations.mockResolvedValue([
+      {
+        id: 'conv_1',
+        title: 'First chat',
+        last_message: 'hello',
+        message_count: 2,
+        provider_id: 'openai',
+        model_id: 'gpt-5.4',
+        created_by: 'demo-user',
+        created_at: '',
+        updated_at: '',
+      },
+    ])
+    api.fetchConversationMessages.mockResolvedValue([{ role: 'assistant', content: 'hello' }])
+    api.findRunningTaskByConversation.mockResolvedValue({
+      id: 'task_new',
+      status: 'running',
+      input: { conversation_id: 'conv_1' },
+    })
+    api.streamRunTask.mockResolvedValue({ conversation_id: 'conv_1' })
+
+    const router = makeRouter()
+    await router.push('/chat/conv_1')
+    await router.isReady()
+
+    mount(ChatView, {
+      global: {
+        plugins: [router],
+      },
+    })
+
+    await flushPromises()
+
+    expect(api.streamRunTask).toHaveBeenCalledWith(
+      'task_new',
+      expect.any(Function),
+      expect.any(Function),
+      expect.objectContaining({ afterSeq: 0, signal: expect.any(AbortSignal) }),
+    )
+  })
+
   it('does not restore entries from localStorage on fresh page load', async () => {
     localStorage.setItem(
       'agent-runtime.chat-state',

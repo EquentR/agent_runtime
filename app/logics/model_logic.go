@@ -787,7 +787,7 @@ func validateCreateCustomModelInput(input CreateCustomModelInput) error {
 
 func isSupportedCustomProviderType(providerType string) bool {
 	switch strings.TrimSpace(providerType) {
-	case coretypes.LLMTypeOpenAIResponses, coretypes.LLMTypeOpenAICompletions, coretypes.LLMTypeGoogle:
+	case coretypes.LLMTypeOpenAIResponses, coretypes.LLMTypeOpenAIChat, coretypes.LLMTypeOpenAICompletions, coretypes.LLMTypeGoogle:
 		return true
 	default:
 		return false

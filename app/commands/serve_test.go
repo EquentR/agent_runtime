@@ -181,6 +181,20 @@ func TestBuildConfiguredLLMClientFactoryUsesResolvedTimeout(t *testing.T) {
 	}
 }
 
+func TestBuildLLMClientFactoryCreatesOpenAIChatClient(t *testing.T) {
+	factory := buildLLMClientFactory(0)
+	provider := &coretypes.LLMProvider{BaseProvider: coretypes.BaseProvider{Name: "openai", BaseUrl: "https://api.openai.com/v1", APIKey: "test-key"}}
+	llmModel := &coretypes.LLMModel{BaseModel: coretypes.BaseModel{ID: "gpt-5.5", Name: "GPT 5.5"}, Type: coretypes.LLMTypeOpenAIChat}
+
+	client, err := factory(provider, llmModel)
+	if err != nil {
+		t.Fatalf("factory() error = %v", err)
+	}
+	if client == nil {
+		t.Fatal("client = nil, want openai_chat client")
+	}
+}
+
 func TestPromptBuildRouterDependenciesExposePromptRuntime(t *testing.T) {
 	db := newServeTestDB(t)
 	promptRuntime, err := initPromptRuntime(db)
