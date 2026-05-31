@@ -663,7 +663,7 @@ export interface MemoryCompression {
 
 export interface TranscriptEntry {
   id: string
-  kind: 'user' | 'reasoning' | 'tool' | 'reply' | 'error' | 'approval' | 'question' | 'memory'
+  kind: 'user' | 'reasoning' | 'tool' | 'reply' | 'error' | 'approval' | 'question' | 'memory' | 'recovery'
   title: string
   content?: string
   attachments?: AttachmentRef[]

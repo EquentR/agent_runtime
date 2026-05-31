@@ -2195,3 +2195,36 @@ describe('memory.compressed event', () => {
     expect(result).toEqual([])
   })
 })
+
+describe('stream_recovery event', () => {
+  it('appends a recovery entry with attempt info', () => {
+    const result = updateTranscriptFromStreamEvent([], {
+      type: 'log.message',
+      payload: {
+        Kind: 'stream_recovery',
+        Err: 'unexpected HTML response',
+        Metadata: { attempt: 2, max_attempts: 3 },
+      },
+    })
+
+    expect(result).toHaveLength(1)
+    expect(result[0].kind).toBe('recovery')
+    expect(result[0].title).toBe('自动重试')
+    expect(result[0].content).toBe('unexpected HTML response (2/3)')
+  })
+
+  it('handles lowercase payload keys', () => {
+    const result = updateTranscriptFromStreamEvent([], {
+      type: 'log.message',
+      payload: {
+        kind: 'stream_recovery',
+        err: 'timeout',
+        metadata: { attempt: 1, max_attempts: 3 },
+      },
+    })
+
+    expect(result).toHaveLength(1)
+    expect(result[0].kind).toBe('recovery')
+    expect(result[0].content).toBe('timeout (1/3)')
+  })
+})

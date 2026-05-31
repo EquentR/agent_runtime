@@ -673,6 +673,15 @@ function showCopyToast(message: string, variant: 'success' | 'error') {
               <span v-if="entry.content" class="trace-detail-preview">{{ entry.content }}</span>
             </summary>
           </details>
+          <details v-else-if="entry.kind === 'recovery'" class="trace-detail trace-recovery-detail trace-flat-shell">
+            <summary class="trace-detail-summary">
+              <span class="trace-summary-leading">
+                <span class="trace-kind-badge recovery" aria-hidden="true"></span>
+                <span class="trace-detail-label">{{ entry.title }}</span>
+              </span>
+              <span v-if="entry.content" class="trace-detail-preview">{{ entry.content }}</span>
+            </summary>
+          </details>
           <div
             v-if="entry.kind === 'reply' && entry.content"
             class="trace-content markdown-content"
