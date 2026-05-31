@@ -436,9 +436,6 @@ function currentChatState() {
     activeTaskEventSeq: activeTaskEventSeq.value,
     activeTaskIdByConversation: activeTaskIdByConversation.value,
     activeTaskEventSeqByConversation: activeTaskEventSeqByConversation.value,
-    entries: entries.value,
-    draftEntriesByConversation: draftEntriesByConversation.value,
-    draftAttachmentsByConversation: draftAttachmentsByConversation.value,
     selectedSkillsByConversation: selectedSkillsByConversation.value,
     selectedWorkspaceModeByConversation: selectedWorkspaceModeByConversation.value,
     pendingWorkspaceMergeTaskIdByConversation: pendingWorkspaceMergeTaskIdByConversation.value,
@@ -457,7 +454,7 @@ function flushChatState() {
 }
 
 watch(
-  [activeConversationId, activeTaskId, activeTaskEventSeq, activeTaskIdByConversation, activeTaskEventSeqByConversation, entries, draftEntriesByConversation, draftAttachmentsByConversation, selectedSkillsByConversation, selectedWorkspaceModeByConversation, pendingWorkspaceMergeTaskIdByConversation],
+  [activeConversationId, activeTaskId, activeTaskEventSeq, activeTaskIdByConversation, activeTaskEventSeqByConversation, selectedSkillsByConversation, selectedWorkspaceModeByConversation, pendingWorkspaceMergeTaskIdByConversation],
   syncChatState,
   { deep: true },
 )
@@ -770,8 +767,12 @@ async function loadConversationForRoute(conversationId: string) {
   }
 
   syncSelectionFromConversation(conversationId)
+
+  // If this conversation has an active streaming task, use the in-memory cache
+  // to avoid losing real-time data. Otherwise always fetch from API.
+  const isStreaming = Boolean(activeTaskIdByConversation.value[conversationId])
   const draft = draftEntriesByConversation.value[conversationId]
-  if (draft) {
+  if (isStreaming && draft && draft.length > 0) {
     entries.value = draft
   } else {
     messagesLoading.value = true
@@ -779,7 +780,8 @@ async function loadConversationForRoute(conversationId: string) {
       const messages = await fetchConversationMessages(conversationId)
       const nextEntries = buildTranscriptEntries(messages)
       setDraftEntries(conversationId, nextEntries)
-      if (conversationId === routeConversationId.value) {
+      // Update entries if user is viewing this conversation (via route or programmatic selection)
+      if (conversationId === routeConversationId.value || conversationId === activeConversationId.value) {
         entries.value = nextEntries
       }
     } catch (error) {
@@ -848,6 +850,21 @@ async function completeTaskConversation(conversationId: string, taskId: string, 
   }
   clearTaskStateForConversation(conversationId)
   await loadConversations(routeConversationId.value || conversationId)
+
+  // After streaming completes, re-fetch from API to ensure consistency
+  // between the streaming incremental state and the server's final state.
+  try {
+    const messages = await fetchConversationMessages(conversationId)
+    const freshEntries = buildTranscriptEntries(messages)
+    setDraftEntries(conversationId, freshEntries)
+    // Update displayed entries if this conversation is currently visible:
+    // - directly selected, matched by route, or user is on the home route
+    if (conversationId === activeConversationId.value || routeConversationId.value === conversationId || !routeConversationId.value) {
+      entries.value = freshEntries
+    }
+  } catch {
+    // Non-critical: keep the streaming-derived entries as fallback
+  }
 }
 
 async function attachTaskStream(taskId: string, conversationId = '') {
@@ -1415,8 +1432,6 @@ onMounted(async () => {
   if (saved.activeConversationId && !activeTaskEventSeqByConversation.value[saved.activeConversationId]) {
     activeTaskEventSeqByConversation.value[saved.activeConversationId] = saved.activeTaskEventSeq
   }
-  entries.value = saved.entries
-  draftEntriesByConversation.value = saved.draftEntriesByConversation
   selectedSkillsByConversation.value = saved.selectedSkillsByConversation
   selectedWorkspaceModeByConversation.value = saved.selectedWorkspaceModeByConversation
   pendingWorkspaceMergeTaskIdByConversation.value = saved.pendingWorkspaceMergeTaskIdByConversation

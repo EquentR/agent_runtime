@@ -1,4 +1,4 @@
-import type { TranscriptEntry, WorkspaceMode } from '../types/api'
+import type { WorkspaceMode } from '../types/api'
 
 const CHAT_STATE_KEY = 'agent-runtime.chat-state'
 const CHAT_STATE_SAVE_DELAY_MS = 75
@@ -9,8 +9,6 @@ interface ChatState {
   activeTaskEventSeq: number
   activeTaskIdByConversation: Record<string, string>
   activeTaskEventSeqByConversation: Record<string, number>
-  entries: TranscriptEntry[]
-  draftEntriesByConversation: Record<string, TranscriptEntry[]>
   selectedSkillsByConversation: Record<string, string[]>
   selectedWorkspaceModeByConversation: Record<string, WorkspaceMode>
   pendingWorkspaceMergeTaskIdByConversation: Record<string, string>
@@ -22,8 +20,6 @@ const EMPTY_STATE: ChatState = {
   activeTaskEventSeq: 0,
   activeTaskIdByConversation: {},
   activeTaskEventSeqByConversation: {},
-  entries: [],
-  draftEntriesByConversation: {},
   selectedSkillsByConversation: {},
   selectedWorkspaceModeByConversation: {},
   pendingWorkspaceMergeTaskIdByConversation: {},
@@ -70,15 +66,6 @@ export function loadChatState(): ChatState {
               Object.entries(parsed.activeTaskEventSeqByConversation).filter(
                 ([conversationId, seq]) =>
                   typeof conversationId === 'string' && typeof seq === 'number' && Number.isFinite(seq),
-              ),
-            )
-          : {},
-      entries: Array.isArray(parsed.entries) ? parsed.entries : [],
-      draftEntriesByConversation:
-        parsed.draftEntriesByConversation && typeof parsed.draftEntriesByConversation === 'object'
-          ? Object.fromEntries(
-              Object.entries(parsed.draftEntriesByConversation).filter(
-                ([conversationId, entries]) => typeof conversationId === 'string' && Array.isArray(entries),
               ),
             )
           : {},

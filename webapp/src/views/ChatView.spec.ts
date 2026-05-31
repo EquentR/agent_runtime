@@ -802,46 +802,6 @@ describe('ChatView', () => {
         activeTaskIdByConversation: {
           conv_stats: 'task_stats',
         },
-        entries: [{ id: 'reply-stats', kind: 'reply', title: '', content: 'done', provider_id: 'aihubmix', model_id: 'gpt-5.4', token_usage: { prompt_tokens: 320, cached_prompt_tokens: 80, completion_tokens: 40, total_tokens: 360 } }],
-        draftEntriesByConversation: {
-          conv_stats: [
-            { id: 'reply-stats', kind: 'reply', title: '', content: 'done', provider_id: 'aihubmix', model_id: 'gpt-5.4', token_usage: { prompt_tokens: 320, cached_prompt_tokens: 80, completion_tokens: 40, total_tokens: 360 } },
-            {
-              id: 'memory-context-stats',
-              kind: 'memory',
-              title: '',
-              memory_context_state: {
-                short_term_tokens: 610,
-                summary_tokens: 290,
-                rendered_summary_tokens: 290,
-                total_tokens: 900,
-                short_term_limit: 2000,
-                summary_limit: 4000,
-                max_context_tokens: 922000,
-                has_summary: true,
-              },
-            },
-            {
-              id: 'memory-stats',
-              kind: 'memory',
-              title: '记忆压缩',
-              content: '1,200 → 900 tokens',
-              memory_compression: {
-                tokens_before: 1200,
-                tokens_after: 900,
-                short_term_tokens_before: 1200,
-                short_term_tokens_after: 600,
-                summary_tokens_before: 0,
-                summary_tokens_after: 300,
-                rendered_summary_tokens_before: 0,
-                rendered_summary_tokens_after: 300,
-                total_tokens_before: 1200,
-                total_tokens_after: 900,
-              },
-            },
-          ],
-        },
-        selectedSkillsByConversation: {},
       }),
     )
 
@@ -859,8 +819,8 @@ describe('ChatView', () => {
 
     const trigger = wrapper.find('[data-context-stats-trigger]')
     expect(trigger.exists()).toBe(true)
-    expect(trigger.text()).toContain('0.10%')
-    expect(trigger.attributes('title')).toContain('900')
+    expect(trigger.text()).toContain('0.02%')
+    expect(trigger.attributes('title')).toContain('150')
     expect(trigger.attributes('title')).toContain('922,000')
     expect(trigger.attributes('title')).not.toContain('320')
 
@@ -871,9 +831,9 @@ describe('ChatView', () => {
     const panel = panels.at(-1) ?? null
     expect(panel).not.toBeNull()
     expect(panel?.textContent ?? '').toContain('gpt-5.4')
-    expect(panel?.textContent ?? '').toContain('900')
+    expect(panel?.textContent ?? '').toContain('150')
     expect(panel?.textContent ?? '').toContain('922,000')
-    expect(panel?.textContent ?? '').toContain('1,200')
+    expect(panel?.textContent ?? '').toContain('999')
     expect(panel?.textContent ?? '').not.toContain('Prompt')
     expect(panel?.textContent ?? '').not.toContain('Cached')
     expect(panel?.textContent ?? '').not.toContain('Output')
@@ -1230,7 +1190,7 @@ describe('ChatView', () => {
     )
   })
 
-  it('restores saved error trace when reopening without a persisted conversation', async () => {
+  it('does not restore entries from localStorage on fresh page load', async () => {
     localStorage.setItem(
       'agent-runtime.chat-state',
       JSON.stringify({
@@ -1252,7 +1212,7 @@ describe('ChatView', () => {
 
     await flushPromises()
 
-    expect(wrapper.text()).toContain('network lost')
+    expect(wrapper.text()).not.toContain('network lost')
   })
 
   it('refreshes conversations after send and keeps the returned conversation selected', async () => {
@@ -1304,7 +1264,7 @@ describe('ChatView', () => {
     await flushPromises()
 
     expect(api.fetchConversations).toHaveBeenCalledTimes(3)
-    expect(api.fetchConversationMessages).not.toHaveBeenCalled()
+    expect(api.fetchConversationMessages).toHaveBeenCalledWith('conv_new')
     expect(wrapper.text()).toContain('Newest chat')
     expect(wrapper.find('.conversation-card.active').text()).toContain('Newest chat')
   })
@@ -2576,6 +2536,19 @@ describe('ChatView', () => {
         },
       }
     })
+    api.fetchConversationMessages.mockResolvedValue([
+      {
+        role: 'assistant',
+        content: 'assistant answer',
+        provider_id: 'openai',
+        model_id: 'gpt-5.4',
+        usage: {
+          prompt_tokens: 321,
+          completion_tokens: 54,
+          total_tokens: 375,
+        },
+      },
+    ])
 
     const router = makeRouter()
     await router.push('/chat')
@@ -2594,7 +2567,7 @@ describe('ChatView', () => {
 
     const usage = wrapper.find('.trace-reply-usage')
     expect(usage.exists()).toBe(true)
-    expect(api.fetchConversationMessages).not.toHaveBeenCalled()
+    expect(api.fetchConversationMessages).toHaveBeenCalledWith('conv_new')
     expect(usage.text()).toContain('321')
     expect(usage.text()).toContain('54')
     expect(usage.text()).toContain('375')
@@ -2810,12 +2783,12 @@ describe('ChatView', () => {
     await conversationButtons[1].trigger('click')
     await flushPromises()
 
-    expect(secondWrapper.text()).toContain('background partial')
-
-    streamListeners[1]?.({ type: 'log.message', payload: { Kind: 'text_delta', Text: ' continued' } })
+    // After page reload, buffered stream content is not restored from localStorage.
+    // Instead, the stream reconnects and shows new events going forward.
+    streamListeners[1]?.({ type: 'log.message', payload: { Kind: 'text_delta', Text: 'resumed content' } })
     await flushPromises()
 
-    expect(secondWrapper.text()).toContain('background partial continued')
+    expect(secondWrapper.text()).toContain('resumed content')
 
     runningStream.resolve({ conversation_id: 'conv_new' })
     await flushPromises()
