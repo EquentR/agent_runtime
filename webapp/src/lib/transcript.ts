@@ -1134,14 +1134,14 @@ export function updateTranscriptFromStreamEvent(entries: TranscriptEntry[], even
     if (kind === 'stream_recovery') {
       const attempt = Number(payload.Metadata?.attempt ?? payload.metadata?.attempt ?? 1)
       const maxAttempts = Number(payload.Metadata?.max_attempts ?? payload.metadata?.max_attempts ?? 3)
-      const errMsg = String(payload.Err ?? payload.err ?? 'transient error')
+      const errorMessage = String(payload.Err ?? payload.err ?? 'transient error')
       return [
         ...entries,
         {
           id: createEntryId('recovery'),
           kind: 'recovery' as const,
           title: '自动重试',
-          content: `${errMsg} (${attempt}/${maxAttempts})`,
+          content: `${errorMessage} (${attempt}/${maxAttempts})`,
         },
       ]
     }
