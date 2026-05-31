@@ -370,7 +370,7 @@ function upsertSkillEntry(entries: TranscriptEntry[], input: {
     title: '使用技能',
     details: [{
       key: input.toolCallId,
-      label: input.skillName || 'skill',
+      label: input.skillName || 'Skill',
       preview,
       collapsed: true,
       loading: input.loading,
