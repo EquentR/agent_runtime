@@ -55,6 +55,7 @@ security:
 tasks:
   workerCount: 16
   runnerId: example-agent
+  pollInterval: 5s
 
 tools:
   webSearch:

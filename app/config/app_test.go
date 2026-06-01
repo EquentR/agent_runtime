@@ -16,6 +16,7 @@ func TestConfigUnmarshalSupportsTasksAndWebSearchSettings(t *testing.T) {
 tasks:
   workerCount: 4
   runnerId: configured-runner
+  pollInterval: 2s
 tools:
   webSearch:
     defaultProvider: tavily
@@ -36,6 +37,9 @@ tools:
 	}
 	if got := mustField(t, tasks, "RunnerID").String(); got != "configured-runner" {
 		t.Fatalf("tasks.runnerId = %q, want %q", got, "configured-runner")
+	}
+	if got := mustField(t, tasks, "PollInterval").Interface().(time.Duration); got != 2*time.Second {
+		t.Fatalf("tasks.pollInterval = %v, want %v", got, 2*time.Second)
 	}
 
 	tools := mustField(t, cfgValue, "Tools")
@@ -93,6 +97,7 @@ func TestConfigMappingsBuildTaskManagerAndWebSearchOptions(t *testing.T) {
 tasks:
   workerCount: 3
   runnerId: example-agent-configured
+  pollInterval: 3s
 tools:
   webSearch:
     defaultProvider: bing
@@ -116,6 +121,9 @@ tools:
 	}
 	if managerOptions.RunnerID != "example-agent-configured" {
 		t.Fatalf("managerOptions.RunnerID = %q, want %q", managerOptions.RunnerID, "example-agent-configured")
+	}
+	if managerOptions.PollInterval != 3*time.Second {
+		t.Fatalf("managerOptions.PollInterval = %v, want %v", managerOptions.PollInterval, 3*time.Second)
 	}
 
 	webSearch := mustField(t, mustField(t, reflect.ValueOf(cfg), "Tools"), "WebSearch")

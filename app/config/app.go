@@ -95,14 +95,16 @@ type TurnstileConfig struct {
 }
 
 type TaskManagerConfig struct {
-	WorkerCount int    `yaml:"workerCount"`
-	RunnerID    string `yaml:"runnerId"`
+	WorkerCount  int           `yaml:"workerCount"`
+	RunnerID     string        `yaml:"runnerId"`
+	PollInterval time.Duration `yaml:"pollInterval"`
 }
 
 func (c TaskManagerConfig) ManagerOptions(auditRecorder coretasks.AuditRecorder) coretasks.ManagerOptions {
 	return coretasks.ManagerOptions{
 		RunnerID:      c.RunnerID,
 		WorkerCount:   c.WorkerCount,
+		PollInterval:  c.PollInterval,
 		AuditRecorder: auditRecorder,
 	}
 }
