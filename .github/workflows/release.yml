@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - v*
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release tag to publish, for example v0.2.0
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -15,6 +21,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref }}
 
       - name: Set up Go
         uses: actions/setup-go@v6
@@ -81,6 +89,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref }}
 
       - name: Set up Go
         uses: actions/setup-go@v6
@@ -119,9 +129,10 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           BINARY_EXT: ${{ matrix.binary_ext }}
           ARCHIVE_EXT: ${{ matrix.archive_ext }}
+          RELEASE_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME}"
+          version="${RELEASE_VERSION}"
           commit="$(git rev-parse --short HEAD)"
           package_name="ice_art_${GOOS}_${GOARCH}"
           staging_dir="release/${package_name}"
@@ -173,4 +184,5 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v3
         with:
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
           files: release-assets/*
