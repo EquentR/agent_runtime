@@ -1,0 +1,176 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - v*
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.26.0
+          run_install: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: webapp/pnpm-lock.yaml
+
+      - name: Backend tests
+        run: go test ./...
+
+      - name: Frontend checks
+        run: |
+          pnpm --dir webapp install --frozen-lockfile
+          pnpm --dir webapp exec vue-tsc -b
+          pnpm --dir webapp exec vitest run
+          pnpm --dir webapp build
+
+  build:
+    name: Build ${{ matrix.goos }}-${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            binary_ext: ""
+            archive_ext: tar.gz
+          - goos: linux
+            goarch: arm64
+            binary_ext: ""
+            archive_ext: tar.gz
+          - goos: darwin
+            goarch: amd64
+            binary_ext: ""
+            archive_ext: tar.gz
+          - goos: darwin
+            goarch: arm64
+            binary_ext: ""
+            archive_ext: tar.gz
+          - goos: windows
+            goarch: amd64
+            binary_ext: .exe
+            archive_ext: zip
+          - goos: windows
+            goarch: arm64
+            binary_ext: .exe
+            archive_ext: zip
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.26.0
+          run_install: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: webapp/pnpm-lock.yaml
+
+      - name: Build frontend
+        run: |
+          pnpm --dir webapp install --frozen-lockfile
+          pnpm --dir webapp build
+
+      - name: Prepare embedded frontend
+        run: |
+          rm -rf app/router/embedded_web
+          mkdir -p app/router/embedded_web
+          cp -R webapp/dist/. app/router/embedded_web/
+
+      - name: Build archive
+        id: package
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          BINARY_EXT: ${{ matrix.binary_ext }}
+          ARCHIVE_EXT: ${{ matrix.archive_ext }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME}"
+          commit="$(git rev-parse --short HEAD)"
+          package_name="ice_art_${GOOS}_${GOARCH}"
+          staging_dir="release/${package_name}"
+          binary_name="ice_art${BINARY_EXT}"
+
+          mkdir -p "${staging_dir}/conf" "${staging_dir}/data" "${staging_dir}/logs" "${staging_dir}/workspace"
+          GOOS="${GOOS}" GOARCH="${GOARCH}" CGO_ENABLED=0 go build \
+            -tags embed_web \
+            -trimpath \
+            -ldflags "-s -w -X main.Version=${version} -X main.GitCommit=${commit}" \
+            -o "${staging_dir}/${binary_name}" \
+            ./cmd/ice_art
+          cp conf/app.yaml "${staging_dir}/conf/app.yaml"
+
+          if [[ "${ARCHIVE_EXT}" == "zip" ]]; then
+            artifact_path="release/${package_name}.zip"
+            (cd release && zip -r "${package_name}.zip" "${package_name}")
+          else
+            artifact_path="release/${package_name}.tar.gz"
+            (cd release && tar -czf "${package_name}.tar.gz" "${package_name}")
+          fi
+
+          echo "artifact_name=${package_name}" >> "${GITHUB_OUTPUT}"
+          echo "artifact_path=${artifact_path}" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload archive
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.package.outputs.artifact_name }}
+          path: ${{ steps.package.outputs.artifact_path }}
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Download archives
+        uses: actions/download-artifact@v8
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate checksums
+        run: |
+          cd release-assets
+          sha256sum * > SHA256SUMS
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: release-assets/*
