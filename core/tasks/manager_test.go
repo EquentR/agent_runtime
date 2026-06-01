@@ -357,6 +357,56 @@ func TestManagerReconcilerSkipsWaitingToolApprovalTaskInsideGraceWindow(t *testi
 	}
 }
 
+func TestManagerReconcilerRecoversStaleWaitingToolApprovalTask(t *testing.T) {
+	store := newTestStore(t)
+	approvalStore := approvals.NewStore(store.db)
+	if err := approvalStore.AutoMigrate(); err != nil {
+		t.Fatalf("approvalStore.AutoMigrate() error = %v", err)
+	}
+	manager := NewManager(store, ManagerOptions{
+		RunnerID:      "runner-1",
+		PollInterval:  5 * time.Millisecond,
+		ApprovalStore: approvalStore,
+	})
+
+	ctx := context.Background()
+	task := createResolvedWaitingToolApprovalTaskForReconcilerTest(t, ctx, manager, store, approvalStore)
+
+	staleWaitingAt := time.Now().UTC().Add(-2 * minWaitingTaskReconciliationAge)
+	if err := store.db.WithContext(ctx).Model(&Task{}).Where("id = ?", task.ID).Update("updated_at", staleWaitingAt).Error; err != nil {
+		t.Fatalf("age waiting task: %v", err)
+	}
+
+	if recovered := manager.reconcileResolvedWaitingToolApprovalTasks(ctx); !recovered {
+		t.Fatal("reconciler recovered = false, want true for stale waiting task")
+	}
+
+	queued, err := manager.GetTask(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("GetTask() error = %v", err)
+	}
+	if queued.Status != StatusQueued {
+		t.Fatalf("queued status = %q, want %q", queued.Status, StatusQueued)
+	}
+	if queued.SuspendReason != "" {
+		t.Fatalf("queued suspend_reason = %q, want empty", queued.SuspendReason)
+	}
+
+	events, err := manager.ListEvents(ctx, task.ID, 0, 20)
+	if err != nil {
+		t.Fatalf("ListEvents() error = %v", err)
+	}
+	resumedCount := 0
+	for _, event := range events {
+		if event.EventType == EventTaskResumed {
+			resumedCount++
+		}
+	}
+	if resumedCount != 1 {
+		t.Fatalf("task.resumed count = %d, want 1", resumedCount)
+	}
+}
+
 func createResolvedWaitingToolApprovalTaskForReconcilerTest(t *testing.T, ctx context.Context, manager *Manager, store *Store, approvalStore *approvals.Store) *Task {
 	t.Helper()
 
