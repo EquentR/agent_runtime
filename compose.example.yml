@@ -1,0 +1,28 @@
+services:
+  ice-art:
+    image: ghcr.io/equentr/ice-art:${ICE_ART_VERSION:-v0.2.0}
+    container_name: ice-art
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      APP_SECRET: ${APP_SECRET:?APP_SECRET is required}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY:-}
+      TURNSTILE_SECRET: ${TURNSTILE_SECRET:-}
+    ports:
+      - "${ICE_ART_PORT:-18080}:18080"
+    volumes:
+      - ice_art_data:/app/data
+      - ice_art_logs:/app/logs
+      - ice_art_workspace:/app/workspace
+
+volumes:
+  ice_art_data:
+  ice_art_logs:
+  ice_art_workspace:

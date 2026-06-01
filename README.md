@@ -226,7 +226,7 @@ pnpm --dir webapp test
 
 发布二进制名称为 `ice_art`，Windows 平台为 `ice_art.exe`。发布构建会先构建 `webapp`，再通过 Go `embed` 将前端静态文件打包进后端二进制，因此 release 包不再需要携带 `static/web` 目录。
 
-推送 `v*` tag 会触发 GitHub Release，生成以下六个平台资产：
+推送到 `main` 或 `master` 只触发自动化测试和构建检查，不发布 Release 或镜像。推送 `v*` tag 会触发 GitHub Release，生成以下六个平台资产：
 
 ```text
 ice_art_linux_amd64.tar.gz
@@ -237,9 +237,16 @@ ice_art_windows_amd64.zip
 ice_art_windows_arm64.zip
 ```
 
-容器镜像默认发布到 GHCR：
+容器镜像只在推送 `v*` tag 时发布到 GHCR，并写入版本 tag：
 
 ```text
-ghcr.io/equentr/ice-art:<tag>
-ghcr.io/equentr/ice-art:latest
+ghcr.io/equentr/ice-art:v0.2.0
+ghcr.io/equentr/ice-art:0.2.0
+ghcr.io/equentr/ice-art:sha-<commit>
+```
+
+Docker Compose 示例见 `compose.example.yml`。复制 `.env.example` 为 `.env`，填写 `APP_SECRET`、`OPENAI_API_KEY` 等环境变量后启动：
+
+```bash
+docker compose -f compose.example.yml up -d
 ```
