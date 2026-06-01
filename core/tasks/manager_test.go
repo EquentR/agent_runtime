@@ -293,6 +293,113 @@ func TestManagerReconcilesWaitingToolApprovalAfterPostSuspendFinalizeFailure(t *
 	}
 }
 
+func TestManagerReconcilerSkipsFreshWaitingToolApprovalTask(t *testing.T) {
+	store := newTestStore(t)
+	approvalStore := approvals.NewStore(store.db)
+	if err := approvalStore.AutoMigrate(); err != nil {
+		t.Fatalf("approvalStore.AutoMigrate() error = %v", err)
+	}
+	manager := NewManager(store, ManagerOptions{
+		RunnerID:      "runner-1",
+		PollInterval:  time.Hour,
+		ApprovalStore: approvalStore,
+	})
+
+	ctx := context.Background()
+	task := createResolvedWaitingToolApprovalTaskForReconcilerTest(t, ctx, manager, store, approvalStore)
+
+	if recovered := manager.reconcileResolvedWaitingToolApprovalTasks(ctx); recovered {
+		t.Fatal("reconciler recovered a fresh waiting task, want it to wait for normal suspend finalization")
+	}
+
+	fresh, err := manager.GetTask(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("GetTask() error = %v", err)
+	}
+	if fresh.Status != StatusWaiting {
+		t.Fatalf("fresh task status = %q, want %q", fresh.Status, StatusWaiting)
+	}
+	if fresh.SuspendReason != "waiting_for_tool_approval" {
+		t.Fatalf("fresh task suspend_reason = %q, want waiting_for_tool_approval", fresh.SuspendReason)
+	}
+}
+
+func TestManagerReconcilerSkipsWaitingToolApprovalTaskInsideGraceWindow(t *testing.T) {
+	store := newTestStore(t)
+	approvalStore := approvals.NewStore(store.db)
+	if err := approvalStore.AutoMigrate(); err != nil {
+		t.Fatalf("approvalStore.AutoMigrate() error = %v", err)
+	}
+	manager := NewManager(store, ManagerOptions{
+		RunnerID:      "runner-1",
+		PollInterval:  5 * time.Millisecond,
+		ApprovalStore: approvalStore,
+	})
+
+	ctx := context.Background()
+	task := createResolvedWaitingToolApprovalTaskForReconcilerTest(t, ctx, manager, store, approvalStore)
+
+	recentWaitingAt := time.Now().UTC().Add(-25 * time.Millisecond)
+	if err := store.db.WithContext(ctx).Model(&Task{}).Where("id = ?", task.ID).Update("updated_at", recentWaitingAt).Error; err != nil {
+		t.Fatalf("age waiting task: %v", err)
+	}
+
+	if recovered := manager.reconcileResolvedWaitingToolApprovalTasks(ctx); recovered {
+		t.Fatal("reconciler recovered a waiting task inside the grace window")
+	}
+
+	stillWaiting, err := manager.GetTask(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("GetTask() error = %v", err)
+	}
+	if stillWaiting.Status != StatusWaiting {
+		t.Fatalf("stillWaiting status = %q, want %q", stillWaiting.Status, StatusWaiting)
+	}
+}
+
+func createResolvedWaitingToolApprovalTaskForReconcilerTest(t *testing.T, ctx context.Context, manager *Manager, store *Store, approvalStore *approvals.Store) *Task {
+	t.Helper()
+
+	task, err := manager.CreateTask(ctx, CreateTaskInput{TaskType: "agent.run", CreatedBy: "alice"})
+	if err != nil {
+		t.Fatalf("CreateTask() error = %v", err)
+	}
+	claimed, _, err := store.ClaimNextTask(ctx, "runner-1", time.Minute)
+	if err != nil {
+		t.Fatalf("ClaimNextTask() error = %v", err)
+	}
+	if claimed == nil || claimed.ID != task.ID {
+		t.Fatalf("claimed task = %#v, want %q", claimed, task.ID)
+	}
+
+	approval, err := approvalStore.CreateApproval(ctx, approvals.CreateApprovalInput{
+		TaskID:           task.ID,
+		ConversationID:   "conv-1",
+		StepIndex:        1,
+		ToolCallID:       "call-1",
+		ToolName:         "bash",
+		ArgumentsSummary: "dangerous",
+		RiskLevel:        "high",
+		Reason:           "dangerous mutation",
+	})
+	if err != nil {
+		t.Fatalf("CreateApproval() error = %v", err)
+	}
+	if _, err := store.UpdateTaskMetadata(ctx, task.ID, map[string]any{
+		coretypes.TaskMetadataKeyInteractionCheckpoint: map[string]any{"interaction_id": approval.ID},
+	}); err != nil {
+		t.Fatalf("UpdateTaskMetadata() error = %v", err)
+	}
+	if _, _, err := store.MarkWaiting(ctx, task.ID, "waiting_for_tool_approval"); err != nil {
+		t.Fatalf("MarkWaiting() error = %v", err)
+	}
+	if _, _, err := approvalStore.ResolveApproval(ctx, task.ID, approval.ID, approvals.ResolveApprovalInput{Decision: approvals.DecisionApprove, Reason: "safe", DecisionBy: "alice"}); err != nil {
+		t.Fatalf("ResolveApproval() error = %v", err)
+	}
+
+	return task
+}
+
 func TestManagerResolveTaskApprovalDoesNotResumeNonToolWaitingTask(t *testing.T) {
 	store := newTestStore(t)
 	approvalStore := approvals.NewStore(store.db)

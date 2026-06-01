@@ -69,6 +69,9 @@ var ErrTaskSuspended = errors.New("task suspended")
 
 const defaultTaskPollInterval = 5 * time.Second
 
+// minWaitingTaskReconciliationAge 给 Runtime.Suspend 的正常审批收尾路径留出短暂窗口。
+const minWaitingTaskReconciliationAge = 50 * time.Millisecond
+
 // Manager 负责任务的创建、领取、串行执行、取消与事件发布。
 type Manager struct {
 	store        *Store
@@ -539,10 +542,20 @@ func (m *Manager) reconcileResolvedWaitingToolApprovalTasks(ctx context.Context)
 		return false
 	}
 
+	reconciliationAge := m.pollInterval
+	if reconciliationAge <= 0 {
+		reconciliationAge = defaultTaskPollInterval
+	}
+	if reconciliationAge < minWaitingTaskReconciliationAge {
+		reconciliationAge = minWaitingTaskReconciliationAge
+	}
+	cutoff := time.Now().UTC().Add(-reconciliationAge)
+
 	var waitingTasks []Task
 	if err := m.store.db.WithContext(ctx).
 		Where("status = ?", StatusWaiting).
 		Where("suspend_reason IN ?", []string{"waiting_for_interaction", "waiting_for_tool_approval"}).
+		Where("updated_at <= ?", cutoff).
 		Order("updated_at asc").
 		Limit(max(1, m.workerCount)).
 		Find(&waitingTasks).Error; err != nil {
