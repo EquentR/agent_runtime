@@ -108,8 +108,8 @@ pnpm --dir webapp install
 ### 3. 启动后端
 
 ```bash
-go build -o bin/example_agent ./cmd/example_agent
-./bin/example_agent -config conf/app.yaml
+go build -o bin/ice_art ./cmd/ice_art
+./bin/ice_art -config conf/app.yaml
 ```
 
 默认监听地址：
@@ -169,7 +169,7 @@ pnpm --dir webapp dev
 
 | 路径 | 说明 |
 |------|------|
-| `cmd/example_agent` | 可执行入口，读取配置并启动服务 |
+| `cmd/ice_art` | 可执行入口，读取配置并启动服务 |
 | `app/commands` / `app/config` / `app/router` | 应用层装配：服务启动、配置解析、路由注册 |
 | `app/handlers` / `app/logics` | HTTP handler 与应用层业务逻辑 |
 | `app/migration` | 数据库迁移注册与启动引导 |
@@ -222,3 +222,24 @@ pnpm --dir webapp test
 ```
 
 更多协作规范、目录职责和改动边界说明请查阅 `AGENTS.md`。
+## Release 与镜像
+
+发布二进制名称为 `ice_art`，Windows 平台为 `ice_art.exe`。发布构建会先构建 `webapp`，再通过 Go `embed` 将前端静态文件打包进后端二进制，因此 release 包不再需要携带 `static/web` 目录。
+
+推送 `v*` tag 会触发 GitHub Release，生成以下六个平台资产：
+
+```text
+ice_art_linux_amd64.tar.gz
+ice_art_linux_arm64.tar.gz
+ice_art_darwin_amd64.tar.gz
+ice_art_darwin_arm64.tar.gz
+ice_art_windows_amd64.zip
+ice_art_windows_arm64.zip
+```
+
+容器镜像默认发布到 GHCR：
+
+```text
+ghcr.io/equentr/ice-art:<tag>
+ghcr.io/equentr/ice-art:latest
+```

@@ -220,10 +220,14 @@ describe('ConversationSidebar', () => {
     await wrapper.find('.sidebar-user-menu-trigger').trigger('click')
     await nextTick()
 
-    const profileLink = document.body.querySelector('.sidebar-profile-link') as HTMLAnchorElement | null
-    expect(profileLink).not.toBeNull()
-    expect(profileLink?.getAttribute('href')).toBe('/profile')
-    expect(profileLink?.textContent).toContain('个人设置')
+    const profileButton = document.body.querySelector('.sidebar-profile-link') as HTMLButtonElement | null
+    expect(profileButton).not.toBeNull()
+    expect(profileButton?.textContent).toContain('个人设置')
+
+    profileButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await nextTick()
+
+    expect(wrapper.emitted('open-profile')).toHaveLength(1)
   })
 
   it('does not show approval management in the user menu', async () => {

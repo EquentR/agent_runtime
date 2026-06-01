@@ -1,0 +1,17 @@
+.git/
+.github/
+.idea/
+.superpowers/
+.worktree/
+.worktrees/
+data/
+data.bak/
+dist/
+logs/
+node_modules/
+webapp/node_modules/
+webapp/dist/
+example_agent.exe
+ice_art.exe
+full-test.json
+*.iml

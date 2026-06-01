@@ -54,7 +54,7 @@ security:
 
 tasks:
   workerCount: 16
-  runnerId: example-agent
+  runnerId: ice-art
   pollInterval: 5s
 
 tools:

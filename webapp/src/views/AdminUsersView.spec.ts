@@ -87,6 +87,7 @@ describe('AdminUsersView', () => {
       email_verified: false,
     }))
 
+    await wrapper.get('[data-user-row="2"]').trigger('click')
     await wrapper.get('[data-user-password-reset-input]').setValue('temporary-123')
     await wrapper.get('[data-user-password-reset-form]').trigger('submit')
     await flushPromises()
@@ -108,7 +109,7 @@ describe('AdminUsersView', () => {
     await flushPromises()
 
     expect(wrapper.find('[data-user-row="3"]').exists()).toBe(false)
-    expect(wrapper.text()).toContain('从左侧选择一个用户。')
+    expect(wrapper.find('[data-user-detail-form]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('bob@example.com')
   })
 
@@ -159,6 +160,6 @@ describe('AdminUsersView', () => {
       status: 'disabled',
     }))
     expect(wrapper.find('[data-user-row="2"]').exists()).toBe(false)
-    expect(wrapper.text()).toContain('从左侧选择一个用户。')
+    expect(wrapper.find('[data-user-detail-form]').exists()).toBe(false)
   })
 })

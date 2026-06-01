@@ -210,15 +210,20 @@ onMounted(() => {
         <div
           v-for="user in users"
           :key="user.id"
-          class="admin-table-row users-table-row"
+          class="admin-table-row users-table-row button-row"
           :data-user-row="user.id"
+          role="button"
+          tabindex="0"
+          @click="selectUser(user)"
+          @keydown.enter.prevent="selectUser(user)"
+          @keydown.space.prevent="selectUser(user)"
         >
           <span>{{ user.username }}</span>
           <span>{{ user.email || '-' }}</span>
           <span>{{ user.role }}</span>
           <span>{{ user.status }}</span>
           <span>
-            <button class="ghost-button small" type="button" @click="selectUser(user)">编辑</button>
+            <button class="ghost-button small" type="button" @click.stop="selectUser(user)">编辑</button>
           </span>
         </div>
         <div v-if="users.length === 0 && !loading" class="admin-table-row">

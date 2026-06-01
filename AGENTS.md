@@ -14,7 +14,7 @@
 - 如果后续新增这些文件，需要将其中规则并入本指南，并以作用域更小、路径更深的规则为更高优先级。
 
 ## 仓库结构
-- `cmd/example_agent`：可运行的参考二进制入口。
+- `cmd/ice_art`：可运行的参考二进制入口。
 - `app/commands`：启动装配、依赖构建、服务初始化。
 - `app/config`：应用级配置结构与默认值解析。
 - `app/router`：路由初始化与依赖下传。
@@ -44,7 +44,7 @@
 - `webapp`：Vue 3 + TypeScript + Vite 前端。
 
 ## 建议优先阅读
-- 启动链：`cmd/example_agent/main.go` -> `app/commands/serve.go` -> `app/router/init.go`。
+- 启动链：`cmd/ice_art/main.go` -> `app/commands/serve.go` -> `app/router/init.go`。
 - 主配置：`conf/app.yaml`。
 - 应用装配：`app/commands/serve.go`、`app/config/app.go`。
 - Handler 模式：`app/handlers/task_handler.go`、`app/handlers/interaction_handler.go`、`app/handlers/approval_handler.go`、`app/handlers/prompt_handler.go`。
@@ -97,7 +97,7 @@
 
 ## 架构规则
 - 不要发明新的启动路径；沿用现有启动链工作。
-- 应用配置从 `conf/app.yaml` 加载；`cmd/example_agent/main.go` 会在 YAML 反序列化前展开环境变量。
+- 应用配置从 `conf/app.yaml` 加载；`cmd/ice_art/main.go` 会在 YAML 反序列化前展开环境变量。
 - 新增运行时依赖时，在 `app/commands/serve.go` 完成装配。
 - 依赖通过 `app/router/deps.go` 向下传递，不要新增全局变量。
 - 新 handler 统一在 `app/router/init.go` 中集中注册，不要在 `serve.go` 临时挂路由。
