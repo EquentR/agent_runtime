@@ -339,7 +339,7 @@ func TestManagerReconcilerSkipsWaitingToolApprovalTaskInsideGraceWindow(t *testi
 	ctx := context.Background()
 	task := createResolvedWaitingToolApprovalTaskForReconcilerTest(t, ctx, manager, store, approvalStore)
 
-	recentWaitingAt := time.Now().UTC().Add(-25 * time.Millisecond)
+	recentWaitingAt := time.Now().UTC()
 	if err := store.db.WithContext(ctx).Model(&Task{}).Where("id = ?", task.ID).Update("updated_at", recentWaitingAt).Error; err != nil {
 		t.Fatalf("age waiting task: %v", err)
 	}

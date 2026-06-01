@@ -27,6 +27,15 @@ func newTestStore(t *testing.T) *Store {
 	if err != nil {
 		t.Fatalf("open test db: %v", err)
 	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("get test sql db: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := sqlDB.Close(); err != nil {
+			t.Fatalf("close test db: %v", err)
+		}
+	})
 
 	store := NewStore(db)
 	if err := store.AutoMigrate(); err != nil {
