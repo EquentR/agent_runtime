@@ -43,7 +43,8 @@ WORKDIR /app
 COPY --from=build --chown=65532:65532 /out/ice_art /app/ice_art
 COPY --from=build --chown=65532:65532 /out/runtime/ /app/
 
-ENV GIN_MODE=release
+ENV GIN_MODE=release \
+    TZ=Asia/Shanghai
 EXPOSE 18080
 VOLUME ["/app/data", "/app/logs", "/app/workspace"]
 
