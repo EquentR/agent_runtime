@@ -1,6 +1,6 @@
 services:
   ice-art:
-    image: ghcr.io/equentr/ice-art:${ICE_ART_VERSION:-v0.2.0}
+    image: ghcr.io/equentr/ice-art:${ICE_ART_VERSION:-latest}
     container_name: ice-art
     restart: unless-stopped
     environment:

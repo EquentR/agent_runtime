@@ -243,6 +243,7 @@ ice_art_windows_arm64.zip
 ghcr.io/equentr/ice-art:v0.2.0
 ghcr.io/equentr/ice-art:0.2.0
 ghcr.io/equentr/ice-art:sha-<commit>
+ghcr.io/equentr/ice-art:latest
 ```
 
 Docker Compose 示例见 `compose.example.yml`。复制 `.env.example` 为 `.env`，填写 `APP_SECRET`、`OPENAI_API_KEY` 等环境变量后启动：
