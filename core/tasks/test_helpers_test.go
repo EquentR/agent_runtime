@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -89,6 +90,27 @@ func registerTransientWriteErrorOnce(t *testing.T, db *gorm.DB, marker string, o
 	})
 
 	return callback
+}
+
+func registerTaskQuerySignalOnce(t *testing.T, db *gorm.DB, table string, signal chan<- struct{}) {
+	t.Helper()
+	callbackName := fmt.Sprintf("test:tasks:%s:query:%s", strings.ReplaceAll(t.Name(), "/", "_"), table)
+	var once sync.Once
+	if err := db.Callback().Query().After("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement == nil || tx.Statement.Schema == nil || tx.Statement.Schema.Table != table {
+			return
+		}
+		once.Do(func() {
+			close(signal)
+		})
+	}); err != nil {
+		t.Fatalf("register query callback: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := db.Callback().Query().Remove(callbackName); err != nil {
+			t.Fatalf("remove query callback: %v", err)
+		}
+	})
 }
 
 func (c *transientWriteErrorCallback) AssertInjected(t *testing.T) {

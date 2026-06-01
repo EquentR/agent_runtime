@@ -67,10 +67,13 @@ type AuditRecorder interface {
 
 var ErrTaskSuspended = errors.New("task suspended")
 
+const defaultTaskPollInterval = 5 * time.Second
+
 // Manager 负责任务的创建、领取、串行执行、取消与事件发布。
 type Manager struct {
 	store        *Store
 	hub          *EventHub
+	workNotifier *workNotifier
 	audit        AuditRecorder
 	approvals    *approvals.Store
 	interactions *interactions.Store
@@ -99,7 +102,7 @@ func NewManager(store *Store, options ManagerOptions) *Manager {
 	}
 	pollInterval := options.PollInterval
 	if pollInterval <= 0 {
-		pollInterval = 50 * time.Millisecond
+		pollInterval = defaultTaskPollInterval
 	}
 	leaseDuration := options.LeaseDuration
 	if leaseDuration <= 0 {
@@ -116,6 +119,7 @@ func NewManager(store *Store, options ManagerOptions) *Manager {
 	return &Manager{
 		store:             store,
 		hub:               NewEventHub(),
+		workNotifier:      newWorkNotifier(),
 		audit:             options.AuditRecorder,
 		approvals:         options.ApprovalStore,
 		interactions:      options.InteractionStore,
@@ -154,6 +158,7 @@ func (m *Manager) Start(ctx context.Context) {
 			corelog.Info("task worker started", corelog.String("component", "tasks"), corelog.String("module", "task_manager"), corelog.String("runner_id", m.runnerID), corelog.Int("worker_index", workerIndex))
 			go m.runWorker(ctx, workerIndex)
 		}
+		go m.reconciliationLoop(ctx)
 	})
 }
 
@@ -469,9 +474,10 @@ func (m *Manager) RetryTask(ctx context.Context, id string) (*Task, error) {
 	return task, nil
 }
 
-// runWorker 持续轮询并执行单个 worker 领取到的任务。
+// runWorker 持续领取并执行任务；空队列时等待显式唤醒或低频兜底轮询。
 func (m *Manager) runWorker(ctx context.Context, workerIndex int) {
 	for {
+		waitCh := m.workNotifier.current()
 		select {
 		case <-ctx.Done():
 			return
@@ -481,17 +487,14 @@ func (m *Manager) runWorker(ctx context.Context, workerIndex int) {
 		task, events, err := m.store.ClaimNextTask(ctx, m.runnerID, m.leaseDuration)
 		if err != nil {
 			corelog.Error("task claim failed", corelog.String("component", "tasks"), corelog.String("module", "task_manager"), corelog.String("runner_id", m.runnerID), corelog.Int("worker_index", workerIndex), corelog.Err(err))
-			time.Sleep(m.pollInterval)
+			if !m.waitForWork(ctx, waitCh) {
+				return
+			}
 			continue
 		}
 		if task == nil {
-			if m.reconcileResolvedWaitingToolApprovalTasks(ctx) {
-				continue
-			}
-			select {
-			case <-ctx.Done():
+			if !m.waitForWork(ctx, waitCh) {
 				return
-			case <-time.After(m.pollInterval):
 			}
 			continue
 		}
@@ -500,6 +503,34 @@ func (m *Manager) runWorker(ctx context.Context, workerIndex int) {
 		m.recordTaskStarted(task)
 		m.publish(events...)
 		m.executeTask(ctx, task)
+	}
+}
+
+func (m *Manager) waitForWork(ctx context.Context, waitCh <-chan struct{}) bool {
+	timer := time.NewTimer(m.pollInterval)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-waitCh:
+		return true
+	case <-timer.C:
+		return true
+	}
+}
+
+func (m *Manager) reconciliationLoop(ctx context.Context) {
+	ticker := time.NewTicker(m.pollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if m.reconcileResolvedWaitingToolApprovalTasks(ctx) {
+				m.notifyWorkers()
+			}
+		}
 	}
 }
 
@@ -643,9 +674,29 @@ func (m *Manager) heartbeatLoop(ctx context.Context, taskID string) {
 	}
 }
 
-// publish 将事件推送给所有实时订阅者。
+// publish 将事件推送给所有实时订阅者，并在任务变为可领取时唤醒 worker。
 func (m *Manager) publish(events ...TaskEvent) {
 	m.hub.Publish(events...)
+	if taskEventsContainRunnableTask(events...) {
+		m.notifyWorkers()
+	}
+}
+
+func (m *Manager) notifyWorkers() {
+	if m == nil || m.workNotifier == nil {
+		return
+	}
+	m.workNotifier.notifyAll()
+}
+
+func taskEventsContainRunnableTask(events ...TaskEvent) bool {
+	for _, event := range events {
+		switch event.EventType {
+		case EventTaskCreated, EventTaskResumed:
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Manager) recordTaskCreated(task *Task) {

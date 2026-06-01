@@ -16,7 +16,6 @@ import (
 	"gorm.io/gorm"
 )
 
-
 func newApprovalAndInteractionStoresForTest(t *testing.T, store *Store) (*approvals.Store, *interactions.Store) {
 	t.Helper()
 	approvalStore := approvals.NewStore(store.db)
@@ -956,10 +955,18 @@ type taskLogEntry struct {
 	fields map[string]any
 }
 
-func (s *taskLogSpy) Debug(msg string, fields ...corelog.Field) { s.entries = append(s.entries, newTaskLogEntry("debug", msg, fields...)) }
-func (s *taskLogSpy) Info(msg string, fields ...corelog.Field)  { s.entries = append(s.entries, newTaskLogEntry("info", msg, fields...)) }
-func (s *taskLogSpy) Warn(msg string, fields ...corelog.Field)  { s.entries = append(s.entries, newTaskLogEntry("warn", msg, fields...)) }
-func (s *taskLogSpy) Error(msg string, fields ...corelog.Field) { s.entries = append(s.entries, newTaskLogEntry("error", msg, fields...)) }
+func (s *taskLogSpy) Debug(msg string, fields ...corelog.Field) {
+	s.entries = append(s.entries, newTaskLogEntry("debug", msg, fields...))
+}
+func (s *taskLogSpy) Info(msg string, fields ...corelog.Field) {
+	s.entries = append(s.entries, newTaskLogEntry("info", msg, fields...))
+}
+func (s *taskLogSpy) Warn(msg string, fields ...corelog.Field) {
+	s.entries = append(s.entries, newTaskLogEntry("warn", msg, fields...))
+}
+func (s *taskLogSpy) Error(msg string, fields ...corelog.Field) {
+	s.entries = append(s.entries, newTaskLogEntry("error", msg, fields...))
+}
 
 func newTaskLogEntry(level string, msg string, fields ...corelog.Field) taskLogEntry {
 	mapped := make(map[string]any, len(fields))
@@ -1808,6 +1815,53 @@ func TestManagerCancelTaskDoesNotOverwriteTaskFinishedWhileCancelInFlight(t *tes
 	}
 }
 
+func TestManagerCreateTaskWakesIdleWorkerWithoutWaitingForPollInterval(t *testing.T) {
+	store := newTestStore(t)
+	firstIdleClaim := make(chan struct{})
+	registerTaskQuerySignalOnce(t, store.db, "tasks", firstIdleClaim)
+
+	manager := NewManager(store, ManagerOptions{
+		RunnerID:          "runner-1",
+		PollInterval:      time.Hour,
+		LeaseDuration:     100 * time.Millisecond,
+		HeartbeatInterval: 20 * time.Millisecond,
+	})
+
+	started := make(chan string, 1)
+	if err := manager.RegisterExecutor("agent.run", func(ctx context.Context, task *Task, runtime *Runtime) (any, error) {
+		started <- task.ID
+		return map[string]any{"task_id": task.ID}, nil
+	}); err != nil {
+		t.Fatalf("RegisterExecutor() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	manager.Start(ctx)
+
+	select {
+	case <-firstIdleClaim:
+	case <-time.After(300 * time.Millisecond):
+		t.Fatal("worker did not perform initial idle claim")
+	}
+
+	created, err := manager.CreateTask(ctx, CreateTaskInput{TaskType: "agent.run", CreatedBy: "alice"})
+	if err != nil {
+		t.Fatalf("CreateTask() error = %v", err)
+	}
+
+	select {
+	case taskID := <-started:
+		if taskID != created.ID {
+			t.Fatalf("started task id = %q, want %q", taskID, created.ID)
+		}
+	case <-time.After(300 * time.Millisecond):
+		t.Fatal("task was not started by wake notification")
+	}
+
+	_ = waitForTaskStatus(t, ctx, manager, created.ID, StatusSucceeded)
+}
+
 func TestManagerExecutesDifferentConcurrencyKeysInParallel(t *testing.T) {
 	store := newTestStore(t)
 	manager := NewManager(store, ManagerOptions{
@@ -2286,7 +2340,7 @@ func TestManagerSupportsParentChildFanOutAndFanIn(t *testing.T) {
 	manager := NewManager(store, ManagerOptions{
 		RunnerID:          "runner-1",
 		WorkerCount:       4,
-		PollInterval:      5 * time.Millisecond,
+		PollInterval:      time.Hour,
 		LeaseDuration:     120 * time.Millisecond,
 		HeartbeatInterval: 25 * time.Millisecond,
 	})
