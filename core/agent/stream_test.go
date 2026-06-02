@@ -1253,6 +1253,42 @@ func TestRunnerRunStreamRecoversChatStreamError(t *testing.T) {
 	}
 }
 
+func TestRunnerRunStreamSilentlyRetriesUnexpectedJSONStreamError(t *testing.T) {
+	client := &stubClient{
+		streams: []model.Stream{
+			newRecvErrorStream(errors.New("unexpected end of JSON input")),
+			newStubStream(
+				[]model.StreamEvent{
+					{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "recovered response"}},
+				},
+				model.Message{Role: model.RoleAssistant, Content: "recovered response"},
+				nil,
+			),
+		},
+	}
+	runner, err := NewRunner(client, nil, Options{Model: "test-model"})
+	if err != nil {
+		t.Fatalf("NewRunner() error = %v", err)
+	}
+
+	result, err := runner.Run(context.Background(), RunInput{Messages: []model.Message{{Role: model.RoleUser, Content: "hello"}}})
+	if err != nil {
+		t.Fatalf("Run() error = %v, want nil (recovered)", err)
+	}
+	if result.FinalMessage.Content != "recovered response" {
+		t.Fatalf("FinalMessage.Content = %q, want recovered response", result.FinalMessage.Content)
+	}
+	if len(client.streamRequests) != 2 {
+		t.Fatalf("stream request count = %d, want 2", len(client.streamRequests))
+	}
+	retryMessages := client.streamRequests[1].Messages
+	for _, message := range retryMessages {
+		if strings.Contains(message.Content, "[system error]") {
+			t.Fatalf("retry request messages = %#v, want no synthetic recovery prompt for upstream JSON decode error", retryMessages)
+		}
+	}
+}
+
 func TestRunnerRunStreamDoesNotRecoverContextCanceled(t *testing.T) {
 	// Context cancellation should NOT be recovered - should fail immediately.
 	ctx, cancel := context.WithCancel(context.Background())

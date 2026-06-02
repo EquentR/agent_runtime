@@ -72,6 +72,23 @@ func buildStreamRecoveryMessage(prefix string, err error) model.Message {
 	}
 }
 
+func appendStreamRecoveryMessage(messages *[]model.Message, prefix string, err error) {
+	if messages == nil || shouldSilentlyRetryStreamError(err) {
+		return
+	}
+	*messages = append(*messages, buildStreamRecoveryMessage(prefix, err))
+}
+
+func shouldSilentlyRetryStreamError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "unexpected end of json input") ||
+		strings.Contains(message, "unexpected json input") ||
+		(strings.Contains(message, "invalid character") && strings.Contains(message, "looking for beginning of value"))
+}
+
 type StreamEventKind string
 
 const (
@@ -296,8 +313,7 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 			if err != nil {
 				if isRecoverableStreamError(err) && consecutiveRecoveries < maxConsecutiveStreamRecoveries {
 					consecutiveRecoveries++
-					recoveryMsg := buildStreamRecoveryMessage("LLM API request failed", err)
-					pendingStreamRecoveryMessages = append(pendingStreamRecoveryMessages, recoveryMsg)
+					appendStreamRecoveryMessage(&pendingStreamRecoveryMessages, "LLM API request failed", err)
 					recoveryEvent := RunStreamEvent{Kind: EventStreamRecovery, Step: step, Err: err, Metadata: map[string]any{"attempt": consecutiveRecoveries, "max_attempts": maxConsecutiveStreamRecoveries}}
 					events <- recoveryEvent
 					r.emitStreamEvent(ctx, recoveryEvent)
@@ -365,8 +381,7 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 			if streamRecvErr != nil {
 				if isRecoverableStreamError(streamRecvErr) && consecutiveRecoveries < maxConsecutiveStreamRecoveries {
 					consecutiveRecoveries++
-					recoveryMsg := buildStreamRecoveryMessage("LLM stream error", streamRecvErr)
-					pendingStreamRecoveryMessages = append(pendingStreamRecoveryMessages, recoveryMsg)
+					appendStreamRecoveryMessage(&pendingStreamRecoveryMessages, "LLM stream error", streamRecvErr)
 					recoveryEvent := RunStreamEvent{Kind: EventStreamRecovery, Step: step, Err: streamRecvErr, Metadata: map[string]any{"attempt": consecutiveRecoveries, "max_attempts": maxConsecutiveStreamRecoveries}}
 					events <- recoveryEvent
 					r.emitStreamEvent(ctx, recoveryEvent)
@@ -389,8 +404,7 @@ func (r *Runner) RunStream(ctx context.Context, input RunInput) (*RunStreamResul
 			if err != nil {
 				if isRecoverableStreamError(err) && consecutiveRecoveries < maxConsecutiveStreamRecoveries {
 					consecutiveRecoveries++
-					recoveryMsg := buildStreamRecoveryMessage("LLM response error", err)
-					pendingStreamRecoveryMessages = append(pendingStreamRecoveryMessages, recoveryMsg)
+					appendStreamRecoveryMessage(&pendingStreamRecoveryMessages, "LLM response error", err)
 					recoveryEvent := RunStreamEvent{Kind: EventStreamRecovery, Step: step, Err: err, Metadata: map[string]any{"attempt": consecutiveRecoveries, "max_attempts": maxConsecutiveStreamRecoveries}}
 					events <- recoveryEvent
 					r.emitStreamEvent(ctx, recoveryEvent)
