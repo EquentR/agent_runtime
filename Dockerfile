@@ -34,14 +34,21 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       ./cmd/ice_art
 
 RUN mkdir -p /out/runtime/conf /out/runtime/data /out/runtime/logs /out/runtime/workspace && \
-    cp conf/app.yaml /out/runtime/conf/app.yaml && \
-    chown -R 65532:65532 /out/runtime
+    cp conf/app.yaml /out/runtime/conf/app.yaml
 
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM debian:bookworm
 WORKDIR /app
 
-COPY --from=build --chown=65532:65532 /out/ice_art /app/ice_art
-COPY --from=build --chown=65532:65532 /out/runtime/ /app/
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates tzdata && \
+    rm -rf /var/lib/apt/lists/*
+
+USER root
+
+COPY --from=build /out/ice_art /app/ice_art
+COPY --from=build /out/runtime/ /app/
 
 ENV GIN_MODE=release \
     TZ=Asia/Shanghai
