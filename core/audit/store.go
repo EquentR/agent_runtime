@@ -17,7 +17,9 @@ import (
 var ErrRunNotFound = errors.New("audit run not found")
 var ErrRunAlreadyFinished = errors.New("audit run already finished")
 
-const appendEventRetryLimit = 3
+const appendEventRetryLimit = 8
+
+const appendEventRetryBaseDelay = 2 * time.Millisecond
 
 type Store struct {
 	db *gorm.DB
@@ -460,10 +462,19 @@ func (s *Store) AppendEvent(ctx context.Context, runID string, input AppendEvent
 		if err == nil {
 			return event, nil
 		}
-		if !isUniqueConstraintError(err) {
+		if !isAppendEventRetryableError(err) {
 			return nil, err
 		}
 		lastErr = err
+		if attempt == appendEventRetryLimit-1 {
+			continue
+		}
+		delay := time.Duration(attempt+1) * appendEventRetryBaseDelay
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(delay):
+		}
 	}
 	return nil, lastErr
 }
@@ -661,6 +672,17 @@ func isUniqueConstraintError(err error) bool {
 	}
 	message := strings.ToLower(err.Error())
 	return strings.Contains(message, "unique constraint failed") || strings.Contains(message, "duplicate key") || strings.Contains(message, "duplicated key")
+}
+
+func isAppendEventRetryableError(err error) bool {
+	if isUniqueConstraintError(err) {
+		return true
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "locked") ||
+		strings.Contains(message, "deadlocked") ||
+		strings.Contains(message, "interrupted") ||
+		strings.Contains(message, "busy")
 }
 
 func normalizePhase(phase Phase, eventType string) Phase {

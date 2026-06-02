@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -546,6 +547,57 @@ func TestStoreAppendEventRetriesTransientUniqueConflict(t *testing.T) {
 	}
 	if event.Seq != 1 {
 		t.Fatalf("event seq = %d, want 1 after retry", event.Seq)
+	}
+}
+
+func TestStoreAppendEventPersistsConcurrentWritesForSameRun(t *testing.T) {
+	db := newTestDB(t)
+	store := NewStore(db)
+	if err := store.AutoMigrate(); err != nil {
+		t.Fatalf("AutoMigrate() error = %v", err)
+	}
+
+	ctx := context.Background()
+	if _, err := store.CreateRun(ctx, StartRunInput{RunID: "run_1", TaskID: "task_1", TaskType: "agent.run"}); err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+
+	const writerCount = 16
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	errs := make(chan error, writerCount)
+	for i := 0; i < writerCount; i++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			<-start
+			_, err := store.AppendEvent(ctx, "run_1", AppendEventInput{
+				EventType: fmt.Sprintf("event.%02d", index),
+			})
+			errs <- err
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("AppendEvent(concurrent) error = %v", err)
+		}
+	}
+
+	events, err := store.ListEvents(ctx, "run_1")
+	if err != nil {
+		t.Fatalf("ListEvents() error = %v", err)
+	}
+	if len(events) != writerCount {
+		t.Fatalf("event count = %d, want %d", len(events), writerCount)
+	}
+	for index, event := range events {
+		wantSeq := int64(index + 1)
+		if event.Seq != wantSeq {
+			t.Fatalf("event[%d].Seq = %d, want %d", index, event.Seq, wantSeq)
+		}
 	}
 }
 
