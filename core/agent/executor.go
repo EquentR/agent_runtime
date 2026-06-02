@@ -358,6 +358,7 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 		if err != nil {
 			return nil, err
 		}
+		history = sanitizeReplayMessages(history)
 		corelog.Info("conversation history loaded", corelog.String("component", "agent"), corelog.String("module", "executor"), corelog.String("task_id", task.ID), corelog.String("conversation_id", conversation.ID), corelog.Int("message_count", len(history)))
 		auditor.recordConversationLoaded(ctx, history)
 		client, err := deps.ClientFactory(provider, llmModel)
@@ -903,40 +904,113 @@ func normalizeWorkspaceMode(mode workspaces.Mode) workspaces.Mode {
 	}
 }
 
-// trimIncompleteToolCallMessages removes trailing assistant messages that have
-// unresolved tool calls (i.e. tool calls without matching tool result messages).
-// Such dangling tool_calls make the conversation history invalid for subsequent
-// turns and must be stripped before persisting a partial run on error.
+// trimIncompleteToolCallMessages keeps only the longest prefix whose tool-call
+// turns are replayable. Partial multi-tool turns must be dropped as a unit; an
+// orphan tool message is just as invalid for the next provider request as a
+// dangling assistant tool_call.
 func trimIncompleteToolCallMessages(messages []model.Message) []model.Message {
 	if len(messages) == 0 {
 		return messages
 	}
-	// Collect tool result IDs present in the message list.
-	toolResultIDs := make(map[string]struct{})
-	for _, msg := range messages {
-		if msg.Role == model.RoleTool && msg.ToolCallId != "" {
-			toolResultIDs[msg.ToolCallId] = struct{}{}
-		}
-	}
-	// Find the last index that is safe to include: drop trailing assistant
-	// messages whose tool calls have no corresponding tool result.
-	end := len(messages)
-	for end > 0 {
-		msg := messages[end-1]
-		if msg.Role != model.RoleAssistant || len(msg.ToolCalls) == 0 {
+
+	out := make([]model.Message, 0, len(messages))
+	for index := 0; index < len(messages); index++ {
+		message := messages[index]
+		if message.Role == model.RoleTool {
 			break
 		}
-		allResolved := true
-		for _, tc := range msg.ToolCalls {
-			if _, ok := toolResultIDs[tc.ID]; !ok {
-				allResolved = false
+		if message.Role != model.RoleAssistant || len(message.ToolCalls) == 0 {
+			out = append(out, message)
+			continue
+		}
+
+		toolResultEnd, ok := completedToolTurnEnd(messages[index:])
+		if !ok {
+			break
+		}
+		out = append(out, messages[index:index+toolResultEnd]...)
+		index += toolResultEnd - 1
+	}
+	return out
+}
+
+func sanitizeReplayMessages(messages []model.Message) []model.Message {
+	if len(messages) == 0 {
+		return messages
+	}
+	out := make([]model.Message, 0, len(messages))
+	for index := 0; index < len(messages); index++ {
+		message := messages[index]
+		if message.Role == model.RoleTool {
+			continue
+		}
+		if message.Role != model.RoleAssistant || len(message.ToolCalls) == 0 {
+			out = append(out, message)
+			continue
+		}
+		toolResultEnd, ok := completedToolTurnEnd(messages[index:])
+		if !ok {
+			index = skipIncompleteToolTurn(messages, index)
+			continue
+		}
+		out = append(out, messages[index:index+toolResultEnd]...)
+		index += toolResultEnd - 1
+	}
+	return out
+}
+
+func skipIncompleteToolTurn(messages []model.Message, assistantIndex int) int {
+	if assistantIndex < 0 || assistantIndex >= len(messages) {
+		return assistantIndex
+	}
+	callIDs := make(map[string]struct{}, len(messages[assistantIndex].ToolCalls))
+	for _, call := range messages[assistantIndex].ToolCalls {
+		if strings.TrimSpace(call.ID) != "" {
+			callIDs[call.ID] = struct{}{}
+		}
+	}
+	index := assistantIndex + 1
+	for index < len(messages) {
+		message := messages[index]
+		if message.Role != model.RoleTool {
+			break
+		}
+		if len(callIDs) > 0 {
+			if _, ok := callIDs[message.ToolCallId]; !ok {
 				break
 			}
 		}
-		if allResolved {
-			break
-		}
-		end--
+		index++
 	}
-	return messages[:end]
+	return index - 1
+}
+
+func completedToolTurnEnd(messages []model.Message) (int, bool) {
+	if len(messages) == 0 || messages[0].Role != model.RoleAssistant || len(messages[0].ToolCalls) == 0 {
+		return 0, false
+	}
+
+	required := make(map[string]struct{}, len(messages[0].ToolCalls))
+	for _, call := range messages[0].ToolCalls {
+		if strings.TrimSpace(call.ID) == "" {
+			return 0, false
+		}
+		required[call.ID] = struct{}{}
+	}
+
+	end := 1
+	for ; end < len(messages) && len(required) > 0; end++ {
+		message := messages[end]
+		if message.Role != model.RoleTool {
+			return 0, false
+		}
+		if _, ok := required[message.ToolCallId]; !ok {
+			return 0, false
+		}
+		delete(required, message.ToolCallId)
+	}
+	if len(required) != 0 {
+		return 0, false
+	}
+	return end, true
 }

@@ -258,6 +258,63 @@ func TestAgentExecutorDoesNotReplayVisibleSystemFailureMessagesIntoNextModelRequ
 	}
 }
 
+func TestAgentExecutorDoesNotReplayIncompleteToolTurnFromFailedHistory(t *testing.T) {
+	store := newConversationStoreForTest(t)
+	_, err := store.CreateConversation(context.Background(), CreateConversationInput{ID: "conv_1", ProviderID: "openai", ModelID: "gpt-5.4"})
+	if err != nil {
+		t.Fatalf("CreateConversation() error = %v", err)
+	}
+	if err := store.AppendMessages(context.Background(), "conv_1", "task_failed", []model.Message{
+		{Role: model.RoleUser, Content: "weather and time?"},
+		{
+			Role: model.RoleAssistant,
+			ToolCalls: []coretypes.ToolCall{
+				{ID: "call_weather", Name: "lookup_weather", Arguments: `{"city":"Shanghai"}`},
+				{ID: "call_time", Name: "lookup_time", Arguments: `{"city":"Shanghai"}`},
+			},
+		},
+		{Role: model.RoleTool, ToolCallId: "call_weather", Content: "sunny"},
+		newVisibleFailureSystemMessage("Run failed: context canceled"),
+	}); err != nil {
+		t.Fatalf("AppendMessages() error = %v", err)
+	}
+
+	client := &stubClient{streams: []model.Stream{newStubStream(
+		[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "second answer"}}},
+		model.Message{Role: model.RoleAssistant, Content: "second answer"},
+		nil,
+	)}}
+	executor := newTaskExecutorForTest(t, ExecutorDependencies{
+		Resolver:          newExecutorResolverForTest(),
+		ConversationStore: store,
+		ClientFactory:     func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return client, nil },
+	})
+	payload := marshalExecutorTaskInput(t, map[string]any{
+		"conversation_id": "conv_1",
+		"provider_id":     "openai",
+		"model_id":        "gpt-5.4",
+		"message":         "continue",
+	})
+	task := &coretasks.Task{ID: "task_recover", TaskType: "agent.run", InputJSON: payload}
+
+	_, err = executor(context.Background(), task, nil)
+	if err != nil {
+		t.Fatalf("executor() error = %v", err)
+	}
+	if len(client.streamRequests) != 1 {
+		t.Fatalf("stream request count = %d, want 1", len(client.streamRequests))
+	}
+	requestMessages := stripExecutorForcedPromptMessages(client.streamRequests[0].Messages)
+	if len(requestMessages) != 2 {
+		t.Fatalf("request messages = %#v, want original user plus new user only", requestMessages)
+	}
+	if requestMessages[0].Role != model.RoleUser || requestMessages[0].Content != "weather and time?" ||
+		requestMessages[1].Role != model.RoleUser || requestMessages[1].Content != "continue" {
+		t.Fatalf("request messages = %#v, want incomplete assistant/tool turn removed from replay", requestMessages)
+	}
+	assertNoDanglingToolCalls(t, requestMessages)
+}
+
 func TestAgentExecutorLoopGuardSafeCompletionPersistsFinalAssistant(t *testing.T) {
 	ctx := context.Background()
 	store := newConversationStoreForTest(t)
@@ -3243,6 +3300,34 @@ func TestAgentExecutorPersistsPartialMessagesWhenLaterStepFails(t *testing.T) {
 	if got[3].Content == "" {
 		t.Fatalf("failure message = %#v, want non-empty error content", got[3])
 	}
+}
+
+func TestTrimIncompleteToolCallMessagesDropsPartialMultiToolTurn(t *testing.T) {
+	completeAssistant := model.Message{
+		Role:      model.RoleAssistant,
+		ToolCalls: []coretypes.ToolCall{{ID: "call_done", Name: "lookup_weather", Arguments: `{"city":"Shanghai"}`}},
+	}
+	completeTool := model.Message{Role: model.RoleTool, ToolCallId: "call_done", Content: "sunny"}
+	partialAssistant := model.Message{
+		Role: model.RoleAssistant,
+		ToolCalls: []coretypes.ToolCall{
+			{ID: "call_1", Name: "lookup_weather", Arguments: `{"city":"Shanghai"}`},
+			{ID: "call_2", Name: "lookup_time", Arguments: `{"city":"Shanghai"}`},
+		},
+	}
+	partialTool := model.Message{Role: model.RoleTool, ToolCallId: "call_1", Content: "sunny"}
+
+	got := trimIncompleteToolCallMessages([]model.Message{
+		completeAssistant,
+		completeTool,
+		partialAssistant,
+		partialTool,
+	})
+
+	if len(got) != 2 || got[0].ToolCalls[0].ID != "call_done" || got[1].ToolCallId != "call_done" {
+		t.Fatalf("trimmed messages = %#v, want only the completed prior assistant/tool turn", got)
+	}
+	assertNoDanglingToolCalls(t, got)
 }
 
 func TestAgentExecutorDoesNotPersistForcedBlocksIntoConversationHistory(t *testing.T) {
