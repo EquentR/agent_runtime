@@ -10,6 +10,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -512,7 +513,7 @@ func (p openaiImageGenProvider) Generate(ctx context.Context, params imageGenPar
 func (p openaiImageGenProvider) Edit(ctx context.Context, params imageEditParams) (imageGenResponse, error) {
 	baseURL := strings.TrimRight(defaultIfEmpty(p.config.BaseURL, "https://api.openai.com/v1"), "/")
 	endpoint := baseURL + "/images/edits"
-	model := defaultIfEmpty(strings.TrimSpace(p.config.Model), defaultImageGenModel)
+	model := resolveOpenAIImageEditModel(p.config)
 	stream := true
 	if p.config.Stream != nil {
 		stream = *p.config.Stream
@@ -555,8 +556,12 @@ func (p openaiImageGenProvider) Edit(ctx context.Context, params imageEditParams
 			return imageGenResponse{}, err
 		}
 	}
+	imageFieldName := "image"
+	if len(params.SourceImages) > 1 {
+		imageFieldName = "image[]"
+	}
 	for _, image := range params.SourceImages {
-		if err := writeImageMultipartFile(writer, "image[]", image); err != nil {
+		if err := writeImageMultipartFile(writer, imageFieldName, image); err != nil {
 			_ = writer.Close()
 			return imageGenResponse{}, err
 		}
@@ -621,12 +626,29 @@ func (p openaiImageGenProvider) Edit(ctx context.Context, params imageEditParams
 }
 
 func writeImageMultipartFile(writer *multipart.Writer, fieldName string, image imageInputAttachment) error {
-	part, err := writer.CreateFormFile(fieldName, defaultIfEmpty(image.FileName, image.ID+fileExtensionFromMimeType(image.MimeType)))
+	mimeType := strings.TrimSpace(image.MimeType)
+	if mimeType == "" && len(image.Data) > 0 {
+		mimeType = http.DetectContentType(image.Data)
+	}
+	mimeType = defaultIfEmpty(mimeType, "application/octet-stream")
+
+	fileName := defaultIfEmpty(image.FileName, image.ID+fileExtensionFromMimeType(mimeType))
+	header := make(textproto.MIMEHeader)
+	header.Set("Content-Disposition", multipart.FileContentDisposition(fieldName, fileName))
+	header.Set("Content-Type", mimeType)
+	part, err := writer.CreatePart(header)
 	if err != nil {
 		return err
 	}
 	_, err = part.Write(image.Data)
 	return err
+}
+
+func resolveOpenAIImageEditModel(config ImageGenProviderConfig) string {
+	if model := strings.TrimSpace(config.EditModel); model != "" {
+		return model
+	}
+	return defaultIfEmpty(strings.TrimSpace(config.Model), defaultImageGenModel)
 }
 
 type imageGenSSEPayload struct {

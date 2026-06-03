@@ -16,6 +16,7 @@ func TestBuildResponseInputEncodesImageAttachmentForUserMessage(t *testing.T) {
 		Role:    model.RoleUser,
 		Content: "look at this",
 		Attachments: []model.Attachment{{
+			ID:       "att_image_1",
 			FileName: "image.png",
 			MimeType: "image/png",
 			Data:     []byte{0x89, 0x50, 0x4e, 0x47},
@@ -37,8 +38,8 @@ func TestBuildResponseInputEncodesImageAttachmentForUserMessage(t *testing.T) {
 		t.Fatalf("len(payload) = %d, want 1", len(payload))
 	}
 	content, ok := payload[0]["content"].([]any)
-	if !ok || len(content) != 2 {
-		t.Fatalf("content = %#v, want two content items", payload[0]["content"])
+	if !ok || len(content) != 3 {
+		t.Fatalf("content = %#v, want three content items", payload[0]["content"])
 	}
 	imageItem, ok := content[1].(map[string]any)
 	if !ok {
@@ -50,6 +51,16 @@ func TestBuildResponseInputEncodesImageAttachmentForUserMessage(t *testing.T) {
 	wantURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString([]byte{0x89, 0x50, 0x4e, 0x47})
 	if imageItem["image_url"] != wantURL {
 		t.Fatalf("image_url = %#v, want %q", imageItem["image_url"], wantURL)
+	}
+	referenceItem, ok := content[2].(map[string]any)
+	if !ok {
+		t.Fatalf("reference item = %#v, want object", content[2])
+	}
+	if referenceItem["type"] != "input_text" {
+		t.Fatalf("reference item type = %#v, want input_text", referenceItem["type"])
+	}
+	if text, _ := referenceItem["text"].(string); !strings.Contains(text, "attachment_id: att_image_1") {
+		t.Fatalf("reference text = %#v, want attachment id", referenceItem["text"])
 	}
 }
 

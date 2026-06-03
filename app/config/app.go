@@ -230,6 +230,7 @@ type ImageGenProvider struct {
 	BaseURL             string `yaml:"baseUrl"`
 	APIKey              string `yaml:"apiKey"`
 	Model               string `yaml:"model"`
+	EditModel           string `yaml:"editModel"`
 	Stream              *bool  `yaml:"stream"`
 	PartialImages       *int   `yaml:"partialImages"`
 	DefaultSize         string `yaml:"defaultSize"`
@@ -245,6 +246,7 @@ func toImageGenProviderConfig(provider *ImageGenProvider) *builtin.ImageGenProvi
 		BaseURL:             provider.BaseURL,
 		APIKey:              provider.APIKey,
 		Model:               provider.Model,
+		EditModel:           provider.EditModel,
 		Stream:              provider.Stream,
 		PartialImages:       provider.PartialImages,
 		DefaultSize:         provider.DefaultSize,

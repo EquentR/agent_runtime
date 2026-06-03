@@ -172,16 +172,16 @@ func buildResponseInput(messages []model.Message, systemMessageMode string) (res
 }
 
 func buildUserMessageContent(message model.Message) (responses.ResponseInputMessageContentListParam, error) {
-	content := make(responses.ResponseInputMessageContentListParam, 0, len(message.Attachments)+1)
+	content := make(responses.ResponseInputMessageContentListParam, 0, len(message.Attachments)*2+1)
 	if strings.TrimSpace(message.Content) != "" {
 		content = append(content, responses.ResponseInputContentParamOfInputText(message.Content))
 	}
 	for _, attachment := range message.Attachments {
-		item, err := responseContentItemFromAttachment(attachment)
+		items, err := responseContentItemsFromAttachment(attachment)
 		if err != nil {
 			return nil, err
 		}
-		content = append(content, item)
+		content = append(content, items...)
 	}
 	if len(content) == 0 {
 		content = append(content, responses.ResponseInputContentParamOfInputText(""))
@@ -189,7 +189,7 @@ func buildUserMessageContent(message model.Message) (responses.ResponseInputMess
 	return content, nil
 }
 
-func responseContentItemFromAttachment(attachment model.Attachment) (responses.ResponseInputContentUnionParam, error) {
+func responseContentItemsFromAttachment(attachment model.Attachment) ([]responses.ResponseInputContentUnionParam, error) {
 	mimeType := strings.TrimSpace(attachment.MimeType)
 	if mimeType == "" {
 		mimeType = http.DetectContentType(attachment.Data)
@@ -197,23 +197,27 @@ func responseContentItemFromAttachment(attachment model.Attachment) (responses.R
 	switch {
 	case strings.HasPrefix(strings.ToLower(mimeType), "image/"):
 		if len(attachment.Data) == 0 {
-			return responses.ResponseInputContentUnionParam{}, fmt.Errorf("image attachment %q data is empty", attachment.FileName)
+			return nil, fmt.Errorf("image attachment %q data is empty", attachment.FileName)
 		}
 		item := responses.ResponseInputContentParamOfInputImage(responses.ResponseInputImageDetailAuto)
 		item.OfInputImage.ImageURL = openai.String("data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(attachment.Data))
-		return item, nil
+		items := []responses.ResponseInputContentUnionParam{item}
+		if promptText := model.ImageAttachmentReferenceText(attachment); promptText != "" {
+			items = append(items, responses.ResponseInputContentParamOfInputText(promptText))
+		}
+		return items, nil
 	case isTextMimeType(mimeType) || (strings.TrimSpace(attachment.MimeType) == "" && utf8.Valid(attachment.Data)):
 		if len(attachment.Data) == 0 {
-			return responses.ResponseInputContentUnionParam{}, fmt.Errorf("text attachment %q data is empty", attachment.FileName)
+			return nil, fmt.Errorf("text attachment %q data is empty", attachment.FileName)
 		}
 		fileItem := responses.ResponseInputContentUnionParam{
 			OfInputFile: &responses.ResponseInputFileParam{},
 		}
 		fileItem.OfInputFile.FileData = openai.String(base64.StdEncoding.EncodeToString(attachment.Data))
 		fileItem.OfInputFile.Filename = openai.String(firstNonEmpty(strings.TrimSpace(attachment.FileName), "attachment.txt"))
-		return fileItem, nil
+		return []responses.ResponseInputContentUnionParam{fileItem}, nil
 	default:
-		return responses.ResponseInputContentUnionParam{}, fmt.Errorf("unsupported attachment type %q", mimeType)
+		return nil, fmt.Errorf("unsupported attachment type %q", mimeType)
 	}
 }
 

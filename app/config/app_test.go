@@ -158,6 +158,7 @@ tools:
       apiKey: ${OPENAI_API_KEY}
       baseUrl: https://api.openai.com/v1
       model: gpt-image-1
+      editModel: gpt-image-1.5
       stream: true
       partialImages: 2
       defaultSize: 1024x1024
@@ -176,6 +177,9 @@ tools:
 	}
 	if options.Openai.Model != "gpt-image-1" {
 		t.Fatalf("options.Openai.Model = %q, want gpt-image-1", options.Openai.Model)
+	}
+	if options.Openai.EditModel != "gpt-image-1.5" {
+		t.Fatalf("options.Openai.EditModel = %q, want gpt-image-1.5", options.Openai.EditModel)
 	}
 	if options.Openai.Stream == nil || !*options.Openai.Stream {
 		t.Fatalf("options.Openai.Stream = %#v, want true pointer", options.Openai.Stream)

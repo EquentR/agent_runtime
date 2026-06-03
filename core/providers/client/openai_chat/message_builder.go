@@ -56,17 +56,17 @@ func chatMessagePayload(message model.Message) (map[string]any, string, error) {
 			promptParts = append(promptParts, message.Content)
 		}
 	} else {
-		parts := make([]map[string]any, 0, len(message.Attachments)+1)
+		parts := make([]map[string]any, 0, len(message.Attachments)*2+1)
 		if message.Content != "" {
 			parts = append(parts, map[string]any{"type": "text", "text": message.Content})
 			promptParts = append(promptParts, message.Content)
 		}
 		for _, attachment := range message.Attachments {
-			part, promptText, err := chatContentPartFromAttachment(attachment)
+			attachmentParts, promptText, err := chatContentPartsFromAttachment(attachment)
 			if err != nil {
 				return nil, "", err
 			}
-			parts = append(parts, part)
+			parts = append(parts, attachmentParts...)
 			if promptText != "" {
 				promptParts = append(promptParts, promptText)
 			}
@@ -102,21 +102,26 @@ func chatToolCallsPayload(toolCalls []types.ToolCall) []map[string]any {
 	return result
 }
 
-func chatContentPartFromAttachment(attachment model.Attachment) (map[string]any, string, error) {
+func chatContentPartsFromAttachment(attachment model.Attachment) ([]map[string]any, string, error) {
 	mimeType := strings.TrimSpace(attachment.MimeType)
 	if mimeType == "" {
 		mimeType = http.DetectContentType(attachment.Data)
 	}
 
-	if strings.HasPrefix(mimeType, "image/") {
+	if strings.HasPrefix(strings.ToLower(mimeType), "image/") {
 		if len(attachment.Data) == 0 {
 			return nil, "", fmt.Errorf("image attachment %q data is empty", attachment.FileName)
 		}
 		dataURL := "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(attachment.Data)
-		return map[string]any{
+		parts := []map[string]any{{
 			"type":      "image_url",
 			"image_url": map[string]any{"url": dataURL},
-		}, "[image attachment]", nil
+		}}
+		promptText := model.ImageAttachmentReferenceText(attachment)
+		if promptText != "" {
+			parts = append(parts, map[string]any{"type": "text", "text": promptText})
+		}
+		return parts, promptText, nil
 	}
 
 	if isTextMimeType(mimeType) || utf8.Valid(attachment.Data) {
@@ -125,7 +130,7 @@ func chatContentPartFromAttachment(attachment model.Attachment) (map[string]any,
 			fileName = "attachment.txt"
 		}
 		text := "[attachment:" + fileName + "]\n" + string(attachment.Data)
-		return map[string]any{"type": "text", "text": text}, text, nil
+		return []map[string]any{{"type": "text", "text": text}}, text, nil
 	}
 
 	return nil, "", fmt.Errorf("unsupported attachment type: %s", mimeType)

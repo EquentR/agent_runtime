@@ -43,7 +43,7 @@ func buildOpenAIMessages(messages []model.Message) ([]openai.ChatCompletionMessa
 			continue
 		}
 
-		parts := make([]openai.ChatMessagePart, 0, len(m.Attachments)+1)
+		parts := make([]openai.ChatMessagePart, 0, len(m.Attachments)*2+1)
 		promptParts := make([]string, 0, len(m.Attachments)+1)
 		if m.Content != "" {
 			parts = append(parts, openai.ChatMessagePart{
@@ -54,11 +54,11 @@ func buildOpenAIMessages(messages []model.Message) ([]openai.ChatCompletionMessa
 		}
 
 		for _, attachment := range m.Attachments {
-			part, promptPart, err := toChatMessagePart(attachment)
+			attachmentParts, promptPart, err := toChatMessageParts(attachment)
 			if err != nil {
 				return nil, nil, err
 			}
-			parts = append(parts, part)
+			parts = append(parts, attachmentParts...)
 			if promptPart != "" {
 				promptParts = append(promptParts, promptPart)
 			}
@@ -102,24 +102,32 @@ func modelToolCallsToOpenAI(toolCalls []types.ToolCall) []openai.ToolCall {
 	return result
 }
 
-func toChatMessagePart(attachment model.Attachment) (openai.ChatMessagePart, string, error) {
+func toChatMessageParts(attachment model.Attachment) ([]openai.ChatMessagePart, string, error) {
 	mimeType := strings.TrimSpace(attachment.MimeType)
 	if mimeType == "" {
 		mimeType = http.DetectContentType(attachment.Data)
 	}
 
-	if strings.HasPrefix(mimeType, "image/") {
+	if strings.HasPrefix(strings.ToLower(mimeType), "image/") {
 		if len(attachment.Data) == 0 {
-			return openai.ChatMessagePart{}, "", fmt.Errorf("image attachment %q data is empty", attachment.FileName)
+			return nil, "", fmt.Errorf("image attachment %q data is empty", attachment.FileName)
 		}
 		encoded := base64.StdEncoding.EncodeToString(attachment.Data)
 		dataURL := "data:" + mimeType + ";base64," + encoded
-		return openai.ChatMessagePart{
+		parts := []openai.ChatMessagePart{{
 			Type: openai.ChatMessagePartTypeImageURL,
 			ImageURL: &openai.ChatMessageImageURL{
 				URL: dataURL,
 			},
-		}, "[image attachment]", nil
+		}}
+		promptText := model.ImageAttachmentReferenceText(attachment)
+		if promptText != "" {
+			parts = append(parts, openai.ChatMessagePart{
+				Type: openai.ChatMessagePartTypeText,
+				Text: promptText,
+			})
+		}
+		return parts, promptText, nil
 	}
 
 	if isTextMimeType(mimeType) || utf8.Valid(attachment.Data) {
@@ -128,14 +136,14 @@ func toChatMessagePart(attachment model.Attachment) (openai.ChatMessagePart, str
 			fileName = "attachment.txt"
 		}
 		content := string(attachment.Data)
-		text := "[附件:" + fileName + "]\n" + content
-		return openai.ChatMessagePart{
+		text := "[attachment:" + fileName + "]\n" + content
+		return []openai.ChatMessagePart{{
 			Type: openai.ChatMessagePartTypeText,
 			Text: text,
-		}, text, nil
+		}}, text, nil
 	}
 
-	return openai.ChatMessagePart{}, "", fmt.Errorf("unsupported attachment type: %s", mimeType)
+	return nil, "", fmt.Errorf("unsupported attachment type: %s", mimeType)
 }
 
 func isTextMimeType(mimeType string) bool {

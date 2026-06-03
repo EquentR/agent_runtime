@@ -109,6 +109,29 @@ func TestBuildGenAIMessages_WithAssistantToolCallsAndToolResponse(t *testing.T) 
 	}
 }
 
+func TestBuildGenAIMessages_TextAttachmentPromptMatchesSentPart(t *testing.T) {
+	contents, _, promptMessages, err := buildGenAIMessages([]model.Message{{
+		Role: model.RoleUser,
+		Attachments: []model.Attachment{{
+			FileName: "note.txt",
+			MimeType: "text/plain",
+			Data:     []byte("hello"),
+		}},
+	}})
+	if err != nil {
+		t.Fatalf("buildGenAIMessages() error = %v", err)
+	}
+	if len(contents) != 1 || len(contents[0].Parts) != 1 {
+		t.Fatalf("contents = %#v, want one text part", contents)
+	}
+	if len(promptMessages) != 1 {
+		t.Fatalf("len(promptMessages) = %d, want 1", len(promptMessages))
+	}
+	if promptMessages[0] != contents[0].Parts[0].Text {
+		t.Fatalf("promptMessages[0] = %q, want sent part text %q", promptMessages[0], contents[0].Parts[0].Text)
+	}
+}
+
 func TestBuildGenAIMessages_ReplaysProviderStateParts(t *testing.T) {
 	msg := model.Message{
 		Role: model.RoleAssistant,

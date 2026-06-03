@@ -153,7 +153,7 @@ func renderMessageText(m model.Message) (string, error) {
 		parts = append(parts, m.Content)
 	}
 	for _, attachment := range m.Attachments {
-		_, promptPart, err := toPartFromAttachment(attachment)
+		_, promptPart, err := toPartsFromAttachment(attachment)
 		if err != nil {
 			return "", err
 		}
@@ -174,11 +174,11 @@ func buildUserMessageParts(m model.Message) ([]*genai.Part, string, error) {
 	}
 
 	for _, attachment := range m.Attachments {
-		part, promptPart, err := toPartFromAttachment(attachment)
+		attachmentParts, promptPart, err := toPartsFromAttachment(attachment)
 		if err != nil {
 			return nil, "", err
 		}
-		parts = append(parts, part)
+		parts = append(parts, attachmentParts...)
 		if promptPart != "" {
 			promptParts = append(promptParts, promptPart)
 		}
@@ -272,6 +272,30 @@ func toPartFromAttachment(attachment model.Attachment) (*genai.Part, string, err
 	}
 
 	return nil, "", fmt.Errorf("unsupported attachment type: %s", mimeType)
+}
+
+func toPartsFromAttachment(attachment model.Attachment) ([]*genai.Part, string, error) {
+	part, promptPart, err := toPartFromAttachment(attachment)
+	if err != nil {
+		return nil, "", err
+	}
+	if part == nil {
+		return nil, "", nil
+	}
+
+	if promptText := model.ImageAttachmentReferenceText(attachment); promptText != "" {
+		return []*genai.Part{part, genai.NewPartFromText(promptText)}, promptText, nil
+	}
+
+	mimeType := strings.TrimSpace(attachment.MimeType)
+	if mimeType == "" {
+		mimeType = http.DetectContentType(attachment.Data)
+	}
+	if strings.HasPrefix(strings.ToLower(mimeType), "image/") {
+		return []*genai.Part{part}, "", nil
+	}
+
+	return []*genai.Part{part}, promptPart, nil
 }
 
 func isTextMimeType(mimeType string) bool {

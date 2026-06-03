@@ -63,6 +63,7 @@ type ImageGenProviderConfig struct {
 	BaseURL             string
 	APIKey              string
 	Model               string
+	EditModel           string
 	Stream              *bool
 	PartialImages       *int
 	DefaultSize         string

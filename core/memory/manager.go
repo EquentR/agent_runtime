@@ -854,6 +854,9 @@ func attachmentPromptText(attachment model.Attachment) string {
 		mimeType = http.DetectContentType(attachment.Data)
 	}
 	if strings.HasPrefix(mimeType, "image/") {
+		if text := model.ImageAttachmentReferenceText(attachment); text != "" {
+			return text
+		}
 		return "[image attachment]"
 	}
 	if isTextMimeType(mimeType) || utf8.Valid(attachment.Data) {
