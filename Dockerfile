@@ -33,8 +33,8 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       -o /out/ice_art \
       ./cmd/ice_art
 
-RUN mkdir -p /out/runtime/conf /out/runtime/data /out/runtime/logs /out/runtime/workspace && \
-    cp conf/app.yaml /out/runtime/conf/app.yaml
+RUN mkdir -p /out/runtime/data /out/runtime/logs && \
+    go run ./scripts/releasepack -source /src -dest /out/runtime
 
 FROM debian:bookworm
 WORKDIR /app

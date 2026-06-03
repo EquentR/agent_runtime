@@ -11,6 +11,10 @@ logs/
 node_modules/
 webapp/node_modules/
 webapp/dist/
+workspace/*
+!workspace/AGENTS.md
+!workspace/skills/
+!workspace/skills/**
 example_agent.exe
 ice_art.exe
 full-test.json

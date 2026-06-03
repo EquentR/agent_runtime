@@ -1,0 +1,117 @@
+# Release defaults keep the app runnable, but leave model and provider setup for the UI.
+workspaceDir: "workspace"
+workspaces:
+  root: data/workspaces
+
+server:
+  host: "0.0.0.0"
+  port: 18080
+  apiBasePath: /api/v1
+  staticPaths:
+    - path: /
+      dir: static/web
+
+sqlite:
+  name: app
+  autoCreate: true
+  inMemory: false
+  dbDir: data/
+  logLevel: debug
+  params:
+    - _pragma=journal_mode(WAL)
+    - _pragma=busy_timeout(30000)
+    - _txlock=exclusive
+
+log:
+  level: info
+  file: logs/app.log
+  rotation: true
+  maxSize: 100
+  maxAge: 30
+  maxBackups: 7
+  compress: true
+
+security:
+  appSecret: ice-art-release-secret-change-me
+  secureCookie: false
+  publicRegistration:
+    enabled: true
+  smtp:
+    enabled: false
+    host: ${SMTP_HOST}
+    port: 587
+    username: ${SMTP_USERNAME}
+    password: ${SMTP_PASSWORD}
+    from: ${SMTP_FROM}
+    useTLS: false
+    useStartTLS: true
+  turnstile:
+    enabled: false
+    siteKey: ${TURNSTILE_SITE_KEY}
+    secret: ${TURNSTILE_SECRET}
+    protectLogin: true
+    protectRegistration: true
+    protectVerification: true
+
+tasks:
+  workerCount: 16
+  runnerId: ice-art
+  pollInterval: 5s
+
+attachments:
+  storageBackend: filesystem
+  filesystem:
+    root: data/attachments
+  draftTTL: 24h
+  sentRetention: 720h
+  gcInterval: 1h
+
+llmRequestTimeout: 10m
+
+# tools:
+#   webSearch:
+#     defaultProvider: tavily
+#     tavily:
+#       apiKey: ${TAVILY_API_KEY}
+#       baseUrl: https://api.tavily.com
+#   imageGen:
+#     defaultProvider: openai
+#     openai:
+#       baseUrl: ${OPENAI_BASE_URL}
+#       apiKey: ${OPENAI_API_KEY}
+#       model: gpt-image-2
+#       editModel: gpt-image-2
+#       stream: true
+#       partialImages: 1
+#       defaultSize: 1024x1024
+#       defaultQuality: auto
+#       defaultOutputFormat: png
+# llmProviders:
+#   - name: openai
+#     baseUrl: ${OPENAI_BASE_URL}
+#     apiKey: ${OPENAI_API_KEY}
+#     models:
+#       - id: gpt-5.5
+#         name: GPT-5.5
+#         type: openai_responses
+#         capabilities:
+#           attachments: true
+#         context:
+#           max: 258000
+#         cost:
+#           input: 6
+#           cachedInput: 0.6
+#           output: 25
+#       - id: gpt-5.4
+#         name: GPT-5.4
+#         type: openai_responses
+#         capabilities:
+#           attachments: true
+#         context:
+#           max: 1050000
+#         cost:
+#           input: 3
+#           cachedInput: 0.3
+#           output: 12
+# embeddingProvider:
+# rerankProvider:

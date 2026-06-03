@@ -138,14 +138,14 @@ jobs:
           staging_dir="release/${package_name}"
           binary_name="ice_art${BINARY_EXT}"
 
-          mkdir -p "${staging_dir}/conf" "${staging_dir}/data" "${staging_dir}/logs" "${staging_dir}/workspace"
+          mkdir -p "${staging_dir}/data" "${staging_dir}/logs"
           GOOS="${GOOS}" GOARCH="${GOARCH}" CGO_ENABLED=0 go build \
             -tags embed_web \
             -trimpath \
             -ldflags "-s -w -X main.Version=${version} -X main.GitCommit=${commit}" \
             -o "${staging_dir}/${binary_name}" \
             ./cmd/ice_art
-          cp conf/app.yaml "${staging_dir}/conf/app.yaml"
+          go run ./scripts/releasepack -source . -dest "${staging_dir}"
 
           if [[ "${ARCHIVE_EXT}" == "zip" ]]; then
             artifact_path="release/${package_name}.zip"

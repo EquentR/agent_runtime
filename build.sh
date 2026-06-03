@@ -66,8 +66,8 @@ go build \
   -o "$DIST_DIR/$APP_NAME" \
   ./cmd/ice_art
 
-printf '==> copying config\n'
-cp "$ROOT_DIR/conf/app.yaml" "$CONFIG_DIR/app.yaml"
+printf '==> packaging release defaults\n'
+go run ./scripts/releasepack -source "$ROOT_DIR" -dest "$DIST_DIR"
 
 printf '\nBuild completed.\n'
 printf 'Output: %s\n' "$DIST_DIR"
