@@ -132,16 +132,35 @@ const toolParamsFormatters: Record<string, (args: Record<string, unknown>) => st
   },
 
   generate_image(args) {
-    const prompt = String(args.prompt || '')
-    const preview = prompt.length > 40 ? prompt.slice(0, 40) + '...' : prompt
-    return `🎨 "${preview}"`
+    return formatImageToolParams(args, 'generate')
   },
 
   edit_image(args) {
-    const prompt = String(args.prompt || '')
-    const preview = prompt.length > 40 ? prompt.slice(0, 40) + '...' : prompt
-    return `🎨✏️ "${preview}"`
+    return formatImageToolParams(args, 'edit')
   },
+}
+
+function formatImageToolParams(args: Record<string, unknown>, mode: 'generate' | 'edit') {
+  const prompt = String(args.prompt || '').trim()
+  const details = [
+    stringDetail('质量', args.quality),
+    stringDetail('大小', args.size),
+    stringDetail('数量', args.n ?? args.count),
+  ].filter(Boolean)
+  const prefix = mode === 'edit' ? '🎨✏️' : '🎨'
+  const lines = [`${prefix} ${prompt || '(no prompt)'}`]
+  if (details.length > 0) {
+    lines.push(details.join(' · '))
+  }
+  return lines.join('\n')
+}
+
+function stringDetail(label: string, value: unknown) {
+  if (value === null || value === undefined) {
+    return ''
+  }
+  const text = String(value).trim()
+  return text ? `${label}: ${text}` : ''
 }
 
 /**
@@ -150,6 +169,21 @@ const toolParamsFormatters: Record<string, (args: Record<string, unknown>) => st
  * a human-friendly text representation, or null to fall back to default.
  */
 const toolResultFormatters: Record<string, (content: string) => string | null> = {
+  generate_image(content: string) {
+    const json = tryParseJSON(content)
+    if (!json || typeof json !== 'object' || Array.isArray(json)) return null
+    const obj = json as Record<string, unknown>
+    if (Array.isArray(obj.images) && obj.images.length > 0) return '已生成'
+    if (typeof obj.error === 'string' && obj.error.trim()) return obj.error.trim()
+    if (typeof obj.message === 'string' && obj.message.trim()) return obj.message.trim()
+    if (Array.isArray(obj.failed_images) && obj.failed_images.length > 0) return '生成失败'
+    return null
+  },
+
+  edit_image(content: string) {
+    return toolResultFormatters.generate_image(content)
+  },
+
   list_files(content: string) {
     const json = tryParseJSON(content)
     if (!json || typeof json !== 'object') return null

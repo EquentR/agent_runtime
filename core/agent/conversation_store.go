@@ -483,7 +483,7 @@ func (s *ConversationStore) getConversationTx(tx *gorm.DB, id string) (*Conversa
 var conversationWhitespacePattern = regexp.MustCompile(`\s+`)
 
 func summarizeConversationText(text string, maxRunes int) string {
-	text = strings.TrimSpace(text)
+	text = strings.TrimSpace(stripAttachmentManifestBlocks(text))
 	if text == "" {
 		return ""
 	}

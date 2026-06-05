@@ -376,6 +376,49 @@ func TestConversationStoreAppendMessagesUpdatesTitleSummaryAndCount(t *testing.T
 	}
 }
 
+func TestConversationStoreSummariesHideAttachmentRuntimeContext(t *testing.T) {
+	store := newConversationStoreForTest(t)
+	_, err := store.CreateConversation(context.Background(), CreateConversationInput{
+		ID:         "conv_1",
+		ProviderID: "openai",
+		ModelID:    "gpt-5.4",
+	})
+	if err != nil {
+		t.Fatalf("CreateConversation() error = %v", err)
+	}
+
+	content := "Please inspect the attachment.\n\n" + wrapAttachmentManifest("Uploaded files are available in the workspace:\n\n- notes.txt\n  attachment_id: att_1\n  path: .attachments/att_1/notes.txt")
+	if err := store.AppendMessages(context.Background(), "conv_1", "task_1", []model.Message{{Role: model.RoleUser, Content: content}}); err != nil {
+		t.Fatalf("AppendMessages() error = %v", err)
+	}
+
+	conversation, err := store.GetConversation(context.Background(), "conv_1")
+	if err != nil {
+		t.Fatalf("GetConversation() error = %v", err)
+	}
+	if conversation.Title != "Please inspect the attachment." {
+		t.Fatalf("Title = %q, want visible user text only", conversation.Title)
+	}
+	if conversation.LastMessage != "Please inspect the attachment." {
+		t.Fatalf("LastMessage = %q, want visible user text only", conversation.LastMessage)
+	}
+
+	title, lastMessage, _, _, err := store.BuildVisibleConversationSummary(context.Background(), "conv_1")
+	if err != nil {
+		t.Fatalf("BuildVisibleConversationSummary() error = %v", err)
+	}
+	if title != "Please inspect the attachment." || lastMessage != "Please inspect the attachment." {
+		t.Fatalf("visible summary title=%q last=%q, want hidden attachment context stripped", title, lastMessage)
+	}
+}
+
+func TestConversationStoreSummariesHideLegacyAttachmentRuntimeContext(t *testing.T) {
+	got := summarizeConversationText("Please inspect the attachment.\n\nUploaded files are available in the workspace:\n\n- notes.txt\n  path: .attachments/att_1/notes.txt", 120)
+	if got != "Please inspect the attachment." {
+		t.Fatalf("summarizeConversationText() = %q, want visible user text only", got)
+	}
+}
+
 func TestConversationStoreEnsureConversationUpdatesLatestModelSelection(t *testing.T) {
 	store := newConversationStoreForTest(t)
 	_, err := store.CreateConversation(context.Background(), CreateConversationInput{

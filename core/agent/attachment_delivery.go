@@ -15,6 +15,12 @@ import (
 )
 
 const runtimeAttachmentsDir = ".attachments"
+const attachmentManifestXMLTag = "agent_runtime_attachments"
+
+const (
+	attachmentManifestOpenTag  = "<" + attachmentManifestXMLTag + ">"
+	attachmentManifestCloseTag = "</" + attachmentManifestXMLTag + ">"
+)
 
 type plannedAttachments struct {
 	display      []model.Attachment
@@ -254,13 +260,52 @@ func buildAttachmentManifestText(items []attachmentManifestItem) string {
 }
 
 func appendAttachmentManifest(content string, manifest string) string {
-	if strings.TrimSpace(manifest) == "" {
+	wrappedManifest := wrapAttachmentManifest(manifest)
+	if strings.TrimSpace(wrappedManifest) == "" {
 		return content
 	}
 	if strings.TrimSpace(content) == "" {
-		return manifest
+		return wrappedManifest
 	}
-	return content + "\n\n" + manifest
+	return content + "\n\n" + wrappedManifest
+}
+
+func wrapAttachmentManifest(manifest string) string {
+	trimmed := strings.TrimSpace(manifest)
+	if trimmed == "" {
+		return ""
+	}
+	return attachmentManifestOpenTag + "\n" + trimmed + "\n" + attachmentManifestCloseTag
+}
+
+func stripAttachmentManifestBlocks(content string) string {
+	remaining := stripLegacyAttachmentManifestText(content)
+	var builder strings.Builder
+	for {
+		openIndex := strings.Index(remaining, attachmentManifestOpenTag)
+		if openIndex < 0 {
+			builder.WriteString(remaining)
+			break
+		}
+		builder.WriteString(remaining[:openIndex])
+		afterOpen := remaining[openIndex+len(attachmentManifestOpenTag):]
+		closeIndex := strings.Index(afterOpen, attachmentManifestCloseTag)
+		if closeIndex < 0 {
+			remaining = ""
+			break
+		}
+		remaining = afterOpen[closeIndex+len(attachmentManifestCloseTag):]
+	}
+	return strings.TrimSpace(builder.String())
+}
+
+func stripLegacyAttachmentManifestText(content string) string {
+	marker := "Uploaded files are available in the workspace:"
+	index := strings.Index(content, marker)
+	if index < 0 {
+		return content
+	}
+	return content[:index]
 }
 
 func attachmentManifestAlreadyPresent(content string, item attachmentManifestItem) bool {

@@ -554,6 +554,50 @@ describe('MessageList', () => {
     expect(summary.text()).toContain('read_file')
   })
 
+  it('shows the full image prompt while hiding successful raw image JSON output', () => {
+    const longPrompt = 'draw a cinematic scene with readable storefront signage, warm sunset reflections, and detailed brush texture'
+    const rawResult = JSON.stringify({
+      tool: 'generate_image',
+      operation: 'generate',
+      images: [{ attachment_id: 'att_image' }],
+    })
+    const wrapper = mount(MessageList, {
+      props: {
+        loading: false,
+        entries: [
+          {
+            id: 'tool-image',
+            kind: 'tool',
+            title: '工具调用',
+            status: 'done',
+            details: [
+              {
+                key: 'call_image',
+                label: 'generate_image',
+                preview: longPrompt,
+                collapsed: false,
+                loading: false,
+                blocks: [
+                  { label: 'Params', value: JSON.stringify({ prompt: longPrompt, quality: 'high', size: '1536x1024', n: 2 }) },
+                  { label: 'Result', value: rawResult, loading: false },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    })
+
+    expect(wrapper.text()).toContain(longPrompt)
+    expect(wrapper.text()).toContain('🎨')
+    expect(wrapper.text()).toContain('质量: high')
+    expect(wrapper.text()).toContain('大小: 1536x1024')
+    expect(wrapper.text()).toContain('数量: 2')
+    expect(wrapper.text()).not.toContain('"prompt"')
+    expect(wrapper.text()).toContain('已生成')
+    expect(wrapper.text()).not.toContain('"attachment_id"')
+  })
+
   it('renders an approval card expanded by default and allows collapsing it', async () => {
     const wrapper = mount(MessageList, {
       props: {

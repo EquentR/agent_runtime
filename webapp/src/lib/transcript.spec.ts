@@ -179,6 +179,65 @@ describe('buildTranscriptEntries', () => {
     ])
   })
 
+  it('hides XML-wrapped attachment runtime context from user message content', () => {
+    const entries = buildTranscriptEntries([
+      {
+        role: 'user',
+        content: [
+          'see file',
+          '',
+          '<agent_runtime_attachments>',
+          'Uploaded files are available in the workspace:',
+          '',
+          '- note.txt',
+          '  attachment_id: att_1',
+          '  path: .attachments/att_1/note.txt',
+          '</agent_runtime_attachments>',
+        ].join('\n'),
+        attachments: [
+          {
+            id: 'att_1',
+            file_name: 'note.txt',
+            mime_type: 'text/plain',
+            status: 'sent',
+          },
+        ],
+      },
+    ] as any)
+
+    expect(entries[0]).toMatchObject({
+      kind: 'user',
+      content: 'see file',
+      attachments: [expect.objectContaining({ id: 'att_1' })],
+    })
+    expect(entries[0].content).not.toContain('agent_runtime_attachments')
+    expect(entries[0].content).not.toContain('path: .attachments')
+  })
+
+  it('hides legacy attachment runtime context from user message content', () => {
+    const entries = buildTranscriptEntries([
+      {
+        role: 'user',
+        content: [
+          'see legacy file',
+          '',
+          'Uploaded files are available in the workspace:',
+          '',
+          '- note.txt',
+          '  attachment_id: att_1',
+          '  path: .attachments/att_1/note.txt',
+        ].join('\n'),
+      },
+    ] as any)
+
+    expect(entries[0]).toMatchObject({
+      kind: 'user',
+      content: 'see legacy file',
+    })
+    expect(entries[0].content).not.toContain('Uploaded files')
+    expect(entries[0].content).not.toContain('path: .attachments')
+  })
+
   it('keeps attachment metadata on reply and user entries', () => {
     const entries = buildTranscriptEntries([
       {
@@ -235,7 +294,7 @@ describe('buildTranscriptEntries', () => {
       {
         role: 'assistant',
         content: '',
-        tool_calls: [{ id: 'call_image_1', name: 'generate_image', arguments: '{"prompt":"draw"}' }],
+        tool_calls: [{ id: 'call_image_1', name: 'generate_image', arguments: '{"prompt":"draw a complete poster with every word visible"}' }],
       },
       { role: 'tool', content: result, tool_call_id: 'call_image_1' },
     ] as any)
@@ -248,7 +307,14 @@ describe('buildTranscriptEntries', () => {
         expect.objectContaining({
           key: 'call_image_1',
           label: 'generate_image',
-          blocks: expect.arrayContaining([expect.objectContaining({ label: 'Result', value: result })]),
+          preview: 'draw a complete poster with every word visible',
+          blocks: [
+            expect.objectContaining({
+              label: 'Params',
+              value: '{"prompt":"draw a complete poster with every word visible"}',
+            }),
+            expect.objectContaining({ label: 'Result', value: '已生成' }),
+          ],
         }),
       ],
     })
@@ -351,6 +417,27 @@ describe('buildTranscriptEntries', () => {
         }),
       ],
     })
+  })
+
+  it('shows image tool JSON errors as readable tool result text', () => {
+    const entries = buildTranscriptEntries([
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [{ id: 'call_image_error', name: 'generate_image', arguments: '{"prompt":"draw"}' }],
+      },
+      {
+        role: 'tool',
+        content: JSON.stringify({ tool: 'generate_image', operation: 'generate', error: 'image model quota exceeded' }),
+        tool_call_id: 'call_image_error',
+      },
+    ] as any)
+
+    expect(entries.map((entry) => entry.kind)).toEqual(['tool'])
+    expect(entries[0].details?.[0].blocks).toEqual([
+      expect.objectContaining({ label: 'Params', value: '{"prompt":"draw"}' }),
+      expect.objectContaining({ label: 'Result', value: 'image model quota exceeded' }),
+    ])
   })
 
   it('does not convert non-image tool results that only look like image tool JSON', () => {

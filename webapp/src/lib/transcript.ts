@@ -30,6 +30,15 @@ function compactWhitespace(value: string) {
   return value.replace(/\s+/g, ' ').trim()
 }
 
+const attachmentRuntimeContextPattern = /<agent_runtime_attachments\b[^>]*>[\s\S]*?<\/agent_runtime_attachments>/gi
+
+function stripAttachmentRuntimeContext(value: string) {
+  const strippedXML = value.replace(attachmentRuntimeContextPattern, '')
+  const legacyMarker = 'Uploaded files are available in the workspace:'
+  const legacyIndex = strippedXML.indexOf(legacyMarker)
+  return (legacyIndex >= 0 ? strippedXML.slice(0, legacyIndex) : strippedXML).trim()
+}
+
 function isRenderableSystemMessage(message: ConversationMessage) {
   if (message.role !== 'system') {
     return false
@@ -442,6 +451,31 @@ function toolArgsPreview(name: string, argumentsText?: string): string {
   return previewText(trimmed, 80)
 }
 
+function normalizeToolResultText(name: string, resultText?: string, error?: boolean) {
+  if (!resultText || error || !isImageToolName(name)) {
+    return resultText
+  }
+  if (parseImageToolResult(resultText, name)) {
+    return '已生成'
+  }
+  try {
+    const parsed: unknown = JSON.parse(resultText)
+    if (isRecord(parsed)) {
+      const errorText = firstString(parsed.error, parsed.Error, parsed.message, parsed.Message)
+      if (errorText) {
+        return errorText
+      }
+      const failedImages = parsed.failed_images ?? parsed.failedImages ?? parsed.FailedImages
+      if (Array.isArray(failedImages) && failedImages.length > 0) {
+        return '生成失败'
+      }
+    }
+  } catch {
+    // Keep plain text image tool errors as-is.
+  }
+  return resultText
+}
+
 function makeToolDetail(input: {
   toolCallId?: string
   name: string
@@ -451,6 +485,7 @@ function makeToolDetail(input: {
   error?: boolean
 }): TranscriptEntryDetail {
   let preview: string
+  const resultText = normalizeToolResultText(input.name, input.resultText, input.error)
   if (input.loading) {
     preview = 'Running'
   } else if (input.error) {
@@ -464,7 +499,7 @@ function makeToolDetail(input: {
     preview,
     collapsed: true,
     loading: input.loading,
-    blocks: makeBlocks(input.argumentsText, input.resultText || (input.loading ? 'Running...' : ''), input.loading),
+    blocks: makeBlocks(input.argumentsText, resultText || (input.loading ? 'Running...' : ''), input.loading),
   }
 }
 
@@ -884,7 +919,7 @@ function applyConversationMessage(
       id: createEntryId('user'),
       kind: 'user',
       title: '',
-      content: message.content,
+      content: stripAttachmentRuntimeContext(message.content),
       ...(message.attachments && message.attachments.length > 0 ? { attachments: message.attachments } : {}),
     })
     return next
