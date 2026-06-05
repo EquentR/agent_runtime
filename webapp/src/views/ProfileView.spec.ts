@@ -1,6 +1,6 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import type { Component } from 'vue'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const api = vi.hoisted(() => ({
   changeUserPassword: vi.fn(),
@@ -109,6 +109,10 @@ describe('ProfileView', () => {
     api.testUserCustomModel.mockResolvedValue({ ok: true })
   })
 
+  afterEach(() => {
+    document.body.innerHTML = ''
+  })
+
   it('updates display name and password while showing required action states', async () => {
     const wrapper = await mountProfileView()
     await flushPromises()
@@ -118,6 +122,7 @@ describe('ProfileView', () => {
     expect(wrapper.text()).toContain('必须绑定邮箱')
     expect(wrapper.text()).toContain('必须修改密码')
     expect(wrapper.find('[data-profile-models-link]').exists()).toBe(true)
+    expect(wrapper.get('[data-open-source-licenses-toggle]').exists()).toBe(true)
     expect(wrapper.text()).toContain('我的模型')
 
     await wrapper.get('[data-profile-display-name-input]').setValue(' Alice Doe ')

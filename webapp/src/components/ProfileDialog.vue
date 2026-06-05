@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
 
+import OpenSourceLicensesPanel from './OpenSourceLicensesPanel.vue'
 import {
   changeUserPassword,
   confirmUserEmailVerification,
@@ -629,6 +630,8 @@ function resetTurnstileWidget() {
                 </div>
               </div>
             </section>
+
+            <OpenSourceLicensesPanel />
           </div>
         </div>
       </div>

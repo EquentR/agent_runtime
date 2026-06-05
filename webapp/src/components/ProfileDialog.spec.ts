@@ -84,6 +84,8 @@ describe('ProfileDialog', () => {
     })
     await flushPromises()
 
+    expect(document.body.querySelector('[data-open-source-licenses-toggle]')).not.toBeNull()
+
     const createButton = document.body.querySelector<HTMLButtonElement>('.profile-action-button')
     expect(createButton).not.toBeNull()
     createButton?.click()

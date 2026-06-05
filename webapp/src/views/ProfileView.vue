@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 
+import OpenSourceLicensesPanel from '../components/OpenSourceLicensesPanel.vue'
 import {
   changeUserPassword,
   confirmUserEmailVerification,
@@ -662,6 +663,8 @@ function resetTurnstileWidget() {
         </div>
       </form>
     </section>
+
+    <OpenSourceLicensesPanel />
   </main>
 </template>
 
