@@ -845,10 +845,6 @@ func (e runtimeEnv) loadImageAttachment(ctx context.Context, createdBy string, a
 	if attachment.ExpiresAt != nil && !attachment.ExpiresAt.After(time.Now().UTC()) {
 		return imageInputAttachment{}, fmt.Errorf("attachment %s is expired", attachment.ID)
 	}
-	mimeType := strings.TrimSpace(attachment.MimeType)
-	if !strings.HasPrefix(strings.ToLower(mimeType), "image/") {
-		return imageInputAttachment{}, fmt.Errorf("attachment %s has unsupported mime type %q", attachment.ID, mimeType)
-	}
 	reader, _, err := e.attachmentStorage.Open(ctx, attachment.StorageKey)
 	if err != nil {
 		return imageInputAttachment{}, err
@@ -865,12 +861,35 @@ func (e runtimeEnv) loadImageAttachment(ctx context.Context, createdBy string, a
 	if len(data) == 0 {
 		return imageInputAttachment{}, fmt.Errorf("attachment %s is empty", attachment.ID)
 	}
+	mimeType, ok := resolveImageAttachmentMimeType(attachment.MimeType, "", data)
+	if !ok {
+		mimeType = strings.TrimSpace(attachment.MimeType)
+		if mimeType == "" {
+			mimeType = "application/octet-stream"
+		}
+		return imageInputAttachment{}, fmt.Errorf("attachment %s has unsupported mime type %q", attachment.ID, mimeType)
+	}
 	return imageInputAttachment{
 		ID:       attachment.ID,
 		FileName: attachment.FileName,
 		MimeType: mimeType,
 		Data:     data,
 	}, nil
+}
+
+func resolveImageAttachmentMimeType(recordMimeType string, metaMimeType string, data []byte) (string, bool) {
+	mimeType := firstNonEmpty(strings.TrimSpace(recordMimeType), strings.TrimSpace(metaMimeType))
+	if strings.HasPrefix(strings.ToLower(mimeType), "image/") {
+		return mimeType, true
+	}
+	if len(data) == 0 {
+		return "", false
+	}
+	detected := strings.TrimSpace(http.DetectContentType(data))
+	if strings.HasPrefix(strings.ToLower(detected), "image/") {
+		return detected, true
+	}
+	return "", false
 }
 
 func (e runtimeEnv) storeGeneratedImage(ctx context.Context, data []byte, mimeType string, size string, conversationID string, createdBy string, revisedPrompt string) (*attachments.Attachment, error) {

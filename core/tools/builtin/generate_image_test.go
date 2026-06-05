@@ -2,7 +2,9 @@ package builtin
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"mime"
 	"mime/multipart"
@@ -10,6 +12,11 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/EquentR/agent_runtime/core/attachments"
+	"github.com/glebarez/sqlite"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 func TestOpenAIImageGenProviderEditUsesConfiguredModelAndSingleImageField(t *testing.T) {
@@ -77,6 +84,64 @@ func TestOpenAIImageGenProviderEditUsesExplicitEditModelOverride(t *testing.T) {
 	}
 	if result.Model != "gpt-image-edit" {
 		t.Fatalf("result.Model = %q, want gpt-image-edit", result.Model)
+	}
+}
+
+func TestLoadImageAttachmentFallsBackToDetectedMimeTypeForLegacyImageMetadata(t *testing.T) {
+	ctx := context.Background()
+	storage, err := attachments.NewFilesystemStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFilesystemStore() error = %v", err)
+	}
+	store := attachments.NewStore(mustOpenImageAttachmentTestDB(t), storage)
+	if err := store.AutoMigrate(); err != nil {
+		t.Fatalf("store.AutoMigrate() error = %v", err)
+	}
+
+	imageData, err := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=")
+	if err != nil {
+		t.Fatalf("DecodeString() error = %v", err)
+	}
+	storedObject, err := storage.PutDraft(ctx, attachments.PutDraftInput{
+		FileName: "legacy-image.bin",
+		MimeType: "application/octet-stream",
+		Data:     imageData,
+	})
+	if err != nil {
+		t.Fatalf("PutDraft() error = %v", err)
+	}
+	draft, err := store.CreateDraft(ctx, attachments.CreateDraftInput{
+		ID:             "att_legacy_image",
+		ConversationID: "conv_1",
+		CreatedBy:      "tester",
+		StorageBackend: storedObject.StorageBackend,
+		StorageKey:     storedObject.StorageKey,
+		FileName:       storedObject.FileName,
+		MimeType:       storedObject.MimeType,
+		SizeBytes:      storedObject.SizeBytes,
+		Kind:           attachments.KindImage,
+	})
+	if err != nil {
+		t.Fatalf("CreateDraft() error = %v", err)
+	}
+	sent, err := store.PromoteDraftToSent(ctx, draft.ID, attachments.PromoteInput{ConversationID: "conv_1"})
+	if err != nil {
+		t.Fatalf("PromoteDraftToSent() error = %v", err)
+	}
+
+	env := runtimeEnv{attachmentStore: store, attachmentStorage: storage}
+	loaded, err := env.loadImageAttachment(ctx, "tester", sent.ID)
+	if err != nil {
+		t.Fatalf("loadImageAttachment() error = %v", err)
+	}
+	if loaded.ID != sent.ID {
+		t.Fatalf("loaded.ID = %q, want %q", loaded.ID, sent.ID)
+	}
+	if loaded.MimeType != "image/png" {
+		t.Fatalf("loaded.MimeType = %q, want image/png", loaded.MimeType)
+	}
+	if string(loaded.Data) != string(imageData) {
+		t.Fatalf("loaded.Data = %x, want %x", loaded.Data, imageData)
 	}
 }
 
@@ -173,4 +238,15 @@ func exerciseOpenAIImageEdit(t *testing.T, config ImageGenProviderConfig) (captu
 	}
 
 	return request, result
+}
+
+func mustOpenImageAttachmentTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
+
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	if err != nil {
+		t.Fatalf("gorm.Open() error = %v", err)
+	}
+	return db
 }

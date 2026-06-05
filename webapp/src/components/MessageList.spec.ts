@@ -494,6 +494,7 @@ describe('MessageList', () => {
     expect(copyButton.find('svg').exists()).toBe(true)
     expect(copyButton.classes()).toContain('compact-icon-button')
     expect(wrapper.find('.markdown-code-language').text()).toBe('ts')
+    expect(wrapper.find('.markdown-code-scroll').exists()).toBe(true)
     expect(codeBlock.find('pre').exists()).toBe(true)
 
     await copyButton.trigger('click')

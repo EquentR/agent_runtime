@@ -1569,6 +1569,7 @@ p {
 }
 
 .markdown-content {
+  min-width: 0;
   white-space: normal;
   color: #21383f;
 }
@@ -1636,7 +1637,7 @@ p {
 }
 
 .markdown-content pre {
-  overflow-x: auto;
+  overflow: visible;
   margin: 0;
   padding: 0.95rem 1rem 1rem;
   border-radius: 0.88rem;
@@ -1655,11 +1656,24 @@ p {
 }
 
 .markdown-code-block {
+  min-width: 0;
+  max-width: 100%;
   margin: 0.72rem 0;
   border-radius: 0.88rem;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(246, 249, 250, 0.98));
   border: 1px solid rgba(25, 50, 59, 0.08);
   overflow: hidden;
+}
+
+.markdown-code-scroll {
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.markdown-code-scroll pre {
+  width: max-content;
+  min-width: 100%;
 }
 
 .markdown-code-toolbar {

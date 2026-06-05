@@ -298,7 +298,9 @@ markdown.renderer.rules.fence = (tokens, index) => {
     '</svg>',
     '</button>',
     '</div>',
+    '<div class="markdown-code-scroll">',
     `<pre><code class="language-${escapedLanguage}">${escapedCode}</code></pre>`,
+    '</div>',
     '</div>',
   ].join('')
 }
