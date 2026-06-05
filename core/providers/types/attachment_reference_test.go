@@ -22,3 +22,15 @@ func TestImageAttachmentReferenceTextIncludesAttachmentID(t *testing.T) {
 		t.Fatalf("reference text = %q, want edit_image hint", text)
 	}
 }
+
+func TestImageAttachmentReferenceTextOmitsSVGAttachment(t *testing.T) {
+	text := ImageAttachmentReferenceText(Attachment{
+		ID:       "att_svg_1",
+		FileName: "diagram.svg",
+		MimeType: "image/svg+xml",
+		Data:     []byte(`<svg xmlns="http://www.w3.org/2000/svg"></svg>`),
+	})
+	if text != "" {
+		t.Fatalf("ImageAttachmentReferenceText() = %q, want empty for SVG attachment", text)
+	}
+}

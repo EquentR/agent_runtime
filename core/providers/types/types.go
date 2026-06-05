@@ -30,7 +30,7 @@ type Message struct {
 	// ReasoningItems 保存结构化推理片段（如 Responses API 的 reasoning item），
 	// 便于后续请求按 provider 要求回放完整推理状态。
 	ReasoningItems []ReasoningItem
-	// Attachments supports image/text files for multimodal requests.
+	// Attachments carries provider-approved direct raster image inputs.
 	Attachments []Attachment
 
 	// assistant 发起的 Tool 调用

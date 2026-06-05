@@ -2390,7 +2390,7 @@ describe('ChatView', () => {
     }))
   })
 
-  it('hides uploader for models without attachment capability', async () => {
+  it('keeps uploader available for models without direct image input capability', async () => {
     api.fetchModelCatalog.mockResolvedValue({
       default_provider_id: 'openai',
       default_model_id: 'gpt-5.4',
@@ -2419,7 +2419,7 @@ describe('ChatView', () => {
     await flushPromises()
 
     const composer = wrapper.findComponent({ name: 'MessageComposer' })
-    expect(composer.props('attachmentsEnabled')).toBe(false)
+    expect(composer.props('attachmentsEnabled')).toBe(true)
   })
 
   it('keeps attachment in failed state when backend delete fails', async () => {

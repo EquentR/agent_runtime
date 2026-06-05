@@ -116,8 +116,9 @@ func (h *AttachmentHandler) handleUploadAttachment() (method, relativePath strin
 		}
 
 		mimeType := normalizeAttachmentMimeType(fileHeader.Header.Get("Content-Type"), data)
-		if !isSupportedAttachmentMimeType(mimeType) {
-			return nil, []resp.ResOpt{resp.WithCode(http.StatusBadRequest)}, fmt.Errorf("mime type %q is not supported", mimeType)
+		classification := attachments.ClassifyFile(fileHeader.Filename, mimeType)
+		if !classification.UploadAllowed {
+			return nil, []resp.ResOpt{resp.WithCode(http.StatusBadRequest)}, fmt.Errorf("uploaded file %q is not supported: %s", fileHeader.Filename, classification.RejectReason)
 		}
 
 		storedObject, err := h.storage.PutDraft(c.Request.Context(), attachments.PutDraftInput{
@@ -281,20 +282,6 @@ func normalizeAttachmentMimeType(headerValue string, data []byte) string {
 		return mimeType
 	}
 	return strings.TrimSpace(http.DetectContentType(data))
-}
-
-func isSupportedAttachmentMimeType(mimeType string) bool {
-	normalized := strings.ToLower(strings.TrimSpace(mimeType))
-	switch {
-	case strings.HasPrefix(normalized, "text/"):
-		return true
-	case strings.HasPrefix(normalized, "image/"):
-		return true
-	case normalized == "application/json":
-		return true
-	default:
-		return false
-	}
 }
 
 func buildAttachmentTextMetadata(fileName string, kind string, data []byte) (string, string) {

@@ -241,6 +241,28 @@ func TestFinishMutableWorkspaceMarksPendingMergeWhenWorkspaceDiffersFromBaseline
 	}
 }
 
+func TestFinishMutableWorkspaceIgnoresRuntimeAttachmentsDirectory(t *testing.T) {
+	templateRoot := t.TempDir()
+	workspacesRoot := t.TempDir()
+	writeFile(t, templateRoot, "AGENTS.md", "# Workspace rules\n")
+	manager := newTestManager(t, templateRoot, workspacesRoot)
+
+	workspace, err := manager.CreateTaskWorkspace(context.Background(), "42", "conv_1", ModeMutable)
+	if err != nil {
+		t.Fatalf("CreateTaskWorkspace() error = %v", err)
+	}
+	writeFile(t, workspace.Root, filepath.Join(".attachments", "att_1", "notes.txt"), "runtime input")
+	writeFile(t, workspace.Root, filepath.Join(".attachments", "att_1", "metadata.json"), "{}")
+
+	state, err := manager.FinishMutableWorkspace(context.Background(), "42", "conv_1")
+	if err != nil {
+		t.Fatalf("FinishMutableWorkspace() error = %v", err)
+	}
+	if state.State != StateCompleted {
+		t.Fatalf("state.State = %q, want %q when only .attachments changed", state.State, StateCompleted)
+	}
+}
+
 func TestWorkspaceManifestDetectsEmptyDirectoryChanges(t *testing.T) {
 	templateRoot := t.TempDir()
 	workspacesRoot := t.TempDir()
@@ -408,6 +430,34 @@ func TestConfirmTaskWorkspaceBacksUpHomeReplacesContents(t *testing.T) {
 	if _, err := manager.ConfirmTaskWorkspace(context.Background(), "42", "tsk_123"); err == nil {
 		t.Fatal("second ConfirmTaskWorkspace() error = nil, want non-pending state rejection")
 	}
+}
+
+func TestConfirmTaskWorkspaceDoesNotMergeRuntimeAttachmentsDirectory(t *testing.T) {
+	templateRoot := t.TempDir()
+	workspacesRoot := t.TempDir()
+	writeFile(t, templateRoot, "AGENTS.md", "# Workspace rules\n")
+	manager := newTestManager(t, templateRoot, workspacesRoot)
+
+	home, err := manager.EnsureHomeWorkspace(context.Background(), "42")
+	if err != nil {
+		t.Fatalf("EnsureHomeWorkspace() error = %v", err)
+	}
+	task, err := manager.CreateTaskWorkspace(context.Background(), "42", "tsk_123", ModeMutable)
+	if err != nil {
+		t.Fatalf("CreateTaskWorkspace() error = %v", err)
+	}
+	writeFile(t, task.Root, "task-output.txt", "merge me")
+	writeFile(t, task.Root, filepath.Join(".attachments", "att_1", "notes.txt"), "runtime input")
+	if _, err := manager.MarkTaskWorkspacePendingMerge(context.Background(), "42", "tsk_123"); err != nil {
+		t.Fatalf("MarkTaskWorkspacePendingMerge() error = %v", err)
+	}
+
+	if _, err := manager.ConfirmTaskWorkspace(context.Background(), "42", "tsk_123"); err != nil {
+		t.Fatalf("ConfirmTaskWorkspace() error = %v", err)
+	}
+
+	assertFileContent(t, home.Root, "task-output.txt", "merge me")
+	assertPathMissing(t, home.Root, filepath.Join(".attachments", "att_1", "notes.txt"))
 }
 
 func TestConfirmTaskWorkspaceRestoresBackupWhenReplacementFails(t *testing.T) {

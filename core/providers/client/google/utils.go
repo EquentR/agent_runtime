@@ -7,7 +7,6 @@ import (
 	"math"
 	"net/http"
 	"strings"
-	"unicode/utf8"
 
 	model "github.com/EquentR/agent_runtime/core/providers/types"
 	"github.com/EquentR/agent_runtime/core/types"
@@ -253,22 +252,12 @@ func toPartFromAttachment(attachment model.Attachment) (*genai.Part, string, err
 		mimeType = http.DetectContentType(attachment.Data)
 	}
 
-	if strings.HasPrefix(mimeType, "image/") {
+	if model.IsRasterImageMimeType(mimeType) {
 		// 图片按 inline bytes part 发送，符合 GenAI 多模态输入格式。
 		if len(attachment.Data) == 0 {
 			return nil, "", fmt.Errorf("image attachment %q data is empty", attachment.FileName)
 		}
 		return genai.NewPartFromBytes(attachment.Data, mimeType), "[image attachment]", nil
-	}
-
-	if isTextMimeType(mimeType) || utf8.Valid(attachment.Data) {
-		// 文本类附件转成纯文本上下文，便于跨 provider 保持一致行为。
-		fileName := attachment.FileName
-		if fileName == "" {
-			fileName = "attachment.txt"
-		}
-		text := "[附件:" + fileName + "]\n" + string(attachment.Data)
-		return genai.NewPartFromText(text), text, nil
 	}
 
 	return nil, "", fmt.Errorf("unsupported attachment type: %s", mimeType)
@@ -291,24 +280,11 @@ func toPartsFromAttachment(attachment model.Attachment) ([]*genai.Part, string, 
 	if mimeType == "" {
 		mimeType = http.DetectContentType(attachment.Data)
 	}
-	if strings.HasPrefix(strings.ToLower(mimeType), "image/") {
+	if model.IsRasterImageMimeType(mimeType) {
 		return []*genai.Part{part}, "", nil
 	}
 
 	return []*genai.Part{part}, promptPart, nil
-}
-
-func isTextMimeType(mimeType string) bool {
-	if strings.HasPrefix(mimeType, "text/") {
-		return true
-	}
-	if mimeType == "application/json" || strings.HasSuffix(mimeType, "+json") {
-		return true
-	}
-	if mimeType == "application/xml" || strings.HasSuffix(mimeType, "+xml") {
-		return true
-	}
-	return false
 }
 
 func parseJSONArgs(raw string) (map[string]any, error) {

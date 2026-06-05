@@ -87,26 +87,86 @@ func TestAttachmentHandlerUploadCreatesDraftAttachment(t *testing.T) {
 	}
 }
 
-func TestAttachmentHandlerRejectsUnsupportedMimeType(t *testing.T) {
+func TestAttachmentHandlerUploadAcceptsWorkspaceOnlyFileTypes(t *testing.T) {
+	_, server := newAttachmentHandlerTestServer(t)
+	ownerCookie := registerAndLoginAuthUser(t, server.URL, "alice")
+
+	tests := []struct {
+		name        string
+		fileName    string
+		contentType string
+		data        []byte
+		wantKind    string
+	}{
+		{
+			name:        "pdf",
+			fileName:    "report.pdf",
+			contentType: "application/pdf",
+			data:        []byte("%PDF-1.7\n"),
+			wantKind:    attachments.KindDocument,
+		},
+		{
+			name:        "docx",
+			fileName:    "draft.docx",
+			contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+			data:        []byte("PK\x03\x04docx"),
+			wantKind:    attachments.KindDocument,
+		},
+		{
+			name:        "svg",
+			fileName:    "vector.svg",
+			contentType: "image/svg+xml",
+			data:        []byte(`<svg xmlns="http://www.w3.org/2000/svg"></svg>`),
+			wantKind:    attachments.KindText,
+		},
+		{
+			name:        "zip",
+			fileName:    "archive.zip",
+			contentType: "application/zip",
+			data:        []byte("PK\x03\x04zip"),
+			wantKind:    attachments.KindArchive,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			response := uploadAttachment(t, server.URL, ownerCookie, uploadAttachmentRequest{
+				FileName:    tt.fileName,
+				ContentType: tt.contentType,
+				Data:        tt.data,
+			})
+			defer response.Body.Close()
+			if response.StatusCode != http.StatusOK {
+				t.Fatalf("upload status = %d, want %d", response.StatusCode, http.StatusOK)
+			}
+			uploaded := decodeAttachmentResponse(t, response.Body)
+			if uploaded.Kind != tt.wantKind {
+				t.Fatalf("uploaded kind = %q, want %q", uploaded.Kind, tt.wantKind)
+			}
+		})
+	}
+}
+
+func TestAttachmentHandlerRejectsDangerousBinaryUpload(t *testing.T) {
 	_, server := newAttachmentHandlerTestServer(t)
 	ownerCookie := registerAndLoginAuthUser(t, server.URL, "alice")
 
 	response := uploadAttachment(t, server.URL, ownerCookie, uploadAttachmentRequest{
-		FileName:    "archive.zip",
-		ContentType: "application/zip",
-		Data:        []byte("PK\x03\x04"),
+		FileName:    "malware.exe",
+		ContentType: "application/octet-stream",
+		Data:        []byte("MZ\x00\x00"),
 	})
 	defer response.Body.Close()
 
 	envelope := decodeEnvelope(t, response.Body)
 	if envelope.OK {
-		t.Fatal("unsupported mime upload unexpectedly succeeded")
+		t.Fatal("dangerous binary upload unexpectedly succeeded")
 	}
 	if envelope.Code != http.StatusBadRequest {
 		t.Fatalf("envelope.Code = %d, want %d", envelope.Code, http.StatusBadRequest)
 	}
 	if envelope.Message == "" {
-		t.Fatal("unsupported mime message = empty, want clear error")
+		t.Fatal("dangerous binary message = empty, want clear error")
 	}
 }
 

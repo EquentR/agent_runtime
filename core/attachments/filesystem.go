@@ -92,7 +92,7 @@ func (s *FilesystemStore) PutDraft(ctx context.Context, input PutDraftInput) (*S
 		FileName:       strings.TrimSpace(input.FileName),
 		MimeType:       normalizeMimeType(input.MimeType),
 		SizeBytes:      int64(len(input.Data)),
-		Kind:           normalizeKind("", input.MimeType),
+		Kind:           ClassifyFile(input.FileName, input.MimeType).Kind,
 	}, nil
 }
 

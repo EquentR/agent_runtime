@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"unicode/utf8"
 
 	model "github.com/EquentR/agent_runtime/core/providers/types"
 	"github.com/EquentR/agent_runtime/core/types"
@@ -195,7 +194,7 @@ func responseContentItemsFromAttachment(attachment model.Attachment) ([]response
 		mimeType = http.DetectContentType(attachment.Data)
 	}
 	switch {
-	case strings.HasPrefix(strings.ToLower(mimeType), "image/"):
+	case model.IsRasterImageMimeType(mimeType):
 		if len(attachment.Data) == 0 {
 			return nil, fmt.Errorf("image attachment %q data is empty", attachment.FileName)
 		}
@@ -206,24 +205,9 @@ func responseContentItemsFromAttachment(attachment model.Attachment) ([]response
 			items = append(items, responses.ResponseInputContentParamOfInputText(promptText))
 		}
 		return items, nil
-	case isTextMimeType(mimeType) || (strings.TrimSpace(attachment.MimeType) == "" && utf8.Valid(attachment.Data)):
-		if len(attachment.Data) == 0 {
-			return nil, fmt.Errorf("text attachment %q data is empty", attachment.FileName)
-		}
-		fileItem := responses.ResponseInputContentUnionParam{
-			OfInputFile: &responses.ResponseInputFileParam{},
-		}
-		fileItem.OfInputFile.FileData = openai.String(base64.StdEncoding.EncodeToString(attachment.Data))
-		fileItem.OfInputFile.Filename = openai.String(firstNonEmpty(strings.TrimSpace(attachment.FileName), "attachment.txt"))
-		return []responses.ResponseInputContentUnionParam{fileItem}, nil
 	default:
 		return nil, fmt.Errorf("unsupported attachment type %q", mimeType)
 	}
-}
-
-func isTextMimeType(mimeType string) bool {
-	mimeType = strings.ToLower(strings.TrimSpace(mimeType))
-	return strings.HasPrefix(mimeType, "text/") || mimeType == "application/json" || strings.HasSuffix(mimeType, "+json")
 }
 
 func firstNonEmpty(values ...string) string {

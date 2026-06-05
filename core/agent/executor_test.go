@@ -2347,7 +2347,7 @@ func TestAgentExecutorPromptRequiresPromptResolver(t *testing.T) {
 	}
 }
 
-func TestAgentExecutorPromotesDraftAttachmentsAndHydratesProviderAttachments(t *testing.T) {
+func TestAgentExecutorPromotesDraftImageAttachmentsAndHydratesProviderAttachments(t *testing.T) {
 	store := newConversationStoreForTest(t)
 	attachmentStorage, err := attachments.NewFilesystemStore(t.TempDir())
 	if err != nil {
@@ -2359,9 +2359,9 @@ func TestAgentExecutorPromotesDraftAttachmentsAndHydratesProviderAttachments(t *
 		t.Fatalf("attachmentStore.AutoMigrate() error = %v", err)
 	}
 	storedObject, err := attachmentStorage.PutDraft(context.Background(), attachments.PutDraftInput{
-		FileName: "notes.txt",
-		MimeType: "text/plain",
-		Data:     []byte("hello"),
+		FileName: "source.png",
+		MimeType: "image/png",
+		Data:     []byte("png-bytes"),
 	})
 	if err != nil {
 		t.Fatalf("PutDraft() error = %v", err)
@@ -2376,8 +2376,8 @@ func TestAgentExecutorPromotesDraftAttachmentsAndHydratesProviderAttachments(t *
 		MimeType:       storedObject.MimeType,
 		SizeBytes:      storedObject.SizeBytes,
 		Kind:           storedObject.Kind,
-		PreviewText:    "hello",
-		ContextText:    "hello",
+		PreviewText:    "[image attachment: source.png]",
+		ContextText:    "[image attachment: source.png]",
 		ExpiresAt:      &expiresAt,
 	})
 	if err != nil {
@@ -2390,7 +2390,7 @@ func TestAgentExecutorPromotesDraftAttachmentsAndHydratesProviderAttachments(t *
 		nil,
 	)}}
 	executor := newTaskExecutorForTest(t, ExecutorDependencies{
-		Resolver:          newExecutorResolverForTest(),
+		Resolver:          newExecutorResolverWithAttachmentCapabilityForTest(true),
 		ConversationStore: store,
 		AttachmentStore:   attachmentStore,
 		AttachmentStorage: attachmentStorage,
@@ -2432,11 +2432,198 @@ func TestAgentExecutorPromotesDraftAttachmentsAndHydratesProviderAttachments(t *
 	if len(lastMessage.Attachments) != 1 {
 		t.Fatalf("last message attachments = %#v, want one attachment", lastMessage.Attachments)
 	}
-	if string(lastMessage.Attachments[0].Data) != "hello" {
-		t.Fatalf("hydrated attachment data = %q, want %q", string(lastMessage.Attachments[0].Data), "hello")
+	if string(lastMessage.Attachments[0].Data) != "png-bytes" {
+		t.Fatalf("hydrated attachment data = %q, want %q", string(lastMessage.Attachments[0].Data), "png-bytes")
 	}
 	if lastMessage.Attachments[0].ID != "att_1" {
 		t.Fatalf("hydrated attachment id = %q, want %q", lastMessage.Attachments[0].ID, "att_1")
+	}
+}
+
+func TestAgentExecutorPlacesTextAttachmentInWorkspaceWithoutProviderBytes(t *testing.T) {
+	store := newConversationStoreForTest(t)
+	attachmentStorage, err := attachments.NewFilesystemStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFilesystemStore() error = %v", err)
+	}
+	attachmentDB := mustOpenExecutorTaskDB(t)
+	attachmentStore := attachments.NewStore(attachmentDB, attachmentStorage)
+	if err := attachmentStore.AutoMigrate(); err != nil {
+		t.Fatalf("attachmentStore.AutoMigrate() error = %v", err)
+	}
+	attachment := createExecutorDraftAttachment(t, attachmentStore, attachmentStorage, executorDraftAttachmentInput{
+		ID:        "att_text_workspace",
+		CreatedBy: "tester",
+		FileName:  "notes.txt",
+		MimeType:  "text/plain",
+		Data:      []byte("workspace text"),
+	})
+	templateRoot := t.TempDir()
+	writeExecutorWorkspacePrompt(t, templateRoot, "# Workspace rules\n")
+	workspacesRoot := t.TempDir()
+	workspaceManager := newExecutorWorkspaceManager(t, templateRoot, workspacesRoot)
+	client := &stubClient{streams: []model.Stream{newStubStream(
+		[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "done"}}},
+		model.Message{Role: model.RoleAssistant, Content: "done"},
+		nil,
+	)}}
+	executor := newTaskExecutorForTest(t, ExecutorDependencies{
+		Resolver:          newExecutorResolverForTest(),
+		ConversationStore: store,
+		AttachmentStore:   attachmentStore,
+		AttachmentStorage: attachmentStorage,
+		WorkspaceManager:  workspaceManager,
+		ClientFactory:     func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return client, nil },
+	})
+
+	_, err = executor(context.Background(), &coretasks.Task{
+		ID:        "task_text_workspace",
+		TaskType:  "agent.run",
+		CreatedBy: "tester",
+		InputJSON: marshalExecutorTaskInput(t, map[string]any{
+			"conversation_id": "conv_text_workspace",
+			"provider_id":     "openai",
+			"model_id":        "gpt-5.4",
+			"message":         "read this",
+			"attachment_ids":  []string{attachment.ID},
+		}),
+	}, nil)
+	if err != nil {
+		t.Fatalf("executor() error = %v", err)
+	}
+	if len(client.streamRequests) != 1 {
+		t.Fatalf("stream request count = %d, want 1", len(client.streamRequests))
+	}
+	lastMessage := client.streamRequests[0].Messages[len(client.streamRequests[0].Messages)-1]
+	if len(lastMessage.Attachments) != 0 {
+		t.Fatalf("provider attachments = %#v, want none for text workspace attachment", lastMessage.Attachments)
+	}
+	if !strings.Contains(lastMessage.Content, "Uploaded files are available in the workspace") ||
+		!strings.Contains(lastMessage.Content, "path: .attachments/att_text_workspace/notes.txt") {
+		t.Fatalf("provider content = %q, want workspace attachment manifest", lastMessage.Content)
+	}
+	workspacePath := filepath.Join(workspacesRoot, "users", "tester", "tasks", "conv_text_workspace", ".attachments", "att_text_workspace", "notes.txt")
+	assertExecutorFileContent(t, workspacePath, "workspace text")
+	persisted, err := store.ListMessages(context.Background(), "conv_text_workspace")
+	if err != nil {
+		t.Fatalf("ListMessages() error = %v", err)
+	}
+	if len(persisted) == 0 || len(persisted[0].Attachments) != 1 || persisted[0].Attachments[0].ID != attachment.ID {
+		t.Fatalf("persisted messages = %#v, want uploaded attachment ref", persisted)
+	}
+}
+
+func TestAgentExecutorDowngradesImageAttachmentWhenModelDoesNotSupportImageInput(t *testing.T) {
+	store := newConversationStoreForTest(t)
+	attachmentStorage, err := attachments.NewFilesystemStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFilesystemStore() error = %v", err)
+	}
+	attachmentDB := mustOpenExecutorTaskDB(t)
+	attachmentStore := attachments.NewStore(attachmentDB, attachmentStorage)
+	if err := attachmentStore.AutoMigrate(); err != nil {
+		t.Fatalf("attachmentStore.AutoMigrate() error = %v", err)
+	}
+	attachment := createExecutorDraftAttachment(t, attachmentStore, attachmentStorage, executorDraftAttachmentInput{
+		ID:        "att_image_workspace",
+		CreatedBy: "tester",
+		FileName:  "source.png",
+		MimeType:  "image/png",
+		Data:      []byte("png-bytes"),
+	})
+	templateRoot := t.TempDir()
+	writeExecutorWorkspacePrompt(t, templateRoot, "# Workspace rules\n")
+	workspacesRoot := t.TempDir()
+	workspaceManager := newExecutorWorkspaceManager(t, templateRoot, workspacesRoot)
+	client := &stubClient{streams: []model.Stream{newStubStream(
+		[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "done"}}},
+		model.Message{Role: model.RoleAssistant, Content: "done"},
+		nil,
+	)}}
+	executor := newTaskExecutorForTest(t, ExecutorDependencies{
+		Resolver:          newExecutorResolverForTest(),
+		ConversationStore: store,
+		AttachmentStore:   attachmentStore,
+		AttachmentStorage: attachmentStorage,
+		WorkspaceManager:  workspaceManager,
+		ClientFactory:     func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return client, nil },
+	})
+
+	_, err = executor(context.Background(), &coretasks.Task{
+		ID:        "task_image_workspace",
+		TaskType:  "agent.run",
+		CreatedBy: "tester",
+		InputJSON: marshalExecutorTaskInput(t, map[string]any{
+			"conversation_id": "conv_image_workspace",
+			"provider_id":     "openai",
+			"model_id":        "gpt-5.4",
+			"message":         "inspect this",
+			"attachment_ids":  []string{attachment.ID},
+		}),
+	}, nil)
+	if err != nil {
+		t.Fatalf("executor() error = %v", err)
+	}
+	lastMessage := client.streamRequests[0].Messages[len(client.streamRequests[0].Messages)-1]
+	if len(lastMessage.Attachments) != 0 {
+		t.Fatalf("provider attachments = %#v, want image downgraded to workspace-only", lastMessage.Attachments)
+	}
+	workspacePath := filepath.Join(workspacesRoot, "users", "tester", "tasks", "conv_image_workspace", ".attachments", "att_image_workspace", "source.png")
+	assertExecutorFileContent(t, workspacePath, "png-bytes")
+}
+
+func TestAgentExecutorDirectSendsRasterImageWhenModelSupportsImageInput(t *testing.T) {
+	store := newConversationStoreForTest(t)
+	attachmentStorage, err := attachments.NewFilesystemStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFilesystemStore() error = %v", err)
+	}
+	attachmentDB := mustOpenExecutorTaskDB(t)
+	attachmentStore := attachments.NewStore(attachmentDB, attachmentStorage)
+	if err := attachmentStore.AutoMigrate(); err != nil {
+		t.Fatalf("attachmentStore.AutoMigrate() error = %v", err)
+	}
+	attachment := createExecutorDraftAttachment(t, attachmentStore, attachmentStorage, executorDraftAttachmentInput{
+		ID:        "att_image_direct",
+		CreatedBy: "tester",
+		FileName:  "source.png",
+		MimeType:  "image/png",
+		Data:      []byte("png-bytes"),
+	})
+	client := &stubClient{streams: []model.Stream{newStubStream(
+		[]model.StreamEvent{{Type: model.StreamEventCompleted, Message: model.Message{Role: model.RoleAssistant, Content: "done"}}},
+		model.Message{Role: model.RoleAssistant, Content: "done"},
+		nil,
+	)}}
+	executor := newTaskExecutorForTest(t, ExecutorDependencies{
+		Resolver:          newExecutorResolverWithAttachmentCapabilityForTest(true),
+		ConversationStore: store,
+		AttachmentStore:   attachmentStore,
+		AttachmentStorage: attachmentStorage,
+		ClientFactory:     func(*coretypes.LLMProvider, *coretypes.LLMModel) (model.LlmClient, error) { return client, nil },
+	})
+
+	_, err = executor(context.Background(), &coretasks.Task{
+		ID:        "task_image_direct",
+		TaskType:  "agent.run",
+		CreatedBy: "tester",
+		InputJSON: marshalExecutorTaskInput(t, map[string]any{
+			"conversation_id": "conv_image_direct",
+			"provider_id":     "openai",
+			"model_id":        "gpt-5.4",
+			"message":         "inspect this",
+			"attachment_ids":  []string{attachment.ID},
+		}),
+	}, nil)
+	if err != nil {
+		t.Fatalf("executor() error = %v", err)
+	}
+	lastMessage := client.streamRequests[0].Messages[len(client.streamRequests[0].Messages)-1]
+	if len(lastMessage.Attachments) != 1 {
+		t.Fatalf("provider attachments = %#v, want direct image", lastMessage.Attachments)
+	}
+	if got := string(lastMessage.Attachments[0].Data); got != "png-bytes" {
+		t.Fatalf("direct image data = %q, want png-bytes", got)
 	}
 }
 
@@ -2607,6 +2794,94 @@ func TestAgentExecutorAllowsContinuationWhenExpiredAttachmentIsOutsideReplayTail
 	}
 	if len(client.streamRequests[0].Messages[0].Attachments) != 0 {
 		t.Fatalf("expired replay attachment = %#v, want omitted outside replay tail", client.streamRequests[0].Messages[0].Attachments)
+	}
+}
+
+func TestPlanReplayMessageAttachmentsAddsWorkspaceManifestForLegacyTextAttachment(t *testing.T) {
+	attachmentStorage, err := attachments.NewFilesystemStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFilesystemStore() error = %v", err)
+	}
+	attachmentDB := mustOpenExecutorTaskDB(t)
+	attachmentStore := attachments.NewStore(attachmentDB, attachmentStorage)
+	if err := attachmentStore.AutoMigrate(); err != nil {
+		t.Fatalf("attachmentStore.AutoMigrate() error = %v", err)
+	}
+	attachment := createExecutorDraftAttachment(t, attachmentStore, attachmentStorage, executorDraftAttachmentInput{
+		ID:        "att_replay_text",
+		CreatedBy: "tester",
+		FileName:  "legacy.txt",
+		MimeType:  "text/plain",
+		Data:      []byte("legacy notes"),
+	})
+	if _, err := attachmentStore.PromoteDraftToSent(context.Background(), attachment.ID, attachments.PromoteInput{ConversationID: "conv_1"}); err != nil {
+		t.Fatalf("PromoteDraftToSent() error = %v", err)
+	}
+	workspaceRoot := t.TempDir()
+	message := model.Message{
+		Role:    model.RoleUser,
+		Content: "use the legacy file",
+		Attachments: []model.Attachment{{
+			ID:       attachment.ID,
+			FileName: "legacy.txt",
+			MimeType: "text/plain",
+		}},
+	}
+
+	hydrated, err := planReplayMessageAttachments(context.Background(), attachmentStore, attachmentStorage, message, workspaceRoot, "conv_1", false)
+	if err != nil {
+		t.Fatalf("planReplayMessageAttachments() error = %v", err)
+	}
+	if len(hydrated.Attachments) != 0 {
+		t.Fatalf("hydrated.Attachments = %#v, want workspace-only attachment omitted from provider bytes", hydrated.Attachments)
+	}
+	if !strings.Contains(hydrated.Content, "path: .attachments/att_replay_text/legacy.txt") {
+		t.Fatalf("hydrated.Content = %q, want replay workspace manifest path", hydrated.Content)
+	}
+	workspacePath := filepath.Join(workspaceRoot, ".attachments", "att_replay_text", "legacy.txt")
+	if data, err := os.ReadFile(workspacePath); err != nil {
+		t.Fatalf("ReadFile(%s) error = %v", workspacePath, err)
+	} else if string(data) != "legacy notes" {
+		t.Fatalf("workspace attachment = %q, want legacy notes", string(data))
+	}
+}
+
+func TestPlanReplayMessageAttachmentsDoesNotDuplicateExistingWorkspaceManifest(t *testing.T) {
+	attachmentStorage, err := attachments.NewFilesystemStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFilesystemStore() error = %v", err)
+	}
+	attachmentDB := mustOpenExecutorTaskDB(t)
+	attachmentStore := attachments.NewStore(attachmentDB, attachmentStorage)
+	if err := attachmentStore.AutoMigrate(); err != nil {
+		t.Fatalf("attachmentStore.AutoMigrate() error = %v", err)
+	}
+	attachment := createExecutorDraftAttachment(t, attachmentStore, attachmentStorage, executorDraftAttachmentInput{
+		ID:        "att_replay_manifest",
+		CreatedBy: "tester",
+		FileName:  "notes.txt",
+		MimeType:  "text/plain",
+		Data:      []byte("notes"),
+	})
+	if _, err := attachmentStore.PromoteDraftToSent(context.Background(), attachment.ID, attachments.PromoteInput{ConversationID: "conv_1"}); err != nil {
+		t.Fatalf("PromoteDraftToSent() error = %v", err)
+	}
+	message := model.Message{
+		Role:    model.RoleUser,
+		Content: "already has path\npath: .attachments/att_replay_manifest/notes.txt",
+		Attachments: []model.Attachment{{
+			ID:       attachment.ID,
+			FileName: "notes.txt",
+			MimeType: "text/plain",
+		}},
+	}
+
+	hydrated, err := planReplayMessageAttachments(context.Background(), attachmentStore, attachmentStorage, message, t.TempDir(), "conv_1", false)
+	if err != nil {
+		t.Fatalf("planReplayMessageAttachments() error = %v", err)
+	}
+	if got := strings.Count(hydrated.Content, "path: .attachments/att_replay_manifest/notes.txt"); got != 1 {
+		t.Fatalf("manifest path count = %d, want 1 in %q", got, hydrated.Content)
 	}
 }
 
@@ -3860,6 +4135,55 @@ func newExecutorResolverForTest() *ModelResolver {
 		BaseProvider: coretypes.BaseProvider{Name: "openai"},
 		Models:       []coretypes.LLMModel{{BaseModel: coretypes.BaseModel{ID: "gpt-5.4", Name: "GPT 5.4"}, Type: coretypes.LLMTypeOpenAIResponses}},
 	}}}
+}
+
+func newExecutorResolverWithAttachmentCapabilityForTest(attachmentsEnabled bool) *ModelResolver {
+	return &ModelResolver{Providers: []coretypes.LLMProvider{{
+		BaseProvider: coretypes.BaseProvider{Name: "openai"},
+		Models: []coretypes.LLMModel{{
+			BaseModel:    coretypes.BaseModel{ID: "gpt-5.4", Name: "GPT 5.4"},
+			Type:         coretypes.LLMTypeOpenAIResponses,
+			Capabilities: coretypes.ModelCapabilities{Attachments: attachmentsEnabled},
+		}},
+	}}}
+}
+
+type executorDraftAttachmentInput struct {
+	ID        string
+	CreatedBy string
+	FileName  string
+	MimeType  string
+	Data      []byte
+}
+
+func createExecutorDraftAttachment(t *testing.T, store *attachments.Store, storage attachments.Storage, input executorDraftAttachmentInput) *attachments.Attachment {
+	t.Helper()
+	storedObject, err := storage.PutDraft(context.Background(), attachments.PutDraftInput{
+		FileName: input.FileName,
+		MimeType: input.MimeType,
+		Data:     input.Data,
+	})
+	if err != nil {
+		t.Fatalf("PutDraft() error = %v", err)
+	}
+	expiresAt := time.Now().UTC().Add(time.Hour)
+	attachment, err := store.CreateDraft(context.Background(), attachments.CreateDraftInput{
+		ID:             input.ID,
+		CreatedBy:      input.CreatedBy,
+		StorageBackend: storedObject.StorageBackend,
+		StorageKey:     storedObject.StorageKey,
+		FileName:       storedObject.FileName,
+		MimeType:       storedObject.MimeType,
+		SizeBytes:      storedObject.SizeBytes,
+		Kind:           storedObject.Kind,
+		PreviewText:    string(input.Data),
+		ContextText:    string(input.Data),
+		ExpiresAt:      &expiresAt,
+	})
+	if err != nil {
+		t.Fatalf("CreateDraft() error = %v", err)
+	}
+	return attachment
 }
 
 func newExecutorToolCallStream(id string, name string, arguments string) model.Stream {

@@ -587,7 +587,11 @@ func (m *Manager) ListPendingMergeWorkspaces(ctx context.Context, userID string)
 }
 
 func isWorkspaceSidecar(relativePath string) bool {
-	switch filepath.ToSlash(relativePath) {
+	slashPath := filepath.ToSlash(relativePath)
+	if slashPath == ".attachments" || strings.HasPrefix(slashPath, ".attachments/") {
+		return true
+	}
+	switch slashPath {
 	case StateFileName, BaselineFileName:
 		return true
 	default:

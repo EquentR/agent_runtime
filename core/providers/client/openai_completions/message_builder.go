@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"unicode/utf8"
 
 	model "github.com/EquentR/agent_runtime/core/providers/types"
 	"github.com/EquentR/agent_runtime/core/types"
@@ -108,7 +107,7 @@ func toChatMessageParts(attachment model.Attachment) ([]openai.ChatMessagePart, 
 		mimeType = http.DetectContentType(attachment.Data)
 	}
 
-	if strings.HasPrefix(strings.ToLower(mimeType), "image/") {
+	if model.IsRasterImageMimeType(mimeType) {
 		if len(attachment.Data) == 0 {
 			return nil, "", fmt.Errorf("image attachment %q data is empty", attachment.FileName)
 		}
@@ -130,31 +129,5 @@ func toChatMessageParts(attachment model.Attachment) ([]openai.ChatMessagePart, 
 		return parts, promptText, nil
 	}
 
-	if isTextMimeType(mimeType) || utf8.Valid(attachment.Data) {
-		fileName := attachment.FileName
-		if fileName == "" {
-			fileName = "attachment.txt"
-		}
-		content := string(attachment.Data)
-		text := "[attachment:" + fileName + "]\n" + content
-		return []openai.ChatMessagePart{{
-			Type: openai.ChatMessagePartTypeText,
-			Text: text,
-		}}, text, nil
-	}
-
 	return nil, "", fmt.Errorf("unsupported attachment type: %s", mimeType)
-}
-
-func isTextMimeType(mimeType string) bool {
-	if strings.HasPrefix(mimeType, "text/") {
-		return true
-	}
-	if mimeType == "application/json" || strings.HasSuffix(mimeType, "+json") {
-		return true
-	}
-	if mimeType == "application/xml" || strings.HasSuffix(mimeType, "+xml") {
-		return true
-	}
-	return false
 }

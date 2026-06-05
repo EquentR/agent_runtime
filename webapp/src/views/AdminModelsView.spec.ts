@@ -153,6 +153,7 @@ describe('AdminModelsView', () => {
     await wrapper.get('[data-admin-model-create]').trigger('click')
 
     expect(wrapper.findAll('[data-admin-model-provider-type] option').map((option) => option.attributes('value'))).toContain('openai_chat')
+    expect(wrapper.text()).toContain('支持图片输入(直传)')
 
     await wrapper.get('[data-admin-model-provider-type]').setValue('openai_completions')
     await wrapper.get('[data-admin-model-provider-id]').setValue(' team-openai ')
@@ -176,6 +177,7 @@ describe('AdminModelsView', () => {
       scope: 'global',
       enabled: true,
       context_max_tokens: 32768,
+      capabilities: { attachments: false },
     }))
     expect(wrapper.text()).toContain('32,768')
     expect(wrapper.text()).toContain('sk-****abcd')

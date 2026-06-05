@@ -58,3 +58,31 @@ func TestBuildOpenAIChatMessages_WithImageAttachmentReference(t *testing.T) {
 		t.Fatalf("promptMessages = %#v, want attachment id hint", promptMessages)
 	}
 }
+
+func TestBuildOpenAIChatMessagesRejectsTextAttachment(t *testing.T) {
+	_, _, err := buildOpenAIChatMessages([]model.Message{{
+		Role: model.RoleUser,
+		Attachments: []model.Attachment{{
+			FileName: "note.txt",
+			MimeType: "text/plain",
+			Data:     []byte("hello"),
+		}},
+	}})
+	if err == nil || !strings.Contains(err.Error(), "unsupported attachment type") {
+		t.Fatalf("buildOpenAIChatMessages() error = %v, want unsupported attachment type", err)
+	}
+}
+
+func TestBuildOpenAIChatMessagesRejectsSVGAttachment(t *testing.T) {
+	_, _, err := buildOpenAIChatMessages([]model.Message{{
+		Role: model.RoleUser,
+		Attachments: []model.Attachment{{
+			FileName: "diagram.svg",
+			MimeType: "image/svg+xml",
+			Data:     []byte(`<svg xmlns="http://www.w3.org/2000/svg"></svg>`),
+		}},
+	}})
+	if err == nil || !strings.Contains(err.Error(), "unsupported attachment type") {
+		t.Fatalf("buildOpenAIChatMessages() error = %v, want unsupported attachment type", err)
+	}
+}

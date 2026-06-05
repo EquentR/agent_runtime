@@ -64,8 +64,8 @@ func TestBuildResponseInputEncodesImageAttachmentForUserMessage(t *testing.T) {
 	}
 }
 
-func TestBuildResponseInputEncodesTextAttachmentForUserMessage(t *testing.T) {
-	input, _, err := buildResponseInput([]model.Message{{
+func TestBuildResponseInputRejectsTextAttachmentForUserMessage(t *testing.T) {
+	_, _, err := buildResponseInput([]model.Message{{
 		Role:    model.RoleUser,
 		Content: "summarize this",
 		Attachments: []model.Attachment{{
@@ -74,35 +74,22 @@ func TestBuildResponseInputEncodesTextAttachmentForUserMessage(t *testing.T) {
 			Data:     []byte("hello"),
 		}},
 	}}, "system")
-	if err != nil {
-		t.Fatalf("buildResponseInput() error = %v", err)
+	if err == nil || !strings.Contains(err.Error(), "unsupported attachment type") {
+		t.Fatalf("buildResponseInput() error = %v, want unsupported attachment type", err)
 	}
+}
 
-	raw, err := json.Marshal(input)
-	if err != nil {
-		t.Fatalf("json.Marshal(input) error = %v", err)
-	}
-	var payload []map[string]any
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		t.Fatalf("json.Unmarshal(payload) error = %v", err)
-	}
-	content, ok := payload[0]["content"].([]any)
-	if !ok || len(content) != 2 {
-		t.Fatalf("content = %#v, want two content items", payload[0]["content"])
-	}
-	fileItem, ok := content[1].(map[string]any)
-	if !ok {
-		t.Fatalf("file item = %#v, want object", content[1])
-	}
-	if fileItem["type"] != "input_file" {
-		t.Fatalf("file item type = %#v, want input_file", fileItem["type"])
-	}
-	if fileItem["filename"] != "note.txt" {
-		t.Fatalf("filename = %#v, want note.txt", fileItem["filename"])
-	}
-	wantData := base64.StdEncoding.EncodeToString([]byte("hello"))
-	if fileItem["file_data"] != wantData {
-		t.Fatalf("file_data = %#v, want %q", fileItem["file_data"], wantData)
+func TestBuildResponseInputRejectsSVGAttachmentForUserMessage(t *testing.T) {
+	_, _, err := buildResponseInput([]model.Message{{
+		Role: model.RoleUser,
+		Attachments: []model.Attachment{{
+			FileName: "diagram.svg",
+			MimeType: "image/svg+xml",
+			Data:     []byte(`<svg xmlns="http://www.w3.org/2000/svg"></svg>`),
+		}},
+	}}, "system")
+	if err == nil || !strings.Contains(err.Error(), "unsupported attachment type") {
+		t.Fatalf("buildResponseInput() error = %v, want unsupported attachment type", err)
 	}
 }
 

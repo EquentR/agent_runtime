@@ -879,14 +879,14 @@ func (e runtimeEnv) loadImageAttachment(ctx context.Context, createdBy string, a
 
 func resolveImageAttachmentMimeType(recordMimeType string, metaMimeType string, data []byte) (string, bool) {
 	mimeType := firstNonEmpty(strings.TrimSpace(recordMimeType), strings.TrimSpace(metaMimeType))
-	if strings.HasPrefix(strings.ToLower(mimeType), "image/") {
+	if attachments.IsRasterImageMimeType(mimeType) {
 		return mimeType, true
 	}
 	if len(data) == 0 {
 		return "", false
 	}
 	detected := strings.TrimSpace(http.DetectContentType(data))
-	if strings.HasPrefix(strings.ToLower(detected), "image/") {
+	if attachments.IsRasterImageMimeType(detected) {
 		return detected, true
 	}
 	return "", false

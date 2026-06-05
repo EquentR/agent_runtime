@@ -160,7 +160,6 @@ const selectedWorkspaceMode = computed(() => selectedWorkspaceModeByConversation
 const currentAttachmentDraftKey = computed(() => activeConversationId.value || NEW_CONVERSATION_SENDING_KEY)
 const currentDraftAttachments = computed(() => draftAttachmentsByConversation.value[currentAttachmentDraftKey.value] ?? [])
 const attachmentsUploading = computed(() => currentDraftAttachments.value.some((attachment) => attachment.upload_state === 'uploading'))
-const selectedModelSupportsAttachments = computed(() => selectedModel.value?.capabilities?.attachments === true)
 const activeConversationTaskId = computed(() => (activeConversationId.value ? activeTaskIdByConversation.value[activeConversationId.value] ?? '' : ''))
 const currentConversationBusy = computed(() => {
   if (activeConversationTaskId.value) {
@@ -1283,7 +1282,7 @@ async function handleSend(message: string) {
 }
 
 async function handleAddAttachments(files: File[]) {
-  if (!selectedModelSupportsAttachments.value || files.length === 0) {
+  if (files.length === 0) {
     return
   }
   const draftKey = currentAttachmentDraftKey.value
@@ -1764,7 +1763,6 @@ onBeforeUnmount(() => {
           :disabled="composerDisabled"
           :busy="currentConversationBusy"
           :stop-disabled="stoppingTask"
-          :attachments-enabled="selectedModelSupportsAttachments"
           :attachments-uploading="attachmentsUploading"
           :attachments="currentDraftAttachments"
           :skills="availableSkills"

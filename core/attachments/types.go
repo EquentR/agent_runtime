@@ -32,6 +32,8 @@ const (
 	BackendFilesystem = "filesystem"
 	KindImage         = "image"
 	KindText          = "text"
+	KindDocument      = "document"
+	KindArchive       = "archive"
 	KindBinary        = "binary"
 )
 
@@ -105,13 +107,5 @@ func normalizeKind(kind string, mimeType string) string {
 	if normalized != "" {
 		return normalized
 	}
-	mimeType = strings.TrimSpace(strings.ToLower(mimeType))
-	switch {
-	case strings.HasPrefix(mimeType, "image/"):
-		return KindImage
-	case strings.HasPrefix(mimeType, "text/"), strings.HasSuffix(mimeType, "+json"), mimeType == "application/json":
-		return KindText
-	default:
-		return KindBinary
-	}
+	return ClassifyFile("", mimeType).Kind
 }

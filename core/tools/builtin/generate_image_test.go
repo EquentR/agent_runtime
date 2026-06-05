@@ -145,6 +145,51 @@ func TestLoadImageAttachmentFallsBackToDetectedMimeTypeForLegacyImageMetadata(t 
 	}
 }
 
+func TestLoadImageAttachmentRejectsSVGSource(t *testing.T) {
+	ctx := context.Background()
+	storage, err := attachments.NewFilesystemStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFilesystemStore() error = %v", err)
+	}
+	store := attachments.NewStore(mustOpenImageAttachmentTestDB(t), storage)
+	if err := store.AutoMigrate(); err != nil {
+		t.Fatalf("store.AutoMigrate() error = %v", err)
+	}
+
+	storedObject, err := storage.PutDraft(ctx, attachments.PutDraftInput{
+		FileName: "diagram.svg",
+		MimeType: "image/svg+xml",
+		Data:     []byte(`<svg xmlns="http://www.w3.org/2000/svg"></svg>`),
+	})
+	if err != nil {
+		t.Fatalf("PutDraft() error = %v", err)
+	}
+	draft, err := store.CreateDraft(ctx, attachments.CreateDraftInput{
+		ID:             "att_svg_source",
+		ConversationID: "conv_1",
+		CreatedBy:      "tester",
+		StorageBackend: storedObject.StorageBackend,
+		StorageKey:     storedObject.StorageKey,
+		FileName:       storedObject.FileName,
+		MimeType:       storedObject.MimeType,
+		SizeBytes:      storedObject.SizeBytes,
+		Kind:           attachments.KindText,
+	})
+	if err != nil {
+		t.Fatalf("CreateDraft() error = %v", err)
+	}
+	sent, err := store.PromoteDraftToSent(ctx, draft.ID, attachments.PromoteInput{ConversationID: "conv_1"})
+	if err != nil {
+		t.Fatalf("PromoteDraftToSent() error = %v", err)
+	}
+
+	env := runtimeEnv{attachmentStore: store, attachmentStorage: storage}
+	_, err = env.loadImageAttachment(ctx, "tester", sent.ID)
+	if err == nil || !strings.Contains(err.Error(), "unsupported mime type") {
+		t.Fatalf("loadImageAttachment() error = %v, want unsupported mime type", err)
+	}
+}
+
 type capturedMultipartFile struct {
 	FieldName string
 	FileName  string

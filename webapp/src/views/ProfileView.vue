@@ -653,7 +653,7 @@ function resetTurnstileWidget() {
         </label>
         <label class="admin-check-row">
           <input v-model="modelDraft.attachments" type="checkbox">
-          <span>支持附件</span>
+          <span>支持图片输入(直传)</span>
         </label>
         <div class="admin-form-actions">
           <button class="primary-button admin-form-button" type="submit" :disabled="modelSaving === 'model-create' || modelSaving === 'model-update'">

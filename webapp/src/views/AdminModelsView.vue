@@ -459,7 +459,7 @@ onMounted(() => {
           </label>
           <label class="admin-check-row">
             <input v-model="customDraft.attachments" type="checkbox">
-            <span>支持附件</span>
+            <span>支持图片输入(直传)</span>
           </label>
           <div class="admin-form-actions">
             <button class="ghost-button admin-form-button" type="button" @click="closeDialog">取消</button>

@@ -46,7 +46,7 @@ func (s *Store) CreateDraft(ctx context.Context, input CreateDraftInput) (*Attac
 		FileName:       strings.TrimSpace(input.FileName),
 		MimeType:       normalizeMimeType(input.MimeType),
 		SizeBytes:      input.SizeBytes,
-		Kind:           normalizeKind(input.Kind, input.MimeType),
+		Kind:           firstNonEmpty(strings.TrimSpace(input.Kind), ClassifyFile(input.FileName, input.MimeType).Kind),
 		Status:         StatusDraft,
 		Lifecycle:      LifecycleDraft,
 		PreviewText:    strings.TrimSpace(input.PreviewText),

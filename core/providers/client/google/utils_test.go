@@ -2,6 +2,7 @@ package google
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	model "github.com/EquentR/agent_runtime/core/providers/types"
@@ -109,8 +110,8 @@ func TestBuildGenAIMessages_WithAssistantToolCallsAndToolResponse(t *testing.T) 
 	}
 }
 
-func TestBuildGenAIMessages_TextAttachmentPromptMatchesSentPart(t *testing.T) {
-	contents, _, promptMessages, err := buildGenAIMessages([]model.Message{{
+func TestBuildGenAIMessagesRejectsTextAttachment(t *testing.T) {
+	_, _, _, err := buildGenAIMessages([]model.Message{{
 		Role: model.RoleUser,
 		Attachments: []model.Attachment{{
 			FileName: "note.txt",
@@ -118,17 +119,57 @@ func TestBuildGenAIMessages_TextAttachmentPromptMatchesSentPart(t *testing.T) {
 			Data:     []byte("hello"),
 		}},
 	}})
+	if err == nil || !strings.Contains(err.Error(), "unsupported attachment type") {
+		t.Fatalf("buildGenAIMessages() error = %v, want unsupported attachment type", err)
+	}
+}
+
+func TestBuildGenAIMessagesRejectsSVGAttachment(t *testing.T) {
+	_, _, _, err := buildGenAIMessages([]model.Message{{
+		Role: model.RoleUser,
+		Attachments: []model.Attachment{{
+			FileName: "diagram.svg",
+			MimeType: "image/svg+xml",
+			Data:     []byte(`<svg xmlns="http://www.w3.org/2000/svg"></svg>`),
+		}},
+	}})
+	if err == nil || !strings.Contains(err.Error(), "unsupported attachment type") {
+		t.Fatalf("buildGenAIMessages() error = %v, want unsupported attachment type", err)
+	}
+}
+
+func TestBuildGenAIMessagesAcceptsRasterImageAttachment(t *testing.T) {
+	contents, _, promptMessages, err := buildGenAIMessages([]model.Message{{
+		Role:    model.RoleUser,
+		Content: "inspect this",
+		Attachments: []model.Attachment{{
+			ID:       "att_png_1",
+			FileName: "source.png",
+			MimeType: "image/png",
+			Data:     []byte("png-bytes"),
+		}},
+	}})
 	if err != nil {
 		t.Fatalf("buildGenAIMessages() error = %v", err)
 	}
-	if len(contents) != 1 || len(contents[0].Parts) != 1 {
-		t.Fatalf("contents = %#v, want one text part", contents)
+	if len(contents) != 1 || len(contents[0].Parts) != 3 {
+		t.Fatalf("contents = %#v, want text, image, and image reference parts", contents)
 	}
-	if len(promptMessages) != 1 {
-		t.Fatalf("len(promptMessages) = %d, want 1", len(promptMessages))
+	if len(promptMessages) != 1 || !strings.Contains(promptMessages[0], "attachment_id: att_png_1") {
+		t.Fatalf("promptMessages = %#v, want image attachment id reference", promptMessages)
 	}
-	if promptMessages[0] != contents[0].Parts[0].Text {
-		t.Fatalf("promptMessages[0] = %q, want sent part text %q", promptMessages[0], contents[0].Parts[0].Text)
+}
+
+func TestBuildGenAIMessagesRejectsEmptyRasterImageAttachment(t *testing.T) {
+	_, _, _, err := buildGenAIMessages([]model.Message{{
+		Role: model.RoleUser,
+		Attachments: []model.Attachment{{
+			FileName: "empty.png",
+			MimeType: "image/png",
+		}},
+	}})
+	if err == nil || !strings.Contains(err.Error(), "data is empty") {
+		t.Fatalf("buildGenAIMessages() error = %v, want empty image data rejection", err)
 	}
 }
 

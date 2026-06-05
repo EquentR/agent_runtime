@@ -208,6 +208,7 @@ describe('ProfileView', () => {
     expect(wrapper.text()).toContain('启用')
 
     expect(wrapper.findAll('[data-user-model-provider-type] option').map((option) => option.attributes('value'))).toContain('openai_chat')
+    expect(wrapper.text()).toContain('支持图片输入(直传)')
 
     await wrapper.get('[data-user-model-provider-type]').setValue('openai_responses')
     await wrapper.get('[data-user-model-provider-id]').setValue(' me-openai-2 ')
@@ -227,6 +228,7 @@ describe('ProfileView', () => {
       scope: 'owner',
       enabled: true,
       context_max_tokens: 65536,
+      capabilities: { attachments: false },
     }))
     expect(wrapper.text()).toContain('模型已创建')
 

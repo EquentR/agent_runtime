@@ -47,21 +47,16 @@ func TestBuildChatCompletionRequest_ForwardsPromptCacheKeyAsStableUserBucket(t *
 	}
 }
 
-func TestBuildOpenAIMessages_WithAttachments(t *testing.T) {
+func TestBuildOpenAIMessages_WithImageAttachment(t *testing.T) {
 	msgs, promptMessages, err := buildOpenAIMessages([]model.Message{{
 		Role:    model.RoleUser,
-		Content: "analyze these attachments",
+		Content: "analyze this image",
 		Attachments: []model.Attachment{
 			{
 				ID:       "att_image_1",
 				FileName: "img.png",
 				MimeType: "image/png",
 				Data:     []byte{1, 2, 3},
-			},
-			{
-				FileName: "note.txt",
-				MimeType: "text/plain",
-				Data:     []byte("line1"),
 			},
 		},
 	}})
@@ -71,8 +66,8 @@ func TestBuildOpenAIMessages_WithAttachments(t *testing.T) {
 	if len(msgs) != 1 {
 		t.Fatalf("len(msgs) = %d, want 1", len(msgs))
 	}
-	if len(msgs[0].MultiContent) != 4 {
-		t.Fatalf("len(msgs[0].MultiContent) = %d, want 4", len(msgs[0].MultiContent))
+	if len(msgs[0].MultiContent) != 3 {
+		t.Fatalf("len(msgs[0].MultiContent) = %d, want 3", len(msgs[0].MultiContent))
 	}
 	if msgs[0].MultiContent[0].Type != goopenai.ChatMessagePartTypeText {
 		t.Fatalf("first part type = %q, want %q", msgs[0].MultiContent[0].Type, goopenai.ChatMessagePartTypeText)
@@ -89,14 +84,36 @@ func TestBuildOpenAIMessages_WithAttachments(t *testing.T) {
 	if !strings.Contains(msgs[0].MultiContent[2].Text, "attachment_id: att_image_1") {
 		t.Fatalf("third part text = %q, want attachment id reference", msgs[0].MultiContent[2].Text)
 	}
-	if msgs[0].MultiContent[3].Type != goopenai.ChatMessagePartTypeText {
-		t.Fatalf("fourth part type = %q, want %q", msgs[0].MultiContent[3].Type, goopenai.ChatMessagePartTypeText)
-	}
-	if !strings.Contains(msgs[0].MultiContent[3].Text, "[attachment:note.txt]") {
-		t.Fatalf("fourth part text = %q, want file marker", msgs[0].MultiContent[3].Text)
-	}
-	if len(promptMessages) != 1 || !strings.Contains(promptMessages[0], "analyze these attachments") || !strings.Contains(promptMessages[0], "[attachment:note.txt]") || !strings.Contains(promptMessages[0], "attachment_id: att_image_1") {
+	if len(promptMessages) != 1 || !strings.Contains(promptMessages[0], "analyze this image") || !strings.Contains(promptMessages[0], "attachment_id: att_image_1") {
 		t.Fatalf("promptMessages = %#v, want combined prompt text", promptMessages)
+	}
+}
+
+func TestBuildOpenAIMessagesRejectsTextAttachment(t *testing.T) {
+	_, _, err := buildOpenAIMessages([]model.Message{{
+		Role: model.RoleUser,
+		Attachments: []model.Attachment{{
+			FileName: "note.txt",
+			MimeType: "text/plain",
+			Data:     []byte("hello"),
+		}},
+	}})
+	if err == nil || !strings.Contains(err.Error(), "unsupported attachment type") {
+		t.Fatalf("buildOpenAIMessages() error = %v, want unsupported attachment type", err)
+	}
+}
+
+func TestBuildOpenAIMessagesRejectsSVGAttachment(t *testing.T) {
+	_, _, err := buildOpenAIMessages([]model.Message{{
+		Role: model.RoleUser,
+		Attachments: []model.Attachment{{
+			FileName: "diagram.svg",
+			MimeType: "image/svg+xml",
+			Data:     []byte(`<svg xmlns="http://www.w3.org/2000/svg"></svg>`),
+		}},
+	}})
+	if err == nil || !strings.Contains(err.Error(), "unsupported attachment type") {
+		t.Fatalf("buildOpenAIMessages() error = %v, want unsupported attachment type", err)
 	}
 }
 
