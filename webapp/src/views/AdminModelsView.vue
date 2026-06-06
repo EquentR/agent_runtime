@@ -408,6 +408,8 @@ onMounted(() => {
           <h2>{{ customFormTitle }}</h2>
           <button class="admin-dialog-close" type="button" aria-label="关闭" @click="closeDialog">✕</button>
         </div>
+        <el-scrollbar class="admin-dialog-scrollbar" view-class="admin-dialog-body">
+          <div class="admin-dialog-body">
         <p v-if="errorMessage" class="error-banner">{{ errorMessage }}</p>
         <p class="admin-dialog-hint">输出预算默认不超过 8k，输入预算由 context 动态计算</p>
         <form class="admin-form-grid" data-admin-model-form @submit.prevent="submitCustomModel">
@@ -468,6 +470,8 @@ onMounted(() => {
             </button>
           </div>
         </form>
+          </div>
+        </el-scrollbar>
       </div>
     </div>
   </main>

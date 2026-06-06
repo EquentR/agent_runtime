@@ -235,7 +235,7 @@ onBeforeUnmount(() => {
       </div>
       <p v-else-if="loading" class="messages-empty">正在加载审批...</p>
       <div v-else-if="approvals.length === 0" class="messages-empty">当前任务暂无审批记录。</div>
-      <div v-else class="approval-card-list">
+      <el-scrollbar v-else class="approval-card-list-scrollbar" view-class="approval-card-list">
         <ApprovalRecordCard
           v-for="approval in approvals"
           :key="approval.id"
@@ -243,7 +243,7 @@ onBeforeUnmount(() => {
           :pending-decision="approvalDecisionStateById[approval.id]?.pending ? approvalDecisionStateById[approval.id]?.decision : ''"
           @approval-decision="handleApprovalDecision"
         />
-      </div>
+      </el-scrollbar>
     </section>
   </main>
 </template>

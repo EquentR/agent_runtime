@@ -92,10 +92,11 @@ describe('MessageList', () => {
       attachTo: document.body,
     })
 
-    const body = wrapper.find('.messages-body').element as HTMLDivElement
+    const body = wrapper.find('.el-scrollbar__wrap').element as HTMLDivElement
     Object.defineProperty(body, 'clientHeight', { configurable: true, value: 100 })
     Object.defineProperty(body, 'scrollHeight', { configurable: true, value: 240 })
     body.scrollTop = 0
+    body.dispatchEvent(new Event('scroll'))
 
     await wrapper.setProps({
       entries: [
@@ -121,9 +122,10 @@ describe('MessageList', () => {
       attachTo: document.body,
     })
 
-    const body = wrapper.find('.messages-body').element as HTMLDivElement
+    const body = wrapper.find('.el-scrollbar__wrap').element as HTMLDivElement
     Object.defineProperty(body, 'clientHeight', { configurable: true, value: 100 })
     Object.defineProperty(body, 'scrollHeight', { configurable: true, value: 240 })
+    body.dispatchEvent(new Event('scroll'))
 
     await nextTick()
     await flushPromises()
@@ -155,7 +157,7 @@ describe('MessageList', () => {
       attachTo: document.body,
     })
 
-    const body = wrapper.find('.messages-body').element as HTMLDivElement
+    const body = wrapper.find('.el-scrollbar__wrap').element as HTMLDivElement
     Object.defineProperty(body, 'clientHeight', { configurable: true, value: 100 })
     Object.defineProperty(body, 'scrollHeight', { configurable: true, value: 240 })
 
@@ -164,6 +166,8 @@ describe('MessageList', () => {
 
     body.scrollTop = 24
     body.dispatchEvent(new Event('scroll'))
+    await nextTick()
+    await flushPromises()
 
     Object.defineProperty(body, 'scrollHeight', { configurable: true, value: 320 })
 

@@ -15,6 +15,7 @@ describe('ConversationSidebar', () => {
   afterEach(() => {
     document.documentElement.classList.remove('theme-teal')
     document.documentElement.classList.remove('theme-teal-dark')
+    document.body.querySelectorAll('.sidebar-confirm-overlay, .sidebar-user-menu-panel').forEach((node) => node.remove())
   })
 
   it('cycles the sidebar theme button through all shared theme states', async () => {
@@ -147,9 +148,9 @@ describe('ConversationSidebar', () => {
 
     await wrapper.find('.conversation-delete-button').trigger('click')
     expect(wrapper.emitted('select')).toEqual([['conv_1']])
-    expect(wrapper.find('.sidebar-confirm-overlay').exists()).toBe(true)
+    expect(document.body.querySelector('.sidebar-confirm-overlay')).not.toBeNull()
 
-    await wrapper.find('.sidebar-confirm-confirm').trigger('click')
+    await document.body.querySelector('.sidebar-confirm-confirm')?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     expect(wrapper.emitted('delete')).toEqual([['conv_1']])
   })
 
@@ -188,15 +189,15 @@ describe('ConversationSidebar', () => {
     expect(wrapper.emitted('toggle-collapse')).toHaveLength(1)
 
     await wrapper.find('.conversation-delete-button').trigger('click')
-    expect(wrapper.find('.sidebar-confirm-overlay').exists()).toBe(true)
-    expect(wrapper.find('.sidebar-confirm-dialog').text()).toContain('确认删除这个对话？')
+    expect(document.body.querySelector('.sidebar-confirm-overlay')).not.toBeNull()
+    expect(document.body.querySelector('.sidebar-confirm-dialog')?.textContent).toContain('确认删除这个对话？')
     expect(wrapper.emitted('delete')).toBeUndefined()
 
-    await wrapper.find('.sidebar-confirm-cancel').trigger('click')
-    expect(wrapper.find('.sidebar-confirm-overlay').exists()).toBe(false)
+    await document.body.querySelector('.sidebar-confirm-cancel')?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    expect(document.body.querySelector('.sidebar-confirm-overlay')).toBeNull()
 
     await wrapper.find('.conversation-delete-button').trigger('click')
-    await wrapper.find('.sidebar-confirm-confirm').trigger('click')
+    await document.body.querySelector('.sidebar-confirm-confirm')?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     expect(wrapper.emitted('delete')).toEqual([['conv_1']])
   })
 
@@ -245,17 +246,17 @@ describe('ConversationSidebar', () => {
 
     await document.body.querySelector('.sidebar-user-menu-logout')?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     await wrapper.vm.$nextTick()
-    expect(wrapper.find('.sidebar-confirm-overlay').exists()).toBe(true)
-    expect(wrapper.find('.sidebar-confirm-dialog').text()).toContain('确认退出登录？')
+    expect(document.body.querySelector('.sidebar-confirm-overlay')).not.toBeNull()
+    expect(document.body.querySelector('.sidebar-confirm-dialog')?.textContent).toContain('确认退出登录？')
     expect(wrapper.emitted('logout')).toBeUndefined()
 
-    await wrapper.find('.sidebar-confirm-cancel').trigger('click')
-    expect(wrapper.find('.sidebar-confirm-overlay').exists()).toBe(false)
+    await document.body.querySelector('.sidebar-confirm-cancel')?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    expect(document.body.querySelector('.sidebar-confirm-overlay')).toBeNull()
 
     await wrapper.find('.sidebar-user-menu-trigger').trigger('click')
     await document.body.querySelector('.sidebar-user-menu-logout')?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     await wrapper.vm.$nextTick()
-    await wrapper.find('.sidebar-confirm-confirm').trigger('click')
+    await document.body.querySelector('.sidebar-confirm-confirm')?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
 
     expect(wrapper.emitted('logout')).toHaveLength(1)
   })

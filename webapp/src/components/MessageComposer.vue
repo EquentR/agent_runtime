@@ -353,6 +353,8 @@ defineExpose({ focus })
               :value="opt.value"
             />
           </el-select>
+
+          <slot name="toolbar-controls"></slot>
         </div>
 
         <div class="composer-toolbar-right">

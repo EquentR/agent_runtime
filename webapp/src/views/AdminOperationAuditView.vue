@@ -94,8 +94,12 @@ onMounted(() => {
           <span>{{ formatCompactTimestamp(event.created_at) }}</span>
           <details>
             <summary>变更</summary>
-            <pre>{{ formatJSON(event.before_json) }}</pre>
-            <pre>{{ formatJSON(event.after_json) }}</pre>
+            <el-scrollbar class="operation-audit-json-scrollbar">
+              <pre class="operation-audit-json-content">{{ formatJSON(event.before_json) }}</pre>
+            </el-scrollbar>
+            <el-scrollbar class="operation-audit-json-scrollbar">
+              <pre class="operation-audit-json-content">{{ formatJSON(event.after_json) }}</pre>
+            </el-scrollbar>
           </details>
         </article>
       </div>

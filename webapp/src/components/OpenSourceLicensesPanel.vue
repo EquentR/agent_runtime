@@ -140,9 +140,10 @@ function closeLicenses() {
 }
 
 .open-source-scroll {
-  min-height: 0;
   display: grid;
+  flex: 1 1 auto;
   gap: 1rem;
+  min-height: 0;
   overflow-y: auto;
   margin-right: 2px;
   padding-right: 0.2rem;

@@ -15,6 +15,7 @@ const navigation = [
 <template>
   <div class="admin-layout-shell">
     <aside class="admin-layout-sidebar">
+      <el-scrollbar class="admin-layout-sidebar-scrollbar" view-class="admin-layout-sidebar-content">
       <div class="admin-layout-brand">
         <p class="eyebrow">Admin</p>
         <h1>后台工作台</h1>
@@ -33,10 +34,13 @@ const navigation = [
       <div class="admin-layout-sidebar-footer">
         <RouterLink class="ghost-button admin-layout-home-button" to="/chat">返回首页</RouterLink>
       </div>
+      </el-scrollbar>
     </aside>
 
     <section class="admin-layout-main">
-      <RouterView />
+      <el-scrollbar class="admin-layout-main-scrollbar" view-class="admin-layout-main-content">
+        <RouterView />
+      </el-scrollbar>
     </section>
   </div>
 </template>

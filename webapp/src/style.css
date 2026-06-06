@@ -196,6 +196,52 @@ p {
   box-shadow: 0 0 0 4px var(--app-focus-ring);
 }
 
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(var(--app-accent-rgb), 0.28) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(var(--app-accent-rgb), 0.24);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(var(--app-accent-rgb), 0.38);
+}
+
+.el-scrollbar {
+  --el-scrollbar-opacity: 0.26;
+  --el-scrollbar-bg-color: rgba(var(--app-accent-rgb), 0.26);
+  --el-scrollbar-hover-opacity: 0.42;
+  --el-scrollbar-hover-bg-color: rgba(var(--app-accent-rgb), 0.42);
+}
+
+.el-scrollbar__bar.is-vertical {
+  width: 8px;
+}
+
+.el-scrollbar__bar.is-horizontal {
+  height: 8px;
+}
+
+.el-scrollbar__thumb {
+  background: rgba(var(--app-accent-rgb), 0.26);
+}
+
+.el-scrollbar__thumb:hover {
+  background: rgba(var(--app-accent-rgb), 0.42);
+}
+
 .login-shell {
   min-height: 100svh;
   display: flex;
@@ -476,13 +522,17 @@ p {
 .sidebar-list {
   width: 100%;
   min-height: 0;
-  overflow-x: hidden;
-  overflow-y: auto;
   display: grid;
   align-content: start;
   grid-auto-rows: max-content;
   gap: 0.45rem;
   padding-right: 0.2rem;
+}
+
+.sidebar-list-scrollbar {
+  width: 100%;
+  min-height: 0;
+  height: 100%;
 }
 
 .conversation-title {
@@ -590,13 +640,16 @@ p {
   left: 0;
   z-index: 8;
   width: min(240px, 78vw);
-  max-height: min(360px, 58vh);
-  overflow-y: auto;
   padding: 0.55rem;
   border-radius: 16px;
   border: 1px solid var(--app-border);
   background: var(--app-menu-bg);
   box-shadow: var(--app-shadow-popover);
+}
+
+.model-menu-panel-view {
+  display: grid;
+  align-content: start;
 }
 
 .model-menu-group + .model-menu-group {
@@ -727,7 +780,11 @@ p {
   display: grid;
   gap: 0.9rem;
   padding: 1.1rem;
-  overflow: auto;
+}
+
+.approval-card-list-scrollbar {
+  min-height: 0;
+  height: 100%;
 }
 
 .approval-topbar .status-pill {
@@ -866,9 +923,21 @@ p {
   padding: 0.9rem;
   display: flex;
   flex-direction: column;
-  gap: 1rem;
   height: 100%;
-  overflow-y: auto;
+  overflow: hidden;
+}
+
+.admin-layout-sidebar-scrollbar,
+.admin-layout-main-scrollbar {
+  min-height: 0;
+  height: 100%;
+}
+
+.admin-layout-sidebar-content {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
 }
 
 .admin-layout-nav {
@@ -881,15 +950,39 @@ p {
   min-width: 0;
   height: 100%;
   border-radius: 18px;
+  border: 1px solid var(--app-border);
+  background: var(--app-surface-panel);
+  box-shadow: var(--app-shadow-soft);
   padding: 0.9rem;
-  overflow-y: auto;
+  overflow: hidden;
+}
+
+.admin-layout-main-content {
+  min-height: 100%;
+  height: 100%;
 }
 
 /* Views that manage their own internal scroll (audit, prompts) */
 .admin-layout-main:has(.admin-audit-shell),
 .admin-layout-main:has(.admin-prompt-shell) {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
   overflow: hidden;
   padding: 0;
+}
+
+.admin-layout-main:has(.admin-audit-shell) .admin-layout-main-scrollbar,
+.admin-layout-main:has(.admin-prompt-shell) .admin-layout-main-scrollbar,
+.admin-layout-main:has(.admin-audit-shell) .admin-layout-main-content,
+.admin-layout-main:has(.admin-prompt-shell) .admin-layout-main-content {
+  min-height: 0;
+  height: 100%;
+}
+
+.admin-layout-main:has(.admin-audit-shell) .admin-layout-main-scrollbar > .el-scrollbar__wrap,
+.admin-layout-main:has(.admin-prompt-shell) .admin-layout-main-scrollbar > .el-scrollbar__wrap {
+  overflow: hidden;
 }
 
 .admin-layout-main .admin-audit-shell,
@@ -964,12 +1057,24 @@ p {
 .admin-dialog {
   width: min(560px, calc(100vw - 2rem));
   max-height: calc(100svh - 2rem);
-  overflow-y: auto;
+  overflow: hidden;
   padding: 1.25rem 1.2rem;
   border-radius: 18px;
   border: 1px solid var(--app-border);
   background: var(--app-surface-strong);
   box-shadow: var(--app-shadow-panel);
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.admin-dialog-scrollbar {
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.admin-dialog-body {
+  min-height: 100%;
   display: grid;
   gap: 1rem;
 }
@@ -1209,14 +1314,20 @@ p {
   min-width: 0;
 }
 
-.operation-audit-row pre {
+.operation-audit-json-scrollbar {
   max-width: 360px;
-  overflow: auto;
   margin: 0.35rem 0 0;
-  padding: 0.4rem;
   border-radius: 8px;
   background: var(--app-surface);
+}
+
+.operation-audit-json-content {
+  width: max-content;
+  min-width: 100%;
+  margin: 0;
+  padding: 0.4rem;
   font-size: 0.72rem;
+  white-space: pre;
 }
 
 @media (max-width: 960px) {
@@ -1412,10 +1523,18 @@ p {
   gap: 0.7rem;
 }
 
-.messages-body,
 .chat-main {
   min-height: 0;
   overflow: hidden;
+}
+
+.messages-scrollbar {
+  min-height: 0;
+  height: 100%;
+}
+
+.messages-scroll-view {
+  min-height: 100%;
 }
 
 /* chat-main transitions (CSS-only, controlled by .composer-centered) */
@@ -1437,7 +1556,6 @@ p {
 }
 
 .messages-body {
-  overflow-y: auto;
   padding-bottom: 0.4rem;
 }
 
@@ -2521,6 +2639,7 @@ p {
   gap: 0.5rem;
   flex: 1;
   min-width: 0;
+  flex-wrap: wrap;
 }
 
 .composer-toolbar-right {
@@ -2934,7 +3053,7 @@ p {
 }
 
 .chat-stage.composer-centered .chat-composer-dock > * {
-  width: min(100%, 600px);
+  width: min(100%, 720px);
 }
 
 /* Welcome greeting – visible only in centered empty state */
@@ -3361,11 +3480,15 @@ p {
 
 .admin-audit-timeline {
   min-height: 0;
-  overflow-y: auto;
   display: grid;
   align-content: start;
   gap: 0.42rem;
   padding-right: 0.15rem;
+}
+
+.admin-audit-timeline-scrollbar {
+  min-height: 0;
+  height: 100%;
 }
 
 .admin-audit-timeline-item {
@@ -3438,13 +3561,17 @@ p {
 .admin-audit-json {
   min-height: 0;
   height: 100%;
-  overflow: auto;
   margin: 0;
   background: var(--app-surface-strong);
   border-radius: 12px;
   border: 1px solid var(--app-border-subtle);
   padding: 0.68rem 0.76rem;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+
+.admin-audit-json-scrollbar {
+  min-height: 0;
+  height: 100%;
 }
 
 .admin-audit-list .conversation-card {
@@ -4186,67 +4313,92 @@ html.theme-teal-dark {
 
 html.theme-teal-dark,
 .theme-teal-dark {
-  --app-body-font-weight: 430;
-  --app-text: #dffbf7;
-  --app-text-strong: #f4fffd;
-  --app-text-heading: #f7fffd;
-  --app-text-muted: #a7cbc5;
-  --app-text-soft: #7fb2aa;
-  --app-text-faint: rgba(210, 252, 247, 0.58);
+  --app-body-font-weight: 450;
+  --app-text: #dce5ec;
+  --app-text-strong: #f4f8fb;
+  --app-text-heading: #f7fbfd;
+  --app-text-muted: #9fb0bd;
+  --app-text-soft: #7f92a2;
+  --app-text-faint: rgba(220, 229, 236, 0.56);
   --app-background:
-    radial-gradient(circle at top left, rgba(20, 184, 166, 0.25), transparent 34%),
-    radial-gradient(circle at top right, rgba(76, 212, 250, 0.16), transparent 30%),
-    linear-gradient(180deg, #041817 0%, #06211f 48%, #0b302c 100%);
-  --app-surface: rgba(7, 31, 30, 0.82);
-  --app-surface-panel: rgba(8, 36, 34, 0.88);
-  --app-surface-strong: rgba(9, 43, 40, 0.98);
-  --app-surface-soft: rgba(9, 42, 39, 0.74);
-  --app-surface-muted: rgba(11, 50, 46, 0.78);
-  --app-surface-code: linear-gradient(180deg, rgba(5, 30, 29, 0.98), rgba(3, 21, 20, 0.98));
-  --app-surface-toast: rgba(3, 20, 19, 0.94);
-  --app-surface-overlay: rgba(2, 13, 13, 0.72);
-  --app-border-subtle: rgba(125, 232, 221, 0.11);
-  --app-border: rgba(125, 232, 221, 0.16);
-  --app-border-strong: rgba(125, 232, 221, 0.23);
-  --app-border-hover: rgba(125, 232, 221, 0.34);
-  --app-shadow-soft: 0 22px 54px rgba(0, 0, 0, 0.32);
-  --app-shadow-panel: 0 28px 64px rgba(0, 0, 0, 0.42);
-  --app-shadow-popover: 0 24px 54px rgba(0, 0, 0, 0.46);
-  --app-shadow-control: 0 10px 22px rgba(0, 0, 0, 0.26);
-  --app-accent: #24d8c6;
+    radial-gradient(circle at top left, rgba(125, 211, 252, 0.09), transparent 33%),
+    radial-gradient(circle at top right, rgba(45, 212, 191, 0.08), transparent 29%),
+    linear-gradient(180deg, #0a1118 0%, #111a25 48%, #162230 100%);
+  --app-surface: rgba(12, 20, 30, 0.82);
+  --app-surface-panel: rgba(14, 24, 35, 0.88);
+  --app-surface-strong: rgba(18, 29, 42, 0.98);
+  --app-surface-soft: rgba(15, 24, 35, 0.74);
+  --app-surface-muted: rgba(18, 29, 42, 0.8);
+  --app-surface-code: linear-gradient(180deg, rgba(13, 20, 30, 0.98), rgba(9, 15, 24, 0.98));
+  --app-surface-toast: rgba(5, 11, 18, 0.94);
+  --app-surface-overlay: rgba(4, 10, 17, 0.72);
+  --app-border-subtle: rgba(148, 163, 184, 0.1);
+  --app-border: rgba(148, 163, 184, 0.14);
+  --app-border-strong: rgba(148, 163, 184, 0.2);
+  --app-border-hover: rgba(125, 211, 252, 0.24);
+  --app-shadow-soft: 0 22px 54px rgba(0, 0, 0, 0.3);
+  --app-shadow-panel: 0 28px 64px rgba(0, 0, 0, 0.38);
+  --app-shadow-popover: 0 24px 54px rgba(0, 0, 0, 0.42);
+  --app-shadow-control: 0 10px 22px rgba(0, 0, 0, 0.22);
+  --app-accent: #2dd4bf;
   --app-accent-strong: #14B8A6;
-  --app-accent-alt: #75e6ff;
-  --app-accent-deep: #88fff0;
-  --app-accent-rgb: 36, 216, 198;
-  --app-accent-gradient: linear-gradient(135deg, #14B8A6 0%, #4CD4FA 100%);
+  --app-accent-alt: #8ad7ff;
+  --app-accent-deep: #a8fff8;
+  --app-accent-rgb: 45, 212, 191;
+  --app-accent-gradient: linear-gradient(135deg, #14B8A6 0%, #38bdf8 100%);
   --app-primary-text: #f7fffd;
-  --app-primary-shadow: 0 18px 36px rgba(20, 184, 166, 0.22);
-  --app-primary-hover-shadow: 0 20px 42px rgba(76, 212, 250, 0.24);
-  --app-focus-border: rgba(76, 212, 250, 0.54);
-  --app-focus-ring: rgba(20, 184, 166, 0.18);
-  --app-active-bg: linear-gradient(135deg, rgba(20, 184, 166, 0.26), rgba(76, 212, 250, 0.16));
-  --app-hover-bg: linear-gradient(135deg, rgba(20, 184, 166, 0.18), rgba(76, 212, 250, 0.11));
-  --app-input-bg: rgba(3, 23, 22, 0.76);
-  --app-input-placeholder: rgba(210, 252, 247, 0.42);
-  --app-button-secondary-bg: rgba(8, 42, 39, 0.78);
-  --app-button-secondary-hover-bg: rgba(20, 184, 166, 0.14);
-  --app-button-secondary-hover-border: rgba(76, 212, 250, 0.36);
-  --app-menu-bg: rgba(5, 31, 29, 0.98);
-  --app-menu-trigger-bg: rgba(7, 38, 35, 0.92);
-  --app-menu-option-text: #e5fffb;
-  --app-menu-label: #7fcac0;
-  --app-auth-switch-bg: rgba(3, 23, 22, 0.78);
-  --app-warning-text: #b8fff5;
-  --app-warning-bg: rgba(20, 184, 166, 0.16);
-  --app-success-text: #8ffff0;
-  --app-success-bg: rgba(20, 184, 166, 0.14);
-  --app-error-bg: rgba(255, 111, 92, 0.13);
-  --app-error-border: rgba(255, 139, 122, 0.28);
-  --app-mobile-sidebar-bg: rgba(5, 31, 29, 0.96);
-  --app-backdrop-bg: rgba(1, 12, 12, 0.64);
-  --app-filter-bar-bg: linear-gradient(180deg, rgba(7, 31, 30, 0.98), rgba(7, 31, 30, 0.84));
-  --app-code-text: #d8fff9;
+  --app-primary-shadow: 0 18px 36px rgba(20, 184, 166, 0.2);
+  --app-primary-hover-shadow: 0 20px 42px rgba(56, 189, 248, 0.2);
+  --app-focus-border: rgba(56, 189, 248, 0.46);
+  --app-focus-ring: rgba(45, 212, 191, 0.12);
+  --app-active-bg: linear-gradient(135deg, rgba(45, 212, 191, 0.16), rgba(56, 189, 248, 0.12));
+  --app-hover-bg: linear-gradient(135deg, rgba(45, 212, 191, 0.1), rgba(56, 189, 248, 0.08));
+  --app-input-bg: rgba(12, 20, 30, 0.76);
+  --app-input-placeholder: rgba(163, 177, 190, 0.52);
+  --app-button-secondary-bg: rgba(14, 24, 35, 0.78);
+  --app-button-secondary-hover-bg: rgba(45, 212, 191, 0.08);
+  --app-button-secondary-hover-border: rgba(56, 189, 248, 0.24);
+  --app-menu-bg: rgba(11, 19, 30, 0.98);
+  --app-menu-trigger-bg: rgba(14, 24, 35, 0.92);
+  --app-menu-option-text: #eef7fb;
+  --app-menu-label: #8ca2b3;
+  --app-auth-switch-bg: rgba(13, 21, 31, 0.78);
+  --app-warning-text: #d8e9f2;
+  --app-warning-bg: rgba(45, 212, 191, 0.12);
+  --app-success-text: #b6ece7;
+  --app-success-bg: rgba(45, 212, 191, 0.1);
+  --app-error-bg: rgba(248, 113, 113, 0.12);
+  --app-error-border: rgba(248, 113, 113, 0.22);
+  --app-mobile-sidebar-bg: rgba(11, 19, 30, 0.96);
+  --app-backdrop-bg: rgba(4, 10, 17, 0.7);
+  --app-filter-bar-bg: linear-gradient(180deg, rgba(11, 19, 30, 0.98), rgba(11, 19, 30, 0.84));
+  --app-code-text: #d8edf4;
   background: var(--app-background);
+}
+
+.theme-teal-dark {
+  scrollbar-color: rgba(207, 224, 230, 0.3) transparent;
+}
+
+.theme-teal-dark *::-webkit-scrollbar-thumb {
+  background: rgba(207, 224, 230, 0.26);
+}
+
+.theme-teal-dark *::-webkit-scrollbar-thumb:hover {
+  background: rgba(111, 199, 206, 0.44);
+}
+
+.theme-teal-dark .el-scrollbar {
+  --el-scrollbar-bg-color: rgba(207, 224, 230, 0.28);
+  --el-scrollbar-hover-bg-color: rgba(111, 199, 206, 0.46);
+}
+
+.theme-teal-dark .el-scrollbar__thumb {
+  background: rgba(207, 224, 230, 0.28);
+}
+
+.theme-teal-dark .el-scrollbar__thumb:hover {
+  background: rgba(111, 199, 206, 0.46);
 }
 
 .theme-teal-dark .primary-button,

@@ -268,7 +268,12 @@ const normalizedEntries = computed(() => {
     return details.some((detail) => !questionToolCallIds.has(detail.key ?? ''))
   })
 })
-const messagesBody = ref<HTMLDivElement | null>(null)
+type ScrollbarLike = {
+  $el?: HTMLElement
+  setScrollTop?: (value: number) => void
+}
+
+const messagesScrollbar = ref<ScrollbarLike | null>(null)
 const copyToastVisible = ref(false)
 const copyToastMessage = ref('')
 const copyToastVariant = ref<'success' | 'error'>('success')
@@ -305,6 +310,17 @@ markdown.renderer.rules.fence = (tokens, index) => {
   ].join('')
 }
 
+function messagesBodyElement() {
+  const scrollbar = messagesScrollbar.value
+  const root = scrollbar?.$el
+  if (!(root instanceof HTMLElement)) {
+    return null
+  }
+
+  const body = root.querySelector('.el-scrollbar__wrap')
+  return body instanceof HTMLDivElement ? body : null
+}
+
 function maxScrollTop(element: HTMLDivElement) {
   return Math.max(element.scrollHeight - element.clientHeight, 0)
 }
@@ -316,7 +332,8 @@ function isNearBottom(element: HTMLDivElement) {
 async function scrollToBottom(force = false) {
   await nextTick()
 
-  if (!messagesBody.value) {
+  const body = messagesBodyElement()
+  if (!body) {
     return
   }
 
@@ -324,23 +341,27 @@ async function scrollToBottom(force = false) {
     return
   }
 
-  messagesBody.value.scrollTop = maxScrollTop(messagesBody.value)
+  const targetTop = maxScrollTop(body)
+  messagesScrollbar.value?.setScrollTop?.(targetTop)
+  body.scrollTop = targetTop
   stickToBottom.value = true
 }
 
 async function smoothScrollToBottom() {
   await nextTick()
 
-  if (!messagesBody.value) {
+  const body = messagesBodyElement()
+  if (!body) {
     return
   }
 
-  const targetTop = maxScrollTop(messagesBody.value)
+  const targetTop = maxScrollTop(body)
 
-  if (import.meta.env.MODE !== 'test' && typeof messagesBody.value.scrollTo === 'function') {
-    messagesBody.value.scrollTo({ top: targetTop, behavior: 'smooth' })
+  if (import.meta.env.MODE !== 'test' && typeof body.scrollTo === 'function') {
+    body.scrollTo({ top: targetTop, behavior: 'smooth' })
   } else {
-    messagesBody.value.scrollTop = targetTop
+    messagesScrollbar.value?.setScrollTop?.(targetTop)
+    body.scrollTop = targetTop
   }
 
   stickToBottom.value = true
@@ -355,11 +376,12 @@ function shouldForceScroll(nextEntries: TranscriptEntry[], previousEntries: Tran
 }
 
 function handleScroll() {
-  if (!messagesBody.value) {
+  const body = messagesBodyElement()
+  if (!body) {
     return
   }
 
-  stickToBottom.value = isNearBottom(messagesBody.value)
+  stickToBottom.value = isNearBottom(body)
 }
 
 function jumpToBottom() {
@@ -557,7 +579,13 @@ function showCopyToast(message: string, variant: 'success' | 'error') {
 
 <template>
   <section class="messages-panel">
-    <div ref="messagesBody" class="messages-body" @scroll="handleScroll">
+    <el-scrollbar
+      ref="messagesScrollbar"
+      class="messages-scrollbar"
+      wrap-class="messages-body"
+      view-class="messages-scroll-view"
+      @scroll="handleScroll"
+    >
       <div v-if="normalizedEntries.length > 0" class="messages-stack wide-stack">
         <article
           v-for="entry in normalizedEntries"
@@ -862,7 +890,7 @@ function showCopyToast(message: string, variant: 'success' | 'error') {
           <span>正在生成</span>
         </div>
       </div>
-    </div>
+    </el-scrollbar>
 
     <button
       v-if="showJumpButton"

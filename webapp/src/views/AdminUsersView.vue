@@ -244,6 +244,8 @@ onMounted(() => {
           </button>
         </div>
 
+        <el-scrollbar class="admin-dialog-scrollbar" view-class="admin-dialog-body">
+          <div class="admin-dialog-body">
         <form class="admin-form-grid" data-user-detail-form @submit.prevent="submitUserUpdate">
           <label>
             <span class="field-label">角色</span>
@@ -297,6 +299,8 @@ onMounted(() => {
             </button>
           </div>
         </form>
+          </div>
+        </el-scrollbar>
       </div>
     </div>
   </main>

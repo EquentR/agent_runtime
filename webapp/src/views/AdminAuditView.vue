@@ -412,7 +412,7 @@ onBeforeUnmount(() => {
 
       <p v-if="loading" class="sidebar-empty">正在加载会话...</p>
       <div v-else-if="conversations.length === 0" class="sidebar-empty">暂无可查看的会话。</div>
-      <div v-else class="sidebar-list admin-audit-list">
+      <el-scrollbar v-else class="sidebar-list-scrollbar admin-audit-list-scrollbar" view-class="sidebar-list admin-audit-list">
         <button
           v-for="conversation in conversations"
           :key="conversation.id"
@@ -434,7 +434,7 @@ onBeforeUnmount(() => {
             </div>
           </div>
         </button>
-      </div>
+      </el-scrollbar>
     </section>
 
     <section class="admin-audit-stage chat-stage">
@@ -486,7 +486,14 @@ onBeforeUnmount(() => {
                     <span class="model-menu-trigger-caret" :class="{ open: turnMenuOpen }" aria-hidden="true"></span>
                   </button>
                   <transition name="model-menu-fade">
-                    <div v-if="turnMenuOpen" class="model-menu-panel" role="menu" data-testid="turn-menu-panel">
+                    <el-scrollbar
+                      v-if="turnMenuOpen"
+                      class="model-menu-panel"
+                      view-class="model-menu-panel-view"
+                      max-height="min(360px, 58vh)"
+                      role="menu"
+                      data-testid="turn-menu-panel"
+                    >
                       <div class="model-menu-group">
                         <button
                           class="model-menu-option"
@@ -515,7 +522,7 @@ onBeforeUnmount(() => {
                           <span class="model-menu-option-label">轮次 {{ index + 1 }}</span>
                         </button>
                       </div>
-                    </div>
+                    </el-scrollbar>
                   </transition>
                 </div>
               </div>
@@ -528,7 +535,7 @@ onBeforeUnmount(() => {
               <button class="admin-audit-filter" :class="{ active: activeFilter === 'error' }" data-filter="error" type="button" @click="applyFilter('error')">错误</button>
             </div>
 
-            <div v-if="filteredTimeline.length" class="admin-audit-timeline">
+            <el-scrollbar v-if="filteredTimeline.length" class="admin-audit-timeline-scrollbar" view-class="admin-audit-timeline">
               <button
                 v-for="entry in filteredTimeline"
                 :key="`${entry.turnIndex}-${entry.seq}`"
@@ -548,7 +555,7 @@ onBeforeUnmount(() => {
                 </div>
                 <span class="admin-audit-artifact-chip">{{ displayTimelineTitle(entry) }}</span>
               </button>
-            </div>
+            </el-scrollbar>
             <p v-else class="messages-empty admin-audit-timeline-empty">当前筛选条件下没有可展示的时间线。</p>
           </article>
 
@@ -564,8 +571,18 @@ onBeforeUnmount(() => {
                 <span>{{ formatPhase(activeTimelineEntry.phase) }}</span>
                 <span v-if="auditRuns.length > 1">轮次 {{ activeTimelineEntry.turnIndex + 1 }}</span>
               </div>
-              <pre v-if="activeArtifactBody" class="trace-detail-content admin-audit-json">{{ activeArtifactBody }}</pre>
-              <pre v-else-if="activeTimelineEntry.payload" class="trace-detail-content admin-audit-json">{{ JSON.stringify(activeTimelineEntry.payload, null, 2) }}</pre>
+              <el-scrollbar
+                v-if="activeArtifactBody"
+                class="admin-audit-json-scrollbar"
+                tag="pre"
+                view-class="trace-detail-content admin-audit-json"
+              >{{ activeArtifactBody }}</el-scrollbar>
+              <el-scrollbar
+                v-else-if="activeTimelineEntry.payload"
+                class="admin-audit-json-scrollbar"
+                tag="pre"
+                view-class="trace-detail-content admin-audit-json"
+              >{{ JSON.stringify(activeTimelineEntry.payload, null, 2) }}</el-scrollbar>
               <p v-else class="messages-empty">当前条目没有可展示的详细内容。</p>
             </div>
             <p v-else class="messages-empty">点击左侧时间线以查看工具参数、输出或对话历史。</p>

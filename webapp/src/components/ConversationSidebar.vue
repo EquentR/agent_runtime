@@ -204,7 +204,7 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <div class="sidebar-list">
+    <el-scrollbar class="sidebar-list-scrollbar" view-class="sidebar-list">
       <p v-if="loading" class="sidebar-empty">正在加载对话...</p>
 
       <div v-else-if="items.length === 0" class="sidebar-empty">
@@ -240,7 +240,7 @@ onBeforeUnmount(() => {
           <Delete />
         </button>
       </div>
-    </div>
+    </el-scrollbar>
 
     <div class="sidebar-account" :class="{ collapsed: compact }">
       <div v-if="!compact || mobile" class="sidebar-account-copy">
@@ -304,15 +304,17 @@ onBeforeUnmount(() => {
       </transition>
     </Teleport>
 
-    <div v-if="confirmState" class="sidebar-confirm-overlay" @click.self="cancelConfirm">
-      <div class="sidebar-confirm-dialog">
-        <h3>{{ confirmState.title }}</h3>
-        <p>{{ confirmState.message }}</p>
-        <div class="sidebar-confirm-actions">
-          <button class="ghost-button sidebar-confirm-cancel" type="button" @click="cancelConfirm">取消</button>
-          <button class="ghost-button sidebar-confirm-confirm" type="button" @click="confirmAction">{{ confirmState.confirmLabel }}</button>
+    <Teleport to="body">
+      <div v-if="confirmState" class="sidebar-confirm-overlay" @click.self="cancelConfirm">
+        <div class="sidebar-confirm-dialog">
+          <h3>{{ confirmState.title }}</h3>
+          <p>{{ confirmState.message }}</p>
+          <div class="sidebar-confirm-actions">
+            <button class="ghost-button sidebar-confirm-cancel" type="button" @click="cancelConfirm">取消</button>
+            <button class="ghost-button sidebar-confirm-confirm" type="button" @click="confirmAction">{{ confirmState.confirmLabel }}</button>
+          </div>
         </div>
       </div>
-    </div>
+    </Teleport>
   </aside>
 </template>

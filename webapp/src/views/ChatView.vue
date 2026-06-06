@@ -1539,7 +1539,13 @@ onBeforeUnmount(() => {
               <span class="model-menu-trigger-caret" :class="{ open: modelMenuOpen }" aria-hidden="true"></span>
             </button>
             <transition name="model-menu-fade">
-              <div v-if="modelMenuOpen" class="model-menu-panel" role="menu">
+              <el-scrollbar
+                v-if="modelMenuOpen"
+                class="model-menu-panel"
+                view-class="model-menu-panel-view"
+                max-height="min(360px, 58vh)"
+                role="menu"
+              >
                 <div v-for="provider in availableProviders" :key="provider.id" class="model-menu-group">
                   <div class="model-menu-group-label">{{ provider.name }}</div>
                   <button
@@ -1557,7 +1563,7 @@ onBeforeUnmount(() => {
                     <span class="model-menu-option-label">{{ item.name }}</span>
                   </button>
                 </div>
-              </div>
+              </el-scrollbar>
             </transition>
           </div>
           <strong class="topbar-conversation-title" :title="activeConversationTitle()">
@@ -1705,59 +1711,6 @@ onBeforeUnmount(() => {
       </div>
       <div class="chat-composer-dock">
         <p v-if="!noUsableModels" class="composer-welcome">请尽情使唤 ~</p>
-        <div v-if="!noUsableModels" class="workspace-mode-row" data-workspace-mode-toggle>
-          <span class="workspace-mode-label">工作区</span>
-          <div class="workspace-mode-switch auth-switch" role="radiogroup" aria-label="工作区模式">
-            <button
-              class="auth-switch-button"
-              :class="{ active: selectedWorkspaceMode === 'mutable' }"
-              type="button"
-              role="radio"
-              data-workspace-mode="mutable"
-              :aria-checked="selectedWorkspaceMode === 'mutable'"
-              @click="handleWorkspaceModeChange('mutable')"
-            >
-              可写
-            </button>
-            <button
-              class="auth-switch-button"
-              :class="{ active: selectedWorkspaceMode === 'readonly' }"
-              type="button"
-              role="radio"
-              data-workspace-mode="readonly"
-              :aria-checked="selectedWorkspaceMode === 'readonly'"
-              @click="handleWorkspaceModeChange('readonly')"
-            >
-              只读
-            </button>
-          </div>
-          <div
-            v-if="currentPendingWorkspaceMergeTaskId"
-            class="workspace-merge-inline"
-            data-workspace-merge-inline
-            aria-label="工作区变更待确认"
-          >
-            <span class="workspace-merge-inline-label">待合并</span>
-            <button
-              class="ghost-button workspace-merge-inline-button"
-              type="button"
-              data-workspace-merge-discard
-              :disabled="workspaceMergeActionPending !== ''"
-              @click="handleWorkspaceMergeAction('discard')"
-            >
-              放弃
-            </button>
-            <button
-              class="primary-button workspace-merge-inline-button"
-              type="button"
-              data-workspace-merge-confirm
-              :disabled="workspaceMergeActionPending !== ''"
-              @click="handleWorkspaceMergeAction('confirm')"
-            >
-              确认
-            </button>
-          </div>
-        </div>
         <MessageComposer
           ref="composerRef"
           :disabled="composerDisabled"
@@ -1772,7 +1725,63 @@ onBeforeUnmount(() => {
           @remove-attachment="handleRemoveAttachment"
           @stop="handleStopTask"
           @update:selected-skill-names="handleSkillSelectionChange"
-        />
+        >
+          <template #toolbar-controls>
+            <div v-if="!noUsableModels" class="workspace-mode-row" data-workspace-mode-toggle>
+              <span class="workspace-mode-label">工作区</span>
+              <div class="workspace-mode-switch auth-switch" role="radiogroup" aria-label="工作区模式">
+                <button
+                  class="auth-switch-button"
+                  :class="{ active: selectedWorkspaceMode === 'mutable' }"
+                  type="button"
+                  role="radio"
+                  data-workspace-mode="mutable"
+                  :aria-checked="selectedWorkspaceMode === 'mutable'"
+                  @click="handleWorkspaceModeChange('mutable')"
+                >
+                  可写
+                </button>
+                <button
+                  class="auth-switch-button"
+                  :class="{ active: selectedWorkspaceMode === 'readonly' }"
+                  type="button"
+                  role="radio"
+                  data-workspace-mode="readonly"
+                  :aria-checked="selectedWorkspaceMode === 'readonly'"
+                  @click="handleWorkspaceModeChange('readonly')"
+                >
+                  只读
+                </button>
+              </div>
+              <div
+                v-if="currentPendingWorkspaceMergeTaskId"
+                class="workspace-merge-inline"
+                data-workspace-merge-inline
+                aria-label="工作区变更待确认"
+              >
+                <span class="workspace-merge-inline-label">待合并</span>
+                <button
+                  class="ghost-button workspace-merge-inline-button"
+                  type="button"
+                  data-workspace-merge-discard
+                  :disabled="workspaceMergeActionPending !== ''"
+                  @click="handleWorkspaceMergeAction('discard')"
+                >
+                  放弃
+                </button>
+                <button
+                  class="primary-button workspace-merge-inline-button"
+                  type="button"
+                  data-workspace-merge-confirm
+                  :disabled="workspaceMergeActionPending !== ''"
+                  @click="handleWorkspaceMergeAction('confirm')"
+                >
+                  确认
+                </button>
+              </div>
+            </div>
+          </template>
+        </MessageComposer>
       </div>
     </section>
   </main>
@@ -1780,12 +1789,13 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .workspace-mode-row {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  justify-content: flex-end;
-  gap: 0.65rem;
-  margin: 0 0 0.55rem;
+  justify-content: flex-start;
+  gap: 0.45rem;
+  margin: 0;
   flex-wrap: wrap;
+  min-width: 0;
 }
 
 .error-banner {
@@ -1810,16 +1820,17 @@ onBeforeUnmount(() => {
 .workspace-mode-label {
   flex: 0 0 auto;
   font-size: 0.78rem;
-  color: rgba(25, 50, 59, 0.58);
+  color: var(--app-text-muted);
+  font-weight: 650;
 }
 
 .workspace-mode-switch {
   width: auto;
-  min-width: 11.5rem;
+  min-width: 8.6rem;
 }
 
 .workspace-mode-switch .auth-switch-button {
-  padding: 0.38rem 0.72rem;
+  padding: 0.32rem 0.62rem;
   font-size: 0.82rem;
   cursor: pointer;
 }
@@ -1828,8 +1839,8 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 0.38rem;
-  min-height: 2.1rem;
-  padding: 0.22rem 0.26rem 0.22rem 0.52rem;
+  min-height: 1.9rem;
+  padding: 0.18rem 0.24rem 0.18rem 0.48rem;
   border: 1px solid rgba(143, 184, 174, 0.34);
   border-radius: 8px;
   background: rgba(241, 248, 246, 0.94);
@@ -1843,10 +1854,26 @@ onBeforeUnmount(() => {
 }
 
 .workspace-merge-inline-button {
-  padding: 0.32rem 0.58rem;
+  padding: 0.3rem 0.52rem;
   border-radius: 7px;
   font-size: 0.78rem;
   line-height: 1.1;
+}
+
+:global(.theme-teal-dark) .workspace-mode-label {
+  color: var(--app-text);
+  font-weight: 750;
+}
+
+:global(.theme-teal-dark) .workspace-merge-inline {
+  border-color: rgba(var(--app-accent-rgb), 0.28);
+  background: rgba(15, 30, 40, 0.9);
+  color: var(--app-text);
+}
+
+:global(.theme-teal-dark) .workspace-merge-inline-label {
+  color: var(--app-text-muted);
+  font-weight: 650;
 }
 
 @media (max-width: 640px) {

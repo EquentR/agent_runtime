@@ -48,4 +48,20 @@ describe('OpenSourceLicensesPanel', () => {
 
     expect(document.body.querySelector('[data-open-source-licenses-dialog]')).toBeNull()
   })
+
+  it('keeps the license list in a native scroll region inside the dialog', async () => {
+    const wrapper = mount(OpenSourceLicensesPanel, {
+      attachTo: document.body,
+    })
+
+    await wrapper.get('[data-open-source-licenses-toggle]').trigger('click')
+    await flushPromises()
+
+    const dialog = document.body.querySelector<HTMLElement>('[data-open-source-licenses-dialog]')
+    const scrollRegion = dialog?.querySelector<HTMLElement>('.open-source-scroll')
+
+    expect(scrollRegion).not.toBeNull()
+    expect(scrollRegion?.parentElement).toBe(dialog)
+    expect(dialog?.querySelector('.el-scrollbar')).toBeNull()
+  })
 })

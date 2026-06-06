@@ -621,35 +621,37 @@ onBeforeUnmount(() => {
 
       <p v-if="loading && documents.length === 0" class="sidebar-empty">正在加载提示词...</p>
       <div v-else-if="documents.length === 0" class="sidebar-empty">暂无提示词，先创建一个。</div>
-      <div v-else class="sidebar-list admin-audit-list admin-prompt-list">
-        <div
-          v-for="document in documents"
-          :key="document.id"
-          class="conversation-card admin-audit-conversation admin-prompt-document"
-          :class="{ active: document.id === selectedDocumentId, disabled: savingDocument }"
-          :data-document-id="document.id"
-          :aria-disabled="savingDocument ? 'true' : undefined"
-          role="button"
-          tabindex="0"
-          @click="!savingDocument && setSelectedDocument(document.id)"
-          @keydown.enter.prevent="!savingDocument && setSelectedDocument(document.id)"
-          @keydown.space.prevent="!savingDocument && setSelectedDocument(document.id)"
-        >
-          <div class="conversation-preview admin-audit-conversation-main">
-            <div class="admin-audit-conversation-row">
-              <strong class="conversation-title truncate-text" :title="document.name">{{ document.name }}</strong>
-              <span class="admin-prompt-status-chip" :class="document.status">{{ document.status }}</span>
+      <el-scrollbar v-else class="sidebar-list-scrollbar admin-prompt-list-scrollbar">
+        <div class="sidebar-list admin-audit-list admin-prompt-list">
+          <div
+            v-for="document in documents"
+            :key="document.id"
+            class="conversation-card admin-audit-conversation admin-prompt-document"
+            :class="{ active: document.id === selectedDocumentId, disabled: savingDocument }"
+            :data-document-id="document.id"
+            :aria-disabled="savingDocument ? 'true' : undefined"
+            role="button"
+            tabindex="0"
+            @click="!savingDocument && setSelectedDocument(document.id)"
+            @keydown.enter.prevent="!savingDocument && setSelectedDocument(document.id)"
+            @keydown.space.prevent="!savingDocument && setSelectedDocument(document.id)"
+          >
+            <div class="conversation-preview admin-audit-conversation-main">
+              <div class="admin-audit-conversation-row">
+                <strong class="conversation-title truncate-text" :title="document.name">{{ document.name }}</strong>
+                <span class="admin-prompt-status-chip" :class="document.status">{{ document.status }}</span>
+              </div>
+              <div class="admin-audit-conversation-meta conversation-meta">
+                <span class="truncate-text">{{ document.scope }}</span>
+                <span class="admin-audit-conversation-time">{{ formatCompactTimestamp(document.updated_at) }}</span>
+              </div>
             </div>
-            <div class="admin-audit-conversation-meta conversation-meta">
-              <span class="truncate-text">{{ document.scope }}</span>
-              <span class="admin-audit-conversation-time">{{ formatCompactTimestamp(document.updated_at) }}</span>
-            </div>
+            <button class="ghost-button icon-button conversation-delete-button" type="button" :data-document-delete="document.id" :disabled="savingDocument || deletingDocumentId === document.id" aria-label="删除提示词" @click.stop="handleDeleteDocument(document.id)">
+              <Close />
+            </button>
           </div>
-          <button class="ghost-button icon-button conversation-delete-button" type="button" :data-document-delete="document.id" :disabled="savingDocument || deletingDocumentId === document.id" aria-label="删除提示词" @click.stop="handleDeleteDocument(document.id)">
-            <Close />
-          </button>
         </div>
-      </div>
+      </el-scrollbar>
     </section>
 
     <section class="admin-prompt-stage admin-audit-stage chat-stage">
@@ -669,8 +671,9 @@ onBeforeUnmount(() => {
         </div>
       </header>
 
-      <div class="admin-prompt-content">
-        <section class="admin-prompt-grid admin-prompt-grid-single">
+      <el-scrollbar class="admin-prompt-content-scrollbar">
+        <div class="admin-prompt-content">
+          <section class="admin-prompt-grid admin-prompt-grid-single">
           <article class="admin-audit-card admin-prompt-card admin-prompt-editor-card">
             <div class="messages-header admin-prompt-card-header admin-prompt-editor-header">
               <div>
@@ -684,8 +687,9 @@ onBeforeUnmount(() => {
             </div>
 
             <form class="admin-prompt-form admin-prompt-document-form" data-document-form @submit.prevent="handleSubmitDocument">
-              <div class="admin-prompt-form-scroller" data-document-form-scroller>
-                <label class="admin-prompt-field">
+              <el-scrollbar class="admin-prompt-form-scrollbar" data-document-form-scroller>
+                <div class="admin-prompt-form-scroller">
+                  <label class="admin-prompt-field">
                   <span class="admin-prompt-field-header">
                     <span class="field-label">提示词 ID</span>
                     <span class="admin-prompt-help-anchor">
@@ -729,11 +733,12 @@ onBeforeUnmount(() => {
                   </label>
                 </div>
 
-                <label class="admin-prompt-field admin-prompt-field-wide">
-                  <span class="field-label">内容</span>
-                  <textarea ref="documentContentInput" class="text-input admin-prompt-textarea" rows="8" data-document-content-input :disabled="savingDocument" :value="documentDraft.content" @input="patchDocumentDraft({ content: ($event.target as HTMLTextAreaElement).value })" />
-                </label>
-              </div>
+                  <label class="admin-prompt-field admin-prompt-field-wide">
+                    <span class="field-label">内容</span>
+                    <textarea ref="documentContentInput" class="text-input admin-prompt-textarea" rows="8" data-document-content-input :disabled="savingDocument" :value="documentDraft.content" @input="patchDocumentDraft({ content: ($event.target as HTMLTextAreaElement).value })" />
+                  </label>
+                </div>
+              </el-scrollbar>
 
               <div class="admin-prompt-actions" data-document-form-actions>
                 <button class="primary-button admin-prompt-compact-button" type="submit" :disabled="savingDocument">
@@ -742,8 +747,9 @@ onBeforeUnmount(() => {
               </div>
             </form>
           </article>
-        </section>
-      </div>
+          </section>
+        </div>
+      </el-scrollbar>
     </section>
 
     <div v-if="bindingDialogVisible" class="admin-prompt-dialog-mask" @click.self="bindingDialogVisible = false">
@@ -798,8 +804,9 @@ onBeforeUnmount(() => {
 
           <section class="admin-prompt-dialog-detail">
             <form v-if="bindingFormVisible" class="admin-prompt-form admin-prompt-binding-form admin-prompt-dialog-form" data-binding-dialog-form data-binding-form @submit.prevent="handleSubmitBinding">
-              <div class="admin-prompt-form-scroller" data-binding-form-scroller>
-                <label class="admin-prompt-field">
+              <el-scrollbar class="admin-prompt-form-scrollbar" data-binding-form-scroller>
+                <div class="admin-prompt-form-scroller">
+                  <label class="admin-prompt-field">
                   <span class="admin-prompt-field-header">
                     <span class="field-label">Scene</span>
                     <span class="admin-prompt-help-anchor">
@@ -868,22 +875,23 @@ onBeforeUnmount(() => {
                   <input v-else class="text-input" data-binding-provider-input :disabled="bindingPaneLocked" :value="bindingDraft.provider_id" @input="patchBindingDraft({ provider_id: ($event.target as HTMLInputElement).value })" />
                 </label>
 
-                <label class="admin-prompt-field">
-                  <span class="field-label">Model</span>
-                  <select
-                    v-if="supportsBindingCatalog"
-                    class="text-input"
-                    data-binding-model-input
-                    :disabled="bindingPaneLocked || catalogLoading || !bindingDraft.provider_id"
-                    :value="bindingDraft.model_id"
-                    @change="patchBindingDraft({ model_id: ($event.target as HTMLSelectElement).value })"
-                  >
-                    <option value="">未指定 Model</option>
-                    <option v-for="model in availableBindingModels" :key="model.id" :value="model.id">{{ model.name }}</option>
-                  </select>
-                  <input v-else class="text-input" data-binding-model-input :disabled="bindingPaneLocked" :value="bindingDraft.model_id" @input="patchBindingDraft({ model_id: ($event.target as HTMLInputElement).value })" />
-                </label>
-              </div>
+                  <label class="admin-prompt-field">
+                    <span class="field-label">Model</span>
+                    <select
+                      v-if="supportsBindingCatalog"
+                      class="text-input"
+                      data-binding-model-input
+                      :disabled="bindingPaneLocked || catalogLoading || !bindingDraft.provider_id"
+                      :value="bindingDraft.model_id"
+                      @change="patchBindingDraft({ model_id: ($event.target as HTMLSelectElement).value })"
+                    >
+                      <option value="">未指定 Model</option>
+                      <option v-for="model in availableBindingModels" :key="model.id" :value="model.id">{{ model.name }}</option>
+                    </select>
+                    <input v-else class="text-input" data-binding-model-input :disabled="bindingPaneLocked" :value="bindingDraft.model_id" @input="patchBindingDraft({ model_id: ($event.target as HTMLInputElement).value })" />
+                  </label>
+                </div>
+              </el-scrollbar>
 
               <div class="admin-prompt-actions admin-prompt-actions-compact" data-binding-form-actions>
                 <button class="primary-button admin-prompt-compact-button" type="submit" :disabled="bindingPaneLocked || !selectedDocumentId">
@@ -931,10 +939,14 @@ onBeforeUnmount(() => {
   height: 100%;
 }
 
-.admin-prompt-content {
+.admin-prompt-content-scrollbar {
   min-height: 0;
   height: 100%;
-  overflow: auto;
+}
+
+.admin-prompt-content {
+  min-height: 100%;
+  height: 100%;
 }
 
 .admin-prompt-grid {
@@ -1034,9 +1046,13 @@ onBeforeUnmount(() => {
   grid-template-rows: minmax(0, 1fr) auto;
 }
 
+.admin-prompt-form-scrollbar {
+  min-height: 0;
+  height: 100%;
+}
+
 .admin-prompt-form-scroller {
   min-height: 0;
-  overflow: auto;
   display: grid;
   align-content: start;
   gap: 0.7rem;
@@ -1102,6 +1118,15 @@ html.theme-teal-dark .admin-prompt-stage {
   border-color: rgba(125, 232, 221, 0.14);
 }
 
+html.theme-teal-dark .admin-prompt-card,
+html.theme-teal-dark .admin-prompt-dialog-table,
+html.theme-teal-dark .admin-prompt-dialog-detail,
+html.theme-teal-dark .admin-prompt-table,
+html.theme-teal-dark .admin-prompt-binding-placeholder {
+  background: rgba(11, 19, 30, 0.84);
+  border-color: rgba(148, 163, 184, 0.14);
+}
+
 html.theme-teal-dark .admin-prompt-subtitle,
 html.theme-teal-dark .admin-prompt-topbar-copy,
 html.theme-teal-dark .admin-prompt-dialog-header p,
@@ -1122,6 +1147,32 @@ html.theme-teal-dark .admin-prompt-status-chip.active {
 html.theme-teal-dark .admin-prompt-status-chip.disabled {
   background: rgba(255, 111, 92, 0.16);
   color: #ffd0c8;
+}
+
+html.theme-teal-dark .admin-prompt-table-toolbar,
+html.theme-teal-dark .admin-prompt-actions {
+  background: rgba(11, 19, 30, 0.9);
+  border-color: rgba(148, 163, 184, 0.14);
+}
+
+html.theme-teal-dark .admin-prompt-actions {
+  border-top-color: rgba(148, 163, 184, 0.14);
+}
+
+html.theme-teal-dark .admin-prompt-compact-button.primary-button {
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.22);
+}
+
+html.theme-teal-dark .admin-prompt-toolbar-button {
+  background: rgba(14, 24, 35, 0.78);
+  border-color: rgba(148, 163, 184, 0.14);
+  color: #eef7fb;
+}
+
+html.theme-teal-dark .admin-prompt-danger-button {
+  color: #f5b4ad;
+  border-color: rgba(248, 113, 113, 0.18);
+  background: rgba(58, 24, 30, 0.84);
 }
 
 html.theme-teal-dark .admin-prompt-field .text-input {
@@ -1151,8 +1202,8 @@ html.theme-teal-dark .admin-prompt-dialog-mask {
 
 html.theme-teal-dark .admin-prompt-dialog,
 html.theme-teal-dark .admin-prompt-dialog .admin-dialog {
-  background: rgba(9, 43, 40, 0.98);
-  border-color: rgba(125, 232, 221, 0.16);
+  background: rgba(11, 19, 30, 0.98);
+  border-color: rgba(148, 163, 184, 0.16);
   color: #dffbf7;
 }
 

@@ -503,9 +503,10 @@ function resetTurnstileWidget() {
             <button class="admin-dialog-close" type="button" aria-label="关闭" @click="emit('close')">✕</button>
           </div>
 
-          <div class="profile-dialog-body">
-            <p v-if="errorMessage" class="error-banner">{{ errorMessage }}</p>
-            <p v-if="statusMessage" class="admin-inline-success">{{ statusMessage }}</p>
+          <el-scrollbar class="profile-dialog-body-scrollbar">
+            <div class="profile-dialog-body">
+              <p v-if="errorMessage" class="error-banner">{{ errorMessage }}</p>
+              <p v-if="statusMessage" class="admin-inline-success">{{ statusMessage }}</p>
 
             <section v-if="needsEmail || needsPassword" class="admin-notice-row" aria-label="必要操作">
               <span v-if="needsEmail" class="admin-warning-pill">必须绑定邮箱</span>
@@ -606,33 +607,36 @@ function resetTurnstileWidget() {
                 <button class="ghost-button profile-action-button" type="button" @click="openModelCreate">新增模型</button>
               </div>
 
-              <div class="admin-table profile-model-table">
-                <div class="admin-table-row profile-model-row profile-model-head">
-                  <span>名称</span>
-                  <span>状态</span>
-                  <span>操作</span>
+              <el-scrollbar class="profile-model-table-scrollbar">
+                <div class="admin-table profile-model-table">
+                  <div class="admin-table-row profile-model-row profile-model-head">
+                    <span>名称</span>
+                    <span>状态</span>
+                    <span>操作</span>
+                  </div>
+                  <div
+                    v-for="model in customModels"
+                    :key="model.id"
+                    class="admin-table-row profile-model-row"
+                  >
+                    <span class="profile-model-name-cell">{{ model.display_name }}</span>
+                    <span :class="model.enabled ? 'profile-model-enabled' : 'profile-model-disabled'">{{ model.enabled ? '启用' : '停用' }}</span>
+                    <span class="profile-model-actions">
+                      <button class="ghost-button small" type="button" :data-user-model-row="model.id" @click="openModelEdit(model)">编辑</button>
+                      <button class="ghost-button small" type="button" :data-user-model-test="model.id" @click="testUserModel(model)">测试</button>
+                      <button class="ghost-button small" type="button" :disabled="modelSaving === `model-delete:${model.id}`" @click="removeUserModel(model)">删除</button>
+                    </span>
+                  </div>
+                  <div v-if="customModels.length === 0" class="admin-table-row">
+                    <span class="admin-empty" style="grid-column: 1/-1">暂无自定义模型，点击"新增模型"添加。</span>
+                  </div>
                 </div>
-                <div
-                  v-for="model in customModels"
-                  :key="model.id"
-                  class="admin-table-row profile-model-row"
-                >
-                  <span class="profile-model-name-cell">{{ model.display_name }}</span>
-                  <span :class="model.enabled ? 'profile-model-enabled' : 'profile-model-disabled'">{{ model.enabled ? '启用' : '停用' }}</span>
-                  <span class="profile-model-actions">
-                    <button class="ghost-button small" type="button" :data-user-model-row="model.id" @click="openModelEdit(model)">编辑</button>
-                    <button class="ghost-button small" type="button" :data-user-model-test="model.id" @click="testUserModel(model)">测试</button>
-                    <button class="ghost-button small" type="button" :disabled="modelSaving === `model-delete:${model.id}`" @click="removeUserModel(model)">删除</button>
-                  </span>
-                </div>
-                <div v-if="customModels.length === 0" class="admin-table-row">
-                  <span class="admin-empty" style="grid-column: 1/-1">暂无自定义模型，点击"新增模型"添加。</span>
-                </div>
-              </div>
+              </el-scrollbar>
             </section>
 
-            <OpenSourceLicensesPanel />
-          </div>
+              <OpenSourceLicensesPanel />
+            </div>
+          </el-scrollbar>
         </div>
       </div>
     </Transition>
@@ -740,10 +744,13 @@ function resetTurnstileWidget() {
   margin: 0 0 0.15rem;
 }
 
-.profile-dialog-body {
+.profile-dialog-body-scrollbar {
   flex: 1 1 auto;
   min-height: 0;
-  overflow-y: auto;
+}
+
+.profile-dialog-body {
+  min-height: 100%;
   padding: 1rem 1.5rem 2rem;
   display: flex;
   flex-direction: column;
@@ -764,8 +771,12 @@ function resetTurnstileWidget() {
   color: #36535c;
 }
 
+.profile-model-table-scrollbar {
+  max-width: 100%;
+}
+
 .profile-model-table {
-  overflow-x: auto;
+  min-width: min(100%, 20rem);
 }
 
 .profile-model-row {

@@ -52,11 +52,25 @@ describe('AdminLayout', () => {
     expect(wrapper.find('[data-admin-layout-outlet]').exists()).toBe(true)
   })
 
-  it('keeps the layout outlet unframed so child pages do not render as nested cards', () => {
+  it('frames ordinary admin pages while internal-scroll pages own their shell', () => {
     expect(appStyles).not.toMatch(/\.admin-layout-main,\s*\.admin-section\s*\{/)
     const mainRule = appStyles.match(/\.admin-layout-main\s*\{(?<body>[^}]*)\}/)?.groups?.body ?? ''
-    expect(mainRule).not.toContain('background:')
-    expect(mainRule).not.toContain('border:')
-    expect(mainRule).not.toContain('box-shadow:')
+    expect(mainRule).toContain('background:')
+    expect(mainRule).toContain('border:')
+    expect(mainRule).toContain('box-shadow:')
+    expect(mainRule).toContain('padding: 0.9rem;')
+
+    const managedPageRule = appStyles.match(
+      /\.admin-layout-main:has\(\.admin-audit-shell\),\s*\.admin-layout-main:has\(\.admin-prompt-shell\)\s*\{(?<body>[^}]*)\}/,
+    )?.groups?.body ?? ''
+    expect(managedPageRule).toContain('background: transparent;')
+    expect(managedPageRule).toContain('border: 0;')
+    expect(managedPageRule).toContain('box-shadow: none;')
+    expect(managedPageRule).toContain('padding: 0;')
+
+    const managedWrapRule = appStyles.match(
+      /\.admin-layout-main:has\(\.admin-audit-shell\) \.admin-layout-main-scrollbar > \.el-scrollbar__wrap,\s*\.admin-layout-main:has\(\.admin-prompt-shell\) \.admin-layout-main-scrollbar > \.el-scrollbar__wrap\s*\{(?<body>[^}]*)\}/,
+    )?.groups?.body ?? ''
+    expect(managedWrapRule).toContain('overflow: hidden;')
   })
 })

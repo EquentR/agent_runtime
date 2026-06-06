@@ -580,32 +580,34 @@ function resetTurnstileWidget() {
         <button class="ghost-button profile-action-button" type="button" @click="resetModelDraft">新增模型</button>
       </div>
 
-      <div class="admin-table profile-model-table">
-        <div class="admin-table-row profile-model-row profile-model-head">
-          <span>名称</span>
-          <span>状态</span>
-          <span>操作</span>
+      <el-scrollbar class="profile-model-table-scrollbar">
+        <div class="admin-table profile-model-table">
+          <div class="admin-table-row profile-model-row profile-model-head">
+            <span>名称</span>
+            <span>状态</span>
+            <span>操作</span>
+          </div>
+          <div
+            v-for="model in customModels"
+            :key="model.id"
+            class="admin-table-row profile-model-row"
+            :class="{ active: selectedModelId === model.id }"
+          >
+            <button class="profile-model-name" type="button" :data-user-model-row="model.id" @click="syncModelDraft(model)">
+              {{ model.display_name }}
+            </button>
+            <span :class="model.enabled ? 'profile-model-enabled' : 'profile-model-disabled'">{{ model.enabled ? '启用' : '停用' }}</span>
+            <span class="profile-model-actions">
+              <button class="ghost-button small" type="button" @click="syncModelDraft(model)">编辑</button>
+              <button class="ghost-button small" type="button" :data-user-model-test="model.id" @click="testUserModel(model)">测试</button>
+              <button class="ghost-button small" type="button" :disabled="modelSaving === `model-delete:${model.id}`" @click="removeUserModel(model)">删除</button>
+            </span>
+          </div>
+          <div v-if="customModels.length === 0" class="admin-table-row">
+            <span class="admin-empty" style="grid-column: 1/-1">暂无自定义模型，点击"新增模型"添加。</span>
+          </div>
         </div>
-        <div
-          v-for="model in customModels"
-          :key="model.id"
-          class="admin-table-row profile-model-row"
-          :class="{ active: selectedModelId === model.id }"
-        >
-          <button class="profile-model-name" type="button" :data-user-model-row="model.id" @click="syncModelDraft(model)">
-            {{ model.display_name }}
-          </button>
-          <span :class="model.enabled ? 'profile-model-enabled' : 'profile-model-disabled'">{{ model.enabled ? '启用' : '停用' }}</span>
-          <span class="profile-model-actions">
-            <button class="ghost-button small" type="button" @click="syncModelDraft(model)">编辑</button>
-            <button class="ghost-button small" type="button" :data-user-model-test="model.id" @click="testUserModel(model)">测试</button>
-            <button class="ghost-button small" type="button" :disabled="modelSaving === `model-delete:${model.id}`" @click="removeUserModel(model)">删除</button>
-          </span>
-        </div>
-        <div v-if="customModels.length === 0" class="admin-table-row">
-          <span class="admin-empty" style="grid-column: 1/-1">暂无自定义模型，点击"新增模型"添加。</span>
-        </div>
-      </div>
+      </el-scrollbar>
     </section>
 
     <section class="admin-section">
@@ -686,8 +688,12 @@ function resetTurnstileWidget() {
   color: #36535c;
 }
 
+.profile-model-table-scrollbar {
+  max-width: 100%;
+}
+
 .profile-model-table {
-  overflow-x: auto;
+  min-width: min(100%, 22rem);
 }
 
 .profile-model-row {
