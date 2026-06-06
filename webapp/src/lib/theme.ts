@@ -3,18 +3,19 @@ export const THEME_STORAGE_KEY = 'app-theme'
 export type ThemeMode = 'default' | 'teal' | 'teal-dark'
 
 function normalizeThemeMode(value: string | null | undefined): ThemeMode {
-  return value === 'teal' || value === 'teal-dark' ? value : 'default'
+  if (value === 'teal' || value === 'teal-dark') {
+    return value
+  }
+  return 'default'
 }
 
 export function getNextThemeMode(theme: ThemeMode): ThemeMode {
   if (theme === 'default') {
     return 'teal'
   }
-
   if (theme === 'teal') {
     return 'teal-dark'
   }
-
   return 'default'
 }
 

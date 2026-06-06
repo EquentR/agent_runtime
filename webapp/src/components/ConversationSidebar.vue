@@ -13,7 +13,13 @@ import {
 } from '@element-plus/icons-vue'
 
 import { formatConversationTitle } from '../lib/chat'
-import { getStoredTheme, setStoredTheme } from '../lib/theme'
+import {
+  getNextThemeMode,
+  getStoredTheme,
+  setStoredTheme,
+  syncThemeFromStorage,
+  type ThemeMode,
+} from '../lib/theme'
 import type { Conversation } from '../types/api'
 
 const props = defineProps<{
@@ -38,12 +44,28 @@ const emit = defineEmits<{
   'open-profile': []
 }>()
 
-const isTealTheme = ref(getStoredTheme() === 'teal')
+const themeMode = ref<ThemeMode>(getStoredTheme())
+
+const themeButtonLabel = computed(() => {
+  const nextThemeMode = getNextThemeMode(themeMode.value)
+  const currentThemeLabel =
+    themeMode.value === 'default' ? '默认' : themeMode.value === 'teal' ? 'Teal' : 'Teal Dark'
+  const nextThemeLabel =
+    nextThemeMode === 'default' ? '默认' : nextThemeMode === 'teal' ? 'Teal' : 'Teal Dark'
+  return `当前主题：${currentThemeLabel}，切换到${nextThemeMode === 'default' ? '默认主题' : ` ${nextThemeLabel} 主题`}`
+})
 
 function toggleTheme() {
-  isTealTheme.value = !isTealTheme.value
-  setStoredTheme(isTealTheme.value ? 'teal' : 'default')
+  const nextThemeMode = getNextThemeMode(themeMode.value)
+  themeMode.value = nextThemeMode
+  setStoredTheme(nextThemeMode)
 }
+
+// Keep the active document in sync with persisted theme state on mount.
+onMounted(() => {
+  syncThemeFromStorage()
+  themeMode.value = getStoredTheme()
+})
 
 type ConfirmState =
   | { kind: 'delete'; conversationId: string; title: string; message: string; confirmLabel: string }
@@ -229,14 +251,14 @@ onBeforeUnmount(() => {
         <button
           class="ghost-button icon-button sidebar-theme-toggle"
           type="button"
-          :aria-label="isTealTheme ? '切换默认主题' : '切换 Teal 主题'"
-          :title="isTealTheme ? '切换默认主题' : '切换 Teal 主题'"
+          :aria-label="themeButtonLabel"
+          :title="themeButtonLabel"
           @click="toggleTheme"
         >
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="8" cy="8" r="5" />
             <path d="M8 3v10" />
-            <path d="M8 3a5 5 0 0 1 0 10" :fill="isTealTheme ? 'currentColor' : 'none'" />
+            <path d="M8 3a5 5 0 0 1 0 10" :fill="themeMode === 'default' ? 'none' : 'currentColor'" />
           </svg>
         </button>
         <div ref="userMenuAnchor" class="sidebar-user-menu-anchor">

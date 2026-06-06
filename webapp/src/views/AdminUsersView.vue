@@ -323,4 +323,19 @@ onMounted(() => {
   padding: 0.3rem 0.58rem;
   font-size: 0.82rem;
 }
+
+html.theme-teal-dark .admin-dialog-overlay {
+  background: rgba(1, 12, 12, 0.68);
+}
+
+html.theme-teal-dark .admin-dialog {
+  background: rgba(9, 43, 40, 0.98);
+  border-color: rgba(125, 232, 221, 0.16);
+  color: #dffbf7;
+  box-shadow: 0 28px 64px rgba(0, 0, 0, 0.42);
+}
+
+html.theme-teal-dark .admin-dialog-divider {
+  border-top-color: rgba(125, 232, 221, 0.12);
+}
 </style>

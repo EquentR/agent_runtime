@@ -1096,6 +1096,66 @@ onBeforeUnmount(() => {
   height: 0.88rem;
 }
 
+html.theme-teal-dark .admin-prompt-sidebar,
+html.theme-teal-dark .admin-prompt-stage {
+  background: rgba(7, 31, 30, 0.86);
+  border-color: rgba(125, 232, 221, 0.14);
+}
+
+html.theme-teal-dark .admin-prompt-subtitle,
+html.theme-teal-dark .admin-prompt-topbar-copy,
+html.theme-teal-dark .admin-prompt-dialog-header p,
+html.theme-teal-dark .admin-prompt-help-button,
+html.theme-teal-dark .admin-prompt-status-chip {
+  color: #a7cbc5;
+}
+
+html.theme-teal-dark .admin-prompt-status-chip {
+  background: rgba(20, 184, 166, 0.12);
+}
+
+html.theme-teal-dark .admin-prompt-status-chip.active {
+  background: rgba(20, 184, 166, 0.22);
+  color: #f4fffd;
+}
+
+html.theme-teal-dark .admin-prompt-status-chip.disabled {
+  background: rgba(255, 111, 92, 0.16);
+  color: #ffd0c8;
+}
+
+html.theme-teal-dark .admin-prompt-field .text-input {
+  background: rgba(3, 23, 22, 0.76);
+  border-color: rgba(125, 232, 221, 0.16);
+  color: #dffbf7;
+}
+
+html.theme-teal-dark .admin-prompt-field .text-input::placeholder {
+  color: rgba(210, 252, 247, 0.42);
+}
+
+html.theme-teal-dark .admin-prompt-tooltip {
+  background: rgba(5, 31, 29, 0.98);
+  border-color: rgba(125, 232, 221, 0.16);
+  color: #dffbf7;
+  box-shadow: 0 24px 54px rgba(0, 0, 0, 0.46);
+}
+
+html.theme-teal-dark .admin-prompt-tooltip strong {
+  color: #f4fffd;
+}
+
+html.theme-teal-dark .admin-prompt-dialog-mask {
+  background: rgba(1, 12, 12, 0.68);
+}
+
+html.theme-teal-dark .admin-prompt-dialog,
+html.theme-teal-dark .admin-prompt-dialog .admin-dialog {
+  background: rgba(9, 43, 40, 0.98);
+  border-color: rgba(125, 232, 221, 0.16);
+  color: #dffbf7;
+}
+
 .admin-prompt-tooltip {
   position: absolute;
   z-index: 16;

@@ -1,10 +1,72 @@
 import { mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import ConversationSidebar from './ConversationSidebar.vue'
+import { THEME_STORAGE_KEY } from '../lib/theme'
 
 describe('ConversationSidebar', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    document.documentElement.classList.remove('theme-teal')
+    document.documentElement.classList.remove('theme-teal-dark')
+  })
+
+  afterEach(() => {
+    document.documentElement.classList.remove('theme-teal')
+    document.documentElement.classList.remove('theme-teal-dark')
+  })
+
+  it('cycles the sidebar theme button through all shared theme states', async () => {
+    localStorage.setItem(THEME_STORAGE_KEY, 'default')
+
+    const wrapper = mount(ConversationSidebar, {
+      global: {
+        stubs: {
+          RouterLink: {
+            props: ['to'],
+            template: '<a :href="to"><slot /></a>',
+          },
+        },
+      },
+      props: {
+        activeConversationId: '',
+        loading: false,
+        username: 'demo-user',
+        conversations: [],
+      },
+    })
+
+    const themeButton = wrapper.find('.sidebar-theme-toggle')
+
+    expect(themeButton.attributes('aria-label')).toBe('当前主题：默认，切换到 Teal 主题')
+    expect(themeButton.attributes('title')).toBe('当前主题：默认，切换到 Teal 主题')
+    expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe('default')
+    expect(document.documentElement.classList.contains('theme-teal')).toBe(false)
+    expect(document.documentElement.classList.contains('theme-teal-dark')).toBe(false)
+
+    await themeButton.trigger('click')
+    expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe('teal')
+    expect(document.documentElement.classList.contains('theme-teal')).toBe(true)
+    expect(document.documentElement.classList.contains('theme-teal-dark')).toBe(false)
+    expect(themeButton.attributes('aria-label')).toBe('当前主题：Teal，切换到 Teal Dark 主题')
+    expect(themeButton.attributes('title')).toBe('当前主题：Teal，切换到 Teal Dark 主题')
+
+    await themeButton.trigger('click')
+    expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe('teal-dark')
+    expect(document.documentElement.classList.contains('theme-teal')).toBe(false)
+    expect(document.documentElement.classList.contains('theme-teal-dark')).toBe(true)
+    expect(themeButton.attributes('aria-label')).toBe('当前主题：Teal Dark，切换到默认主题')
+    expect(themeButton.attributes('title')).toBe('当前主题：Teal Dark，切换到默认主题')
+
+    await themeButton.trigger('click')
+    expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe('default')
+    expect(document.documentElement.classList.contains('theme-teal')).toBe(false)
+    expect(document.documentElement.classList.contains('theme-teal-dark')).toBe(false)
+    expect(themeButton.attributes('aria-label')).toBe('当前主题：默认，切换到 Teal 主题')
+    expect(themeButton.attributes('title')).toBe('当前主题：默认，切换到 Teal 主题')
+  })
+
   it('renders only one-line titles without preview metadata rows', () => {
     const wrapper = mount(ConversationSidebar, {
       global: {
