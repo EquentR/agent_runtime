@@ -837,4 +837,41 @@ function resetTurnstileWidget() {
 html.theme-teal .profile-dialog-shell {
   background: #eafaf8;
 }
+
+html.theme-teal-dark .profile-dialog-overlay {
+  background: rgba(1, 12, 12, 0.72);
+}
+
+html.theme-teal-dark .profile-dialog-shell {
+  background: rgba(8, 36, 34, 0.96);
+  border-left: 1px solid rgba(125, 232, 221, 0.16);
+  box-shadow: -12px 0 36px rgba(0, 0, 0, 0.36);
+}
+
+html.theme-teal-dark .profile-dialog-header {
+  border-bottom-color: rgba(125, 232, 221, 0.12);
+}
+
+html.theme-teal-dark .profile-model-head,
+html.theme-teal-dark .profile-model-name-cell {
+  color: #f4fffd;
+}
+
+html.theme-teal-dark .profile-model-enabled {
+  color: #8ffff0;
+}
+
+html.theme-teal-dark .profile-model-disabled {
+  color: #ffd08f;
+}
+
+html.theme-teal-dark .profile-model-dialog-overlay {
+  background: rgba(1, 12, 12, 0.62);
+}
+
+html.theme-teal-dark .profile-model-dialog-overlay .admin-dialog {
+  background: rgba(9, 43, 40, 0.98);
+  border-color: rgba(125, 232, 221, 0.16);
+  color: #dffbf7;
+}
 </style>

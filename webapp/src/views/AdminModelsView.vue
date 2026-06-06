@@ -541,4 +541,32 @@ onMounted(() => {
   padding: 0.68rem 0.82rem;
   font-weight: 700;
 }
+
+html.theme-teal-dark .admin-dialog-overlay {
+  background: rgba(1, 12, 12, 0.68);
+}
+
+html.theme-teal-dark .admin-dialog {
+  background: rgba(9, 43, 40, 0.98);
+  border-color: rgba(125, 232, 221, 0.16);
+  color: #dffbf7;
+  box-shadow: 0 28px 64px rgba(0, 0, 0, 0.42);
+}
+
+html.theme-teal-dark .admin-dialog-hint,
+html.theme-teal-dark .admin-model-name,
+html.theme-teal-dark .admin-text-button {
+  color: #f4fffd;
+}
+
+html.theme-teal-dark .admin-warning-banner {
+  border-color: rgba(125, 232, 221, 0.18);
+  background: rgba(20, 184, 166, 0.12);
+  color: #dffbf7;
+}
+
+html.theme-teal-dark .admin-custom-model-row.active {
+  border-color: rgba(36, 216, 198, 0.22);
+  background: linear-gradient(135deg, rgba(20, 184, 166, 0.18), rgba(76, 212, 250, 0.12));
+}
 </style>

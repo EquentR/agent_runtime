@@ -1,9 +1,22 @@
 export const THEME_STORAGE_KEY = 'app-theme'
 
-export type ThemeMode = 'default' | 'teal'
+export type ThemeMode = 'default' | 'teal' | 'teal-dark'
 
 function normalizeThemeMode(value: string | null | undefined): ThemeMode {
-  return value === 'teal' ? 'teal' : 'default'
+  if (value === 'teal' || value === 'teal-dark') {
+    return value
+  }
+  return 'default'
+}
+
+export function getNextThemeMode(theme: ThemeMode): ThemeMode {
+  if (theme === 'default') {
+    return 'teal'
+  }
+  if (theme === 'teal') {
+    return 'teal-dark'
+  }
+  return 'default'
 }
 
 export function getStoredTheme(): ThemeMode {
@@ -16,6 +29,7 @@ export function getStoredTheme(): ThemeMode {
 
 export function applyTheme(theme: ThemeMode) {
   document.documentElement.classList.toggle('theme-teal', theme === 'teal')
+  document.documentElement.classList.toggle('theme-teal-dark', theme === 'teal-dark')
 }
 
 export function syncThemeFromStorage() {

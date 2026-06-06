@@ -65,4 +65,33 @@ describe('app startup', () => {
     expect(calls[0]).toBe('sync-theme')
     expect(calls.at(-1)).toBe('mount')
   })
+
+  it('syncs the persisted theme before the app is created', async () => {
+    const calls: string[] = []
+    const app = {
+      mount: harness.mount,
+      use: harness.use,
+    }
+    harness.syncThemeFromStorage.mockImplementation(() => {
+      calls.push('sync-theme')
+    })
+    harness.createApp.mockImplementation(() => {
+      calls.push('create-app')
+      return app
+    })
+    harness.use.mockImplementation(() => {
+      calls.push('use-plugin')
+      return app
+    })
+    harness.mount.mockImplementation(() => {
+      calls.push('mount')
+      return app
+    })
+
+    await import('./main')
+
+    expect(harness.syncThemeFromStorage).toHaveBeenCalledOnce()
+    expect(calls[0]).toBe('sync-theme')
+    expect(calls.slice(0, 2)).toEqual(['sync-theme', 'create-app'])
+  })
 })

@@ -238,6 +238,41 @@ function closeLicenses() {
   transform: translateY(12px) scale(0.985);
 }
 
+html.theme-teal-dark .open-source-overlay {
+  background: rgba(1, 12, 12, 0.62);
+}
+
+html.theme-teal-dark .open-source-dialog {
+  background: rgba(9, 43, 40, 0.96);
+  border: 1px solid rgba(125, 232, 221, 0.16);
+  box-shadow: 0 28px 64px rgba(0, 0, 0, 0.38);
+}
+
+html.theme-teal-dark .open-source-project h3,
+html.theme-teal-dark .open-source-group h3,
+html.theme-teal-dark .open-source-label {
+  color: #f4fffd;
+}
+
+html.theme-teal-dark .open-source-project-link,
+html.theme-teal-dark .open-source-link {
+  color: #75e6ff;
+}
+
+html.theme-teal-dark .open-source-project-link:hover,
+html.theme-teal-dark .open-source-link:hover {
+  color: #8ffff0;
+}
+
+html.theme-teal-dark .open-source-row {
+  border-color: rgba(125, 232, 221, 0.12);
+  background: rgba(7, 31, 30, 0.82);
+}
+
+html.theme-teal-dark .open-source-row-head {
+  color: #7fcac0;
+}
+
 @media (max-width: 760px) {
   .open-source-row {
     grid-template-columns: 1fr;
