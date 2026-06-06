@@ -13,9 +13,8 @@ import {
 } from '@element-plus/icons-vue'
 
 import { formatConversationTitle } from '../lib/chat'
+import { getStoredTheme, setStoredTheme } from '../lib/theme'
 import type { Conversation } from '../types/api'
-
-const THEME_KEY = 'app-theme'
 
 const props = defineProps<{
   activeConversationId: string
@@ -39,25 +38,12 @@ const emit = defineEmits<{
   'open-profile': []
 }>()
 
-const isTealTheme = ref(localStorage.getItem(THEME_KEY) === 'teal')
+const isTealTheme = ref(getStoredTheme() === 'teal')
 
 function toggleTheme() {
   isTealTheme.value = !isTealTheme.value
-  if (isTealTheme.value) {
-    document.documentElement.classList.add('theme-teal')
-    localStorage.setItem(THEME_KEY, 'teal')
-  } else {
-    document.documentElement.classList.remove('theme-teal')
-    localStorage.setItem(THEME_KEY, 'default')
-  }
+  setStoredTheme(isTealTheme.value ? 'teal' : 'default')
 }
-
-// Apply saved theme on mount
-onMounted(() => {
-  if (isTealTheme.value) {
-    document.documentElement.classList.add('theme-teal')
-  }
-})
 
 type ConfirmState =
   | { kind: 'delete'; conversationId: string; title: string; message: string; confirmLabel: string }
