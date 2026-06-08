@@ -2558,6 +2558,12 @@ describe('ChatView', () => {
     expect(titleBlock.element.firstElementChild?.classList.contains('model-menu')).toBe(true)
   })
 
+  it('lets the Element Plus model menu scrollbar expand beyond the trigger height', () => {
+    const panelRule = chatStyles.match(/\.model-menu-panel\.el-scrollbar\s*\{(?<body>[^}]*)\}/)
+
+    expect(panelRule?.groups?.body ?? '').toContain('height: auto;')
+  })
+
   it('keeps finish token stats visible without refetching the full conversation after completion', async () => {
     api.fetchConversations
       .mockResolvedValueOnce([])

@@ -647,6 +647,10 @@ p {
   box-shadow: var(--app-shadow-popover);
 }
 
+.model-menu-panel.el-scrollbar {
+  height: auto;
+}
+
 .model-menu-panel-view {
   display: grid;
   align-content: start;
