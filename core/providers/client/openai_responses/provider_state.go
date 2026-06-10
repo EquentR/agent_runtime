@@ -229,6 +229,7 @@ func responseOutputItemToInputParam(item responses.ResponseOutputItemUnion) (res
 	case "image_generation_call":
 		status := strings.TrimSpace(item.Status)
 		if status == "" {
+			// Default to "completed" since only finished items are persisted in provider state.
 			status = "completed"
 		}
 		return responses.ResponseInputItemParamOfImageGenerationCall(item.ID, item.Result, status), nil
