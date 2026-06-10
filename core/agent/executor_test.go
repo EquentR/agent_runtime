@@ -2885,7 +2885,7 @@ func TestPlanReplayMessageAttachmentsDoesNotDuplicateExistingWorkspaceManifest(t
 	}
 }
 
-func TestAgentExecutorFailsPreciseReplayWhenRequiredAttachmentExpired(t *testing.T) {
+func TestAgentExecutorContinuesReplayWhenHistoryAttachmentExpired(t *testing.T) {
 	store := newConversationStoreForTest(t)
 	attachmentStorage, err := attachments.NewFilesystemStore(t.TempDir())
 	if err != nil {
@@ -2947,7 +2947,7 @@ func TestAgentExecutorFailsPreciseReplayWhenRequiredAttachmentExpired(t *testing
 		t.Fatalf("AppendMessages() error = %v", err)
 	}
 
-	client := &stubClient{streams: []model.Stream{newStubStream(nil, model.Message{}, nil)}}
+	client := &stubClient{streams: []model.Stream{newStubStream(nil, model.Message{Role: model.RoleAssistant, Content: "ok"}, nil)}}
 	executor := newTaskExecutorForTest(t, ExecutorDependencies{
 		Resolver:          newExecutorResolverForTest(),
 		ConversationStore: store,
@@ -2968,11 +2968,11 @@ func TestAgentExecutorFailsPreciseReplayWhenRequiredAttachmentExpired(t *testing
 			"created_by":      "tester",
 		}),
 	}, nil)
-	if err == nil || !strings.Contains(err.Error(), "expired") {
-		t.Fatalf("executor() error = %v, want expired replay error", err)
+	if err != nil {
+		t.Fatalf("executor() error = %v, want nil (expired attachments should be tolerated)", err)
 	}
-	if len(client.streamRequests) != 0 {
-		t.Fatalf("stream request count = %d, want 0", len(client.streamRequests))
+	if len(client.streamRequests) != 1 {
+		t.Fatalf("stream request count = %d, want 1 (model should have been called)", len(client.streamRequests))
 	}
 }
 

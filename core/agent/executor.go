@@ -353,7 +353,7 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 		if err != nil {
 			return nil, err
 		}
-		history, err = hydrateReplayMessages(ctx, deps.AttachmentStore, deps.AttachmentStorage, history, conversation.ID, workspaceRoot, llmModel.SupportsAttachments(), savedSummary != "")
+		history, err = hydrateReplayMessages(ctx, deps.AttachmentStore, deps.AttachmentStorage, history, conversation.ID, workspaceRoot, llmModel.SupportsAttachments(), true)
 		if err != nil {
 			return nil, err
 		}
@@ -584,7 +584,11 @@ func hydrateReplayMessages(ctx context.Context, store *attachments.Store, storag
 		}
 		hydrated, err := planReplayMessageAttachments(ctx, store, storage, hydratedMessages[messageIndex], workspaceRoot, conversationID, directImageInput)
 		if err != nil {
-			if allowExpiredHistoryContinuation && errors.Is(err, attachments.ErrAttachmentExpired) && messageIndex < len(hydratedMessages)-1 {
+			if allowExpiredHistoryContinuation && errors.Is(err, attachments.ErrAttachmentExpired) {
+				// Expired attachments in history: drop the attachment references but keep
+				// the message content (which already contains the manifest text describing
+				// what was uploaded). This allows conversation continuation even when local
+				// attachment files have expired after long idle periods.
 				hydratedMessages[messageIndex].Attachments = nil
 				continue
 			}
