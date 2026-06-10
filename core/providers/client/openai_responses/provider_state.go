@@ -226,6 +226,12 @@ func responseOutputItemToInputParam(item responses.ResponseOutputItemUnion) (res
 		return modelReasoningItemToResponse(responseReasoningItemToModel(item)), nil
 	case "function_call":
 		return responses.ResponseInputItemParamOfFunctionCall(item.Arguments.OfString, item.CallID, item.Name), nil
+	case "image_generation_call":
+		status := strings.TrimSpace(item.Status)
+		if status == "" {
+			status = "completed"
+		}
+		return responses.ResponseInputItemParamOfImageGenerationCall(item.ID, item.Result, status), nil
 	default:
 		return responses.ResponseInputItemUnionParam{}, fmt.Errorf("unsupported output item type in provider state: %s", item.Type)
 	}

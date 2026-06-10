@@ -180,6 +180,8 @@ func applyStreamEvent(
 				emitEvent(model.StreamEvent{Type: model.StreamEventToolCallDelta, ToolCall: call})
 			}
 		}
+	case "response.output_item.done":
+		setOutputItem(outputItems, event.OutputIndex, event.Item)
 	case "response.function_call_arguments.delta":
 		acc.AppendArgumentsDeltaByItemID(event.ItemID, event.Delta)
 		appendOutputItemFunctionArgumentsDelta(outputItems, event.ItemID, event.Delta)

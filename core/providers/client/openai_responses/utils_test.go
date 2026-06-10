@@ -272,8 +272,10 @@ func TestBuildResponseRequestParams_ReplaysAssistantReasoningItems(t *testing.T)
 	if first["type"] != "reasoning" || first["id"] != "rs_1" {
 		t.Fatalf("replayed reasoning item = %#v", first)
 	}
-	if first["encrypted_content"] != "enc_123" {
-		t.Fatalf("encrypted_content = %v, want enc_123", first["encrypted_content"])
+	// encrypted_content must NOT be sent: it references server-side state that is not
+	// persisted (store=false) and expires, causing "Item not found" errors on continuation.
+	if first["encrypted_content"] != nil {
+		t.Fatalf("encrypted_content = %v, want nil (should not be sent with store=false)", first["encrypted_content"])
 	}
 }
 
@@ -729,5 +731,48 @@ func TestExtractChatResponse_PopulatesFinalMessageProviderState(t *testing.T) {
 	}
 	if got.Content != "hello world" || got.Reasoning != "plan first" {
 		t.Fatalf("response = %#v", got)
+	}
+}
+
+func TestBuildResponseRequestParams_ReplaysImageGenerationCallFromProviderState(t *testing.T) {
+	params, err := buildResponseRequestParams(model.ChatRequest{
+		Model: "gpt-5.4",
+		Messages: []model.Message{{
+			Role: model.RoleAssistant,
+			ProviderState: &model.ProviderState{
+				Provider:   providerName,
+				Format:     responseStateFormat,
+				Version:    messageVersion,
+				ResponseID: "resp_img_1",
+				Payload:    json.RawMessage(`{"response_id":"resp_img_1","output":[{"type":"message","id":"msg_1","status":"completed","content":[{"type":"output_text","text":"here is the image"}]},{"type":"image_generation_call","id":"ig_1","result":"base64data","status":"completed"}]}`),
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("buildResponseRequestParams() error = %v", err)
+	}
+
+	var payload map[string]any
+	data, err := json.Marshal(params)
+	if err != nil {
+		t.Fatalf("json.Marshal(params) error = %v", err)
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("json.Unmarshal(payload) error = %v", err)
+	}
+
+	input, ok := payload["input"].([]any)
+	if !ok || len(input) != 2 {
+		t.Fatalf("input = %#v, want 2 items", payload["input"])
+	}
+	second, _ := input[1].(map[string]any)
+	if second["type"] != "image_generation_call" {
+		t.Fatalf("second input item type = %v, want image_generation_call", second["type"])
+	}
+	if second["id"] != "ig_1" {
+		t.Fatalf("image_generation_call id = %v, want ig_1", second["id"])
+	}
+	if second["result"] != "base64data" {
+		t.Fatalf("image_generation_call result = %v, want base64data", second["result"])
 	}
 }

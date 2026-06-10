@@ -353,9 +353,9 @@ func modelReasoningItemToResponse(item model.ReasoningItem) responses.ResponseIn
 		summary = append(summary, responses.ResponseReasoningItemSummaryParam{Text: part.Text})
 	}
 	param := responses.ResponseInputItemParamOfReasoning(item.ID, summary)
-	if item.EncryptedContent != "" && param.OfReasoning != nil {
-		param.OfReasoning.EncryptedContent = openai.Opt(item.EncryptedContent)
-	}
+	// Do NOT send encrypted_content when replaying: it references server-side state
+	// that is not persisted (store=false) and expires after hours/days, causing
+	// "Item with id 'rs_xxx' not found" errors on conversation continuation.
 	return param
 }
 
