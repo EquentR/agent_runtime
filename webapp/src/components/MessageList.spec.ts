@@ -191,6 +191,85 @@ describe('MessageList', () => {
     wrapper.unmount()
   })
 
+  it('forces scrolling to the bottom when the parent sends a scroll signal', async () => {
+    const wrapper = mount(MessageList, {
+      props: {
+        loading: false,
+        scrollToBottomSignal: 0,
+        entries: [
+          { id: 'reply-1', kind: 'reply', title: '', content: 'first' },
+        ],
+      },
+      attachTo: document.body,
+    })
+
+    const body = wrapper.find('.el-scrollbar__wrap').element as HTMLDivElement
+    Object.defineProperty(body, 'clientHeight', { configurable: true, value: 100 })
+    Object.defineProperty(body, 'scrollHeight', { configurable: true, value: 240 })
+
+    await nextTick()
+    await flushPromises()
+
+    body.scrollTop = 24
+    body.dispatchEvent(new Event('scroll'))
+    await nextTick()
+    await flushPromises()
+
+    Object.defineProperty(body, 'scrollHeight', { configurable: true, value: 360 })
+
+    await wrapper.setProps({
+      scrollToBottomSignal: 1,
+      entries: [
+        { id: 'reply-1', kind: 'reply', title: '', content: 'first' },
+        { id: 'user-2', kind: 'user', title: '', content: 'new question' },
+      ],
+    })
+    await nextTick()
+    await flushPromises()
+
+    expect(body.scrollTop).toBe(260)
+    wrapper.unmount()
+  })
+
+  it('renders turn navigation nodes with user message summaries and scrolls to the selected turn', async () => {
+    const wrapper = mount(MessageList, {
+      props: {
+        loading: false,
+        entries: [
+          { id: 'user-1', kind: 'user', title: '', content: 'first question with enough detail to summarize' },
+          { id: 'reply-1', kind: 'reply', title: '', content: 'first answer' },
+          { id: 'user-2', kind: 'user', title: '', content: 'second question' },
+          { id: 'reply-2', kind: 'reply', title: '', content: 'second answer' },
+        ],
+      },
+      attachTo: document.body,
+    })
+
+    const body = wrapper.find('.el-scrollbar__wrap').element as HTMLDivElement
+    Object.defineProperty(body, 'clientHeight', { configurable: true, value: 100 })
+    Object.defineProperty(body, 'scrollHeight', { configurable: true, value: 400 })
+
+    const articles = wrapper.findAll('.trace-block')
+    Object.defineProperty(articles[0].element, 'offsetTop', { configurable: true, value: 20 })
+    Object.defineProperty(articles[2].element, 'offsetTop', { configurable: true, value: 180 })
+
+    await nextTick()
+    await flushPromises()
+
+    const nodes = wrapper.findAll('.turn-nav-node')
+    expect(nodes).toHaveLength(2)
+    expect(nodes[0].attributes('title')).toBe('first question with enough detail to summarize')
+    expect(nodes[1].attributes('title')).toBe('second question')
+
+    await nodes[1].trigger('click')
+    await nextTick()
+    await flushPromises()
+
+    expect(body.scrollTop).toBe(180)
+    expect(wrapper.findAll('.turn-nav-node')[1].classes()).toContain('active')
+    wrapper.unmount()
+  })
+
   it('renders thinking and grouped tools collapsed by default', () => {
     const wrapper = mount(MessageList, {
       props: {
@@ -1203,6 +1282,35 @@ describe('MessageList', () => {
 
     expect(wrapper.find('.message-attachment-thumbnail').exists()).toBe(true)
     expect(wrapper.text()).toContain('image.png')
+  })
+
+  it('hides generated reply image attachment names and prompt previews', () => {
+    const wrapper = mount(MessageList, {
+      props: {
+        loading: false,
+        entries: [
+          {
+            id: 'reply-generated-image',
+            kind: 'reply',
+            title: '',
+            attachments: [
+              {
+                id: 'att_generated',
+                file_name: 'generated-prompt-file-name.png',
+                mime_type: 'image/png',
+                kind: 'image',
+                status: 'sent',
+                preview_text: 'a long revised generation prompt',
+              },
+            ],
+          },
+        ],
+      },
+    })
+
+    expect(wrapper.find('.message-attachment-thumbnail').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('generated-prompt-file-name.png')
+    expect(wrapper.text()).not.toContain('a long revised generation prompt')
   })
 
   it('renders image partial preview for reply entries', () => {

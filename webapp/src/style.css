@@ -1586,6 +1586,45 @@ p {
   display: block;
 }
 
+.turn-nav {
+  position: absolute;
+  top: 50%;
+  right: 0.75rem;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.38rem;
+  transform: translateY(-50%);
+}
+
+.turn-nav-node {
+  width: 1.35rem;
+  height: 1.35rem;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--app-border-subtle);
+  border-radius: 999px;
+  background: var(--app-surface-strong);
+  color: var(--app-text-muted);
+  box-shadow: var(--app-shadow-control);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.68rem;
+  line-height: 1;
+  padding: 0;
+}
+
+.turn-nav-node:hover,
+.turn-nav-node.active {
+  border-color: var(--app-border-hover);
+  color: var(--app-accent-deep);
+  background: var(--app-active-bg);
+}
+
+.turn-nav-node.active {
+  font-weight: 700;
+}
+
 .messages-generating-indicator {
   width: min(920px, 100%);
   margin: 0 auto;

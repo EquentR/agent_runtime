@@ -14,10 +14,12 @@ const props = withDefaults(defineProps<{
   loading: boolean
   entries: TranscriptEntry[]
   showThinkingAndTools?: boolean
+  scrollToBottomSignal?: number
   approvalDecisionStateById?: Record<string, { pending: boolean; decision: 'approve' | 'reject' }>
   questionResponseStateById?: Record<string, { pending: boolean }>
 }>(), {
   showThinkingAndTools: true,
+  scrollToBottomSignal: 0,
 })
 
 const emit = defineEmits<{
@@ -277,6 +279,7 @@ const messagesScrollbar = ref<ScrollbarLike | null>(null)
 const copyToastVisible = ref(false)
 const copyToastMessage = ref('')
 const copyToastVariant = ref<'success' | 'error'>('success')
+const activeTurnId = ref('')
 let copyToastTimer: ReturnType<typeof setTimeout> | null = null
 const bottomOffsetThreshold = 24
 const stickToBottom = ref(true)
@@ -382,6 +385,7 @@ function handleScroll() {
   }
 
   stickToBottom.value = isNearBottom(body)
+  updateActiveTurnFromScroll()
 }
 
 function jumpToBottom() {
@@ -409,7 +413,84 @@ watch(() => props.entries, (nextEntries, previousEntries) => {
   void scrollToBottom(forceScroll)
 }, { deep: true, flush: 'post' })
 
+watch(() => props.scrollToBottomSignal, (nextSignal, previousSignal) => {
+  if (nextSignal === previousSignal) {
+    return
+  }
+  stickToBottom.value = true
+  void scrollToBottom(true)
+}, { flush: 'post' })
+
 const showJumpButton = computed(() => normalizedEntries.value.length > 0 && !stickToBottom.value)
+
+function summarizeTurn(content: string | undefined) {
+  const summary = (content ?? '').replace(/\s+/g, ' ').trim()
+  if (summary.length <= 60) {
+    return summary || '空消息'
+  }
+  return `${summary.slice(0, 57)}...`
+}
+
+const turnNavigationItems = computed(() =>
+  normalizedEntries.value
+    .filter((entry) => entry.kind === 'user')
+    .map((entry, index) => ({
+      id: entry.id,
+      label: String(index + 1),
+      summary: summarizeTurn(entry.content),
+    })),
+)
+
+watch(turnNavigationItems, (items) => {
+  if (items.length === 0) {
+    activeTurnId.value = ''
+    return
+  }
+  if (!items.some((item) => item.id === activeTurnId.value)) {
+    activeTurnId.value = items[0].id
+  }
+}, { immediate: true })
+
+function entryElement(entryId: string) {
+  const root = messagesScrollbar.value?.$el
+  if (!(root instanceof HTMLElement)) {
+    return null
+  }
+  return Array.from(root.querySelectorAll<HTMLElement>('[data-entry-id]')).find((element) => element.dataset.entryId === entryId) ?? null
+}
+
+function updateActiveTurnFromScroll() {
+  const body = messagesBodyElement()
+  if (!body || turnNavigationItems.value.length === 0) {
+    return
+  }
+
+  let currentId = turnNavigationItems.value[0].id
+  const scrollLine = body.scrollTop + 8
+  for (const item of turnNavigationItems.value) {
+    const element = entryElement(item.id)
+    if (!element) {
+      continue
+    }
+    if (element.offsetTop <= scrollLine) {
+      currentId = item.id
+    }
+  }
+  activeTurnId.value = currentId
+}
+
+function scrollToTurn(entryId: string) {
+  const body = messagesBodyElement()
+  const element = entryElement(entryId)
+  if (!body || !element) {
+    return
+  }
+  const targetTop = Math.min(element.offsetTop, maxScrollTop(body))
+  messagesScrollbar.value?.setScrollTop?.(targetTop)
+  body.scrollTop = targetTop
+  stickToBottom.value = isNearBottom(body)
+  activeTurnId.value = entryId
+}
 
 function detailSections(entry: TranscriptEntry): TranscriptEntryDetail[] {
   return entry.details ?? []
@@ -505,6 +586,10 @@ function isImageAttachment(attachment: AttachmentRef) {
   return attachment.mime_type.startsWith('image/')
 }
 
+function isGeneratedReplyImageAttachment(entry: TranscriptEntry, attachment: AttachmentRef) {
+  return entry.kind === 'reply' && isImageAttachment(attachment) && attachment.kind === 'image'
+}
+
 function isUnavailableAttachment(attachment: AttachmentRef) {
   return attachment.status === 'expired' || attachment.status === 'deleted'
 }
@@ -591,6 +676,7 @@ function showCopyToast(message: string, variant: 'success' | 'error') {
           v-for="entry in normalizedEntries"
           :key="entry.id"
           class="trace-block"
+          :data-entry-id="entry.id"
           :class="[
             entry.kind,
             {
@@ -746,7 +832,7 @@ function showCopyToast(message: string, variant: 'success' | 'error') {
                     :src="attachmentHref(attachment)"
                     :alt="attachment.file_name"
                   />
-                  <div class="message-attachment-meta">
+                  <div v-if="!isGeneratedReplyImageAttachment(entry, attachment)" class="message-attachment-meta">
                     <p class="message-attachment-name">{{ attachment.file_name }}</p>
                     <p class="message-attachment-status">{{ attachmentStatusLabel(attachment) }}</p>
                   </div>
@@ -891,6 +977,21 @@ function showCopyToast(message: string, variant: 'success' | 'error') {
         </div>
       </div>
     </el-scrollbar>
+
+    <nav v-if="turnNavigationItems.length > 1" class="turn-nav" aria-label="对话轮次导航">
+      <button
+        v-for="item in turnNavigationItems"
+        :key="item.id"
+        class="turn-nav-node"
+        :class="{ active: item.id === activeTurnId }"
+        type="button"
+        :title="item.summary"
+        :aria-label="`跳转到第 ${item.label} 轮：${item.summary}`"
+        @click="scrollToTurn(item.id)"
+      >
+        <span>{{ item.label }}</span>
+      </button>
+    </nav>
 
     <button
       v-if="showJumpButton"

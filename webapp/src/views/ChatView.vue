@@ -30,6 +30,7 @@ import {
   findRunningTaskByConversation,
   respondTaskInteraction,
   streamRunTask,
+  waitForRunTask,
   TASK_STREAM_ABORTED_MESSAGE,
 } from '../lib/api'
 import { clearChatState, loadChatState, saveChatState, scheduleChatStateSave } from '../lib/chat-state'
@@ -123,11 +124,16 @@ const modelMenuRef = ref<HTMLElement | null>(null)
 const contextStatsOpen = ref(false)
 const contextStatsRef = ref<HTMLElement | null>(null)
 const composerRef = ref<InstanceType<typeof MessageComposer> | null>(null)
+const messageListScrollSignal = ref(0)
 const showThinkingAndTools = ref(true)
 const workspaceMergeActionPending = ref('')
 const initialized = ref(false)
 let activeStreamAbortController: AbortController | null = null
 let activeStreamingTaskId = ''
+let activeStreamRetryTimer: ReturnType<typeof setTimeout> | null = null
+let activeStreamSessionId = 0
+const STREAM_RETRY_INITIAL_DELAY_MS = 800
+const STREAM_RETRY_MAX_DELAY_MS = 5000
 
 const isAdmin = computed(() => getSessionRole() === 'admin')
 const routeConversationId = computed(() => (typeof route.params.conversationId === 'string' ? route.params.conversationId : ''))
@@ -194,6 +200,9 @@ const currentConversationEntries = computed(() => {
 })
 const visibleConversationEntries = computed(() => currentConversationEntries.value.filter((entry) => !entry.memory_context_state))
 const showNoModelEmpty = computed(() => noUsableModels.value && visibleConversationEntries.value.length === 0)
+const showComposerWelcome = computed(
+  () => visibleConversationEntries.value.length === 0 && !noUsableModels.value && !messagesLoading.value && !currentConversationBusy.value,
+)
 const topbarStatusLabel = computed(() => (messagesLoading.value || currentConversationBusy.value ? '同步中' : '就绪'))
 const topbarStatusClass = computed(() => ({
   'status-pill': true,
@@ -597,7 +606,7 @@ async function loadCatalog() {
   try {
     modelCatalog.value = await fetchModelCatalog()
     applySelection(selectedProviderId.value || modelCatalog.value.default_provider_id, selectedModelId.value || modelCatalog.value.default_model_id)
-  } catch (error) {
+  } catch (error: any) {
     applyErrorState(error, '加载模型目录失败')
   } finally {
     catalogLoading.value = false
@@ -746,6 +755,9 @@ async function resumeStreamForConversation(conversationId: string) {
 
   const savedTaskId = activeTaskIdByConversation.value[conversationId] ?? ''
   if (savedTaskId) {
+    if (activeStreamingTaskId === savedTaskId) {
+      return
+    }
     try {
       const task = await fetchTaskDetails(savedTaskId)
       const taskConversationId = resolveTaskConversationId(task)
@@ -830,6 +842,199 @@ function stopActiveStream() {
   activeStreamAbortController?.abort()
   activeStreamAbortController = null
   activeStreamingTaskId = ''
+  activeStreamSessionId += 1
+  if (activeStreamRetryTimer) {
+    clearTimeout(activeStreamRetryTimer)
+    activeStreamRetryTimer = null
+  }
+}
+
+function finishActiveStream(taskId: string) {
+  if (activeStreamRetryTimer) {
+    clearTimeout(activeStreamRetryTimer)
+    activeStreamRetryTimer = null
+  }
+  if (!taskId || activeStreamingTaskId === taskId) {
+    activeStreamingTaskId = ''
+  }
+}
+
+async function finishTaskStreamAfterDisconnect(task: TaskDetails, fallbackConversationId: string, taskId: string) {
+  const taskConversationId = resolveTaskConversationId(task) || fallbackConversationId
+  syncWorkspaceMergeStateFromTask(task, taskConversationId)
+
+  if (task.status === 'cancelled' || isTaskPendingWorkspaceMerge(task)) {
+    clearTaskStateForConversation(taskConversationId)
+    finishActiveStream(taskId)
+    return
+  }
+
+  if (task.status === 'failed') {
+    const taskError =
+      task.error && typeof task.error === 'object'
+        ? String((task.error as Record<string, unknown>).message ?? '')
+        : String(task.error ?? 'Task failed')
+    const currentEntries = currentConversationContextEntries(taskConversationId)
+    const nextEntries = updateTranscriptFromStreamEvent(currentEntries, {
+      type: 'task.failed',
+      payload: { error: taskError },
+    })
+    applyEntriesForConversation(taskConversationId, nextEntries)
+    clearTaskStateForConversation(taskConversationId)
+    finishActiveStream(taskId)
+    return
+  }
+
+  if (task.status === 'succeeded') {
+    const result = task.result || task.result_json
+    const finalResult = result ?? await waitForRunTask(taskId)
+    await completeTaskConversation(taskConversationId, taskId, finalResult)
+    finishActiveStream(taskId)
+    return
+  }
+
+  finishActiveStream(taskId)
+}
+
+function waitForDelay(ms: number) {
+  return new Promise<void>((resolve) => {
+    activeStreamRetryTimer = setTimeout(() => {
+      activeStreamRetryTimer = null
+      resolve()
+    }, ms)
+  })
+}
+
+async function retryTaskStream(
+  taskId: string,
+  conversationId: string,
+  afterSeq: number,
+  sessionId: number,
+  attempt = 1,
+) {
+  const delayMs = Math.min(STREAM_RETRY_INITIAL_DELAY_MS * (2 ** Math.max(attempt - 2, 0)), STREAM_RETRY_MAX_DELAY_MS)
+  await waitForDelay(delayMs)
+  if (sessionId !== activeStreamSessionId || activeStreamingTaskId !== taskId) {
+    return
+  }
+  await connectTaskStream(taskId, conversationId, afterSeq, sessionId, attempt)
+}
+
+async function connectTaskStream(
+  taskId: string,
+  conversationId: string,
+  afterSeq: number,
+  sessionId: number,
+  attempt: number,
+) {
+  if (sessionId !== activeStreamSessionId || activeStreamingTaskId !== taskId) {
+    return
+  }
+
+  const abortController = activeStreamAbortController
+  if (!abortController) {
+    return
+  }
+
+  let streamConversationId = conversationId || activeConversationId.value
+  let firstVisibleChunkSeen = false
+
+  try {
+    const result = await streamRunTask(
+      taskId,
+      () => {
+        void 0
+      },
+      (event) => {
+        const eventConversationId =
+          (typeof event.payload?.conversation_id === 'string' ? event.payload.conversation_id : '') || streamConversationId || conversationId
+        if (eventConversationId && !streamConversationId) {
+          streamConversationId = eventConversationId
+        }
+
+        const currentSeq = taskEventSeqForStream(eventConversationId, taskId)
+        const nextSeq = Math.max(currentSeq, event.seq ?? 0)
+        setTaskStateForConversation(eventConversationId, taskId, nextSeq)
+        const currentEntries = currentConversationContextEntries(eventConversationId)
+        const nextEntries = updateTranscriptFromStreamEvent(currentEntries, event)
+        applyEntriesForConversation(eventConversationId, nextEntries)
+
+        const isVisibleTextChunk =
+          !firstVisibleChunkSeen &&
+          !!eventConversationId &&
+          event.type === 'log.message' &&
+          typeof event.payload?.Kind === 'string' &&
+          event.payload.Kind === 'text_delta' &&
+          typeof event.payload?.Text === 'string' &&
+          event.payload.Text.length > 0
+        if (isVisibleTextChunk) {
+          firstVisibleChunkSeen = true
+          void loadConversations(eventConversationId)
+        }
+      },
+      { signal: abortController.signal, afterSeq },
+    )
+
+    streamConversationId = result.conversation_id || streamConversationId
+    await completeTaskConversation(streamConversationId, taskId, result)
+    finishActiveStream(taskId)
+    return
+  } catch (error: any) {
+    if (error instanceof Error && error.message === TASK_STREAM_ABORTED_MESSAGE) {
+      finishActiveStream(taskId)
+      return
+    }
+
+    const workspaceAction = workspaceErrorActionFromError(error)
+    if (workspaceAction) {
+      const failedConversationId = streamConversationId || conversationId
+      const nextEntries = updateTranscriptFromStreamEvent(currentConversationContextEntries(failedConversationId), {
+        type: 'task.failed',
+        payload: { error: workspaceAction.message || error.message },
+      })
+      applyEntriesForConversation(failedConversationId, nextEntries)
+      clearTaskStateForConversation(failedConversationId)
+      applyErrorState(error, '发送消息失败')
+      finishActiveStream(taskId)
+      return
+    }
+
+    let task: TaskDetails | null = null
+    try {
+      task = await fetchTaskDetails(taskId)
+    } catch {
+      task = null
+    }
+
+    if (!task) {
+      if (attempt >= 6) {
+        finishActiveStream(taskId)
+        return
+      }
+      const retryConversationId = streamConversationId || conversationId || activeConversationId.value
+      const retryAfterSeq = taskEventSeqForStream(retryConversationId, taskId)
+      void retryTaskStream(taskId, retryConversationId, retryAfterSeq, sessionId, attempt + 1)
+      return
+    }
+
+    const taskConversationId = resolveTaskConversationId(task) || streamConversationId || conversationId
+    syncWorkspaceMergeStateFromTask(task, taskConversationId)
+
+    if (!isTaskActive(task)) {
+      await finishTaskStreamAfterDisconnect(task, taskConversationId, taskId)
+      return
+    }
+
+    const currentSeq = taskEventSeqForStream(taskConversationId, taskId)
+    setTaskStateForConversation(taskConversationId, taskId, currentSeq)
+
+    if (attempt >= 6) {
+      finishActiveStream(taskId)
+      return
+    }
+
+    void retryTaskStream(taskId, taskConversationId, currentSeq, sessionId, attempt + 1)
+  }
 }
 
 async function completeTaskConversation(conversationId: string, taskId: string, result: RunTaskResult) {
@@ -884,105 +1089,12 @@ async function attachTaskStream(taskId: string, conversationId = '') {
   }
 
   stopActiveStream()
-  const abortController = new AbortController()
-  activeStreamAbortController = abortController
-  activeStreamingTaskId = taskId
   const initialConversationId = conversationId || activeConversationId.value
   const initialAfterSeq = taskEventSeqForStream(initialConversationId, taskId)
+  activeStreamAbortController = new AbortController()
+  activeStreamingTaskId = taskId
   setTaskStateForConversation(initialConversationId, taskId, initialAfterSeq)
-
-  let streamConversationId = initialConversationId
-  let firstVisibleChunkSeen = false
-
-  try {
-    const result = await streamRunTask(
-      taskId,
-      () => {
-        void 0
-      },
-      (event) => {
-        const eventConversationId =
-          (typeof event.payload?.conversation_id === 'string' ? event.payload.conversation_id : '') || streamConversationId || initialConversationId
-        if (eventConversationId && !streamConversationId) {
-          streamConversationId = eventConversationId
-        }
-
-        const currentSeq = taskEventSeqForStream(eventConversationId, taskId)
-        const nextSeq = Math.max(currentSeq, event.seq ?? 0)
-        setTaskStateForConversation(eventConversationId, taskId, nextSeq)
-        const currentEntries = currentConversationContextEntries(eventConversationId)
-        const nextEntries = updateTranscriptFromStreamEvent(currentEntries, event)
-        applyEntriesForConversation(eventConversationId, nextEntries)
-
-        const isVisibleTextChunk =
-          !firstVisibleChunkSeen &&
-          !!eventConversationId &&
-          event.type === 'log.message' &&
-          typeof event.payload?.Kind === 'string' &&
-          event.payload.Kind === 'text_delta' &&
-          typeof event.payload?.Text === 'string' &&
-          event.payload.Text.length > 0
-        if (isVisibleTextChunk) {
-          firstVisibleChunkSeen = true
-          void loadConversations(eventConversationId)
-        }
-      },
-      { signal: abortController.signal, afterSeq: initialAfterSeq },
-    )
-
-    streamConversationId = result.conversation_id || streamConversationId
-    await completeTaskConversation(streamConversationId, taskId, result)
-  } catch (error) {
-    if (error instanceof Error && error.message === TASK_STREAM_ABORTED_MESSAGE) {
-      return
-    }
-
-    const taskError = error instanceof Error ? error.message : '发送消息失败'
-    try {
-      const task = await fetchTaskDetails(taskId)
-      if (!isTaskActive(task)) {
-        const taskConversationId = resolveTaskConversationId(task) || streamConversationId || initialConversationId
-        syncWorkspaceMergeStateFromTask(task, taskConversationId)
-        if (task.status === 'cancelled') {
-          clearTaskStateForConversation(taskConversationId)
-          return
-        }
-        if (isTaskPendingWorkspaceMerge(task)) {
-          clearTaskStateForConversation(taskConversationId)
-          return
-        }
-        if (workspaceErrorActionFromError(error) && taskConversationId === activeConversationId.value) {
-          applyErrorState(error, '发送消息失败')
-        }
-        const currentEntries = currentConversationContextEntries(taskConversationId)
-        const nextEntries = updateTranscriptFromStreamEvent(currentEntries, {
-          type: 'task.failed',
-          payload: { error: taskError },
-        })
-        applyEntriesForConversation(taskConversationId, nextEntries)
-        clearTaskStateForConversation(taskConversationId)
-      }
-    } catch {
-      if (taskError !== 'Task event stream disconnected') {
-        if (workspaceErrorActionFromError(error) && streamConversationId === activeConversationId.value) {
-          applyErrorState(error, '发送消息失败')
-        }
-        const currentEntries = currentConversationContextEntries(streamConversationId)
-        const nextEntries = updateTranscriptFromStreamEvent(currentEntries, {
-          type: 'task.failed',
-          payload: { error: taskError },
-        })
-        applyEntriesForConversation(streamConversationId, nextEntries)
-      }
-    }
-  } finally {
-    if (activeStreamAbortController === abortController) {
-      activeStreamAbortController = null
-    }
-    if (activeStreamingTaskId === taskId) {
-      activeStreamingTaskId = ''
-    }
-  }
+  await connectTaskStream(taskId, initialConversationId, initialAfterSeq, activeStreamSessionId, 1)
 }
 
 async function resumeTask(task: TaskDetails | null | undefined, conversationId = '') {
@@ -1219,6 +1331,7 @@ async function handleSend(message: string) {
     ...(sentAttachments.length > 0 ? { attachments: sentAttachments } : {}),
   }]
   entries.value = nextEntries
+  messageListScrollSignal.value += 1
   if (previousConversationId) {
     setDraftEntries(previousConversationId, nextEntries)
   }
@@ -1703,6 +1816,7 @@ onBeforeUnmount(() => {
           :loading="messagesLoading || currentConversationBusy"
           :entries="visibleConversationEntries"
           :show-thinking-and-tools="showThinkingAndTools"
+          :scroll-to-bottom-signal="messageListScrollSignal"
           :approval-decision-state-by-id="approvalDecisionStateById"
           :question-response-state-by-id="questionResponseStateById"
           @approval-decision="handleApprovalDecision"
@@ -1710,7 +1824,7 @@ onBeforeUnmount(() => {
         />
       </div>
       <div class="chat-composer-dock">
-        <p v-if="!noUsableModels" class="composer-welcome">请尽情使唤 ~</p>
+        <p v-if="showComposerWelcome" class="composer-welcome">请尽情使唤 ~</p>
         <MessageComposer
           ref="composerRef"
           :disabled="composerDisabled"

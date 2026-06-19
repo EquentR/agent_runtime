@@ -4,6 +4,7 @@ import { resolve } from 'node:path'
 import ElementPlus from 'element-plus'
 import { config, flushPromises, mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { nextTick } from 'vue'
 import { createRouter, createMemoryHistory } from 'vue-router'
 
 const chatStyles = readFileSync(resolve(process.cwd(), 'src/style.css'), 'utf8')
@@ -513,6 +514,39 @@ describe('ChatView', () => {
     expect(wrapper.find('[data-no-model-empty]').exists()).toBe(false)
     expect(wrapper.text()).toContain('historical answer')
     expect(wrapper.get('.composer-submit').attributes()).toHaveProperty('disabled')
+  })
+
+  it('does not render the composer welcome placeholder when messages are visible', async () => {
+    api.fetchConversations.mockResolvedValue([
+      {
+        id: 'conv_1',
+        title: 'Saved chat',
+        last_message: 'historical answer',
+        message_count: 1,
+        provider_id: 'openai',
+        model_id: 'gpt-5.4',
+        created_by: 'demo-user',
+        created_at: '',
+        updated_at: '',
+      },
+    ])
+    api.fetchConversationMessages.mockResolvedValue([{ role: 'assistant', content: 'historical answer' }])
+
+    const router = makeRouter()
+    await router.push('/chat/conv_1')
+    await router.isReady()
+
+    const wrapper = mount(ChatView, {
+      global: {
+        plugins: [router],
+      },
+    })
+
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.text()).toContain('historical answer')
+    expect(wrapper.find('.composer-welcome').exists()).toBe(false)
   })
 
   it('shows admin links only inside the user menu', async () => {
@@ -1375,6 +1409,105 @@ describe('ChatView', () => {
 
     runningStream.resolve({ conversation_id: 'conv_new' })
     await flushPromises()
+  })
+
+  it('increments the message list bottom-scroll signal after sending a message', async () => {
+    const runningStream = createDeferred<{ conversation_id: string }>()
+    api.fetchConversations.mockResolvedValue([])
+    api.createRunTask.mockResolvedValue({ id: 'task_1', input: { conversation_id: 'conv_new' } })
+    api.streamRunTask.mockImplementation(async () => runningStream.promise)
+
+    const router = makeRouter()
+    await router.push('/chat')
+    await router.isReady()
+
+    const wrapper = mount(ChatView, {
+      global: {
+        plugins: [router],
+      },
+    })
+
+    await flushPromises()
+    await nextTick()
+    const beforeSignal = wrapper.findComponent(MessageList).props('scrollToBottomSignal')
+
+    await wrapper.find('textarea').setValue('hello')
+    await wrapper.find('form').trigger('submit.prevent')
+    await flushPromises()
+    await nextTick()
+
+    const afterSignal = wrapper.findComponent(MessageList).props('scrollToBottomSignal')
+    expect(afterSignal).toBe((beforeSignal as number) + 1)
+
+    runningStream.resolve({ conversation_id: 'conv_new' })
+    await flushPromises()
+  })
+
+  it('reconnects SSE with the latest event sequence when the stream disconnects but the task is still running', async () => {
+    vi.useFakeTimers()
+    const streamEventListeners: Array<(event: any) => void> = []
+    const runningTaskSnapshots: Array<{ id: string; status: string; input: { conversation_id: string } }> = []
+    api.fetchConversations.mockResolvedValue([])
+    api.createRunTask.mockResolvedValue({ id: 'task_1', input: { conversation_id: 'conv_new' } })
+    api.fetchTaskDetails.mockImplementation(async (taskId: string) => {
+      runningTaskSnapshots.push({ id: taskId, status: 'running', input: { conversation_id: 'conv_new' } })
+      return {
+        id: taskId,
+        status: 'running',
+        input: { conversation_id: 'conv_new' },
+      }
+    })
+    api.streamRunTask
+      .mockImplementationOnce(async (_taskId: string, _onTextDelta: () => void, onEvent: (event: any) => void) => {
+        streamEventListeners.push(onEvent)
+        onEvent({
+          task_id: 'task_1',
+          seq: 7,
+          type: 'log.message',
+          payload: { conversation_id: 'conv_new', Kind: 'text_delta', Text: 'partial before disconnect' },
+        })
+        throw new Error('Task event stream disconnected')
+      })
+      .mockImplementationOnce(async (_taskId: string, _onTextDelta: () => void, onEvent: (event: any) => void) => {
+        streamEventListeners.push(onEvent)
+        return { conversation_id: 'conv_new' }
+      })
+
+    const router = makeRouter()
+    await router.push('/chat')
+    await router.isReady()
+
+    const wrapper = mount(ChatView, {
+      global: {
+        plugins: [router],
+      },
+    })
+
+    await flushPromises()
+    await wrapper.find('textarea').setValue('hello')
+    await wrapper.find('form').trigger('submit.prevent')
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(800)
+    await flushPromises()
+
+    expect(api.streamRunTask).toHaveBeenCalledTimes(2)
+    expect(api.streamRunTask).toHaveBeenNthCalledWith(
+      1,
+      'task_1',
+      expect.any(Function),
+      expect.any(Function),
+      expect.objectContaining({ afterSeq: 0, signal: expect.any(AbortSignal) }),
+    )
+    expect(api.streamRunTask).toHaveBeenNthCalledWith(
+      2,
+      'task_1',
+      expect.any(Function),
+      expect.any(Function),
+      expect.objectContaining({ afterSeq: 7, signal: expect.any(AbortSignal) }),
+    )
+    expect(runningTaskSnapshots[0]).toEqual({ id: 'task_1', status: 'running', input: { conversation_id: 'conv_new' } })
+    expect(streamEventListeners).toHaveLength(2)
+    vi.useRealTimers()
   })
 
   it('does not show a separate approval entry beside the composer even when waiting for approval', async () => {
