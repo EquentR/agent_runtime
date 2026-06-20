@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	coretools "github.com/EquentR/agent_runtime/core/tools"
+	"github.com/EquentR/agent_runtime/core/workspaces"
 )
 
 func Register(registry *coretools.Registry, options Options) error {
@@ -16,7 +17,11 @@ func Register(registry *coretools.Registry, options Options) error {
 		return err
 	}
 
-	return registry.Register(
+	return registry.Register(visibleBuiltinTools(env)...)
+}
+
+func visibleBuiltinTools(env runtimeEnv) []coretools.Tool {
+	tools := []coretools.Tool{
 		newListFilesTool(env),
 		newReadFileTool(env),
 		newWriteFileTool(env),
@@ -36,5 +41,25 @@ func Register(registry *coretools.Registry, options Options) error {
 		newWebSearchTool(env),
 		newEditImageTool(env),
 		newGenerateImageTool(env),
-	)
+	}
+	if env.workspaceMode != workspaces.ModeReadonly {
+		return tools
+	}
+
+	visible := make([]coretools.Tool, 0, len(tools))
+	for _, tool := range tools {
+		if readonlyVisibleTool(tool.Name) {
+			visible = append(visible, tool)
+		}
+	}
+	return visible
+}
+
+func readonlyVisibleTool(name string) bool {
+	switch name {
+	case "write_file", "delete_file", "move_file", "copy_file":
+		return false
+	default:
+		return true
+	}
 }

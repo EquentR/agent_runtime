@@ -511,6 +511,7 @@ export type TaskSuspendReason = 'waiting_for_tool_approval' | 'waiting_for_inter
 export type WorkspaceMode = 'mutable' | 'readonly'
 export type WorkspaceState = 'pending_merge' | 'merged' | 'discarded'
 export type TaskWorkspaceStateStatus = 'active' | WorkspaceState | 'completed'
+export type WorkspaceTreeNodeType = 'file' | 'directory'
 
 export interface TaskWorkspaceState {
   task_id: string
@@ -527,6 +528,45 @@ export interface TaskWorkspaceState {
   merged_at?: string
   discarded_at?: string
   error_message?: string
+}
+
+export interface WorkspaceTreeNode {
+  path: string
+  name: string
+  type: WorkspaceTreeNodeType
+  binary?: boolean
+  size?: number
+  children?: WorkspaceTreeNode[]
+}
+
+export interface WorkspaceSnapshot {
+  task_id: string
+  conversation_id?: string
+  home_root: string
+  task_root: string
+  path?: string
+  tree: WorkspaceTreeNode[]
+}
+
+export interface WorkspaceFileDetail {
+  task_id: string
+  conversation_id?: string
+  path: string
+  name: string
+  type: WorkspaceTreeNodeType
+  content?: string
+  binary?: boolean
+  size?: number
+  mime_type?: string
+}
+
+export interface WorkspaceDiffResult {
+  task_id: string
+  conversation_id?: string
+  path: string
+  diff: string
+  truncated?: boolean
+  binary?: boolean
 }
 
 export interface TaskSnapshot {

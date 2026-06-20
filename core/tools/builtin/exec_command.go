@@ -14,15 +14,18 @@ import (
 	corelog "github.com/EquentR/agent_runtime/core/log"
 	coretools "github.com/EquentR/agent_runtime/core/tools"
 	"github.com/EquentR/agent_runtime/core/types"
+	"github.com/EquentR/agent_runtime/core/workspaces"
 )
 
 func newExecCommandTool(env runtimeEnv) coretools.Tool {
 	return coretools.Tool{
-		Name:              "exec_command",
-		Description:       "Execute a command in the workspace",
-		Source:            "builtin",
-		ApprovalMode:      types.ToolApprovalModeConditional,
-		ApprovalEvaluator: evaluateExecCommandApproval,
+		Name:         "exec_command",
+		Description:  "Execute a command in the workspace",
+		Source:       "builtin",
+		ApprovalMode: types.ToolApprovalModeConditional,
+		ApprovalEvaluator: func(arguments map[string]any) coretools.ApprovalRequirement {
+			return evaluateExecCommandApproval(context.Background(), env.workspaceMode, arguments, env.commandJudge)
+		},
 		Parameters: objectSchema([]string{"command"}, map[string]types.SchemaProperty{
 			"command":           {Type: "string", Description: "Command to execute"},
 			"args":              stringArrayProperty("Optional command arguments"),
@@ -130,7 +133,7 @@ func newExecCommandTool(env runtimeEnv) coretools.Tool {
 	}
 }
 
-func evaluateExecCommandApproval(arguments map[string]any) coretools.ApprovalRequirement {
+func evaluateExecCommandApproval(ctx context.Context, mode workspaces.Mode, arguments map[string]any, judge CommandJudge) coretools.ApprovalRequirement {
 	command, _ := arguments["command"].(string)
 	command = strings.TrimSpace(command)
 	if command == "" {
@@ -145,6 +148,15 @@ func evaluateExecCommandApproval(arguments map[string]any) coretools.ApprovalReq
 	tokens := unwrapCommandTokens(command, args)
 	if len(tokens) == 0 {
 		return coretools.ApprovalRequirement{}
+	}
+
+	judgeCommand := commandLine
+	if wrappedCommand, ok := shellWrappedCommand(command, args); ok {
+		judgeCommand = wrappedCommand
+	}
+
+	if requirement := evaluateExecCommandWithJudge(ctx, mode, arguments, judge, commandLine, judgeCommand); requirement.Decision != "" || requirement.Required || requirement.Reason != "" {
+		return requirement
 	}
 
 	head := tokens[0]
@@ -173,6 +185,106 @@ func evaluateExecCommandApproval(arguments map[string]any) coretools.ApprovalReq
 	default:
 		return coretools.ApprovalRequirement{}
 	}
+}
+
+func evaluateExecCommandWithJudge(ctx context.Context, mode workspaces.Mode, arguments map[string]any, judge CommandJudge, commandLine string, judgeCommand string) coretools.ApprovalRequirement {
+	if judge == nil {
+		return coretools.ApprovalRequirement{}
+	}
+
+	normalizedMode := workspaceModeFromArguments(mode, arguments)
+	result, err := judge.Evaluate(ctx, CommandJudgeRequest{
+		Command:       judgeCommand,
+		Arguments:     cloneApprovalArguments(arguments),
+		WorkspaceMode: normalizedMode,
+		ToolName:      "exec_command",
+	})
+	if err != nil {
+		return coretools.ApprovalRequirement{
+			Decision:         coretools.ApprovalDecisionRequireApproval,
+			Required:         true,
+			ArgumentsSummary: fmt.Sprintf("command=%s", commandLine),
+			RiskLevel:        coretools.RiskLevelMedium,
+			Reason:           fmt.Sprintf("command judge unavailable; human approval required: %s", commandLine),
+		}
+	}
+
+	switch normalizeCommandVerdict(string(result.Verdict)) {
+	case CommandVerdictSafe:
+		return coretools.ApprovalRequirement{
+			Decision:         coretools.ApprovalDecisionAllow,
+			ArgumentsSummary: fmt.Sprintf("command=%s", commandLine),
+			Reason:           strings.TrimSpace(result.Reason),
+		}
+	case CommandVerdictNeutral:
+		if normalizedMode == workspaces.ModeReadonly {
+			return coretools.ApprovalRequirement{
+				Decision:         coretools.ApprovalDecisionRequireApproval,
+				Required:         true,
+				ArgumentsSummary: fmt.Sprintf("command=%s", commandLine),
+				RiskLevel:        coretools.RiskLevelMedium,
+				Reason:           firstNonEmpty(strings.TrimSpace(result.Reason), fmt.Sprintf("command judge marked command neutral in readonly workspace: %s", commandLine)),
+			}
+		}
+		return coretools.ApprovalRequirement{
+			Decision:         coretools.ApprovalDecisionAllow,
+			ArgumentsSummary: fmt.Sprintf("command=%s", commandLine),
+			Reason:           strings.TrimSpace(result.Reason),
+		}
+	case CommandVerdictRisky:
+		if normalizedMode == workspaces.ModeReadonly {
+			return coretools.ApprovalRequirement{
+				Decision:         coretools.ApprovalDecisionBlock,
+				Required:         false,
+				ArgumentsSummary: fmt.Sprintf("command=%s", commandLine),
+				RiskLevel:        coretools.RiskLevelHigh,
+				Reason:           firstNonEmpty(strings.TrimSpace(result.Reason), fmt.Sprintf("command judge marked command risky in readonly workspace: %s", commandLine)),
+			}
+		}
+		return coretools.ApprovalRequirement{
+			Decision:         coretools.ApprovalDecisionRequireApproval,
+			Required:         true,
+			ArgumentsSummary: fmt.Sprintf("command=%s", commandLine),
+			RiskLevel:        coretools.RiskLevelHigh,
+			Reason:           firstNonEmpty(strings.TrimSpace(result.Reason), fmt.Sprintf("command judge marked command risky: %s", commandLine)),
+		}
+	case CommandVerdictUnavailable:
+		fallthrough
+	default:
+		return coretools.ApprovalRequirement{
+			Decision:         coretools.ApprovalDecisionRequireApproval,
+			Required:         true,
+			ArgumentsSummary: fmt.Sprintf("command=%s", commandLine),
+			RiskLevel:        coretools.RiskLevelMedium,
+			Reason:           firstNonEmpty(strings.TrimSpace(result.Reason), fmt.Sprintf("command judge unavailable; human approval required: %s", commandLine)),
+		}
+	}
+}
+
+func workspaceModeFromArguments(fallback workspaces.Mode, arguments map[string]any) workspaces.Mode {
+	raw := strings.TrimSpace(fmt.Sprint(arguments["workspace_mode"]))
+	switch workspaces.Mode(raw) {
+	case workspaces.ModeReadonly:
+		return workspaces.ModeReadonly
+	case workspaces.ModeMutable:
+		return workspaces.ModeMutable
+	default:
+		if fallback == "" {
+			return workspaces.ModeMutable
+		}
+		return fallback
+	}
+}
+
+func cloneApprovalArguments(arguments map[string]any) map[string]any {
+	if len(arguments) == 0 {
+		return nil
+	}
+	cloned := make(map[string]any, len(arguments))
+	for key, value := range arguments {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 func commandTokens(command string, args []string) []string {

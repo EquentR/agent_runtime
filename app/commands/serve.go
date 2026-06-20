@@ -2,10 +2,12 @@ package commands
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/EquentR/agent_runtime/app/config"
@@ -92,8 +94,9 @@ func Serve(c *config.Config, version, commit string) {
 	authRuntime.ModelLogic = modelLogic
 	authRuntime.ModelTester = &modelConnectionTester{clientFactory: buildConfiguredLLMClientFactory(c)}
 	resolver = modelLogic.Resolver()
+	commandJudge := newCommandJudge(resolver, buildConfiguredLLMClientFactory(c))
 	toolRegistryFactory := func(workspaceRoot string) (*coretools.Registry, error) {
-		return newDefaultToolRegistry(workspaceRoot, c.Tools.WebSearch.BuiltinOptions(), c.Tools.ImageGen.BuiltinOptions(), attachmentStore, attachmentStorage, c.Attachments.ResolvedSentRetention())
+		return newDefaultToolRegistryWithJudge(workspaceRoot, c.Tools.WebSearch.BuiltinOptions(), c.Tools.ImageGen.BuiltinOptions(), attachmentStore, attachmentStorage, c.Attachments.ResolvedSentRetention(), commandJudge)
 	}
 	toolRegistry, err := toolRegistryFactory(workspaceRuntime.TemplateRoot)
 	if err != nil {
@@ -519,22 +522,97 @@ func newTaskManager(store *coretasks.Store, approvalStore *approvals.Store, inte
 }
 
 func newDefaultToolRegistry(workspaceRoot string, webSearch builtin.WebSearchOptions, imageGen builtin.ImageGenOptions, attachmentStore *attachments.Store, attachmentStorage attachments.Storage, attachmentSentRetention time.Duration) (*coretools.Registry, error) {
+	return newDefaultToolRegistryWithJudge(workspaceRoot, webSearch, imageGen, attachmentStore, attachmentStorage, attachmentSentRetention, nil)
+}
+
+func newDefaultToolRegistryWithJudge(workspaceRoot string, webSearch builtin.WebSearchOptions, imageGen builtin.ImageGenOptions, attachmentStore *attachments.Store, attachmentStorage attachments.Storage, attachmentSentRetention time.Duration, commandJudge builtin.CommandJudge) (*coretools.Registry, error) {
 	registry := coretools.NewRegistry()
-	if err := builtin.Register(registry, newDefaultBuiltinOptions(workspaceRoot, webSearch, imageGen, attachmentStore, attachmentStorage, attachmentSentRetention)); err != nil {
+	if err := builtin.Register(registry, newDefaultBuiltinOptionsWithJudge(workspaceRoot, webSearch, imageGen, attachmentStore, attachmentStorage, attachmentSentRetention, commandJudge)); err != nil {
 		return nil, err
 	}
 	return registry, nil
 }
 
 func newDefaultBuiltinOptions(workspaceRoot string, webSearch builtin.WebSearchOptions, imageGen builtin.ImageGenOptions, attachmentStore *attachments.Store, attachmentStorage attachments.Storage, attachmentSentRetention time.Duration) builtin.Options {
+	return newDefaultBuiltinOptionsWithJudge(workspaceRoot, webSearch, imageGen, attachmentStore, attachmentStorage, attachmentSentRetention, nil)
+}
+
+func newDefaultBuiltinOptionsWithJudge(workspaceRoot string, webSearch builtin.WebSearchOptions, imageGen builtin.ImageGenOptions, attachmentStore *attachments.Store, attachmentStorage attachments.Storage, attachmentSentRetention time.Duration, commandJudge builtin.CommandJudge) builtin.Options {
 	imageGen.SentRetention = attachmentSentRetention
 	return builtin.Options{
 		WorkspaceRoot:     workspaceRoot,
+		WorkspaceMode:     builtin.WorkspaceModeFromRoot(workspaceRoot),
+		CommandJudge:      commandJudge,
 		WebSearch:         webSearch,
 		ImageGen:          imageGen,
 		AttachmentStore:   attachmentStore,
 		AttachmentStorage: attachmentStorage,
 	}
+}
+
+type configuredCommandJudge struct {
+	resolver     *coreagent.ModelResolver
+	clientFactory coreagent.ClientFactory
+}
+
+func newCommandJudge(resolver *coreagent.ModelResolver, clientFactory coreagent.ClientFactory) builtin.CommandJudge {
+	return &configuredCommandJudge{resolver: resolver, clientFactory: clientFactory}
+}
+
+func (j *configuredCommandJudge) Evaluate(ctx context.Context, request builtin.CommandJudgeRequest) (builtin.CommandJudgeResult, error) {
+	if j == nil || j.resolver == nil || j.clientFactory == nil {
+		return builtin.CommandJudgeResult{Verdict: builtin.CommandVerdictUnavailable, Reason: "command judge is not configured"}, nil
+	}
+	providerID, modelID := j.resolver.DefaultSelection()
+	if strings.TrimSpace(providerID) == "" || strings.TrimSpace(modelID) == "" {
+		return builtin.CommandJudgeResult{Verdict: builtin.CommandVerdictUnavailable, Reason: "command judge model is not configured"}, nil
+	}
+	resolved, err := j.resolver.ResolveContext(ctx, providerID, modelID)
+	if err != nil {
+		return builtin.CommandJudgeResult{Verdict: builtin.CommandVerdictUnavailable, Reason: err.Error()}, nil
+	}
+	client, err := j.clientFactory(resolved.Provider, resolved.Model)
+	if err != nil {
+		return builtin.CommandJudgeResult{Verdict: builtin.CommandVerdictUnavailable, Reason: err.Error()}, nil
+	}
+	payload, err := json.Marshal(map[string]any{
+		"tool_name":      request.ToolName,
+		"workspace_mode": request.WorkspaceMode,
+		"command":        request.Command,
+		"arguments":      request.Arguments,
+	})
+	if err != nil {
+		return builtin.CommandJudgeResult{Verdict: builtin.CommandVerdictUnavailable, Reason: err.Error()}, nil
+	}
+	resp, err := client.Chat(ctx, model.ChatRequest{
+		Model: resolved.Model.ModelID(),
+		Messages: []model.Message{
+			{Role: model.RoleSystem, Content: "Classify the shell command as safe, neutral, risky, or unavailable. Reply with one word."},
+			{Role: model.RoleUser, Content: string(payload)},
+		},
+	})
+	if err != nil {
+		return builtin.CommandJudgeResult{Verdict: builtin.CommandVerdictUnavailable, Reason: err.Error()}, nil
+	}
+	answer := strings.TrimSpace(resp.Message.Content)
+	if answer == "" {
+		answer = strings.TrimSpace(resp.Content)
+	}
+	verdict := builtin.CommandVerdictUnavailable
+	switch strings.ToLower(answer) {
+	case string(builtin.CommandVerdictSafe):
+		verdict = builtin.CommandVerdictSafe
+	case string(builtin.CommandVerdictNeutral):
+		verdict = builtin.CommandVerdictNeutral
+	case string(builtin.CommandVerdictRisky):
+		verdict = builtin.CommandVerdictRisky
+	case string(builtin.CommandVerdictUnavailable):
+		verdict = builtin.CommandVerdictUnavailable
+	}
+	return builtin.CommandJudgeResult{
+		Verdict: verdict,
+		Reason:  answer,
+	}, nil
 }
 
 type taskAuditRecorder struct {

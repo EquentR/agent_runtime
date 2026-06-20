@@ -20,6 +20,7 @@ import (
 	corelog "github.com/EquentR/agent_runtime/core/log"
 	coretools "github.com/EquentR/agent_runtime/core/tools"
 	coretypes "github.com/EquentR/agent_runtime/core/types"
+	"github.com/EquentR/agent_runtime/core/workspaces"
 )
 
 func TestRegisterRegistersPlannedTools(t *testing.T) {
@@ -60,6 +61,32 @@ func TestRegisterRegistersPlannedTools(t *testing.T) {
 
 	if !slices.Equal(got, want) {
 		t.Fatalf("tool names = %#v, want %#v", got, want)
+	}
+}
+
+func TestRegisterReadonlyModeHidesWriteToolsButKeepsAskUserAndImageTools(t *testing.T) {
+	workspace := t.TempDir()
+	registry := coretools.NewRegistry()
+
+	if err := Register(registry, Options{WorkspaceRoot: workspace, WorkspaceMode: workspaces.ModeReadonly}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	names := make([]string, 0, len(registry.List()))
+	for _, definition := range registry.List() {
+		names = append(names, definition.Name)
+	}
+
+	for _, hidden := range []string{"write_file", "delete_file", "move_file", "copy_file"} {
+		if slices.Contains(names, hidden) {
+			t.Fatalf("readonly registry contains %q, want hidden", hidden)
+		}
+	}
+
+	for _, visible := range []string{"ask_user", "using_skills", "exec_command", "generate_image", "edit_image"} {
+		if !slices.Contains(names, visible) {
+			t.Fatalf("readonly registry missing %q", visible)
+		}
 	}
 }
 
@@ -608,8 +635,8 @@ func TestExecCommandTruncatesLargeStdout(t *testing.T) {
 	})
 
 	raw, err := registry.Execute(context.Background(), "exec_command", map[string]any{
-		"command": "python",
-		"args":    []any{"-c", "print('x' * 200)"},
+		"command": os.Args[0],
+		"args":    []any{"-test.run=TestHelperStdoutFlood", "--", "--helper-stdout-flood"},
 	})
 	if err != nil {
 		t.Fatalf("Execute(exec_command) error = %v", err)
@@ -630,7 +657,6 @@ func TestExecCommandTruncatesLargeStdout(t *testing.T) {
 		t.Fatalf("stdout byte counters = %#v, want original > returned", result)
 	}
 }
-
 func TestHTTPRequestTruncatesLargeBody(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, strings.Repeat("abcdef", 100))
@@ -1179,13 +1205,20 @@ func assertBuiltinLogContains(t *testing.T, entries []builtinLogEntry, level str
 	t.Fatalf("log entry not found: level=%s msg=%s %s=%v entries=%#v", level, msg, key, want, entries)
 }
 
+func TestHelperStdoutFlood(t *testing.T) {
+	if len(os.Args) < 2 || os.Args[len(os.Args)-1] != "--helper-stdout-flood" {
+		return
+	}
+	fmt.Fprint(os.Stdout, strings.Repeat("x", 200))
+	os.Exit(0)
+}
+
 func TestHelperProcess(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") != "1" {
 		return
 	}
 	select {}
 }
-
 func newBuiltinRegistry(t *testing.T, options Options) *coretools.Registry {
 	t.Helper()
 	registry := coretools.NewRegistry()

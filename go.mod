@@ -10,6 +10,7 @@ require (
 	github.com/mark3labs/mcp-go v0.45.0
 	github.com/openai/openai-go/v3 v3.29.0
 	github.com/pkoukk/tiktoken-go v0.1.8
+	github.com/pmezard/go-difflib v1.0.0
 	github.com/sashabaranov/go-openai v1.41.2
 	github.com/soulteary/gin-static v0.2.6
 	github.com/swaggo/swag v1.16.6

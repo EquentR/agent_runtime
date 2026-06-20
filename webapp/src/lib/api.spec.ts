@@ -3,14 +3,21 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   ApiError,
   buildRunTaskRequest,
+  buildConversationWorkspaceDownloadUrl,
   cancelTask,
   extractStreamText,
   formatTaskError,
   normalizeAuthUser,
+  normalizeConversationWorkspaceSnapshot,
+  normalizeWorkspaceDiffResult,
+  normalizeWorkspaceFileDetail,
   normalizeToolApproval,
   normalizeConversationMessage,
   normalizeTaskDetails,
   normalizeRunTaskResult,
+  fetchConversationWorkspaceDiff,
+  fetchConversationWorkspaceFile,
+  fetchConversationWorkspaceSnapshot,
   confirmTaskWorkspaceMerge,
   confirmConversationWorkspaceMerge,
   discardTaskWorkspaceChanges,
@@ -1752,6 +1759,163 @@ describe('workspace merge actions', () => {
       task_root: 'data/workspaces/users/42/tasks/task_1',
       discarded_at: '2026-05-24T00:01:00Z',
     })
+  })
+})
+
+describe('workspace browser API helpers', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    vi.stubGlobal('fetch', vi.fn())
+  })
+
+  it('builds encoded workspace download urls', () => {
+    expect(buildConversationWorkspaceDownloadUrl('conv_1', 'docs/a b.md')).toBe(
+      '/api/v1/conversations/conv_1/workspace/download?path=docs%2Fa%20b.md',
+    )
+  })
+
+  it('normalizes workspace snapshot, file, and diff payloads', () => {
+    expect(
+      normalizeConversationWorkspaceSnapshot({
+        task_id: 'task_1',
+        home_root: '/home',
+        task_root: '/task',
+        tree: [
+          {
+            path: 'src',
+            name: 'src',
+            type: 'directory',
+            children: [{ path: 'src/app.ts', name: 'app.ts', type: 'file', binary: true, size: '123' }],
+          },
+        ],
+      } as any),
+    ).toMatchObject({
+      task_id: 'task_1',
+      home_root: '/home',
+      task_root: '/task',
+      tree: [
+        {
+          path: 'src',
+          name: 'src',
+          type: 'directory',
+          children: [
+            {
+              path: 'src/app.ts',
+              name: 'app.ts',
+              type: 'file',
+              binary: true,
+              size: 123,
+            },
+          ],
+        },
+      ],
+    })
+
+    expect(
+      normalizeWorkspaceFileDetail({
+        task_id: 'task_1',
+        path: 'src/app.ts',
+        name: 'app.ts',
+        type: 'file',
+        content: 42,
+        size: '12',
+        binary: 'false',
+      } as any),
+    ).toMatchObject({
+      task_id: 'task_1',
+      path: 'src/app.ts',
+      name: 'app.ts',
+      type: 'file',
+      content: '42',
+      size: 12,
+      binary: false,
+    })
+
+    expect(
+      normalizeWorkspaceDiffResult({
+        task_id: 'task_1',
+        path: 'src/app.ts',
+        diff: 99,
+        truncated: 'true',
+      } as any),
+    ).toMatchObject({
+      task_id: 'task_1',
+      path: 'src/app.ts',
+      diff: '99',
+      truncated: true,
+    })
+  })
+
+  it('fetches workspace snapshot, file, and diff endpoints', async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          code: 200,
+          message: 'OK',
+          data: {
+            task_id: 'task_1',
+            home_root: '/home',
+            task_root: '/task',
+            tree: [{ path: 'README.md', name: 'README.md', type: 'file', binary: false, size: 7 }],
+          },
+          time: '',
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          code: 200,
+          message: 'OK',
+          data: {
+            task_id: 'task_1',
+            path: 'README.md',
+            name: 'README.md',
+            type: 'file',
+            content: '# hello',
+          },
+          time: '',
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          code: 200,
+          message: 'OK',
+          data: {
+            task_id: 'task_1',
+            path: 'README.md',
+            diff: '@@ -1 +1 @@',
+          },
+          time: '',
+        }),
+      } as Response)
+
+    const snapshot = await fetchConversationWorkspaceSnapshot('conv_1', 'docs/a b.md')
+    const file = await fetchConversationWorkspaceFile('conv_1', 'README.md')
+    const diff = await fetchConversationWorkspaceDiff('conv_1', 'README.md')
+
+    expect(snapshot.tree).toHaveLength(1)
+    expect(file.content).toBe('# hello')
+    expect(diff.diff).toBe('@@ -1 +1 @@')
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      '/api/v1/conversations/conv_1/workspace/files?path=docs%2Fa%20b.md',
+      expect.objectContaining({ credentials: 'include' }),
+    )
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      '/api/v1/conversations/conv_1/workspace/file?path=README.md',
+      expect.objectContaining({ credentials: 'include' }),
+    )
+    expect(fetch).toHaveBeenNthCalledWith(
+      3,
+      '/api/v1/conversations/conv_1/workspace/diff?path=README.md',
+      expect.objectContaining({ credentials: 'include' }),
+    )
   })
 })
 

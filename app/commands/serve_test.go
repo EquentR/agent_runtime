@@ -765,6 +765,56 @@ func TestNewDefaultToolRegistryPassesImageGenSentRetention(t *testing.T) {
 	}
 }
 
+func TestNewDefaultToolRegistryInfersWorkspaceModeFromWorkspaceState(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspaceRoot, workspaces.StateFileName), []byte(`{"mode":"readonly"}`), 0o644); err != nil {
+		t.Fatalf("WriteFile(workspace state) error = %v", err)
+	}
+	registry, err := newDefaultToolRegistryWithJudge(workspaceRoot, builtin.WebSearchOptions{}, builtin.ImageGenOptions{}, nil, nil, 0, &serveCommandJudgeStub{result: builtin.CommandJudgeResult{Verdict: builtin.CommandVerdictNeutral}})
+	if err != nil {
+		t.Fatalf("newDefaultToolRegistryWithJudge() error = %v", err)
+	}
+	policy, ok := registry.ApprovalPolicy("exec_command")
+	if !ok {
+		t.Fatal("ApprovalPolicy(exec_command) ok = false, want true")
+	}
+	requirement := policy.Evaluate(map[string]any{"command": "echo", "args": []any{"hi"}})
+	if !requirement.Required {
+		t.Fatal("readonly workspace should require approval for neutral verdict")
+	}
+}
+
+func TestServeCommandJudgeUsesConfiguredModelAndReturnsVerdict(t *testing.T) {
+	resolver := &coreagent.ModelResolver{Providers: []coretypes.LLMProvider{{
+		BaseProvider: coretypes.BaseProvider{Name: "openai"},
+		Models: []coretypes.LLMModel{{
+			BaseModel: coretypes.BaseModel{ID: "gpt-5.4", Name: "GPT 5.4"},
+			Type:      coretypes.LLMTypeOpenAIResponses,
+		}},
+	}}}
+	judge := newCommandJudge(resolver, func(provider *coretypes.LLMProvider, llmModel *coretypes.LLMModel) (model.LlmClient, error) {
+		if provider == nil || provider.ProviderName() != "openai" {
+			t.Fatalf("provider = %#v, want openai", provider)
+		}
+		if llmModel == nil || llmModel.ModelID() != "gpt-5.4" {
+			t.Fatalf("model = %#v, want gpt-5.4", llmModel)
+		}
+		return &serveJudgeClientStub{response: "risky"}, nil
+	})
+	result, err := judge.Evaluate(context.Background(), builtin.CommandJudgeRequest{
+		Command:       "rm -rf tmp",
+		Arguments:     map[string]any{"command": "rm", "args": []any{"-rf", "tmp"}},
+		WorkspaceMode: workspaces.ModeReadonly,
+		ToolName:      "exec_command",
+	})
+	if err != nil {
+		t.Fatalf("Judge.Evaluate() error = %v", err)
+	}
+	if result.Verdict != builtin.CommandVerdictRisky {
+		t.Fatalf("Judge.Evaluate() verdict = %q, want %q", result.Verdict, builtin.CommandVerdictRisky)
+	}
+}
+
 func TestBuildAgentRunExecutorDependenciesProvideSkillsResolver(t *testing.T) {
 	deps := buildAgentRunExecutorDependencies(nil, nil, nil, nil, nil, nil, nil, nil, t.TempDir(), nil, nil, nil, nil)
 	if deps.SkillsResolver == nil {
@@ -1125,6 +1175,13 @@ func TestRegisterAgentRunExecutorPromptWiringKeepsAuditRecorder(t *testing.T) {
 
 type serveStubClient struct{ answer string }
 
+type serveCommandJudgeStub struct {
+	result builtin.CommandJudgeResult
+	err    error
+}
+
+type serveJudgeClientStub struct{ response string }
+
 type serveFakeModelTester struct{}
 
 func (serveFakeModelTester) TestModel(context.Context, *coreagent.ResolvedModel) error {
@@ -1137,6 +1194,18 @@ func (s *serveStubClient) Chat(context.Context, model.ChatRequest) (model.ChatRe
 
 func (s *serveStubClient) ChatStream(context.Context, model.ChatRequest) (model.Stream, error) {
 	return &serveStubStream{answer: s.answer}, nil
+}
+
+func (s *serveCommandJudgeStub) Evaluate(context.Context, builtin.CommandJudgeRequest) (builtin.CommandJudgeResult, error) {
+	return s.result, s.err
+}
+
+func (s *serveJudgeClientStub) Chat(context.Context, model.ChatRequest) (model.ChatResponse, error) {
+	return model.ChatResponse{Message: model.Message{Role: model.RoleAssistant, Content: s.response}, Content: s.response}, nil
+}
+
+func (s *serveJudgeClientStub) ChatStream(context.Context, model.ChatRequest) (model.Stream, error) {
+	return nil, errors.New("not used")
 }
 
 type serveStubStream struct{ answer string }

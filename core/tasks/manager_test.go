@@ -38,6 +38,45 @@ func TestApprovalEventConstants(t *testing.T) {
 	}
 }
 
+func TestManagerFindLatestTaskByConversationReturnsMostRecentTask(t *testing.T) {
+	store := newTestStore(t)
+	manager := NewManager(store, ManagerOptions{RunnerID: "runner-1"})
+
+	older, err := manager.CreateTask(context.Background(), CreateTaskInput{
+		TaskType: "agent.run",
+		Input: map[string]any{
+			"conversation_id": "conv-1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateTask(older) error = %v", err)
+	}
+	if _, _, err := store.ClaimNextTask(context.Background(), "runner-1", time.Minute); err != nil {
+		t.Fatalf("ClaimNextTask(older) error = %v", err)
+	}
+	if _, _, err := store.MarkSucceeded(context.Background(), older.ID, map[string]any{"conversation_id": "conv-1"}); err != nil {
+		t.Fatalf("MarkSucceeded(older) error = %v", err)
+	}
+
+	latest, err := manager.CreateTask(context.Background(), CreateTaskInput{
+		TaskType: "agent.run",
+		Input: map[string]any{
+			"conversation_id": "conv-1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateTask(latest) error = %v", err)
+	}
+
+	got, err := manager.FindLatestTaskByConversation(context.Background(), "conv-1")
+	if err != nil {
+		t.Fatalf("FindLatestTaskByConversation() error = %v", err)
+	}
+	if got == nil || got.ID != latest.ID {
+		t.Fatalf("latest task = %#v, want %q", got, latest.ID)
+	}
+}
+
 func TestManagerResolveTaskApprovalResumesWaitingTaskExactlyOnce(t *testing.T) {
 	store := newTestStore(t)
 	approvalStore, interactionStore := newApprovalAndInteractionStoresForTest(t, store)

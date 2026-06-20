@@ -45,6 +45,10 @@ import type {
   TaskWorkspaceStateStatus,
   RunTaskRequest,
   RunTaskResult,
+  WorkspaceDiffResult,
+  WorkspaceFileDetail,
+  WorkspaceSnapshot,
+  WorkspaceTreeNode,
   TaskStreamEvent,
   TaskSnapshot,
   ToolApproval,
@@ -937,6 +941,119 @@ export function normalizeTaskWorkspaceState(state: Partial<TaskWorkspaceState> &
     normalized.conversation_id = conversationId
   }
   return normalized
+}
+
+function normalizeWorkspaceTreeNodeType(value: unknown, children: WorkspaceTreeNode[] | undefined): WorkspaceTreeNode['type'] {
+  const normalized = normalizeStringValue(value)?.toLowerCase() ?? ''
+  if (normalized === 'directory' || normalized === 'dir' || normalized === 'folder' || normalized === 'tree') {
+    return 'directory'
+  }
+  if (normalized === 'file' || normalized === 'leaf') {
+    return 'file'
+  }
+  return children && children.length > 0 ? 'directory' : 'file'
+}
+
+function normalizeWorkspaceTreeNodes(value: unknown): WorkspaceTreeNode[] {
+  if (Array.isArray(value)) {
+    return value.map((node) =>
+      normalizeWorkspaceTreeNode(node && typeof node === 'object' ? (node as Partial<WorkspaceTreeNode> & Record<string, unknown>) : {}),
+    )
+  }
+  if (value && typeof value === 'object') {
+    const root = normalizeWorkspaceTreeNode(value as Partial<WorkspaceTreeNode> & Record<string, unknown>)
+    return root.type === 'directory' ? root.children ?? [] : [root]
+  }
+  return []
+}
+
+export function normalizeWorkspaceTreeNode(
+  node: Partial<WorkspaceTreeNode> & Record<string, unknown>,
+): WorkspaceTreeNode {
+  const children = normalizeWorkspaceTreeNodes(node.children ?? node.Children)
+  return {
+    path: normalizeFirstStringValue(node.path, node.Path),
+    name: normalizeFirstStringValue(node.name, node.Name),
+    type: normalizeWorkspaceTreeNodeType(node.type ?? node.Type, children),
+    binary: normalizeBooleanValue(node.binary ?? node.Binary),
+    size: normalizeIntegerValue(node.size ?? node.Size),
+    children: children.length > 0 ? children : undefined,
+  }
+}
+
+export function normalizeConversationWorkspaceSnapshot(
+  snapshot: Partial<WorkspaceSnapshot> & Record<string, unknown>,
+): WorkspaceSnapshot {
+  return {
+    task_id: normalizeFirstStringValue(snapshot.task_id, snapshot.taskId, snapshot.TaskID),
+    conversation_id: normalizeFirstOptionalStringValue(snapshot.conversation_id, snapshot.conversationId, snapshot.ConversationID),
+    home_root: normalizeFirstStringValue(snapshot.home_root, snapshot.homeRoot, snapshot.HomeRoot),
+    task_root: normalizeFirstStringValue(snapshot.task_root, snapshot.taskRoot, snapshot.TaskRoot),
+    path: normalizeFirstOptionalStringValue(snapshot.path, snapshot.Path),
+    tree: normalizeWorkspaceTreeNodes(snapshot.tree ?? snapshot.Tree),
+  }
+}
+
+export function normalizeWorkspaceFileDetail(
+  file: Partial<WorkspaceFileDetail> & Record<string, unknown>,
+): WorkspaceFileDetail {
+  return {
+    task_id: normalizeFirstStringValue(file.task_id, file.taskId, file.TaskID),
+    conversation_id: normalizeFirstOptionalStringValue(file.conversation_id, file.conversationId, file.ConversationID),
+    path: normalizeFirstStringValue(file.path, file.Path),
+    name: normalizeFirstStringValue(file.name, file.Name),
+    type: normalizeWorkspaceTreeNodeType(file.type ?? file.Type, undefined),
+    content: normalizeFirstOptionalStringValue(file.content, file.Content),
+    binary: normalizeBooleanValue(file.binary ?? file.Binary),
+    size: normalizeIntegerValue(file.size ?? file.Size),
+    mime_type: normalizeFirstOptionalStringValue(file.mime_type, file.mimeType, file.MimeType),
+  }
+}
+
+export function normalizeWorkspaceDiffResult(
+  diff: Partial<WorkspaceDiffResult> & Record<string, unknown>,
+): WorkspaceDiffResult {
+  return {
+    task_id: normalizeFirstStringValue(diff.task_id, diff.taskId, diff.TaskID),
+    conversation_id: normalizeFirstOptionalStringValue(diff.conversation_id, diff.conversationId, diff.ConversationID),
+    path: normalizeFirstStringValue(diff.path, diff.Path),
+    diff: normalizeFirstStringValue(diff.diff, diff.Diff),
+    truncated: normalizeBooleanValue(diff.truncated ?? diff.Truncated),
+    binary: normalizeBooleanValue(diff.binary ?? diff.Binary),
+  }
+}
+
+function workspaceBrowserQuery(path?: string) {
+  return path ? `?path=${encodeURIComponent(path)}` : ''
+}
+
+export function buildConversationWorkspaceUrl(conversationId: string, path?: string) {
+  return `${API_BASE}/conversations/${encodeURIComponent(conversationId)}/workspace/files${workspaceBrowserQuery(path)}`
+}
+
+export function buildConversationWorkspaceDownloadUrl(conversationId: string, path: string) {
+  return `${API_BASE}/conversations/${encodeURIComponent(conversationId)}/workspace/download${workspaceBrowserQuery(path)}`
+}
+
+export async function fetchConversationWorkspaceSnapshot(conversationId: string, path?: string) {
+  const snapshot = await request<Partial<WorkspaceSnapshot> & Record<string, unknown>>(
+    `/conversations/${encodeURIComponent(conversationId)}/workspace/files${workspaceBrowserQuery(path)}`,
+  )
+  return normalizeConversationWorkspaceSnapshot(snapshot)
+}
+
+export async function fetchConversationWorkspaceFile(conversationId: string, path: string) {
+  const file = await request<Partial<WorkspaceFileDetail> & Record<string, unknown>>(
+    `/conversations/${encodeURIComponent(conversationId)}/workspace/file${workspaceBrowserQuery(path)}`,
+  )
+  return normalizeWorkspaceFileDetail(file)
+}
+
+export async function fetchConversationWorkspaceDiff(conversationId: string, path: string) {
+  const diff = await request<Partial<WorkspaceDiffResult> & Record<string, unknown>>(
+    `/conversations/${encodeURIComponent(conversationId)}/workspace/diff${workspaceBrowserQuery(path)}`,
+  )
+  return normalizeWorkspaceDiffResult(diff)
 }
 
 export function normalizeConversation(

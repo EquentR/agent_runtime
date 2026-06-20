@@ -7,6 +7,7 @@ import ConversationSidebar from '../components/ConversationSidebar.vue'
 import ProfileDialog from '../components/ProfileDialog.vue'
 import MessageComposer from '../components/MessageComposer.vue'
 import MessageList from '../components/MessageList.vue'
+import WorkspaceBrowserPanel from '../components/chat/WorkspaceBrowserPanel.vue'
 import {
   ApiError,
   cancelTask,
@@ -1574,17 +1575,6 @@ onMounted(async () => {
     }
   }
 
-  if (routeConversationId.value) {
-    const savedTaskId = activeTaskIdByConversation.value[routeConversationId.value] ?? ''
-    if (savedTaskId) {
-      try {
-        const task = await fetchTaskDetails(savedTaskId)
-        await resumeTask(task, routeConversationId.value)
-      } catch {
-        clearTaskStateForConversation(routeConversationId.value)
-      }
-    }
-  }
 })
 
 onBeforeUnmount(() => {
@@ -1806,6 +1796,11 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="chat-main">
+        <WorkspaceBrowserPanel
+          v-if="activeConversationId"
+          class="workspace-browser-panel-shell"
+          :conversation-id="activeConversationId"
+        />
         <div v-if="showNoModelEmpty" class="chat-no-model-empty" data-no-model-empty>
           <h2>当前没有可用模型</h2>
           <p>请在个人设置中添加自定义模型，或联系管理员开启全局模型。</p>
@@ -1972,6 +1967,10 @@ onBeforeUnmount(() => {
   border-radius: 7px;
   font-size: 0.78rem;
   line-height: 1.1;
+}
+
+.workspace-browser-panel-shell {
+  margin-bottom: 0.75rem;
 }
 
 :global(.theme-teal-dark) .workspace-mode-label {

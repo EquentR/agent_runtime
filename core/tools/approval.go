@@ -10,7 +10,16 @@ const (
 	RiskLevelHigh   RiskLevel = "high"
 )
 
+type ApprovalDecision string
+
+const (
+	ApprovalDecisionAllow           ApprovalDecision = "allow"
+	ApprovalDecisionRequireApproval ApprovalDecision = "require_approval"
+	ApprovalDecisionBlock           ApprovalDecision = "block"
+)
+
 type ApprovalRequirement struct {
+	Decision         ApprovalDecision
 	Required         bool
 	ArgumentsSummary string
 	RiskLevel        RiskLevel
@@ -48,4 +57,14 @@ func (p ApprovalPolicy) Evaluate(arguments map[string]any) ApprovalRequirement {
 	default:
 		return ApprovalRequirement{}
 	}
+}
+
+func (r ApprovalRequirement) DecisionOrDefault() ApprovalDecision {
+	if r.Decision != "" {
+		return r.Decision
+	}
+	if r.Required {
+		return ApprovalDecisionRequireApproval
+	}
+	return ApprovalDecisionAllow
 }

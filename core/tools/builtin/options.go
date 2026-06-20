@@ -11,6 +11,7 @@ import (
 	"github.com/EquentR/agent_runtime/core/attachments"
 	corelog "github.com/EquentR/agent_runtime/core/log"
 	coretools "github.com/EquentR/agent_runtime/core/tools"
+	"github.com/EquentR/agent_runtime/core/workspaces"
 )
 
 const (
@@ -22,6 +23,8 @@ const (
 
 type Options struct {
 	WorkspaceRoot     string
+	WorkspaceMode     workspaces.Mode
+	CommandJudge      CommandJudge
 	CommandTimeout    time.Duration
 	HTTPClient        *http.Client
 	WebSearch         WebSearchOptions
@@ -73,6 +76,8 @@ type ImageGenProviderConfig struct {
 
 type runtimeEnv struct {
 	workspaceRoot     string
+	workspaceMode     workspaces.Mode
+	commandJudge      CommandJudge
 	commandTimeout    time.Duration
 	httpClient        *http.Client
 	webSearch         WebSearchOptions
@@ -121,6 +126,8 @@ func normalizeOptions(options Options) (runtimeEnv, error) {
 
 	return runtimeEnv{
 		workspaceRoot:     root,
+		workspaceMode:     options.WorkspaceMode,
+		commandJudge:      options.CommandJudge,
 		commandTimeout:    clampDuration(timeout, minCommandTimeout, maxCommandTimeout),
 		httpClient:        client,
 		webSearch:         options.WebSearch,

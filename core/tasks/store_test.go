@@ -93,6 +93,78 @@ func TestStoreCreateTaskPersistsConcurrencyKey(t *testing.T) {
 	}
 }
 
+func TestStoreFindLatestTaskByConversationReturnsMostRecentTaskRegardlessOfStatus(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	older, _, err := store.CreateTask(ctx, CreateTaskInput{
+		TaskType: "agent.run",
+		Input:    map[string]any{"conversation_id": "conv_1"},
+	})
+	if err != nil {
+		t.Fatalf("CreateTask() older error = %v", err)
+	}
+	newer, _, err := store.CreateTask(ctx, CreateTaskInput{
+		TaskType: "agent.run",
+		Input:    map[string]any{"conversation_id": "conv_1"},
+	})
+	if err != nil {
+		t.Fatalf("CreateTask() newer error = %v", err)
+	}
+	other, _, err := store.CreateTask(ctx, CreateTaskInput{
+		TaskType: "agent.run",
+		Input:    map[string]any{"conversation_id": "conv_other"},
+	})
+	if err != nil {
+		t.Fatalf("CreateTask() other error = %v", err)
+	}
+
+	if _, _, err := store.ClaimNextTask(ctx, "runner-1", time.Minute); err != nil {
+		t.Fatalf("ClaimNextTask() older error = %v", err)
+	}
+	if _, _, err := store.MarkSucceeded(ctx, older.ID, map[string]any{"conversation_id": "conv_1"}); err != nil {
+		t.Fatalf("MarkSucceeded() older error = %v", err)
+	}
+	if _, _, err := store.ClaimNextTask(ctx, "runner-2", time.Minute); err != nil {
+		t.Fatalf("ClaimNextTask() newer error = %v", err)
+	}
+	if _, _, err := store.MarkSucceeded(ctx, newer.ID, map[string]any{"conversation_id": "conv_1"}); err != nil {
+		t.Fatalf("MarkSucceeded() newer error = %v", err)
+	}
+	if _, _, err := store.ClaimNextTask(ctx, "runner-3", time.Minute); err != nil {
+		t.Fatalf("ClaimNextTask() other error = %v", err)
+	}
+	if _, _, err := store.MarkSucceeded(ctx, other.ID, map[string]any{"conversation_id": "conv_other"}); err != nil {
+		t.Fatalf("MarkSucceeded() other error = %v", err)
+	}
+
+	got, err := store.FindLatestTaskByConversation(ctx, "conv_1")
+	if err != nil {
+		t.Fatalf("FindLatestTaskByConversation() error = %v", err)
+	}
+	if got == nil {
+		t.Fatal("FindLatestTaskByConversation() = nil, want task")
+	}
+	if got.ID != newer.ID {
+		t.Fatalf("latest task id = %q, want %q", got.ID, newer.ID)
+	}
+	if got.Status != StatusSucceeded {
+		t.Fatalf("latest task status = %q, want %q", got.Status, StatusSucceeded)
+	}
+}
+
+func TestStoreFindLatestTaskByConversationReturnsNilForMissingConversation(t *testing.T) {
+	store := newTestStore(t)
+
+	got, err := store.FindLatestTaskByConversation(context.Background(), " ")
+	if err != nil {
+		t.Fatalf("FindLatestTaskByConversation() error = %v", err)
+	}
+	if got != nil {
+		t.Fatalf("FindLatestTaskByConversation() = %#v, want nil", got)
+	}
+}
+
 // TestStoreClaimNextTaskTransitionsQueuedTaskToRunning 验证领取任务会推进状态并写入租约信息。
 func TestStoreClaimNextTaskTransitionsQueuedTaskToRunning(t *testing.T) {
 	store := newTestStore(t)

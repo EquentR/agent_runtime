@@ -16,7 +16,9 @@ import (
 	"github.com/EquentR/agent_runtime/core/memory"
 	model "github.com/EquentR/agent_runtime/core/providers/types"
 	"github.com/EquentR/agent_runtime/core/runtimeprompt"
+	coretools "github.com/EquentR/agent_runtime/core/tools"
 	coretypes "github.com/EquentR/agent_runtime/core/types"
+	"github.com/EquentR/agent_runtime/core/workspaces"
 )
 
 var ErrInteractionPending = errors.New("interaction pending")
@@ -610,12 +612,22 @@ func (r *Runner) executeAssistantToolCalls(ctx context.Context, step int, title 
 				}
 				continue
 			}
-			required, suspendErr := r.maybeSuspendForInteraction(ctx, step, callIndex, assistant, call, arguments, *produced)
+			required, blockedOutput, suspendErr := r.maybeSuspendForInteraction(ctx, step, callIndex, assistant, call, arguments, *produced)
 			if suspendErr != nil {
 				return toolExecutionOutcome{}, suspendErr
 			}
 			if required {
 				return toolExecutionOutcome{Suspended: true}, nil
+			}
+			if blockedOutput != "" {
+				toolMessage := model.Message{Role: model.RoleTool, ToolCallId: call.ID, Content: blockedOutput}
+				*baseConversation = append(*baseConversation, toolMessage)
+				*produced = append(*produced, toolMessage)
+				if r.options.Memory != nil {
+					r.options.Memory.AddMessage(toolMessage)
+					*memoryInsertedCount = *memoryInsertedCount + 1
+				}
+				continue
 			}
 		}
 
@@ -735,21 +747,31 @@ func loopGuardAuditPayload(result LoopGuardResult) map[string]any {
 	return payload
 }
 
-func (r *Runner) maybeSuspendForInteraction(ctx context.Context, step int, toolCallIndex int, assistant model.Message, call coretypes.ToolCall, arguments map[string]interface{}, produced []model.Message) (bool, error) {
+func (r *Runner) maybeSuspendForInteraction(ctx context.Context, step int, toolCallIndex int, assistant model.Message, call coretypes.ToolCall, arguments map[string]interface{}, produced []model.Message) (bool, string, error) {
 	if r == nil || r.registry == nil {
-		return false, nil
+		return false, "", nil
 	}
 	policy, ok := r.registry.ApprovalPolicy(call.Name)
 	if !ok {
-		return false, nil
+		return false, "", nil
 	}
-	requirement := policy.Evaluate(arguments)
+	evaluatedArguments := cloneAnyMap(arguments)
+	if call.Name == "exec_command" {
+		evaluatedArguments = ensureWorkspaceModeArgument(evaluatedArguments, r.workspaceModeForApproval(ctx))
+	}
+	requirement := policy.Evaluate(evaluatedArguments)
+	switch requirement.DecisionOrDefault() {
+	case coretools.ApprovalDecisionAllow:
+		return false, "", nil
+	case coretools.ApprovalDecisionBlock:
+		return false, syntheticToolOutputForBlockedCommand(call.Name, requirement.Reason), nil
+	}
 	if !requirement.Required {
-		return false, nil
+		return false, "", nil
 	}
 	runtime := r.taskRuntime()
 	if runtime == nil {
-		return false, fmt.Errorf("tool %q requires approval but task runtime is not available", call.Name)
+		return false, "", fmt.Errorf("tool %q requires approval but task runtime is not available", call.Name)
 	}
 	approval, err := runtime.CreateApproval(ctx, approvals.CreateApprovalInput{
 		TaskID:           runtime.TaskID(),
@@ -762,7 +784,7 @@ func (r *Runner) maybeSuspendForInteraction(ctx context.Context, step int, toolC
 		Reason:           requirement.Reason,
 	})
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 	r.emitInteractionRequested(ctx, step, approval.ID, string(interactions.KindApproval), call, map[string]any{
 		"arguments_summary": requirement.ArgumentsSummary,
@@ -771,7 +793,7 @@ func (r *Runner) maybeSuspendForInteraction(ctx context.Context, step int, toolC
 	})
 	task, err := runtime.GetTask(ctx)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 	metadata, err := metadataWithInteractionCheckpoint(task.MetadataJSON, interactionCheckpoint{
 		InteractionID:                    approval.ID,
@@ -781,15 +803,59 @@ func (r *Runner) maybeSuspendForInteraction(ctx context.Context, step int, toolC
 		ProducedMessagesBeforeCheckpoint: cloneMessages(produced),
 	})
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 	if err := runtime.UpdateMetadata(ctx, metadata); err != nil {
-		return false, err
+		return false, "", err
 	}
 	if err := runtime.Suspend(ctx, "waiting_for_interaction"); err != nil {
-		return false, err
+		return false, "", err
 	}
-	return true, nil
+	return true, "", nil
+}
+
+func (r *Runner) workspaceModeForApproval(ctx context.Context) workspaces.Mode {
+	runtime := r.taskRuntime()
+	if runtime == nil {
+		return workspaces.ModeMutable
+	}
+	task, err := runtime.GetTask(ctx)
+	if err != nil || task == nil || len(task.InputJSON) == 0 {
+		return workspaces.ModeMutable
+	}
+	var input struct {
+		WorkspaceMode workspaces.Mode `json:"workspace_mode"`
+	}
+	if err := json.Unmarshal(task.InputJSON, &input); err != nil {
+		return workspaces.ModeMutable
+	}
+	switch input.WorkspaceMode {
+	case workspaces.ModeReadonly:
+		return workspaces.ModeReadonly
+	case workspaces.ModeMutable:
+		return workspaces.ModeMutable
+	default:
+		return workspaces.ModeMutable
+	}
+}
+
+func ensureWorkspaceModeArgument(arguments map[string]any, mode workspaces.Mode) map[string]any {
+	cloned := cloneAnyMap(arguments)
+	if cloned == nil {
+		cloned = map[string]any{}
+	}
+	if _, ok := cloned["workspace_mode"]; !ok && mode != "" {
+		cloned["workspace_mode"] = string(mode)
+	}
+	return cloned
+}
+
+func syntheticToolOutputForBlockedCommand(toolName string, reason string) string {
+	message := fmt.Sprintf("Tool %q execution was skipped because the command judge blocked it.", toolName)
+	if reason = strings.TrimSpace(reason); reason != "" {
+		message += " Reason: " + reason
+	}
+	return message
 }
 
 func (r *Runner) maybeSuspendForQuestion(ctx context.Context, step int, toolCallIndex int, assistant model.Message, call coretypes.ToolCall, arguments map[string]interface{}, produced []model.Message) (bool, error) {

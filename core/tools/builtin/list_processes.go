@@ -2,7 +2,7 @@ package builtin
 
 import (
 	"context"
-	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"os/exec"
 	"runtime"
@@ -74,37 +74,39 @@ func listProcesses(pid int) ([]processInfo, error) {
 }
 
 func listWindowsProcesses(pid int) ([]processInfo, error) {
-	args := []string{"/fo", "csv", "/nh"}
+	script := "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new(); $ErrorActionPreference = 'Stop'; Get-Process -ErrorAction SilentlyContinue"
 	if pid > 0 {
-		args = append(args, "/fi", fmt.Sprintf("PID eq %d", pid))
+		script += fmt.Sprintf(" | Where-Object { $_.Id -eq %d }", pid)
 	}
-	output, err := exec.Command("tasklist", args...).Output()
+	script += " | Select-Object @{Name='pid';Expression={$_.Id}}, @{Name='ppid';Expression={0}}, @{Name='name';Expression={$_.ProcessName}}, @{Name='command';Expression={$_.ProcessName}} | ConvertTo-Json -Compress -Depth 3"
+
+	output, err := exec.Command("powershell", "-NoProfile", "-Command", script).Output()
 	if err != nil {
 		return nil, err
 	}
 
-	reader := csv.NewReader(strings.NewReader(string(output)))
-	records, err := reader.ReadAll()
-	if err != nil {
-		return nil, err
+	return parseWindowsProcesses(output)
+}
+
+func parseWindowsProcesses(output []byte) ([]processInfo, error) {
+	trimmed := strings.TrimSpace(string(output))
+	if trimmed == "" || trimmed == "null" {
+		return []processInfo{}, nil
 	}
 
-	processes := make([]processInfo, 0, len(records))
-	for _, record := range records {
-		if len(record) < 2 {
-			continue
+	if strings.HasPrefix(trimmed, "[") {
+		var processes []processInfo
+		if err := json.Unmarshal([]byte(trimmed), &processes); err != nil {
+			return nil, err
 		}
-		name := strings.TrimSpace(record[0])
-		if name == "INFO: No tasks are running which match the specified criteria." || name == "" {
-			continue
-		}
-		processID, err := strconv.Atoi(strings.TrimSpace(record[1]))
-		if err != nil {
-			continue
-		}
-		processes = append(processes, processInfo{PID: processID, Name: name, Command: name})
+		return processes, nil
 	}
-	return processes, nil
+
+	var process processInfo
+	if err := json.Unmarshal([]byte(trimmed), &process); err != nil {
+		return nil, err
+	}
+	return []processInfo{process}, nil
 }
 
 func listUnixProcesses(pid int) ([]processInfo, error) {

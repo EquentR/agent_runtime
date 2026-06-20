@@ -736,6 +736,86 @@ type WorkspaceStateSwaggerDoc struct {
 	ErrorMessage string  `json:"error_message,omitempty"`
 }
 
+// WorkspaceBrowserSnapshotSwaggerResponse describes a workspace tree response.
+type WorkspaceBrowserSnapshotSwaggerResponse struct {
+	Code    int                            `json:"code"`
+	Message string                         `json:"message"`
+	Data    WorkspaceBrowserSnapshotSwaggerDoc `json:"data"`
+	OK      bool                           `json:"ok"`
+	Time    string                         `json:"time"`
+}
+
+// WorkspaceBrowserSnapshotSwaggerDoc describes the workspace tree payload.
+type WorkspaceBrowserSnapshotSwaggerDoc struct {
+	ConversationID string                                `json:"conversation_id"`
+	TaskID         string                                `json:"task_id"`
+	UserID         string                                `json:"user_id"`
+	HomeRoot       string                                `json:"home_root"`
+	TaskRoot       string                                `json:"task_root"`
+	Tree           *WorkspaceBrowserTreeNodeSwaggerDoc   `json:"tree,omitempty"`
+}
+
+// WorkspaceBrowserTreeNodeSwaggerDoc describes one tree node in the workspace browser.
+type WorkspaceBrowserTreeNodeSwaggerDoc struct {
+	Path     string                               `json:"path"`
+	Name     string                               `json:"name"`
+	Type     string                               `json:"type" enums:"dir,file"`
+	Size     int64                                `json:"size,omitempty"`
+	Binary   bool                                 `json:"binary,omitempty"`
+	Children []*WorkspaceBrowserTreeNodeSwaggerDoc `json:"children,omitempty"`
+}
+
+// WorkspaceBrowserFileSwaggerResponse describes a workspace file detail response.
+type WorkspaceBrowserFileSwaggerResponse struct {
+	Code    int                          `json:"code"`
+	Message string                       `json:"message"`
+	Data    WorkspaceBrowserFileSwaggerDoc `json:"data"`
+	OK      bool                         `json:"ok"`
+	Time    string                       `json:"time"`
+}
+
+// WorkspaceBrowserFileSwaggerDoc describes one workspace file payload.
+type WorkspaceBrowserFileSwaggerDoc struct {
+	ConversationID string `json:"conversation_id"`
+	TaskID         string `json:"task_id"`
+	UserID         string `json:"user_id"`
+	Path           string `json:"path"`
+	Name           string `json:"name"`
+	Size           int64  `json:"size"`
+	Binary         bool   `json:"binary"`
+	Content        string `json:"content,omitempty"`
+}
+
+// WorkspaceBrowserDiffSwaggerResponse describes a workspace diff response.
+type WorkspaceBrowserDiffSwaggerResponse struct {
+	Code    int                         `json:"code"`
+	Message string                      `json:"message"`
+	Data    WorkspaceBrowserDiffSwaggerDoc `json:"data"`
+	OK      bool                        `json:"ok"`
+	Time    string                      `json:"time"`
+}
+
+// WorkspaceBrowserDiffSwaggerDoc describes one workspace diff payload.
+type WorkspaceBrowserDiffSwaggerDoc struct {
+	ConversationID string `json:"conversation_id"`
+	TaskID         string `json:"task_id"`
+	UserID         string `json:"user_id"`
+	Path           string `json:"path"`
+	Binary         bool   `json:"binary"`
+	UnifiedDiff    string `json:"unified_diff,omitempty"`
+	HomeContent    string `json:"home_content,omitempty"`
+	TaskContent    string `json:"task_content,omitempty"`
+}
+
+// WorkspaceBrowserDownloadSwaggerResponse describes a workspace download response metadata.
+type WorkspaceBrowserDownloadSwaggerResponse struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+	Data    string `json:"data"`
+	OK      bool   `json:"ok"`
+	Time    string `json:"time"`
+}
+
 // UserWorkspaceSummarySwaggerResponse describes an admin workspace summary response.
 type UserWorkspaceSummarySwaggerResponse struct {
 	Code    int                            `json:"code"`

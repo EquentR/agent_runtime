@@ -88,6 +88,28 @@ func (s *Store) GetTask(ctx context.Context, id string) (*Task, error) {
 	return &task, nil
 }
 
+// FindLatestTaskByConversation 根据 conversation id 查询最近的任务。
+func (s *Store) FindLatestTaskByConversation(ctx context.Context, conversationID string) (*Task, error) {
+	trimmedConversationID := strings.TrimSpace(conversationID)
+	if trimmedConversationID == "" {
+		return nil, nil
+	}
+
+	var task Task
+	err := s.db.WithContext(ctx).
+		Where("json_extract(input_json, '$.conversation_id') = ? OR json_extract(result_json, '$.conversation_id') = ?", trimmedConversationID, trimmedConversationID).
+		Order("created_at desc").
+		Order("id desc").
+		Take(&task).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &task, nil
+}
+
 // FindLatestActiveTaskByConversation 根据 conversation id 查询最近的非终态任务。
 func (s *Store) FindLatestActiveTaskByConversation(ctx context.Context, conversationID string) (*Task, error) {
 	trimmedConversationID := strings.TrimSpace(conversationID)

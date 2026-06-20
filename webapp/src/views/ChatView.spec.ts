@@ -33,6 +33,12 @@ const api = vi.hoisted(() => {
     deleteAttachment: vi.fn(),
     deleteConversation: vi.fn(),
     fetchConversationWorkspaceState: vi.fn(),
+    fetchConversationWorkspaceSnapshot: vi.fn(),
+    fetchConversationWorkspaceFile: vi.fn(),
+    fetchConversationWorkspaceDiff: vi.fn(),
+    buildConversationWorkspaceDownloadUrl: vi.fn((conversationId: string, path: string) =>
+      `/api/v1/conversations/${conversationId}/workspace/download?path=${encodeURIComponent(path)}`,
+    ),
     confirmConversationWorkspaceMerge: vi.fn(),
     discardConversationWorkspaceChanges: vi.fn(),
     confirmTaskWorkspaceMerge: vi.fn(),
@@ -147,6 +153,10 @@ describe('ChatView', () => {
     api.deleteAttachment.mockReset()
     api.deleteConversation.mockReset()
     api.fetchConversationWorkspaceState.mockReset()
+    api.fetchConversationWorkspaceSnapshot.mockReset()
+    api.fetchConversationWorkspaceFile.mockReset()
+    api.fetchConversationWorkspaceDiff.mockReset()
+    api.buildConversationWorkspaceDownloadUrl.mockReset()
     api.confirmConversationWorkspaceMerge.mockReset()
     api.discardConversationWorkspaceChanges.mockReset()
     api.confirmTaskWorkspaceMerge.mockReset()
@@ -183,6 +193,12 @@ describe('ChatView', () => {
       { name: 'review', source_ref: 'skills/review/SKILL.md' },
     ])
     api.fetchConversationWorkspaceState.mockResolvedValue(null)
+    api.fetchConversationWorkspaceSnapshot.mockResolvedValue({
+      task_id: 'task_workspace',
+      home_root: '/home',
+      task_root: '/task',
+      tree: [],
+    })
   })
 
   afterEach(() => {
@@ -2691,6 +2707,39 @@ describe('ChatView', () => {
     expect(titleBlock.element.firstElementChild?.classList.contains('model-menu')).toBe(true)
   })
 
+  it('mounts the workspace browser panel inside the chat view for an active conversation', async () => {
+    api.fetchConversations.mockResolvedValue([
+      {
+        id: 'conv_1',
+        title: 'Workspace chat',
+        last_message: 'hello',
+        message_count: 1,
+        provider_id: 'openai',
+        model_id: 'gpt-5.4',
+        created_by: 'demo-user',
+        created_at: '',
+        updated_at: '',
+      },
+    ])
+    api.fetchConversationMessages.mockResolvedValue([{ role: 'assistant', content: 'hello' }])
+
+    const router = makeRouter()
+    await router.push('/chat/conv_1')
+    await router.isReady()
+
+    const wrapper = mount(ChatView, {
+      global: {
+        plugins: [router],
+      },
+    })
+
+    await flushPromises()
+
+    expect(wrapper.find('.workspace-browser-panel-shell').exists()).toBe(true)
+    expect(wrapper.text()).toContain('Workspace')
+    expect(wrapper.text()).toContain('Workspace chat')
+  })
+
   it('lets the Element Plus model menu scrollbar expand beyond the trigger height', () => {
     const panelRule = chatStyles.match(/\.model-menu-panel\.el-scrollbar\s*\{(?<body>[^}]*)\}/)
 
@@ -2979,7 +3028,7 @@ describe('ChatView', () => {
     streamListeners[1]?.({ type: 'log.message', payload: { Kind: 'text_delta', Text: 'resumed content' } })
     await flushPromises()
 
-    expect(secondWrapper.text()).toContain('resumed content')
+    expect(secondWrapper.findComponent(MessageList).text()).toContain('resumed content')
 
     runningStream.resolve({ conversation_id: 'conv_new' })
     await flushPromises()
