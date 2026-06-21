@@ -29,13 +29,13 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.AdminYAMLModelCatalogSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.AdminYAMLModelCatalogSwaggerResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -55,13 +55,13 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.CustomModelListSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.CustomModelListSwaggerResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -85,7 +85,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/handlers.CustomModelCreateSwaggerRequest"
+                            "$ref": "#/definitions/app_handlers.CustomModelCreateSwaggerRequest"
                         }
                     }
                 ],
@@ -93,19 +93,19 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.CustomModelSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.CustomModelSwaggerResponse"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -138,7 +138,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/handlers.CustomModelUpdateSwaggerRequest"
+                            "$ref": "#/definitions/app_handlers.CustomModelUpdateSwaggerRequest"
                         }
                     }
                 ],
@@ -146,25 +146,25 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.CustomModelSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.CustomModelSwaggerResponse"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -191,19 +191,19 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.CustomModelDeleteSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.CustomModelDeleteSwaggerResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -232,25 +232,25 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ModelTestSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ModelTestSwaggerResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -290,7 +290,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/handlers.AdminYAMLModelUpdateSwaggerRequest"
+                            "$ref": "#/definitions/app_handlers.AdminYAMLModelUpdateSwaggerRequest"
                         }
                     }
                 ],
@@ -298,25 +298,25 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.AdminYAMLModelSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.AdminYAMLModelSwaggerResponse"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -345,25 +345,25 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.UserWorkspaceSummarySwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.UserWorkspaceSummarySwaggerResponse"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -401,19 +401,19 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.AttachmentSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.AttachmentSwaggerResponse"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -442,19 +442,19 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.AttachmentSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.AttachmentSwaggerResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -481,25 +481,25 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.AttachmentDeleteSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.AttachmentDeleteSwaggerResponse"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -534,13 +534,13 @@ const docTemplate = `{
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -560,13 +560,13 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.AuditConversationListSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.AuditConversationListSwaggerResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -595,13 +595,13 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.AuditEventListSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.AuditEventListSwaggerResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -630,13 +630,13 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.AuditRunListSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.AuditRunListSwaggerResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -665,19 +665,19 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.AuditRunSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.AuditRunSwaggerResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -706,19 +706,19 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.AuditEventsSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.AuditEventsSwaggerResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -747,25 +747,25 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.AuditReplaySwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.AuditReplaySwaggerResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -791,7 +791,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/handlers.AuthEmailVerificationSendSwaggerRequest"
+                            "$ref": "#/definitions/app_handlers.AuthEmailVerificationSendSwaggerRequest"
                         }
                     }
                 ],
@@ -799,31 +799,31 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.AuthEmailVerificationSentSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.AuthEmailVerificationSentSwaggerResponse"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "429": {
                         "description": "Too Many Requests",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -849,7 +849,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/handlers.AuthEmailVerificationVerifySwaggerRequest"
+                            "$ref": "#/definitions/app_handlers.AuthEmailVerificationVerifySwaggerRequest"
                         }
                     }
                 ],
@@ -857,37 +857,37 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.AuthEmailVerificationVerifySwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.AuthEmailVerificationVerifySwaggerResponse"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "429": {
                         "description": "Too Many Requests",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -913,7 +913,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/handlers.AuthLoginSwaggerRequest"
+                            "$ref": "#/definitions/app_handlers.AuthLoginSwaggerRequest"
                         }
                     }
                 ],
@@ -921,19 +921,19 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.AuthUserSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.AuthUserSwaggerResponse"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -956,13 +956,13 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.AuthLogoutSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.AuthLogoutSwaggerResponse"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -982,13 +982,13 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.AuthUserSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.AuthUserSwaggerResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -1014,7 +1014,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/handlers.AuthRegisterSwaggerRequest"
+                            "$ref": "#/definitions/app_handlers.AuthRegisterSwaggerRequest"
                         }
                     }
                 ],
@@ -1022,19 +1022,19 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.AuthUserSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.AuthUserSwaggerResponse"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -1054,13 +1054,13 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ConversationListSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ConversationListSwaggerResponse"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -1089,13 +1089,13 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ConversationDetailSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ConversationDetailSwaggerResponse"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -1122,13 +1122,13 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ConversationDeleteSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ConversationDeleteSwaggerResponse"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -1157,13 +1157,13 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ConversationMessagesSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ConversationMessagesSwaggerResponse"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -1192,19 +1192,19 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ConversationWorkspaceStateSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ConversationWorkspaceStateSwaggerResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -1233,31 +1233,85 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.WorkspaceStateSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.WorkspaceStateSwaggerResponse"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/conversations/{id}/workspace/diff": {
+            "get": {
+                "description": "将当前 conversation 的 task workspace 与 home workspace 对比并返回统一 diff。",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "conversations"
+                ],
+                "summary": "查看当前 conversation 工作区 diff",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Conversation ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "File path",
+                        "name": "path",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/app_handlers.WorkspaceBrowserDiffSwaggerResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -1286,25 +1340,180 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.WorkspaceStateSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.WorkspaceStateSwaggerResponse"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/conversations/{id}/workspace/download": {
+            "get": {
+                "description": "以二进制流方式下载当前 conversation 对应 task workspace 中指定路径的文件。",
+                "produces": [
+                    "application/octet-stream"
+                ],
+                "tags": [
+                    "conversations"
+                ],
+                "summary": "下载当前 conversation 工作区文件",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Conversation ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "File path",
+                        "name": "path",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "workspace file content",
+                        "schema": {
+                            "type": "file"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/conversations/{id}/workspace/file": {
+            "get": {
+                "description": "返回当前 conversation 对应 task workspace 中指定 path 的文件内容和元数据。",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "conversations"
+                ],
+                "summary": "查看当前 conversation 工作区文件",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Conversation ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "File path",
+                        "name": "path",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/app_handlers.WorkspaceBrowserFileSwaggerResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/conversations/{id}/workspace/files": {
+            "get": {
+                "description": "返回当前 conversation 对应 task workspace 的文件树，可选 path 用于过滤子目录。",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "conversations"
+                ],
+                "summary": "浏览当前 conversation 的工作区文件树",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Conversation ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter path",
+                        "name": "path",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/app_handlers.WorkspaceBrowserSnapshotSwaggerResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -1332,7 +1541,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ExampleSayHelloSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ExampleSayHelloSwaggerResponse"
                         }
                     }
                 }
@@ -1352,13 +1561,13 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ModelCatalogSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ModelCatalogSwaggerResponse"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -1416,13 +1625,13 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.PromptBindingListSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.PromptBindingListSwaggerResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -1446,7 +1655,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/handlers.PromptBindingCreateSwaggerRequest"
+                            "$ref": "#/definitions/app_handlers.PromptBindingCreateSwaggerRequest"
                         }
                     }
                 ],
@@ -1454,25 +1663,25 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.PromptBindingSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.PromptBindingSwaggerResponse"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -1501,25 +1710,25 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.PromptBindingSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.PromptBindingSwaggerResponse"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -1550,7 +1759,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/handlers.PromptBindingUpdateSwaggerRequest"
+                            "$ref": "#/definitions/app_handlers.PromptBindingUpdateSwaggerRequest"
                         }
                     }
                 ],
@@ -1558,25 +1767,25 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.PromptBindingSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.PromptBindingSwaggerResponse"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -1603,25 +1812,25 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.PromptDeleteSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.PromptDeleteSwaggerResponse"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -1655,13 +1864,13 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.PromptDocumentListSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.PromptDocumentListSwaggerResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -1685,7 +1894,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/handlers.PromptDocumentCreateSwaggerRequest"
+                            "$ref": "#/definitions/app_handlers.PromptDocumentCreateSwaggerRequest"
                         }
                     }
                 ],
@@ -1693,25 +1902,25 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.PromptDocumentSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.PromptDocumentSwaggerResponse"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -1740,19 +1949,19 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.PromptDocumentSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.PromptDocumentSwaggerResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -1783,7 +1992,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/handlers.PromptDocumentUpdateSwaggerRequest"
+                            "$ref": "#/definitions/app_handlers.PromptDocumentUpdateSwaggerRequest"
                         }
                     }
                 ],
@@ -1791,25 +2000,25 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.PromptDocumentSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.PromptDocumentSwaggerResponse"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -1836,19 +2045,19 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.PromptDeleteSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.PromptDeleteSwaggerResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -1868,13 +2077,13 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.PublicRegistrationSettingsSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.PublicRegistrationSettingsSwaggerResponse"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -1894,13 +2103,13 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.PublicTurnstileSettingsSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.PublicTurnstileSettingsSwaggerResponse"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -1920,13 +2129,13 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.SkillListSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.SkillListSwaggerResponse"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -1955,13 +2164,13 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.SkillSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.SkillSwaggerResponse"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -2067,7 +2276,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/handlers.CreateTaskRequest"
+                            "$ref": "#/definitions/app_handlers.CreateTaskRequest"
                         }
                     }
                 ],
@@ -2075,13 +2284,13 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.TaskSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.TaskSwaggerResponse"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -2110,7 +2319,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.TaskSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.TaskSwaggerResponse"
                         }
                     }
                 }
@@ -2139,13 +2348,13 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.TaskSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.TaskSwaggerResponse"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -2174,19 +2383,19 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ApprovalListSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ApprovalListSwaggerResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -2226,7 +2435,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/handlers.ApprovalDecisionSwaggerRequest"
+                            "$ref": "#/definitions/app_handlers.ApprovalDecisionSwaggerRequest"
                         }
                     }
                 ],
@@ -2234,25 +2443,25 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ApprovalSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ApprovalSwaggerResponse"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -2281,13 +2490,13 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.TaskSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.TaskSwaggerResponse"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -2357,13 +2566,13 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.TaskSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.TaskSwaggerResponse"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -2392,31 +2601,31 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.WorkspaceStateSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.WorkspaceStateSwaggerResponse"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -2445,25 +2654,25 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.WorkspaceStateSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.WorkspaceStateSwaggerResponse"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -2483,13 +2692,13 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.AuthUserSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.AuthUserSwaggerResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -2513,7 +2722,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/handlers.UserProfileUpdateSwaggerRequest"
+                            "$ref": "#/definitions/app_handlers.UserProfileUpdateSwaggerRequest"
                         }
                     }
                 ],
@@ -2521,25 +2730,25 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.AuthUserSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.AuthUserSwaggerResponse"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -2565,7 +2774,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/handlers.UserEmailVerificationStartSwaggerRequest"
+                            "$ref": "#/definitions/app_handlers.UserEmailVerificationStartSwaggerRequest"
                         }
                     }
                 ],
@@ -2573,37 +2782,37 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.AuthEmailVerificationSentSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.AuthEmailVerificationSentSwaggerResponse"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "429": {
                         "description": "Too Many Requests",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -2629,7 +2838,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/handlers.UserEmailVerificationConfirmSwaggerRequest"
+                            "$ref": "#/definitions/app_handlers.UserEmailVerificationConfirmSwaggerRequest"
                         }
                     }
                 ],
@@ -2637,37 +2846,37 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.AuthUserSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.AuthUserSwaggerResponse"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "429": {
                         "description": "Too Many Requests",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -2687,13 +2896,13 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.CustomModelListSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.CustomModelListSwaggerResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -2717,7 +2926,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/handlers.CustomModelCreateSwaggerRequest"
+                            "$ref": "#/definitions/app_handlers.CustomModelCreateSwaggerRequest"
                         }
                     }
                 ],
@@ -2725,19 +2934,19 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.CustomModelSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.CustomModelSwaggerResponse"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -2770,7 +2979,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/handlers.CustomModelUpdateSwaggerRequest"
+                            "$ref": "#/definitions/app_handlers.CustomModelUpdateSwaggerRequest"
                         }
                     }
                 ],
@@ -2778,19 +2987,19 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.CustomModelSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.CustomModelSwaggerResponse"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -2817,13 +3026,13 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.CustomModelDeleteSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.CustomModelDeleteSwaggerResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -2852,19 +3061,19 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ModelTestSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ModelTestSwaggerResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -2890,7 +3099,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/handlers.UserPasswordChangeSwaggerRequest"
+                            "$ref": "#/definitions/app_handlers.UserPasswordChangeSwaggerRequest"
                         }
                     }
                 ],
@@ -2898,25 +3107,25 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.AuthUserSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.AuthUserSwaggerResponse"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorSwaggerResponse"
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     }
                 }
@@ -2924,7 +3133,7 @@ const docTemplate = `{
         }
     },
     "definitions": {
-        "handlers.AdminYAMLModelCatalogSwaggerDoc": {
+        "app_handlers.AdminYAMLModelCatalogSwaggerDoc": {
             "type": "object",
             "properties": {
                 "default_model_id": {
@@ -2936,19 +3145,19 @@ const docTemplate = `{
                 "providers": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/handlers.AdminYAMLModelProviderSwaggerDoc"
+                        "$ref": "#/definitions/app_handlers.AdminYAMLModelProviderSwaggerDoc"
                     }
                 }
             }
         },
-        "handlers.AdminYAMLModelCatalogSwaggerResponse": {
+        "app_handlers.AdminYAMLModelCatalogSwaggerResponse": {
             "type": "object",
             "properties": {
                 "code": {
                     "type": "integer"
                 },
                 "data": {
-                    "$ref": "#/definitions/handlers.AdminYAMLModelCatalogSwaggerDoc"
+                    "$ref": "#/definitions/app_handlers.AdminYAMLModelCatalogSwaggerDoc"
                 },
                 "message": {
                     "type": "string"
@@ -2961,7 +3170,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.AdminYAMLModelProviderSwaggerDoc": {
+        "app_handlers.AdminYAMLModelProviderSwaggerDoc": {
             "type": "object",
             "properties": {
                 "id": {
@@ -2970,7 +3179,7 @@ const docTemplate = `{
                 "models": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/handlers.AdminYAMLModelSwaggerDoc"
+                        "$ref": "#/definitions/app_handlers.AdminYAMLModelSwaggerDoc"
                     }
                 },
                 "name": {
@@ -2978,17 +3187,17 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.AdminYAMLModelSwaggerDoc": {
+        "app_handlers.AdminYAMLModelSwaggerDoc": {
             "type": "object",
             "properties": {
                 "capabilities": {
-                    "$ref": "#/definitions/handlers.ModelCapabilitiesSwaggerDoc"
+                    "$ref": "#/definitions/app_handlers.ModelCapabilitiesSwaggerDoc"
                 },
                 "context": {
-                    "$ref": "#/definitions/handlers.ModelContextSwaggerDoc"
+                    "$ref": "#/definitions/app_handlers.ModelContextSwaggerDoc"
                 },
                 "cost": {
-                    "$ref": "#/definitions/handlers.ModelPricingSwaggerDoc"
+                    "$ref": "#/definitions/app_handlers.ModelPricingSwaggerDoc"
                 },
                 "enabled": {
                     "type": "boolean"
@@ -3013,14 +3222,14 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.AdminYAMLModelSwaggerResponse": {
+        "app_handlers.AdminYAMLModelSwaggerResponse": {
             "type": "object",
             "properties": {
                 "code": {
                     "type": "integer"
                 },
                 "data": {
-                    "$ref": "#/definitions/handlers.AdminYAMLModelSwaggerDoc"
+                    "$ref": "#/definitions/app_handlers.AdminYAMLModelSwaggerDoc"
                 },
                 "message": {
                     "type": "string"
@@ -3033,7 +3242,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.AdminYAMLModelUpdateSwaggerRequest": {
+        "app_handlers.AdminYAMLModelUpdateSwaggerRequest": {
             "type": "object",
             "properties": {
                 "enabled": {
@@ -3044,7 +3253,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.ApprovalDecisionSwaggerRequest": {
+        "app_handlers.ApprovalDecisionSwaggerRequest": {
             "type": "object",
             "properties": {
                 "decision": {
@@ -3055,7 +3264,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.ApprovalListSwaggerResponse": {
+        "app_handlers.ApprovalListSwaggerResponse": {
             "type": "object",
             "properties": {
                 "code": {
@@ -3064,7 +3273,7 @@ const docTemplate = `{
                 "data": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/handlers.ApprovalSwaggerDoc"
+                        "$ref": "#/definitions/app_handlers.ApprovalSwaggerDoc"
                     }
                 },
                 "message": {
@@ -3078,7 +3287,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.ApprovalSwaggerDoc": {
+        "app_handlers.ApprovalSwaggerDoc": {
             "type": "object",
             "properties": {
                 "arguments_summary": {
@@ -3135,14 +3344,14 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.ApprovalSwaggerResponse": {
+        "app_handlers.ApprovalSwaggerResponse": {
             "type": "object",
             "properties": {
                 "code": {
                     "type": "integer"
                 },
                 "data": {
-                    "$ref": "#/definitions/handlers.ApprovalSwaggerDoc"
+                    "$ref": "#/definitions/app_handlers.ApprovalSwaggerDoc"
                 },
                 "message": {
                     "type": "string"
@@ -3155,7 +3364,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.AttachmentDeleteSwaggerData": {
+        "app_handlers.AttachmentDeleteSwaggerData": {
             "type": "object",
             "properties": {
                 "deleted": {
@@ -3163,14 +3372,14 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.AttachmentDeleteSwaggerResponse": {
+        "app_handlers.AttachmentDeleteSwaggerResponse": {
             "type": "object",
             "properties": {
                 "code": {
                     "type": "integer"
                 },
                 "data": {
-                    "$ref": "#/definitions/handlers.AttachmentDeleteSwaggerData"
+                    "$ref": "#/definitions/app_handlers.AttachmentDeleteSwaggerData"
                 },
                 "message": {
                     "type": "string"
@@ -3183,7 +3392,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.AttachmentSwaggerDoc": {
+        "app_handlers.AttachmentSwaggerDoc": {
             "type": "object",
             "properties": {
                 "conversation_id": {
@@ -3227,14 +3436,14 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.AttachmentSwaggerResponse": {
+        "app_handlers.AttachmentSwaggerResponse": {
             "type": "object",
             "properties": {
                 "code": {
                     "type": "integer"
                 },
                 "data": {
-                    "$ref": "#/definitions/handlers.AttachmentSwaggerDoc"
+                    "$ref": "#/definitions/app_handlers.AttachmentSwaggerDoc"
                 },
                 "message": {
                     "type": "string"
@@ -3247,7 +3456,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.AuditConversationListSwaggerResponse": {
+        "app_handlers.AuditConversationListSwaggerResponse": {
             "type": "object",
             "properties": {
                 "code": {
@@ -3256,7 +3465,7 @@ const docTemplate = `{
                 "data": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/handlers.AuditConversationSwaggerDoc"
+                        "$ref": "#/definitions/app_handlers.AuditConversationSwaggerDoc"
                     }
                 },
                 "message": {
@@ -3270,7 +3479,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.AuditConversationSwaggerDoc": {
+        "app_handlers.AuditConversationSwaggerDoc": {
             "type": "object",
             "properties": {
                 "audit_run_id": {
@@ -3302,7 +3511,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.AuditEventListSwaggerResponse": {
+        "app_handlers.AuditEventListSwaggerResponse": {
             "type": "object",
             "properties": {
                 "code": {
@@ -3311,7 +3520,7 @@ const docTemplate = `{
                 "data": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/handlers.AuditEventSwaggerDoc"
+                        "$ref": "#/definitions/app_handlers.AuditEventSwaggerDoc"
                     }
                 },
                 "message": {
@@ -3325,7 +3534,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.AuditEventSwaggerDoc": {
+        "app_handlers.AuditEventSwaggerDoc": {
             "type": "object",
             "properties": {
                 "created_at": {
@@ -3364,7 +3573,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.AuditEventsSwaggerResponse": {
+        "app_handlers.AuditEventsSwaggerResponse": {
             "type": "object",
             "properties": {
                 "code": {
@@ -3373,7 +3582,7 @@ const docTemplate = `{
                 "data": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/handlers.AuditEventSwaggerDoc"
+                        "$ref": "#/definitions/app_handlers.AuditEventSwaggerDoc"
                     }
                 },
                 "message": {
@@ -3387,7 +3596,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.AuditReplayArtifactSummarySwaggerDoc": {
+        "app_handlers.AuditReplayArtifactSummarySwaggerDoc": {
             "type": "object",
             "properties": {
                 "created_at": {
@@ -3416,7 +3625,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.AuditReplayArtifactSwaggerDoc": {
+        "app_handlers.AuditReplayArtifactSwaggerDoc": {
             "type": "object",
             "properties": {
                 "body": {},
@@ -3446,31 +3655,31 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.AuditReplayBundleSwaggerDoc": {
+        "app_handlers.AuditReplayBundleSwaggerDoc": {
             "type": "object",
             "properties": {
                 "artifacts": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/handlers.AuditReplayArtifactSwaggerDoc"
+                        "$ref": "#/definitions/app_handlers.AuditReplayArtifactSwaggerDoc"
                     }
                 },
                 "run": {
-                    "$ref": "#/definitions/handlers.AuditRunSwaggerDoc"
+                    "$ref": "#/definitions/app_handlers.AuditRunSwaggerDoc"
                 },
                 "timeline": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/handlers.AuditReplayEventSwaggerDoc"
+                        "$ref": "#/definitions/app_handlers.AuditReplayEventSwaggerDoc"
                     }
                 }
             }
         },
-        "handlers.AuditReplayEventSwaggerDoc": {
+        "app_handlers.AuditReplayEventSwaggerDoc": {
             "type": "object",
             "properties": {
                 "artifact": {
-                    "$ref": "#/definitions/handlers.AuditReplayArtifactSummarySwaggerDoc"
+                    "$ref": "#/definitions/app_handlers.AuditReplayArtifactSummarySwaggerDoc"
                 },
                 "created_at": {
                     "type": "string"
@@ -3499,14 +3708,14 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.AuditReplaySwaggerResponse": {
+        "app_handlers.AuditReplaySwaggerResponse": {
             "type": "object",
             "properties": {
                 "code": {
                     "type": "integer"
                 },
                 "data": {
-                    "$ref": "#/definitions/handlers.AuditReplayBundleSwaggerDoc"
+                    "$ref": "#/definitions/app_handlers.AuditReplayBundleSwaggerDoc"
                 },
                 "message": {
                     "type": "string"
@@ -3519,7 +3728,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.AuditRunListSwaggerResponse": {
+        "app_handlers.AuditRunListSwaggerResponse": {
             "type": "object",
             "properties": {
                 "code": {
@@ -3528,7 +3737,7 @@ const docTemplate = `{
                 "data": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/handlers.AuditRunSwaggerDoc"
+                        "$ref": "#/definitions/app_handlers.AuditRunSwaggerDoc"
                     }
                 },
                 "message": {
@@ -3542,7 +3751,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.AuditRunSwaggerDoc": {
+        "app_handlers.AuditRunSwaggerDoc": {
             "type": "object",
             "properties": {
                 "conversation_id": {
@@ -3601,14 +3810,14 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.AuditRunSwaggerResponse": {
+        "app_handlers.AuditRunSwaggerResponse": {
             "type": "object",
             "properties": {
                 "code": {
                     "type": "integer"
                 },
                 "data": {
-                    "$ref": "#/definitions/handlers.AuditRunSwaggerDoc"
+                    "$ref": "#/definitions/app_handlers.AuditRunSwaggerDoc"
                 },
                 "message": {
                     "type": "string"
@@ -3621,7 +3830,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.AuthEmailVerificationSendSwaggerRequest": {
+        "app_handlers.AuthEmailVerificationSendSwaggerRequest": {
             "type": "object",
             "properties": {
                 "email": {
@@ -3638,7 +3847,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.AuthEmailVerificationSentSwaggerData": {
+        "app_handlers.AuthEmailVerificationSentSwaggerData": {
             "type": "object",
             "properties": {
                 "sent": {
@@ -3646,14 +3855,14 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.AuthEmailVerificationSentSwaggerResponse": {
+        "app_handlers.AuthEmailVerificationSentSwaggerResponse": {
             "type": "object",
             "properties": {
                 "code": {
                     "type": "integer"
                 },
                 "data": {
-                    "$ref": "#/definitions/handlers.AuthEmailVerificationSentSwaggerData"
+                    "$ref": "#/definitions/app_handlers.AuthEmailVerificationSentSwaggerData"
                 },
                 "message": {
                     "type": "string"
@@ -3666,7 +3875,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.AuthEmailVerificationVerifySwaggerRequest": {
+        "app_handlers.AuthEmailVerificationVerifySwaggerRequest": {
             "type": "object",
             "properties": {
                 "code": {
@@ -3683,14 +3892,14 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.AuthEmailVerificationVerifySwaggerResponse": {
+        "app_handlers.AuthEmailVerificationVerifySwaggerResponse": {
             "type": "object",
             "properties": {
                 "code": {
                     "type": "integer"
                 },
                 "data": {
-                    "$ref": "#/definitions/handlers.AuthUserSwaggerDoc"
+                    "$ref": "#/definitions/app_handlers.AuthUserSwaggerDoc"
                 },
                 "message": {
                     "type": "string"
@@ -3703,7 +3912,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.AuthLoginSwaggerRequest": {
+        "app_handlers.AuthLoginSwaggerRequest": {
             "type": "object",
             "properties": {
                 "password": {
@@ -3717,7 +3926,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.AuthLogoutSwaggerData": {
+        "app_handlers.AuthLogoutSwaggerData": {
             "type": "object",
             "properties": {
                 "logged_out": {
@@ -3725,14 +3934,14 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.AuthLogoutSwaggerResponse": {
+        "app_handlers.AuthLogoutSwaggerResponse": {
             "type": "object",
             "properties": {
                 "code": {
                     "type": "integer"
                 },
                 "data": {
-                    "$ref": "#/definitions/handlers.AuthLogoutSwaggerData"
+                    "$ref": "#/definitions/app_handlers.AuthLogoutSwaggerData"
                 },
                 "message": {
                     "type": "string"
@@ -3745,7 +3954,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.AuthRegisterSwaggerRequest": {
+        "app_handlers.AuthRegisterSwaggerRequest": {
             "type": "object",
             "properties": {
                 "confirm_password": {
@@ -3765,7 +3974,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.AuthUserSwaggerDoc": {
+        "app_handlers.AuthUserSwaggerDoc": {
             "type": "object",
             "properties": {
                 "display_name": {
@@ -3803,14 +4012,14 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.AuthUserSwaggerResponse": {
+        "app_handlers.AuthUserSwaggerResponse": {
             "type": "object",
             "properties": {
                 "code": {
                     "type": "integer"
                 },
                 "data": {
-                    "$ref": "#/definitions/handlers.AuthUserSwaggerDoc"
+                    "$ref": "#/definitions/app_handlers.AuthUserSwaggerDoc"
                 },
                 "message": {
                     "type": "string"
@@ -3823,7 +4032,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.ConversationDeleteSwaggerData": {
+        "app_handlers.ConversationDeleteSwaggerData": {
             "type": "object",
             "properties": {
                 "deleted": {
@@ -3831,14 +4040,14 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.ConversationDeleteSwaggerResponse": {
+        "app_handlers.ConversationDeleteSwaggerResponse": {
             "type": "object",
             "properties": {
                 "code": {
                     "type": "integer"
                 },
                 "data": {
-                    "$ref": "#/definitions/handlers.ConversationDeleteSwaggerData"
+                    "$ref": "#/definitions/app_handlers.ConversationDeleteSwaggerData"
                 },
                 "message": {
                     "type": "string"
@@ -3851,14 +4060,14 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.ConversationDetailSwaggerResponse": {
+        "app_handlers.ConversationDetailSwaggerResponse": {
             "type": "object",
             "properties": {
                 "code": {
                     "type": "integer"
                 },
                 "data": {
-                    "$ref": "#/definitions/handlers.ConversationSwaggerDoc"
+                    "$ref": "#/definitions/app_handlers.ConversationSwaggerDoc"
                 },
                 "message": {
                     "type": "string"
@@ -3871,7 +4080,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.ConversationListSwaggerResponse": {
+        "app_handlers.ConversationListSwaggerResponse": {
             "type": "object",
             "properties": {
                 "code": {
@@ -3880,7 +4089,7 @@ const docTemplate = `{
                 "data": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/handlers.ConversationSwaggerDoc"
+                        "$ref": "#/definitions/app_handlers.ConversationSwaggerDoc"
                     }
                 },
                 "message": {
@@ -3894,7 +4103,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.ConversationMessageDoc": {
+        "app_handlers.ConversationMessageDoc": {
             "type": "object",
             "properties": {
                 "content": {
@@ -3917,7 +4126,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.ConversationMessagesSwaggerResponse": {
+        "app_handlers.ConversationMessagesSwaggerResponse": {
             "type": "object",
             "properties": {
                 "code": {
@@ -3926,7 +4135,7 @@ const docTemplate = `{
                 "data": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/handlers.ConversationMessageDoc"
+                        "$ref": "#/definitions/app_handlers.ConversationMessageDoc"
                     }
                 },
                 "message": {
@@ -3940,7 +4149,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.ConversationSwaggerDoc": {
+        "app_handlers.ConversationSwaggerDoc": {
             "type": "object",
             "properties": {
                 "created_at": {
@@ -3959,10 +4168,10 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "memory_compression": {
-                    "$ref": "#/definitions/handlers.MemoryCompressionSwaggerDoc"
+                    "$ref": "#/definitions/app_handlers.MemoryCompressionSwaggerDoc"
                 },
                 "memory_context": {
-                    "$ref": "#/definitions/handlers.MemoryContextSwaggerDoc"
+                    "$ref": "#/definitions/app_handlers.MemoryContextSwaggerDoc"
                 },
                 "message_count": {
                     "type": "integer"
@@ -3981,14 +4190,14 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.ConversationWorkspaceStateSwaggerResponse": {
+        "app_handlers.ConversationWorkspaceStateSwaggerResponse": {
             "type": "object",
             "properties": {
                 "code": {
                     "type": "integer"
                 },
                 "data": {
-                    "$ref": "#/definitions/handlers.WorkspaceStateSwaggerDoc"
+                    "$ref": "#/definitions/app_handlers.WorkspaceStateSwaggerDoc"
                 },
                 "message": {
                     "type": "string"
@@ -4001,7 +4210,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.CreateTaskRequest": {
+        "app_handlers.CreateTaskRequest": {
             "type": "object",
             "properties": {
                 "config": {
@@ -4030,7 +4239,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.CustomModelCreateSwaggerRequest": {
+        "app_handlers.CustomModelCreateSwaggerRequest": {
             "type": "object",
             "properties": {
                 "api_key": {
@@ -4040,13 +4249,13 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "capabilities": {
-                    "$ref": "#/definitions/handlers.ModelCapabilitiesSwaggerDoc"
+                    "$ref": "#/definitions/app_handlers.ModelCapabilitiesSwaggerDoc"
                 },
                 "context_max_tokens": {
                     "type": "integer"
                 },
                 "cost": {
-                    "$ref": "#/definitions/handlers.ModelPricingSwaggerDoc"
+                    "$ref": "#/definitions/app_handlers.ModelPricingSwaggerDoc"
                 },
                 "display_name": {
                     "type": "string"
@@ -4071,7 +4280,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.CustomModelDeleteSwaggerData": {
+        "app_handlers.CustomModelDeleteSwaggerData": {
             "type": "object",
             "properties": {
                 "deleted": {
@@ -4079,14 +4288,14 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.CustomModelDeleteSwaggerResponse": {
+        "app_handlers.CustomModelDeleteSwaggerResponse": {
             "type": "object",
             "properties": {
                 "code": {
                     "type": "integer"
                 },
                 "data": {
-                    "$ref": "#/definitions/handlers.CustomModelDeleteSwaggerData"
+                    "$ref": "#/definitions/app_handlers.CustomModelDeleteSwaggerData"
                 },
                 "message": {
                     "type": "string"
@@ -4099,7 +4308,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.CustomModelListSwaggerResponse": {
+        "app_handlers.CustomModelListSwaggerResponse": {
             "type": "object",
             "properties": {
                 "code": {
@@ -4108,7 +4317,7 @@ const docTemplate = `{
                 "data": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/handlers.CustomModelSwaggerDoc"
+                        "$ref": "#/definitions/app_handlers.CustomModelSwaggerDoc"
                     }
                 },
                 "message": {
@@ -4122,7 +4331,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.CustomModelSwaggerDoc": {
+        "app_handlers.CustomModelSwaggerDoc": {
             "type": "object",
             "properties": {
                 "api_key_masked": {
@@ -4132,16 +4341,16 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "capabilities": {
-                    "$ref": "#/definitions/handlers.ModelCapabilitiesSwaggerDoc"
+                    "$ref": "#/definitions/app_handlers.ModelCapabilitiesSwaggerDoc"
                 },
                 "context": {
-                    "$ref": "#/definitions/handlers.ModelContextSwaggerDoc"
+                    "$ref": "#/definitions/app_handlers.ModelContextSwaggerDoc"
                 },
                 "context_max_tokens": {
                     "type": "integer"
                 },
                 "cost": {
-                    "$ref": "#/definitions/handlers.ModelPricingSwaggerDoc"
+                    "$ref": "#/definitions/app_handlers.ModelPricingSwaggerDoc"
                 },
                 "created_at": {
                     "type": "string"
@@ -4175,14 +4384,14 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.CustomModelSwaggerResponse": {
+        "app_handlers.CustomModelSwaggerResponse": {
             "type": "object",
             "properties": {
                 "code": {
                     "type": "integer"
                 },
                 "data": {
-                    "$ref": "#/definitions/handlers.CustomModelSwaggerDoc"
+                    "$ref": "#/definitions/app_handlers.CustomModelSwaggerDoc"
                 },
                 "message": {
                     "type": "string"
@@ -4195,7 +4404,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.CustomModelUpdateSwaggerRequest": {
+        "app_handlers.CustomModelUpdateSwaggerRequest": {
             "type": "object",
             "properties": {
                 "api_key": {
@@ -4205,7 +4414,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "capabilities": {
-                    "$ref": "#/definitions/handlers.ModelCapabilitiesSwaggerDoc"
+                    "$ref": "#/definitions/app_handlers.ModelCapabilitiesSwaggerDoc"
                 },
                 "clear_api_key": {
                     "type": "boolean"
@@ -4217,7 +4426,7 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "cost": {
-                    "$ref": "#/definitions/handlers.ModelPricingSwaggerDoc"
+                    "$ref": "#/definitions/app_handlers.ModelPricingSwaggerDoc"
                 },
                 "display_name": {
                     "type": "string"
@@ -4242,7 +4451,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.ErrorSwaggerResponse": {
+        "app_handlers.ErrorSwaggerResponse": {
             "type": "object",
             "properties": {
                 "code": {
@@ -4260,7 +4469,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.ExampleSayHelloSwaggerResponse": {
+        "app_handlers.ExampleSayHelloSwaggerResponse": {
             "type": "object",
             "properties": {
                 "code": {
@@ -4280,7 +4489,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.MemoryCompressionSwaggerDoc": {
+        "app_handlers.MemoryCompressionSwaggerDoc": {
             "type": "object",
             "properties": {
                 "rendered_summary_tokens_after": {
@@ -4315,7 +4524,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.MemoryContextSwaggerDoc": {
+        "app_handlers.MemoryContextSwaggerDoc": {
             "type": "object",
             "properties": {
                 "has_summary": {
@@ -4344,7 +4553,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.ModelCapabilitiesSwaggerDoc": {
+        "app_handlers.ModelCapabilitiesSwaggerDoc": {
             "type": "object",
             "properties": {
                 "attachments": {
@@ -4352,7 +4561,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.ModelCatalogSwaggerDoc": {
+        "app_handlers.ModelCatalogSwaggerDoc": {
             "type": "object",
             "properties": {
                 "default_model_id": {
@@ -4364,19 +4573,19 @@ const docTemplate = `{
                 "providers": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/handlers.ModelProviderSwaggerDoc"
+                        "$ref": "#/definitions/app_handlers.ModelProviderSwaggerDoc"
                     }
                 }
             }
         },
-        "handlers.ModelCatalogSwaggerResponse": {
+        "app_handlers.ModelCatalogSwaggerResponse": {
             "type": "object",
             "properties": {
                 "code": {
                     "type": "integer"
                 },
                 "data": {
-                    "$ref": "#/definitions/handlers.ModelCatalogSwaggerDoc"
+                    "$ref": "#/definitions/app_handlers.ModelCatalogSwaggerDoc"
                 },
                 "message": {
                     "type": "string"
@@ -4389,7 +4598,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.ModelContextSwaggerDoc": {
+        "app_handlers.ModelContextSwaggerDoc": {
             "type": "object",
             "properties": {
                 "input": {
@@ -4403,17 +4612,17 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.ModelEntrySwaggerDoc": {
+        "app_handlers.ModelEntrySwaggerDoc": {
             "type": "object",
             "properties": {
                 "capabilities": {
-                    "$ref": "#/definitions/handlers.ModelCapabilitiesSwaggerDoc"
+                    "$ref": "#/definitions/app_handlers.ModelCapabilitiesSwaggerDoc"
                 },
                 "context": {
-                    "$ref": "#/definitions/handlers.ModelContextSwaggerDoc"
+                    "$ref": "#/definitions/app_handlers.ModelContextSwaggerDoc"
                 },
                 "cost": {
-                    "$ref": "#/definitions/handlers.ModelPricingSwaggerDoc"
+                    "$ref": "#/definitions/app_handlers.ModelPricingSwaggerDoc"
                 },
                 "id": {
                     "type": "string"
@@ -4426,21 +4635,21 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.ModelPricingSwaggerDoc": {
+        "app_handlers.ModelPricingSwaggerDoc": {
             "type": "object",
             "properties": {
                 "cached_input": {
-                    "$ref": "#/definitions/handlers.TokenPriceSwaggerDoc"
+                    "$ref": "#/definitions/app_handlers.TokenPriceSwaggerDoc"
                 },
                 "input": {
-                    "$ref": "#/definitions/handlers.TokenPriceSwaggerDoc"
+                    "$ref": "#/definitions/app_handlers.TokenPriceSwaggerDoc"
                 },
                 "output": {
-                    "$ref": "#/definitions/handlers.TokenPriceSwaggerDoc"
+                    "$ref": "#/definitions/app_handlers.TokenPriceSwaggerDoc"
                 }
             }
         },
-        "handlers.ModelProviderSwaggerDoc": {
+        "app_handlers.ModelProviderSwaggerDoc": {
             "type": "object",
             "properties": {
                 "id": {
@@ -4449,7 +4658,7 @@ const docTemplate = `{
                 "models": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/handlers.ModelEntrySwaggerDoc"
+                        "$ref": "#/definitions/app_handlers.ModelEntrySwaggerDoc"
                     }
                 },
                 "name": {
@@ -4457,7 +4666,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.ModelTestSwaggerData": {
+        "app_handlers.ModelTestSwaggerData": {
             "type": "object",
             "properties": {
                 "ok": {
@@ -4465,14 +4674,14 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.ModelTestSwaggerResponse": {
+        "app_handlers.ModelTestSwaggerResponse": {
             "type": "object",
             "properties": {
                 "code": {
                     "type": "integer"
                 },
                 "data": {
-                    "$ref": "#/definitions/handlers.ModelTestSwaggerData"
+                    "$ref": "#/definitions/app_handlers.ModelTestSwaggerData"
                 },
                 "message": {
                     "type": "string"
@@ -4485,7 +4694,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.PromptBindingCreateSwaggerRequest": {
+        "app_handlers.PromptBindingCreateSwaggerRequest": {
             "type": "object",
             "properties": {
                 "is_default": {
@@ -4514,7 +4723,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.PromptBindingListSwaggerResponse": {
+        "app_handlers.PromptBindingListSwaggerResponse": {
             "type": "object",
             "properties": {
                 "code": {
@@ -4523,7 +4732,7 @@ const docTemplate = `{
                 "data": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/handlers.PromptBindingSwaggerDoc"
+                        "$ref": "#/definitions/app_handlers.PromptBindingSwaggerDoc"
                     }
                 },
                 "message": {
@@ -4537,7 +4746,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.PromptBindingSwaggerDoc": {
+        "app_handlers.PromptBindingSwaggerDoc": {
             "type": "object",
             "properties": {
                 "created_at": {
@@ -4581,14 +4790,14 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.PromptBindingSwaggerResponse": {
+        "app_handlers.PromptBindingSwaggerResponse": {
             "type": "object",
             "properties": {
                 "code": {
                     "type": "integer"
                 },
                 "data": {
-                    "$ref": "#/definitions/handlers.PromptBindingSwaggerDoc"
+                    "$ref": "#/definitions/app_handlers.PromptBindingSwaggerDoc"
                 },
                 "message": {
                     "type": "string"
@@ -4601,7 +4810,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.PromptBindingUpdateSwaggerRequest": {
+        "app_handlers.PromptBindingUpdateSwaggerRequest": {
             "type": "object",
             "properties": {
                 "is_default": {
@@ -4630,7 +4839,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.PromptDeleteSwaggerData": {
+        "app_handlers.PromptDeleteSwaggerData": {
             "type": "object",
             "properties": {
                 "deleted": {
@@ -4638,14 +4847,14 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.PromptDeleteSwaggerResponse": {
+        "app_handlers.PromptDeleteSwaggerResponse": {
             "type": "object",
             "properties": {
                 "code": {
                     "type": "integer"
                 },
                 "data": {
-                    "$ref": "#/definitions/handlers.PromptDeleteSwaggerData"
+                    "$ref": "#/definitions/app_handlers.PromptDeleteSwaggerData"
                 },
                 "message": {
                     "type": "string"
@@ -4658,7 +4867,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.PromptDocumentCreateSwaggerRequest": {
+        "app_handlers.PromptDocumentCreateSwaggerRequest": {
             "type": "object",
             "properties": {
                 "content": {
@@ -4681,7 +4890,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.PromptDocumentListSwaggerResponse": {
+        "app_handlers.PromptDocumentListSwaggerResponse": {
             "type": "object",
             "properties": {
                 "code": {
@@ -4690,7 +4899,7 @@ const docTemplate = `{
                 "data": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/handlers.PromptDocumentSwaggerDoc"
+                        "$ref": "#/definitions/app_handlers.PromptDocumentSwaggerDoc"
                     }
                 },
                 "message": {
@@ -4704,7 +4913,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.PromptDocumentSwaggerDoc": {
+        "app_handlers.PromptDocumentSwaggerDoc": {
             "type": "object",
             "properties": {
                 "content": {
@@ -4739,14 +4948,14 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.PromptDocumentSwaggerResponse": {
+        "app_handlers.PromptDocumentSwaggerResponse": {
             "type": "object",
             "properties": {
                 "code": {
                     "type": "integer"
                 },
                 "data": {
-                    "$ref": "#/definitions/handlers.PromptDocumentSwaggerDoc"
+                    "$ref": "#/definitions/app_handlers.PromptDocumentSwaggerDoc"
                 },
                 "message": {
                     "type": "string"
@@ -4759,7 +4968,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.PromptDocumentUpdateSwaggerRequest": {
+        "app_handlers.PromptDocumentUpdateSwaggerRequest": {
             "type": "object",
             "properties": {
                 "content": {
@@ -4779,7 +4988,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.PublicRegistrationSettingsSwaggerDoc": {
+        "app_handlers.PublicRegistrationSettingsSwaggerDoc": {
             "type": "object",
             "properties": {
                 "enabled": {
@@ -4787,14 +4996,14 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.PublicRegistrationSettingsSwaggerResponse": {
+        "app_handlers.PublicRegistrationSettingsSwaggerResponse": {
             "type": "object",
             "properties": {
                 "code": {
                     "type": "integer"
                 },
                 "data": {
-                    "$ref": "#/definitions/handlers.PublicRegistrationSettingsSwaggerDoc"
+                    "$ref": "#/definitions/app_handlers.PublicRegistrationSettingsSwaggerDoc"
                 },
                 "message": {
                     "type": "string"
@@ -4807,7 +5016,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.PublicTurnstileSettingsSwaggerDoc": {
+        "app_handlers.PublicTurnstileSettingsSwaggerDoc": {
             "type": "object",
             "properties": {
                 "enabled": {
@@ -4827,14 +5036,14 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.PublicTurnstileSettingsSwaggerResponse": {
+        "app_handlers.PublicTurnstileSettingsSwaggerResponse": {
             "type": "object",
             "properties": {
                 "code": {
                     "type": "integer"
                 },
                 "data": {
-                    "$ref": "#/definitions/handlers.PublicTurnstileSettingsSwaggerDoc"
+                    "$ref": "#/definitions/app_handlers.PublicTurnstileSettingsSwaggerDoc"
                 },
                 "message": {
                     "type": "string"
@@ -4847,20 +5056,20 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.RunTaskResultSwaggerDoc": {
+        "app_handlers.RunTaskResultSwaggerDoc": {
             "type": "object",
             "properties": {
                 "conversation_id": {
                     "type": "string"
                 },
                 "final_message": {
-                    "$ref": "#/definitions/handlers.ConversationMessageDoc"
+                    "$ref": "#/definitions/app_handlers.ConversationMessageDoc"
                 },
                 "memory_compression": {
-                    "$ref": "#/definitions/handlers.MemoryCompressionSwaggerDoc"
+                    "$ref": "#/definitions/app_handlers.MemoryCompressionSwaggerDoc"
                 },
                 "memory_context": {
-                    "$ref": "#/definitions/handlers.MemoryContextSwaggerDoc"
+                    "$ref": "#/definitions/app_handlers.MemoryContextSwaggerDoc"
                 },
                 "messages_appended": {
                     "type": "integer"
@@ -4890,7 +5099,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.SkillListItemDoc": {
+        "app_handlers.SkillListItemDoc": {
             "type": "object",
             "properties": {
                 "description": {
@@ -4922,7 +5131,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.SkillListSwaggerResponse": {
+        "app_handlers.SkillListSwaggerResponse": {
             "type": "object",
             "properties": {
                 "code": {
@@ -4931,7 +5140,7 @@ const docTemplate = `{
                 "data": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/handlers.SkillListItemDoc"
+                        "$ref": "#/definitions/app_handlers.SkillListItemDoc"
                     }
                 },
                 "message": {
@@ -4945,7 +5154,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.SkillSwaggerDoc": {
+        "app_handlers.SkillSwaggerDoc": {
             "type": "object",
             "properties": {
                 "content": {
@@ -4986,14 +5195,14 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.SkillSwaggerResponse": {
+        "app_handlers.SkillSwaggerResponse": {
             "type": "object",
             "properties": {
                 "code": {
                     "type": "integer"
                 },
                 "data": {
-                    "$ref": "#/definitions/handlers.SkillSwaggerDoc"
+                    "$ref": "#/definitions/app_handlers.SkillSwaggerDoc"
                 },
                 "message": {
                     "type": "string"
@@ -5006,7 +5215,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.TaskSwaggerDoc": {
+        "app_handlers.TaskSwaggerDoc": {
             "type": "object",
             "properties": {
                 "created_at": {
@@ -5025,7 +5234,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "result": {
-                    "$ref": "#/definitions/handlers.RunTaskResultSwaggerDoc"
+                    "$ref": "#/definitions/app_handlers.RunTaskResultSwaggerDoc"
                 },
                 "retry_of_task_id": {
                     "type": "string"
@@ -5050,14 +5259,14 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.TaskSwaggerResponse": {
+        "app_handlers.TaskSwaggerResponse": {
             "type": "object",
             "properties": {
                 "code": {
                     "type": "integer"
                 },
                 "data": {
-                    "$ref": "#/definitions/handlers.TaskSwaggerDoc"
+                    "$ref": "#/definitions/app_handlers.TaskSwaggerDoc"
                 },
                 "message": {
                     "type": "string"
@@ -5070,7 +5279,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.TaskWorkspaceSummarySwaggerDoc": {
+        "app_handlers.TaskWorkspaceSummarySwaggerDoc": {
             "type": "object",
             "properties": {
                 "backup_root": {
@@ -5113,7 +5322,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.TokenPriceSwaggerDoc": {
+        "app_handlers.TokenPriceSwaggerDoc": {
             "type": "object",
             "properties": {
                 "amount_usd": {
@@ -5124,7 +5333,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.UserEmailVerificationConfirmSwaggerRequest": {
+        "app_handlers.UserEmailVerificationConfirmSwaggerRequest": {
             "type": "object",
             "properties": {
                 "code": {
@@ -5135,7 +5344,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.UserEmailVerificationStartSwaggerRequest": {
+        "app_handlers.UserEmailVerificationStartSwaggerRequest": {
             "type": "object",
             "properties": {
                 "email": {
@@ -5146,7 +5355,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.UserPasswordChangeSwaggerRequest": {
+        "app_handlers.UserPasswordChangeSwaggerRequest": {
             "type": "object",
             "properties": {
                 "confirm_password": {
@@ -5160,7 +5369,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.UserProfileUpdateSwaggerRequest": {
+        "app_handlers.UserProfileUpdateSwaggerRequest": {
             "type": "object",
             "properties": {
                 "display_name": {
@@ -5168,7 +5377,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.UserWorkspaceSummarySwaggerDoc": {
+        "app_handlers.UserWorkspaceSummarySwaggerDoc": {
             "type": "object",
             "properties": {
                 "home_root": {
@@ -5177,7 +5386,7 @@ const docTemplate = `{
                 "tasks": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/handlers.TaskWorkspaceSummarySwaggerDoc"
+                        "$ref": "#/definitions/app_handlers.TaskWorkspaceSummarySwaggerDoc"
                     }
                 },
                 "user_id": {
@@ -5185,14 +5394,14 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.UserWorkspaceSummarySwaggerResponse": {
+        "app_handlers.UserWorkspaceSummarySwaggerResponse": {
             "type": "object",
             "properties": {
                 "code": {
                     "type": "integer"
                 },
                 "data": {
-                    "$ref": "#/definitions/handlers.UserWorkspaceSummarySwaggerDoc"
+                    "$ref": "#/definitions/app_handlers.UserWorkspaceSummarySwaggerDoc"
                 },
                 "message": {
                     "type": "string"
@@ -5205,7 +5414,178 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.WorkspaceStateSwaggerDoc": {
+        "app_handlers.WorkspaceBrowserDiffSwaggerDoc": {
+            "type": "object",
+            "properties": {
+                "binary": {
+                    "type": "boolean"
+                },
+                "conversation_id": {
+                    "type": "string"
+                },
+                "home_content": {
+                    "type": "string"
+                },
+                "path": {
+                    "type": "string"
+                },
+                "task_content": {
+                    "type": "string"
+                },
+                "task_id": {
+                    "type": "string"
+                },
+                "unified_diff": {
+                    "type": "string"
+                },
+                "user_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "app_handlers.WorkspaceBrowserDiffSwaggerResponse": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "integer"
+                },
+                "data": {
+                    "$ref": "#/definitions/app_handlers.WorkspaceBrowserDiffSwaggerDoc"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "ok": {
+                    "type": "boolean"
+                },
+                "time": {
+                    "type": "string"
+                }
+            }
+        },
+        "app_handlers.WorkspaceBrowserFileSwaggerDoc": {
+            "type": "object",
+            "properties": {
+                "binary": {
+                    "type": "boolean"
+                },
+                "content": {
+                    "type": "string"
+                },
+                "conversation_id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "path": {
+                    "type": "string"
+                },
+                "size": {
+                    "type": "integer"
+                },
+                "task_id": {
+                    "type": "string"
+                },
+                "user_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "app_handlers.WorkspaceBrowserFileSwaggerResponse": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "integer"
+                },
+                "data": {
+                    "$ref": "#/definitions/app_handlers.WorkspaceBrowserFileSwaggerDoc"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "ok": {
+                    "type": "boolean"
+                },
+                "time": {
+                    "type": "string"
+                }
+            }
+        },
+        "app_handlers.WorkspaceBrowserSnapshotSwaggerDoc": {
+            "type": "object",
+            "properties": {
+                "conversation_id": {
+                    "type": "string"
+                },
+                "home_root": {
+                    "type": "string"
+                },
+                "task_id": {
+                    "type": "string"
+                },
+                "task_root": {
+                    "type": "string"
+                },
+                "tree": {
+                    "$ref": "#/definitions/app_handlers.WorkspaceBrowserTreeNodeSwaggerDoc"
+                },
+                "user_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "app_handlers.WorkspaceBrowserSnapshotSwaggerResponse": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "integer"
+                },
+                "data": {
+                    "$ref": "#/definitions/app_handlers.WorkspaceBrowserSnapshotSwaggerDoc"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "ok": {
+                    "type": "boolean"
+                },
+                "time": {
+                    "type": "string"
+                }
+            }
+        },
+        "app_handlers.WorkspaceBrowserTreeNodeSwaggerDoc": {
+            "type": "object",
+            "properties": {
+                "binary": {
+                    "type": "boolean"
+                },
+                "children": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/app_handlers.WorkspaceBrowserTreeNodeSwaggerDoc"
+                    }
+                },
+                "name": {
+                    "type": "string"
+                },
+                "path": {
+                    "type": "string"
+                },
+                "size": {
+                    "type": "integer"
+                },
+                "type": {
+                    "type": "string",
+                    "enum": [
+                        "dir",
+                        "file"
+                    ]
+                }
+            }
+        },
+        "app_handlers.WorkspaceStateSwaggerDoc": {
             "type": "object",
             "properties": {
                 "backup_root": {
@@ -5257,14 +5637,14 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.WorkspaceStateSwaggerResponse": {
+        "app_handlers.WorkspaceStateSwaggerResponse": {
             "type": "object",
             "properties": {
                 "code": {
                     "type": "integer"
                 },
                 "data": {
-                    "$ref": "#/definitions/handlers.WorkspaceStateSwaggerDoc"
+                    "$ref": "#/definitions/app_handlers.WorkspaceStateSwaggerDoc"
                 },
                 "message": {
                     "type": "string"

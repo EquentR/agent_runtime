@@ -157,6 +157,18 @@ func (h *WorkspaceHandler) BrowserMiddleware() gin.HandlerFunc {
 	}
 }
 
+// handleGetConversationWorkspaceFiles returns the workspace tree for the current conversation.
+//
+// @Summary 浏览当前 conversation 的工作区文件树
+// @Description 返回当前 conversation 对应 task workspace 的文件树，可选 path 用于过滤子目录。
+// @Tags conversations
+// @Produce json
+// @Param id path string true "Conversation ID"
+// @Param path query string false "Filter path"
+// @Success 200 {object} WorkspaceBrowserSnapshotSwaggerResponse
+// @Failure 401 {object} ErrorSwaggerResponse
+// @Failure 404 {object} ErrorSwaggerResponse
+// @Router /conversations/{id}/workspace/files [get]
 func (h *WorkspaceHandler) handleGetConversationWorkspaceFiles() (method, relativePath string, wrapper resp.JsonOptionsResultWrapper, opts []resp.WrapperOption) {
 	return http.MethodGet, "/:id/workspace/files", func(c *gin.Context) (any, []resp.ResOpt, error) {
 		conversation, resOpts, err := h.loadConversationForWorkspace(c)
@@ -179,6 +191,19 @@ func (h *WorkspaceHandler) handleGetConversationWorkspaceFiles() (method, relati
 	}, nil
 }
 
+// handleGetConversationWorkspaceFile returns the selected workspace file content and metadata.
+//
+// @Summary 查看当前 conversation 工作区文件
+// @Description 返回当前 conversation 对应 task workspace 中指定 path 的文件内容和元数据。
+// @Tags conversations
+// @Produce json
+// @Param id path string true "Conversation ID"
+// @Param path query string true "File path"
+// @Success 200 {object} WorkspaceBrowserFileSwaggerResponse
+// @Failure 400 {object} ErrorSwaggerResponse
+// @Failure 401 {object} ErrorSwaggerResponse
+// @Failure 404 {object} ErrorSwaggerResponse
+// @Router /conversations/{id}/workspace/file [get]
 func (h *WorkspaceHandler) handleGetConversationWorkspaceFile() (method, relativePath string, wrapper resp.JsonOptionsResultWrapper, opts []resp.WrapperOption) {
 	return http.MethodGet, "/:id/workspace/file", func(c *gin.Context) (any, []resp.ResOpt, error) {
 		conversation, resOpts, err := h.loadConversationForWorkspace(c)
@@ -197,6 +222,19 @@ func (h *WorkspaceHandler) handleGetConversationWorkspaceFile() (method, relativ
 	}, nil
 }
 
+// handleGetConversationWorkspaceDiff returns a unified diff for a workspace file.
+//
+// @Summary 查看当前 conversation 工作区 diff
+// @Description 将当前 conversation 的 task workspace 与 home workspace 对比并返回统一 diff。
+// @Tags conversations
+// @Produce json
+// @Param id path string true "Conversation ID"
+// @Param path query string true "File path"
+// @Success 200 {object} WorkspaceBrowserDiffSwaggerResponse
+// @Failure 400 {object} ErrorSwaggerResponse
+// @Failure 401 {object} ErrorSwaggerResponse
+// @Failure 404 {object} ErrorSwaggerResponse
+// @Router /conversations/{id}/workspace/diff [get]
 func (h *WorkspaceHandler) handleGetConversationWorkspaceDiff() (method, relativePath string, wrapper resp.JsonOptionsResultWrapper, opts []resp.WrapperOption) {
 	return http.MethodGet, "/:id/workspace/diff", func(c *gin.Context) (any, []resp.ResOpt, error) {
 		conversation, resOpts, err := h.loadConversationForWorkspace(c)
@@ -215,6 +253,19 @@ func (h *WorkspaceHandler) handleGetConversationWorkspaceDiff() (method, relativ
 	}, nil
 }
 
+// handleDownloadConversationWorkspace streams a workspace file as an attachment.
+//
+// @Summary 下载当前 conversation 工作区文件
+// @Description 以二进制流方式下载当前 conversation 对应 task workspace 中指定路径的文件。
+// @Tags conversations
+// @Produce application/octet-stream
+// @Param id path string true "Conversation ID"
+// @Param path query string true "File path"
+// @Success 200 {file} string "workspace file content"
+// @Failure 400 {object} ErrorSwaggerResponse
+// @Failure 401 {object} ErrorSwaggerResponse
+// @Failure 404 {object} ErrorSwaggerResponse
+// @Router /conversations/{id}/workspace/download [get]
 func (h *WorkspaceHandler) handleDownloadConversationWorkspace() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		conversation, resOpts, err := h.loadConversationForWorkspace(c)
