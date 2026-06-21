@@ -57,7 +57,7 @@ func visibleBuiltinTools(env runtimeEnv) []coretools.Tool {
 
 func readonlyVisibleTool(name string) bool {
 	switch name {
-	case "write_file", "delete_file", "move_file", "copy_file":
+	case "write_file", "delete_file", "move_file", "copy_file", "kill_process":
 		return false
 	default:
 		return true

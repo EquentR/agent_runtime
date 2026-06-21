@@ -16,6 +16,7 @@ import (
 	"github.com/EquentR/agent_runtime/core/runtimeprompt"
 	coretools "github.com/EquentR/agent_runtime/core/tools"
 	coretypes "github.com/EquentR/agent_runtime/core/types"
+	"github.com/EquentR/agent_runtime/core/workspaces"
 )
 
 func TestRunnerRunStreamEmitsTextAndCompletedEvents(t *testing.T) {
@@ -1058,6 +1059,22 @@ func TestRunnerRunStreamMergesRegistryToolsWithInputTools(t *testing.T) {
 	}
 	if tools[0].Name != "lookup_weather" && tools[1].Name != "lookup_weather" {
 		t.Fatalf("request tools = %#v, want lookup_weather included", tools)
+	}
+}
+
+func TestEnsureWorkspaceModeArgumentOverridesSpoofedMode(t *testing.T) {
+	arguments := map[string]any{
+		"command":        "echo hi",
+		"workspace_mode": "mutable",
+	}
+
+	got := ensureWorkspaceModeArgument(arguments, workspaces.ModeReadonly)
+
+	if got["workspace_mode"] != string(workspaces.ModeReadonly) {
+		t.Fatalf("workspace_mode = %#v, want %q", got["workspace_mode"], workspaces.ModeReadonly)
+	}
+	if arguments["workspace_mode"] != "mutable" {
+		t.Fatalf("original arguments mutated = %#v, want spoofed value preserved in caller map", arguments["workspace_mode"])
 	}
 }
 

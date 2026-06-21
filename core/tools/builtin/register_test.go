@@ -77,7 +77,7 @@ func TestRegisterReadonlyModeHidesWriteToolsButKeepsAskUserAndImageTools(t *test
 		names = append(names, definition.Name)
 	}
 
-	for _, hidden := range []string{"write_file", "delete_file", "move_file", "copy_file"} {
+	for _, hidden := range []string{"write_file", "delete_file", "move_file", "copy_file", "kill_process"} {
 		if slices.Contains(names, hidden) {
 			t.Fatalf("readonly registry contains %q, want hidden", hidden)
 		}
@@ -492,7 +492,13 @@ func TestFileToolsRejectSymlink(t *testing.T) {
 
 func TestExecCommand(t *testing.T) {
 	workspace := t.TempDir()
-	registry := newBuiltinRegistry(t, Options{WorkspaceRoot: workspace, CommandTimeout: 5 * time.Second})
+	registry := newBuiltinRegistry(t, Options{
+		WorkspaceRoot:  workspace,
+		CommandTimeout: 5 * time.Second,
+		CommandJudge: &stubCommandJudge{
+			result: CommandJudgeResult{Verdict: CommandVerdictSafe},
+		},
+	})
 	policy, ok := registry.ApprovalPolicy("exec_command")
 	if !ok {
 		t.Fatal("ApprovalPolicy(exec_command) ok = false, want true")
@@ -504,104 +510,6 @@ func TestExecCommand(t *testing.T) {
 	})
 	if safeRequirement.Required {
 		t.Fatalf("safe exec approval = %#v, want no approval", safeRequirement)
-	}
-
-	deleteRequirement := policy.Evaluate(map[string]any{
-		"command": "rm",
-		"args":    []any{"-rf", "tmp"},
-	})
-	if !deleteRequirement.Required {
-		t.Fatal("rm approval Required = false, want true")
-	}
-	if deleteRequirement.RiskLevel == "" {
-		t.Fatal("rm approval RiskLevel = empty, want non-empty")
-	}
-	if !strings.Contains(strings.ToLower(deleteRequirement.Reason), "delete") {
-		t.Fatalf("rm approval Reason = %q, want delete-focused summary", deleteRequirement.Reason)
-	}
-
-	mutationRequirement := policy.Evaluate(map[string]any{
-		"command": "apt-get",
-		"args":    []any{"install", "ripgrep"},
-	})
-	if !mutationRequirement.Required {
-		t.Fatal("apt-get install approval Required = false, want true")
-	}
-	if !strings.Contains(strings.ToLower(mutationRequirement.Reason), "system") {
-		t.Fatalf("apt-get install Reason = %q, want system-focused summary", mutationRequirement.Reason)
-	}
-
-	wrapperCases := []struct {
-		name   string
-		args   map[string]any
-		wantIn string
-	}{
-		{
-			name:   "sh wrapper delete",
-			args:   map[string]any{"command": "sh", "args": []any{"-c", "rm -rf tmp"}},
-			wantIn: "delete",
-		},
-		{
-			name:   "cmd wrapper delete",
-			args:   map[string]any{"command": "cmd", "args": []any{"/C", "del temp.txt"}},
-			wantIn: "delete",
-		},
-		{
-			name:   "powershell wrapper kill",
-			args:   map[string]any{"command": "powershell", "args": []any{"-Command", "Stop-Process -Id 42"}},
-			wantIn: "terminate",
-		},
-		{
-			name:   "sudo prefix delete",
-			args:   map[string]any{"command": "sudo", "args": []any{"rm", "-rf", "tmp"}},
-			wantIn: "delete",
-		},
-		{
-			name:   "env prefix delete",
-			args:   map[string]any{"command": "env", "args": []any{"FOO=1", "BAR=2", "rm", "-rf", "tmp"}},
-			wantIn: "delete",
-		},
-		{
-			name:   "nohup prefix kill",
-			args:   map[string]any{"command": "nohup", "args": []any{"kill", "123"}},
-			wantIn: "terminate",
-		},
-		{
-			name:   "powershell start-process wrapper kill",
-			args:   map[string]any{"command": "powershell", "args": []any{"-Command", "Start-Process taskkill -ArgumentList '/PID 123 /F' -Wait"}},
-			wantIn: "terminate",
-		},
-	}
-	for _, tc := range wrapperCases {
-		t.Run(tc.name, func(t *testing.T) {
-			requirement := policy.Evaluate(tc.args)
-			if !requirement.Required {
-				t.Fatalf("policy.Evaluate(%#v) Required = false, want true", tc.args)
-			}
-			if !strings.Contains(strings.ToLower(requirement.Reason), tc.wantIn) {
-				t.Fatalf("policy.Evaluate(%#v) Reason = %q, want substring %q", tc.args, requirement.Reason, tc.wantIn)
-			}
-		})
-	}
-
-	killCases := []struct {
-		name string
-		args map[string]any
-	}{
-		{name: "kill", args: map[string]any{"command": "kill", "args": []any{"123"}}},
-		{name: "pkill", args: map[string]any{"command": "pkill", "args": []any{"agent"}}},
-		{name: "taskkill", args: map[string]any{"command": "taskkill", "args": []any{"/PID", "123", "/F"}}},
-	}
-	for _, tc := range killCases {
-		t.Run(tc.name, func(t *testing.T) {
-			requirement := policy.Evaluate(tc.args)
-			if !requirement.Required {
-				t.Fatalf("policy.Evaluate(%#v) Required = false, want true", tc.args)
-			}
-			if !strings.Contains(strings.ToLower(requirement.Reason), "terminate") {
-				t.Fatalf("policy.Evaluate(%#v) Reason = %q, want terminate-focused summary", tc.args, requirement.Reason)
-			}
-		})
 	}
 
 	raw, err := registry.Execute(context.Background(), "exec_command", map[string]any{
@@ -631,7 +539,10 @@ func TestExecCommandTruncatesLargeStdout(t *testing.T) {
 	workspace := t.TempDir()
 	registry := newBuiltinRegistry(t, Options{
 		WorkspaceRoot: workspace,
-		OutputBudget:  OutputBudgetOptions{CommandStdoutBytes: 32},
+		CommandJudge: &stubCommandJudge{
+			result: CommandJudgeResult{Verdict: CommandVerdictSafe},
+		},
+		OutputBudget: OutputBudgetOptions{CommandStdoutBytes: 32},
 	})
 
 	raw, err := registry.Execute(context.Background(), "exec_command", map[string]any{
@@ -1131,7 +1042,13 @@ func newBuiltinLogEntry(level string, msg string, fields ...corelog.Field) built
 
 func TestExecCommandLogging(t *testing.T) {
 	workspace := t.TempDir()
-	registry := newBuiltinRegistry(t, Options{WorkspaceRoot: workspace, CommandTimeout: 5 * time.Second})
+	registry := newBuiltinRegistry(t, Options{
+		WorkspaceRoot:  workspace,
+		CommandTimeout: 5 * time.Second,
+		CommandJudge: &stubCommandJudge{
+			result: CommandJudgeResult{Verdict: CommandVerdictSafe},
+		},
+	})
 	spy := &builtinLogSpy{}
 	original := corelog.SetLogger(spy)
 	defer corelog.SetLogger(original)

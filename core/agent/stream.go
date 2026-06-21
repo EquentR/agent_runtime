@@ -844,7 +844,7 @@ func ensureWorkspaceModeArgument(arguments map[string]any, mode workspaces.Mode)
 	if cloned == nil {
 		cloned = map[string]any{}
 	}
-	if _, ok := cloned["workspace_mode"]; !ok && mode != "" {
+	if mode != "" {
 		cloned["workspace_mode"] = string(mode)
 	}
 	return cloned

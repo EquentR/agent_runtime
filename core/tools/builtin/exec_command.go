@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os/exec"
 	"runtime"
-	"slices"
 	"strings"
 	"time"
 
@@ -158,38 +157,18 @@ func evaluateExecCommandApproval(ctx context.Context, mode workspaces.Mode, argu
 	if requirement := evaluateExecCommandWithJudge(ctx, mode, arguments, judge, commandLine, judgeCommand); requirement.Decision != "" || requirement.Required || requirement.Reason != "" {
 		return requirement
 	}
-
-	head := tokens[0]
-	switch {
-	case isDeletionCommand(head, tokens[1:]):
-		return coretools.ApprovalRequirement{
-			Required:         true,
-			ArgumentsSummary: fmt.Sprintf("command=%s", commandLine),
-			RiskLevel:        coretools.RiskLevelHigh,
-			Reason:           fmt.Sprintf("command may delete files or directories: %s", commandLine),
-		}
-	case isProcessKillCommand(head):
-		return coretools.ApprovalRequirement{
-			Required:         true,
-			ArgumentsSummary: fmt.Sprintf("command=%s", commandLine),
-			RiskLevel:        coretools.RiskLevelHigh,
-			Reason:           fmt.Sprintf("command may terminate processes: %s", commandLine),
-		}
-	case isSystemMutationCommand(head, tokens[1:]):
-		return coretools.ApprovalRequirement{
-			Required:         true,
-			ArgumentsSummary: fmt.Sprintf("command=%s", commandLine),
-			RiskLevel:        coretools.RiskLevelHigh,
-			Reason:           fmt.Sprintf("command may mutate the system outside the workspace: %s", commandLine),
-		}
-	default:
-		return coretools.ApprovalRequirement{}
-	}
+	return coretools.ApprovalRequirement{}
 }
 
 func evaluateExecCommandWithJudge(ctx context.Context, mode workspaces.Mode, arguments map[string]any, judge CommandJudge, commandLine string, judgeCommand string) coretools.ApprovalRequirement {
 	if judge == nil {
-		return coretools.ApprovalRequirement{}
+		return coretools.ApprovalRequirement{
+			Decision:         coretools.ApprovalDecisionRequireApproval,
+			Required:         true,
+			ArgumentsSummary: fmt.Sprintf("command=%s", commandLine),
+			RiskLevel:        coretools.RiskLevelMedium,
+			Reason:           fmt.Sprintf("command judge unavailable; human approval required: %s", commandLine),
+		}
 	}
 
 	normalizedMode := workspaceModeFromArguments(mode, arguments)
@@ -262,6 +241,9 @@ func evaluateExecCommandWithJudge(ctx context.Context, mode workspaces.Mode, arg
 }
 
 func workspaceModeFromArguments(fallback workspaces.Mode, arguments map[string]any) workspaces.Mode {
+	if fallback == workspaces.ModeReadonly || fallback == workspaces.ModeMutable {
+		return fallback
+	}
 	raw := strings.TrimSpace(fmt.Sprint(arguments["workspace_mode"]))
 	switch workspaces.Mode(raw) {
 	case workspaces.ModeReadonly:
@@ -269,10 +251,7 @@ func workspaceModeFromArguments(fallback workspaces.Mode, arguments map[string]a
 	case workspaces.ModeMutable:
 		return workspaces.ModeMutable
 	default:
-		if fallback == "" {
-			return workspaces.ModeMutable
-		}
-		return fallback
+		return workspaces.ModeMutable
 	}
 }
 
@@ -469,30 +448,6 @@ func trimStartProcessPrefix(tokens []string) ([]string, bool) {
 
 func trimShellQuotes(value string) string {
 	return strings.Trim(value, `"'`)
-}
-
-func isDeletionCommand(head string, args []string) bool {
-	if slices.Contains([]string{"rm", "rmdir", "del", "erase", "rd", "unlink", "remove-item", "shred"}, head) {
-		return true
-	}
-	return head == "git" && len(args) > 0 && args[0] == "clean"
-}
-
-func isProcessKillCommand(head string) bool {
-	return slices.Contains([]string{"kill", "pkill", "killall", "taskkill", "stop-process"}, head)
-}
-
-func isSystemMutationCommand(head string, args []string) bool {
-	if slices.Contains([]string{"shutdown", "reboot", "halt", "poweroff", "mount", "umount", "mkfs", "diskpart", "useradd", "userdel", "usermod", "groupadd", "groupdel"}, head) {
-		return true
-	}
-	if slices.Contains([]string{"apt", "apt-get", "yum", "dnf", "zypper", "apk", "pacman", "brew", "pip", "pip3", "npm", "pnpm"}, head) {
-		return len(args) > 0 && slices.Contains([]string{"install", "uninstall", "remove", "upgrade", "update", "add"}, args[0])
-	}
-	if slices.Contains([]string{"systemctl", "service", "sc", "launchctl"}, head) {
-		return len(args) > 0 && slices.Contains([]string{"start", "stop", "restart", "reload", "enable", "disable", "mask", "unmask", "delete"}, args[0])
-	}
-	return false
 }
 
 func buildExecCommand(ctx context.Context, command string, args []string, useShell bool) *exec.Cmd {

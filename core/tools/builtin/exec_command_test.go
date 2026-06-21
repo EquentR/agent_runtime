@@ -92,6 +92,29 @@ func TestExecCommandJudgeUnavailableFallsBackToApproval(t *testing.T) {
 	}
 }
 
+func TestExecCommandJudgeMissingRequiresApproval(t *testing.T) {
+	registry := newBuiltinRegistry(t, Options{
+		WorkspaceRoot: t.TempDir(),
+	})
+
+	policy, ok := registry.ApprovalPolicy("exec_command")
+	if !ok {
+		t.Fatal("ApprovalPolicy(exec_command) ok = false, want true")
+	}
+
+	requirement := policy.Evaluate(map[string]any{
+		"command":        "echo",
+		"args":           []any{"hello"},
+		"workspace_mode": string(workspaces.ModeMutable),
+	})
+	if requirement.Decision != coretools.ApprovalDecisionRequireApproval {
+		t.Fatalf("Decision = %q, want %q when judge missing", requirement.Decision, coretools.ApprovalDecisionRequireApproval)
+	}
+	if !requirement.Required {
+		t.Fatal("missing judge should force human approval")
+	}
+}
+
 func TestExecCommandJudgeUnwrapsShellWrappersBeforeEvaluation(t *testing.T) {
 	judge := &recordingExecCommandJudge{
 		result: CommandJudgeResult{Verdict: CommandVerdictSafe},
