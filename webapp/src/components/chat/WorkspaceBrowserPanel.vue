@@ -255,6 +255,7 @@ watch(
 
 <style scoped>
 .workspace-browser-panel {
+  height: 100%;
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -318,6 +319,13 @@ watch(
   background: var(--app-input-bg);
 }
 
+.workspace-browser-search > svg {
+  width: 0.95rem;
+  height: 0.95rem;
+  flex: 0 0 auto;
+  color: var(--app-text-muted);
+}
+
 .workspace-browser-search-input {
   width: 100%;
   border: none;
@@ -337,6 +345,7 @@ watch(
 }
 
 .workspace-browser-body {
+  flex: 1 1 auto;
   min-height: 0;
   display: grid;
   grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.26fr);
@@ -400,6 +409,14 @@ watch(
   display: inline-grid;
   place-items: center;
   color: var(--app-text-muted);
+}
+
+.workspace-browser-node-icon svg,
+.workspace-browser-download svg,
+.workspace-browser-icon-button svg {
+  width: 1rem;
+  height: 1rem;
+  flex: 0 0 auto;
 }
 
 .workspace-browser-node-path {

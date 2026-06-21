@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
-import { Close, Menu } from '@element-plus/icons-vue'
+import { Close, FolderOpened, Menu } from '@element-plus/icons-vue'
 
 import ConversationSidebar from '../components/ConversationSidebar.vue'
 import ProfileDialog from '../components/ProfileDialog.vue'
@@ -127,6 +127,8 @@ const contextStatsRef = ref<HTMLElement | null>(null)
 const composerRef = ref<InstanceType<typeof MessageComposer> | null>(null)
 const messageListScrollSignal = ref(0)
 const showThinkingAndTools = ref(true)
+const workspaceVisible = ref(false)
+const workspaceViewportReady = ref(false)
 const workspaceMergeActionPending = ref('')
 const initialized = ref(false)
 let activeStreamAbortController: AbortController | null = null
@@ -210,6 +212,18 @@ const topbarStatusClass = computed(() => ({
   idle: !messagesLoading.value && !currentConversationBusy.value,
   loading: messagesLoading.value || currentConversationBusy.value,
 }))
+const workspacePanelVisible = computed(() => Boolean(activeConversationId.value) && workspaceVisible.value)
+const chatMainLayoutClass = computed(() => ({
+  'workspace-mobile': sidebarMobile.value,
+  'workspace-open': workspacePanelVisible.value,
+  'workspace-hidden': !workspacePanelVisible.value,
+}))
+const workspaceShellClass = computed(() => ({
+  mobile: sidebarMobile.value,
+  open: workspacePanelVisible.value,
+  hidden: !workspacePanelVisible.value,
+}))
+const workspaceToggleLabel = computed(() => (workspacePanelVisible.value ? '隐藏工作区' : '显示工作区'))
 
 function clearErrorState() {
   errorMessage.value = ''
@@ -589,6 +603,10 @@ function toggleSidebarCollapsed() {
   sidebarCollapsed.value = !sidebarCollapsed.value
 }
 
+function toggleWorkspacePanel() {
+  workspaceVisible.value = !workspaceVisible.value
+}
+
 function closeSidebarDrawer() {
   sidebarDrawerOpen.value = false
 }
@@ -596,10 +614,18 @@ function closeSidebarDrawer() {
 function syncSidebarViewport() {
   const mobile = window.innerWidth <= 960
   sidebarMobile.value = mobile
+  if (!workspaceViewportReady.value) {
+    workspaceVisible.value = !mobile
+    workspaceViewportReady.value = true
+  }
 
   if (!mobile) {
     sidebarDrawerOpen.value = false
   }
+}
+
+if (typeof window !== 'undefined') {
+  syncSidebarViewport()
 }
 
 async function loadCatalog() {
@@ -1531,6 +1557,7 @@ function handleGlobalKeydown(event: KeyboardEvent) {
   if (event.key === 'Escape') {
     closeModelMenu()
     closeContextStats()
+    workspaceVisible.value = false
   }
 }
 
@@ -1766,6 +1793,19 @@ onBeforeUnmount(() => {
               </div>
             </el-popover>
           <button
+            v-if="activeConversationId"
+            class="ghost-button icon-button workspace-toggle"
+            type="button"
+            data-workspace-toggle
+            :class="{ active: workspacePanelVisible }"
+            :title="workspaceToggleLabel"
+            :aria-label="workspaceToggleLabel"
+            :aria-pressed="workspacePanelVisible"
+            @click="toggleWorkspacePanel"
+          >
+            <FolderOpened />
+          </button>
+          <button
             class="thinking-toggle"
             :class="{ active: showThinkingAndTools }"
             :title="showThinkingAndTools ? '隐藏思考与工具调用' : '显示思考与工具调用'"
@@ -1796,27 +1836,49 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="chat-main">
-        <WorkspaceBrowserPanel
-          v-if="activeConversationId"
-          class="workspace-browser-panel-shell"
-          :conversation-id="activeConversationId"
-        />
-        <div v-if="showNoModelEmpty" class="chat-no-model-empty" data-no-model-empty>
-          <h2>当前没有可用模型</h2>
-          <p>请在个人设置中添加自定义模型，或联系管理员开启全局模型。</p>
-          <RouterLink class="primary-button" to="/profile#profile-models" data-no-model-profile-link>打开个人设置</RouterLink>
+        <div class="chat-main-layout" :class="chatMainLayoutClass">
+          <div class="chat-main-content">
+            <div v-if="showNoModelEmpty" class="chat-no-model-empty" data-no-model-empty>
+              <h2>当前没有可用模型</h2>
+              <p>请在个人设置中添加自定义模型，或联系管理员开启全局模型。</p>
+              <RouterLink class="primary-button" to="/profile#profile-models" data-no-model-profile-link>打开个人设置</RouterLink>
+            </div>
+            <MessageList
+              v-else
+              :loading="messagesLoading || currentConversationBusy"
+              :entries="visibleConversationEntries"
+              :show-thinking-and-tools="showThinkingAndTools"
+              :scroll-to-bottom-signal="messageListScrollSignal"
+              :approval-decision-state-by-id="approvalDecisionStateById"
+              :question-response-state-by-id="questionResponseStateById"
+              @approval-decision="handleApprovalDecision"
+              @interaction-respond="handleInteractionRespond"
+            />
+          </div>
+
+          <button
+            v-if="activeConversationId && sidebarMobile && workspacePanelVisible"
+            class="workspace-backdrop"
+            type="button"
+            aria-label="关闭工作区"
+            data-workspace-backdrop
+            @click="toggleWorkspacePanel"
+          ></button>
+
+          <aside
+            v-if="activeConversationId"
+            class="workspace-shell"
+            :class="workspaceShellClass"
+            data-workspace-shell
+            :aria-hidden="workspacePanelVisible ? 'false' : 'true'"
+          >
+            <WorkspaceBrowserPanel
+              class="workspace-browser-panel-shell"
+              :conversation-id="activeConversationId"
+              :conversation-title="activeConversationTitle()"
+            />
+          </aside>
         </div>
-        <MessageList
-          v-else
-          :loading="messagesLoading || currentConversationBusy"
-          :entries="visibleConversationEntries"
-          :show-thinking-and-tools="showThinkingAndTools"
-          :scroll-to-bottom-signal="messageListScrollSignal"
-          :approval-decision-state-by-id="approvalDecisionStateById"
-          :question-response-state-by-id="questionResponseStateById"
-          @approval-decision="handleApprovalDecision"
-          @interaction-respond="handleInteractionRespond"
-        />
       </div>
       <div class="chat-composer-dock">
         <p v-if="showComposerWelcome" class="composer-welcome">请尽情使唤 ~</p>
@@ -1970,7 +2032,9 @@ onBeforeUnmount(() => {
 }
 
 .workspace-browser-panel-shell {
-  margin-bottom: 0.75rem;
+  min-height: 0;
+  height: 100%;
+  margin: 0;
 }
 
 :global(.theme-teal-dark) .workspace-mode-label {

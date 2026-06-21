@@ -197,7 +197,30 @@ describe('ChatView', () => {
       task_id: 'task_workspace',
       home_root: '/home',
       task_root: '/task',
-      tree: [],
+      tree: [
+        {
+          path: 'src',
+          name: 'src',
+          type: 'directory',
+          children: [{ path: 'src/app.ts', name: 'app.ts', type: 'file', size: 12 }],
+        },
+      ],
+    })
+    api.fetchConversationWorkspaceFile.mockResolvedValue({
+      task_id: 'task_workspace',
+      path: 'src/app.ts',
+      name: 'app.ts',
+      type: 'file',
+      content: 'console.log("workspace")',
+      binary: false,
+      size: 12,
+    })
+    api.fetchConversationWorkspaceDiff.mockResolvedValue({
+      task_id: 'task_workspace',
+      path: 'src/app.ts',
+      diff: '@@ -1 +1 @@\n-console.log("main")\n+console.log("workspace")',
+      truncated: false,
+      binary: false,
     })
   })
 
@@ -2707,6 +2730,42 @@ describe('ChatView', () => {
     expect(titleBlock.element.firstElementChild?.classList.contains('model-menu')).toBe(true)
   })
 
+  it('shows a workspace toggle beside the context and thinking controls', async () => {
+    api.fetchConversations.mockResolvedValue([
+      {
+        id: 'conv_1',
+        title: 'Workspace chat',
+        last_message: 'hello',
+        message_count: 1,
+        provider_id: 'openai',
+        model_id: 'gpt-5.4',
+        created_by: 'demo-user',
+        created_at: '',
+        updated_at: '',
+      },
+    ])
+    api.fetchConversationMessages.mockResolvedValue([{ role: 'assistant', content: 'hello' }])
+
+    const router = makeRouter()
+    await router.push('/chat/conv_1')
+    await router.isReady()
+
+    const wrapper = mount(ChatView, {
+      global: {
+        plugins: [router],
+      },
+    })
+
+    await flushPromises()
+
+    const topbarRight = wrapper.get('.topbar-right')
+    const toggle = topbarRight.get('[data-workspace-toggle]')
+    expect(toggle.attributes('aria-label')).toBe('隐藏工作区')
+    expect(toggle.attributes('aria-pressed')).toBe('true')
+    expect(topbarRight.element.contains(toggle.element)).toBe(true)
+    expect(wrapper.get('[data-workspace-shell]').classes()).not.toContain('hidden')
+  })
+
   it('mounts the workspace browser panel inside the chat view for an active conversation', async () => {
     api.fetchConversations.mockResolvedValue([
       {
@@ -2738,6 +2797,54 @@ describe('ChatView', () => {
     expect(wrapper.find('.workspace-browser-panel-shell').exists()).toBe(true)
     expect(wrapper.text()).toContain('Workspace')
     expect(wrapper.text()).toContain('Workspace chat')
+  })
+
+  it('switches the workspace shell to a drawer on narrow screens', async () => {
+    setViewportWidth(375)
+    api.fetchConversations.mockResolvedValue([
+      {
+        id: 'conv_1',
+        title: 'Workspace chat',
+        last_message: 'hello',
+        message_count: 1,
+        provider_id: 'openai',
+        model_id: 'gpt-5.4',
+        created_by: 'demo-user',
+        created_at: '',
+        updated_at: '',
+      },
+    ])
+    api.fetchConversationMessages.mockResolvedValue([{ role: 'assistant', content: 'hello' }])
+
+    const router = makeRouter()
+    await router.push('/chat/conv_1')
+    await router.isReady()
+
+    const wrapper = mount(ChatView, {
+      global: {
+        plugins: [router],
+      },
+    })
+
+    await flushPromises()
+
+    const shell = wrapper.get('[data-workspace-shell]')
+    expect(shell.classes()).toContain('mobile')
+    expect(shell.classes()).toContain('hidden')
+    expect(wrapper.find('[data-workspace-backdrop]').exists()).toBe(false)
+
+    await wrapper.get('[data-workspace-toggle]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-workspace-shell]').classes()).toContain('mobile')
+    expect(wrapper.get('[data-workspace-shell]').classes()).toContain('open')
+    expect(wrapper.get('[data-workspace-shell]').attributes('aria-hidden')).toBe('false')
+    expect(wrapper.find('[data-workspace-backdrop]').exists()).toBe(true)
+
+    await wrapper.get('[data-workspace-backdrop]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-workspace-shell]').classes()).toContain('hidden')
   })
 
   it('lets the Element Plus model menu scrollbar expand beyond the trigger height', () => {
