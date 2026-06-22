@@ -22,7 +22,7 @@ type workspaceBrowser interface {
 	Snapshot(ctx context.Context, conversationID string, filterPath string) (*coreworkspaces.WorkspaceSnapshot, error)
 	File(ctx context.Context, conversationID string, filePath string) (*coreworkspaces.WorkspaceFileDetail, error)
 	Diff(ctx context.Context, conversationID string, filePath string) (*coreworkspaces.WorkspaceDiffResult, error)
-	Download(ctx context.Context, conversationID string, filePath string) ([]byte, string, error)
+	Download(ctx context.Context, conversationID string, filePath string) (*coreworkspaces.WorkspaceDownload, error)
 }
 
 type taskManagerStoreAdapter struct {
@@ -176,18 +176,11 @@ func (h *WorkspaceHandler) handleGetConversationWorkspaceFiles() (method, relati
 			return nil, resOpts, err
 		}
 		path := strings.TrimSpace(c.Query("path"))
-		if path == "" {
-			snapshot, err := h.browser.Snapshot(c.Request.Context(), conversation.ID, "")
-			if err != nil {
-				return nil, workspaceBrowserErrorOptions(err), err
-			}
-			return snapshot, nil, nil
-		}
-		detail, err := h.browser.File(c.Request.Context(), conversation.ID, path)
+		snapshot, err := h.browser.Snapshot(c.Request.Context(), conversation.ID, path)
 		if err != nil {
 			return nil, workspaceBrowserErrorOptions(err), err
 		}
-		return detail, nil, nil
+		return snapshot, nil, nil
 	}, nil
 }
 
@@ -253,15 +246,16 @@ func (h *WorkspaceHandler) handleGetConversationWorkspaceDiff() (method, relativ
 	}, nil
 }
 
-// handleDownloadConversationWorkspace streams a workspace file as an attachment.
+// handleDownloadConversationWorkspace streams a workspace file or directory zip as an attachment.
 //
-// @Summary 下载当前 conversation 工作区文件
-// @Description 以二进制流方式下载当前 conversation 对应 task workspace 中指定路径的文件。
+// @Summary 下载当前 conversation 工作区文件或目录
+// @Description 以二进制流方式下载当前 conversation 对应 task workspace 中指定路径的文件；目录会打包为 zip。
 // @Tags conversations
 // @Produce application/octet-stream
+// @Produce application/zip
 // @Param id path string true "Conversation ID"
-// @Param path query string true "File path"
-// @Success 200 {file} string "workspace file content"
+// @Param path query string true "File or directory path"
+// @Success 200 {file} string "workspace file content or directory zip"
 // @Failure 400 {object} ErrorSwaggerResponse
 // @Failure 401 {object} ErrorSwaggerResponse
 // @Failure 404 {object} ErrorSwaggerResponse
@@ -278,16 +272,20 @@ func (h *WorkspaceHandler) handleDownloadConversationWorkspace() gin.HandlerFunc
 			resp.BadJson(c, nil, fmt.Errorf("path is required"), resp.WithCode(http.StatusBadRequest))
 			return
 		}
-		data, fileName, err := h.browser.Download(c.Request.Context(), conversation.ID, path)
+		download, err := h.browser.Download(c.Request.Context(), conversation.ID, path)
 		if err != nil {
 			resp.BadJson(c, nil, err, workspaceBrowserErrorOptions(err)...)
 			return
 		}
 		headers := map[string]string{}
-		if fileName != "" {
-			headers["Content-Disposition"] = fmt.Sprintf(`attachment; filename="%s"`, fileName)
+		if download.FileName != "" {
+			headers["Content-Disposition"] = fmt.Sprintf(`attachment; filename="%s"`, download.FileName)
 		}
-		c.DataFromReader(http.StatusOK, int64(len(data)), "application/octet-stream", bytes.NewReader(data), headers)
+		contentType := download.ContentType
+		if contentType == "" {
+			contentType = "application/octet-stream"
+		}
+		c.DataFromReader(http.StatusOK, int64(len(download.Data)), contentType, bytes.NewReader(download.Data), headers)
 	}
 }
 

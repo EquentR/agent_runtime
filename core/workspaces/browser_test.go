@@ -1,6 +1,8 @@
 package workspaces
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -230,15 +232,65 @@ func TestBrowserFileDiffAndDownloadFollowWorkspaceContents(t *testing.T) {
 		t.Fatalf("UnifiedDiff = %q, want home removal and task addition", diff.UnifiedDiff)
 	}
 
-	data, fileName, err := env.browser.Download(ctx, "conv_1", "notes.md")
+	download, err := env.browser.Download(ctx, "conv_1", "notes.md")
 	if err != nil {
 		t.Fatalf("Download() error = %v", err)
 	}
-	if string(data) != "task line\n" {
-		t.Fatalf("download body = %q, want task line", string(data))
+	if string(download.Data) != "task line\n" {
+		t.Fatalf("download body = %q, want task line", string(download.Data))
 	}
-	if fileName != "notes.md" {
-		t.Fatalf("download fileName = %q, want notes.md", fileName)
+	if download.FileName != "notes.md" {
+		t.Fatalf("download fileName = %q, want notes.md", download.FileName)
+	}
+	if download.ContentType != "application/octet-stream" {
+		t.Fatalf("download ContentType = %q, want application/octet-stream", download.ContentType)
+	}
+}
+
+func TestBrowserDownloadDirectoryReturnsVisibleZip(t *testing.T) {
+	env := newBrowserTestEnv(t)
+	ctx := context.Background()
+
+	task := env.createTask(t, "conv_1", "42", ModeReadonly)
+	workspace := env.createWorkspace(t, "42", task.ID, ModeReadonly)
+	writeFile(t, workspace.Root, filepath.Join("docs", "guide.md"), "guide\n")
+	writeFile(t, workspace.Root, filepath.Join("docs", "nested", "deep.md"), "deep\n")
+	writeFile(t, workspace.Root, filepath.Join("docs", "AGENTS.md"), "# hidden agents\n")
+	writeFile(t, workspace.Root, filepath.Join("docs", "skills", "review", "SKILL.md"), "# hidden skill\n")
+	writeFile(t, workspace.Root, filepath.Join("docs", StateFileName), `{"hidden":true}`)
+
+	download, err := env.browser.Download(ctx, "conv_1", "docs")
+	if err != nil {
+		t.Fatalf("Download(docs) error = %v", err)
+	}
+	if download.FileName != "docs.zip" {
+		t.Fatalf("download FileName = %q, want docs.zip", download.FileName)
+	}
+	if download.ContentType != "application/zip" {
+		t.Fatalf("download ContentType = %q, want application/zip", download.ContentType)
+	}
+
+	entries := readZipEntries(t, download.Data)
+	for path, want := range map[string]string{
+		filepath.ToSlash(filepath.Join("docs", "guide.md")):          "guide\n",
+		filepath.ToSlash(filepath.Join("docs", "nested", "deep.md")): "deep\n",
+	} {
+		got, ok := entries[path]
+		if !ok {
+			t.Fatalf("zip entries = %#v, want %q", entries, path)
+		}
+		if got != want {
+			t.Fatalf("zip entry %q = %q, want %q", path, got, want)
+		}
+	}
+	for _, hiddenPath := range []string{
+		filepath.ToSlash(filepath.Join("docs", "AGENTS.md")),
+		filepath.ToSlash(filepath.Join("docs", "skills", "review", "SKILL.md")),
+		filepath.ToSlash(filepath.Join("docs", StateFileName)),
+	} {
+		if _, ok := entries[hiddenPath]; ok {
+			t.Fatalf("zip entries = %#v, did not want hidden path %q", entries, hiddenPath)
+		}
 	}
 }
 
@@ -252,6 +304,9 @@ func TestBrowserRejectsEscapingPathsAndSymlinks(t *testing.T) {
 	if _, err := env.browser.File(ctx, "conv_1", "../secret.txt"); err == nil {
 		t.Fatal("File() error = nil, want path escape rejection")
 	}
+	if _, err := env.browser.Download(ctx, "conv_1", "../secret.txt"); err == nil {
+		t.Fatal("Download() error = nil, want path escape rejection")
+	}
 
 	outside := filepath.Join(env.workspacesRoot, "outside.txt")
 	if err := os.WriteFile(outside, []byte("outside"), 0o644); err != nil {
@@ -263,6 +318,19 @@ func TestBrowserRejectsEscapingPathsAndSymlinks(t *testing.T) {
 	}
 	if _, err := env.browser.File(ctx, "conv_1", "linked.txt"); err == nil || !strings.Contains(strings.ToLower(err.Error()), "symlink") {
 		t.Fatalf("File(symlink) error = %v, want symlink rejection", err)
+	}
+	if _, err := env.browser.Download(ctx, "conv_1", "linked.txt"); err == nil || !strings.Contains(strings.ToLower(err.Error()), "symlink") {
+		t.Fatalf("Download(symlink) error = %v, want symlink rejection", err)
+	}
+	if err := os.MkdirAll(filepath.Join(workspace.Root, "docs"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(docs) error = %v", err)
+	}
+	nestedLinkPath := filepath.Join(workspace.Root, "docs", "linked.txt")
+	if err := os.Symlink(outside, nestedLinkPath); err != nil {
+		t.Skipf("nested symlink creation not permitted: %v", err)
+	}
+	if _, err := env.browser.Download(ctx, "conv_1", "docs"); err == nil || !strings.Contains(strings.ToLower(err.Error()), "symlink") {
+		t.Fatalf("Download(docs with symlink) error = %v, want symlink rejection", err)
 	}
 }
 
@@ -355,4 +423,29 @@ func browserTreeFind(node *WorkspaceTreeNode, path string) *WorkspaceTreeNode {
 		}
 	}
 	return nil
+}
+
+func readZipEntries(t *testing.T, data []byte) map[string]string {
+	t.Helper()
+	reader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatalf("zip.NewReader() error = %v", err)
+	}
+	entries := map[string]string{}
+	for _, file := range reader.File {
+		handle, err := file.Open()
+		if err != nil {
+			t.Fatalf("Open(%q) error = %v", file.Name, err)
+		}
+		content := new(bytes.Buffer)
+		if _, err := content.ReadFrom(handle); err != nil {
+			_ = handle.Close()
+			t.Fatalf("ReadFrom(%q) error = %v", file.Name, err)
+		}
+		if err := handle.Close(); err != nil {
+			t.Fatalf("Close(%q) error = %v", file.Name, err)
+		}
+		entries[file.Name] = content.String()
+	}
+	return entries
 }
