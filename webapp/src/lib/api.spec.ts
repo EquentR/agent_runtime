@@ -1778,37 +1778,52 @@ describe('workspace browser API helpers', () => {
     expect(
       normalizeConversationWorkspaceSnapshot({
         task_id: 'task_1',
-        home_root: '/home',
-        task_root: '/task',
-        tree: [
-          {
-            path: 'src',
-            name: 'src',
-            type: 'directory',
-            children: [{ path: 'src/app.ts', name: 'app.ts', type: 'file', binary: true, size: '123' }],
-          },
-        ],
+        conversation_id: 'conv_1',
+        path: 'src',
+        tree: {
+          path: 'src',
+          name: 'src',
+          type: 'dir',
+          children_loaded: true,
+          children: [
+            { path: 'src/app.ts', name: 'app.ts', type: 'file', size: 12, has_diff: true },
+            { path: 'src/lib', name: 'lib', type: 'dir', childrenLoaded: false },
+          ],
+        },
+      } as any),
+    ).toMatchObject({
+      task_id: 'task_1',
+      conversation_id: 'conv_1',
+      path: 'src',
+      tree: [
+        {
+          path: 'src/app.ts',
+          name: 'app.ts',
+          type: 'file',
+          size: 12,
+          has_diff: true,
+        },
+        {
+          path: 'src/lib',
+          name: 'lib',
+          type: 'directory',
+          children_loaded: false,
+        },
+      ],
+    })
+
+    expect(
+      normalizeConversationWorkspaceSnapshot({
+        task_id: 'task_1',
+        homeRoot: '/home',
+        taskRoot: '/task',
+        tree: [{ path: 'src/app.ts', name: 'app.ts', type: 'file', HasDiff: true, ChildrenLoaded: true }],
       } as any),
     ).toMatchObject({
       task_id: 'task_1',
       home_root: '/home',
       task_root: '/task',
-      tree: [
-        {
-          path: 'src',
-          name: 'src',
-          type: 'directory',
-          children: [
-            {
-              path: 'src/app.ts',
-              name: 'app.ts',
-              type: 'file',
-              binary: true,
-              size: 123,
-            },
-          ],
-        },
-      ],
+      tree: [{ path: 'src/app.ts', has_diff: true, children_loaded: true }],
     })
 
     expect(
@@ -1835,13 +1850,46 @@ describe('workspace browser API helpers', () => {
       normalizeWorkspaceDiffResult({
         task_id: 'task_1',
         path: 'src/app.ts',
-        diff: 99,
-        truncated: 'true',
+        unified_diff: '@@ -1 +1 @@',
+        home_content: 'old',
+        task_content: 'new',
       } as any),
     ).toMatchObject({
       task_id: 'task_1',
       path: 'src/app.ts',
-      diff: '99',
+      diff: '@@ -1 +1 @@',
+      home_content: 'old',
+      task_content: 'new',
+    })
+
+    expect(
+      normalizeWorkspaceDiffResult({
+        task_id: 'task_1',
+        path: 'src/lib.ts',
+        unifiedDiff: '@@ -2 +2 @@',
+        homeContent: 'camel old',
+        taskContent: 'camel new',
+      } as any),
+    ).toMatchObject({
+      diff: '@@ -2 +2 @@',
+      home_content: 'camel old',
+      task_content: 'camel new',
+    })
+
+    expect(
+      normalizeWorkspaceDiffResult({
+        task_id: 'task_1',
+        path: 'src/pascal.ts',
+        UnifiedDiff: '@@ -3 +3 @@',
+        HomeContent: 'pascal old',
+        TaskContent: 'pascal new',
+        Diff: 'legacy diff wins',
+        truncated: 'true',
+      } as any),
+    ).toMatchObject({
+      diff: 'legacy diff wins',
+      home_content: 'pascal old',
+      task_content: 'pascal new',
       truncated: true,
     })
   })

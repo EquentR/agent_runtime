@@ -536,14 +536,16 @@ export interface WorkspaceTreeNode {
   type: WorkspaceTreeNodeType
   binary?: boolean
   size?: number
+  has_diff?: boolean
+  children_loaded?: boolean
   children?: WorkspaceTreeNode[]
 }
 
 export interface WorkspaceSnapshot {
   task_id: string
   conversation_id?: string
-  home_root: string
-  task_root: string
+  home_root?: string
+  task_root?: string
   path?: string
   tree: WorkspaceTreeNode[]
 }
@@ -565,6 +567,8 @@ export interface WorkspaceDiffResult {
   conversation_id?: string
   path: string
   diff: string
+  home_content?: string
+  task_content?: string
   truncated?: boolean
   binary?: boolean
 }
