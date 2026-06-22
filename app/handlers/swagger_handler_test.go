@@ -353,7 +353,7 @@ func TestSwaggerJSONIncludesWorkspacePathsAndDefinitions(t *testing.T) {
 	}
 	assertSwaggerPathHasResponses(t, paths, "/tasks/{id}/workspace/confirm", "post", "200", "400", "401", "404", "409")
 	assertSwaggerPathHasResponses(t, paths, "/conversations/{id}/workspace", "get", "200", "401", "404")
-	assertSwaggerPathHasResponses(t, paths, "/conversations/{id}/workspace/files", "get", "200", "401", "404")
+	assertSwaggerPathHasResponses(t, paths, "/conversations/{id}/workspace/files", "get", "200", "400", "401", "404")
 	assertSwaggerPathHasResponses(t, paths, "/conversations/{id}/workspace/file", "get", "200", "400", "401", "404")
 	assertSwaggerPathHasResponses(t, paths, "/conversations/{id}/workspace/diff", "get", "200", "400", "401", "404")
 	assertSwaggerPathHasResponses(t, paths, "/conversations/{id}/workspace/download", "get", "200", "400", "401", "404")

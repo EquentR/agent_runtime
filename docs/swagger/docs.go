@@ -1505,6 +1505,12 @@ const docTemplate = `{
                             "$ref": "#/definitions/app_handlers.WorkspaceBrowserSnapshotSwaggerResponse"
                         }
                     },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
+                        }
+                    },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {

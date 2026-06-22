@@ -166,6 +166,7 @@ func (h *WorkspaceHandler) BrowserMiddleware() gin.HandlerFunc {
 // @Param id path string true "Conversation ID"
 // @Param path query string false "Filter path"
 // @Success 200 {object} WorkspaceBrowserSnapshotSwaggerResponse
+// @Failure 400 {object} ErrorSwaggerResponse
 // @Failure 401 {object} ErrorSwaggerResponse
 // @Failure 404 {object} ErrorSwaggerResponse
 // @Router /conversations/{id}/workspace/files [get]
