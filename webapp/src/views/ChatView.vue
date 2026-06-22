@@ -128,7 +128,6 @@ const composerRef = ref<InstanceType<typeof MessageComposer> | null>(null)
 const messageListScrollSignal = ref(0)
 const showThinkingAndTools = ref(true)
 const workspaceVisible = ref(false)
-const workspaceViewportReady = ref(false)
 const workspaceMergeActionPending = ref('')
 const initialized = ref(false)
 let activeStreamAbortController: AbortController | null = null
@@ -276,6 +275,9 @@ function syncDocumentTitle() {
 }
 
 watch([activeConversationId, conversations], syncDocumentTitle, { deep: true, immediate: true })
+watch(activeConversationId, () => {
+  workspaceVisible.value = false
+})
 
 function currentConversationContextEntries(conversationId: string) {
   if (!conversationId) {
@@ -614,10 +616,6 @@ function closeSidebarDrawer() {
 function syncSidebarViewport() {
   const mobile = window.innerWidth <= 960
   sidebarMobile.value = mobile
-  if (!workspaceViewportReady.value) {
-    workspaceVisible.value = !mobile
-    workspaceViewportReady.value = true
-  }
 
   if (!mobile) {
     sidebarDrawerOpen.value = false
@@ -1873,9 +1871,11 @@ onBeforeUnmount(() => {
             :aria-hidden="workspacePanelVisible ? 'false' : 'true'"
           >
             <WorkspaceBrowserPanel
+              v-if="workspacePanelVisible"
               class="workspace-browser-panel-shell"
               :conversation-id="activeConversationId"
               :conversation-title="activeConversationTitle()"
+              :open="workspacePanelVisible"
             />
           </aside>
         </div>
