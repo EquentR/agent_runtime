@@ -326,6 +326,8 @@ async function loadFileDetail(nextSessionId: number) {
     fileLoading.value = false
     if (mode.value === 'file') {
       await renderFileView(createRenderToken('file'))
+    } else if (mode.value === 'diff' && diffDetail.value) {
+      await renderDiffView(createRenderToken('diff'))
     }
   } catch (error) {
     if (nextSessionId !== sessionId || requestedPath !== filePath.value) {

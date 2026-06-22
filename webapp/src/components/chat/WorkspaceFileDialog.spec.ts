@@ -243,6 +243,56 @@ describe('WorkspaceFileDialog', () => {
     wrapper.unmount()
   })
 
+  it('renders diff when diff resolves before the initial file request', async () => {
+    const fileDeferred = createDeferred({
+      task_id: 'task_1',
+      conversation_id: 'conv_1',
+      path: 'src/app.ts',
+      name: 'app.ts',
+      type: 'file',
+      content: 'const app = true',
+      binary: false,
+      size: 42,
+    })
+    api.fetchConversationWorkspaceFile.mockReturnValue(fileDeferred.promise)
+    api.fetchConversationWorkspaceDiff.mockResolvedValue({
+      task_id: 'task_1',
+      conversation_id: 'conv_1',
+      path: 'src/app.ts',
+      diff: '@@ -1 +1 @@',
+      home_content: 'const app = false',
+      task_content: 'const app = true',
+    })
+
+    const wrapper = mountDialog()
+
+    const diffButton = document.body.querySelector<HTMLButtonElement>('[data-workspace-dialog-mode="diff"]')
+    expect(diffButton).not.toBeNull()
+    await diffButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await flushPromises()
+    await flushPromises()
+
+    expect(api.fetchConversationWorkspaceDiff).toHaveBeenCalledWith('conv_1', 'src/app.ts')
+
+    fileDeferred.resolve({
+      task_id: 'task_1',
+      conversation_id: 'conv_1',
+      path: 'src/app.ts',
+      name: 'app.ts',
+      type: 'file',
+      content: 'const app = true',
+      binary: false,
+      size: 42,
+    })
+    await flushPromises()
+    await flushPromises()
+
+    expect(monaco.diffEditors).toHaveLength(1)
+    expect(monaco.diffEditors[0].setModel).toHaveBeenCalled()
+
+    wrapper.unmount()
+  })
+
   it('disposes the mounted file editor when a binary diff replaces it', async () => {
     api.fetchConversationWorkspaceFile.mockResolvedValue({
       task_id: 'task_1',
