@@ -11,6 +11,12 @@ type MonacoApi = Awaited<ReturnType<typeof getMonaco>>
 type MonacoModel = ReturnType<MonacoApi['editor']['createModel']>
 type MonacoEditor = ReturnType<MonacoApi['editor']['create']>
 type MonacoDiffEditor = ReturnType<MonacoApi['editor']['createDiffEditor']>
+interface RenderToken {
+  sessionId: number
+  renderId: number
+  mode: ViewMode
+  path: string
+}
 
 const props = defineProps<{
   open: boolean
@@ -32,6 +38,7 @@ const fileError = ref('')
 const diffError = ref('')
 
 let sessionId = 0
+let renderId = 0
 let escapeListenerAttached = false
 let bodyOverflowBefore = ''
 let monacoEditor: MonacoEditor | MonacoDiffEditor | null = null
@@ -117,6 +124,28 @@ function resetEditorState() {
   }
 }
 
+function invalidateRender() {
+  renderId += 1
+}
+
+function createRenderToken(expectedMode: ViewMode): RenderToken {
+  return {
+    mode: expectedMode,
+    path: filePath.value,
+    renderId,
+    sessionId,
+  }
+}
+
+function isRenderTokenCurrent(token: RenderToken) {
+  return props.open
+    && hasFileNode.value
+    && token.sessionId === sessionId
+    && token.renderId === renderId
+    && token.mode === mode.value
+    && token.path === filePath.value
+}
+
 function resetSessionState() {
   fileDetail.value = null
   diffDetail.value = null
@@ -129,6 +158,7 @@ function resetSessionState() {
 
 function disposeCurrentSession() {
   sessionId += 1
+  invalidateRender()
   resetEditorState()
   resetSessionState()
 }
@@ -177,20 +207,32 @@ function guessLanguage(path: string, mimeType?: string) {
   return 'plaintext'
 }
 
-async function renderFileView() {
-  if (!hasFileNode.value || activeBinary.value || !fileDetail.value) {
-    resetEditorState()
+async function renderFileView(token: RenderToken = createRenderToken('file')) {
+  if (!isRenderTokenCurrent(token) || activeBinary.value || !fileDetail.value) {
+    if (isRenderTokenCurrent(token)) {
+      resetEditorState()
+    }
     return
   }
 
   await nextTick()
+  if (!isRenderTokenCurrent(token) || activeBinary.value || !fileDetail.value) {
+    return
+  }
+
   const host = editorHost.value
   if (!host) {
+    resetEditorState()
     return
   }
 
   resetEditorState()
   const monaco = await getMonaco()
+  if (!isRenderTokenCurrent(token) || activeBinary.value || !fileDetail.value || editorHost.value !== host) {
+    return
+  }
+
+  const detail = fileDetail.value
   const editor = monaco.editor.create(host, {
     automaticLayout: true,
     fontSize: 13,
@@ -200,27 +242,40 @@ async function renderFileView() {
     scrollBeyondLastLine: false,
     wordWrap: 'off',
   })
-  const model = monaco.editor.createModel(fileDetail.value.content ?? '', guessLanguage(fileDetail.value.path, fileDetail.value.mime_type))
+  const model = monaco.editor.createModel(detail.content ?? '', guessLanguage(detail.path, detail.mime_type))
   editor.setModel(model)
   monacoEditor = editor
   monacoModels = [model]
   editor.layout()
 }
 
-async function renderDiffView() {
-  if (!hasFileNode.value || activeBinary.value || !diffDetail.value) {
+async function renderDiffView(token: RenderToken = createRenderToken('diff')) {
+  if (!isRenderTokenCurrent(token) || activeBinary.value || !diffDetail.value) {
+    if (isRenderTokenCurrent(token)) {
+      resetEditorState()
+    }
     return
   }
 
   await nextTick()
+  if (!isRenderTokenCurrent(token) || activeBinary.value || !diffDetail.value) {
+    return
+  }
+
   const host = editorHost.value
   if (!host) {
+    resetEditorState()
     return
   }
 
   resetEditorState()
   const monaco = await getMonaco()
-  if (diffDetail.value.home_content !== undefined && diffDetail.value.task_content !== undefined) {
+  if (!isRenderTokenCurrent(token) || activeBinary.value || !diffDetail.value || editorHost.value !== host) {
+    return
+  }
+
+  const detail = diffDetail.value
+  if (detail.home_content !== undefined && detail.task_content !== undefined) {
     const editor = monaco.editor.createDiffEditor(host, {
       automaticLayout: true,
       fontSize: 13,
@@ -229,8 +284,8 @@ async function renderDiffView() {
       renderSideBySide: true,
       scrollBeyondLastLine: false,
     })
-    const original = monaco.editor.createModel(diffDetail.value.home_content, guessLanguage(diffDetail.value.path))
-    const modified = monaco.editor.createModel(diffDetail.value.task_content, guessLanguage(diffDetail.value.path))
+    const original = monaco.editor.createModel(detail.home_content, guessLanguage(detail.path))
+    const modified = monaco.editor.createModel(detail.task_content, guessLanguage(detail.path))
     editor.setModel({ original, modified })
     monacoEditor = editor
     monacoModels = [original, modified]
@@ -247,7 +302,7 @@ async function renderDiffView() {
     scrollBeyondLastLine: false,
     wordWrap: 'off',
   })
-  const model = monaco.editor.createModel(diffDetail.value.diff ?? '', guessLanguage(diffDetail.value.path))
+  const model = monaco.editor.createModel(detail.diff ?? '', guessLanguage(detail.path))
   editor.setModel(model)
   monacoEditor = editor
   monacoModels = [model]
@@ -259,20 +314,21 @@ async function loadFileDetail(nextSessionId: number) {
     return
   }
 
+  const requestedPath = filePath.value
   fileLoading.value = true
   fileError.value = ''
   try {
-    const file = await fetchConversationWorkspaceFile(props.conversationId, filePath.value)
-    if (nextSessionId !== sessionId) {
+    const file = await fetchConversationWorkspaceFile(props.conversationId, requestedPath)
+    if (nextSessionId !== sessionId || requestedPath !== filePath.value) {
       return
     }
     fileDetail.value = file
     fileLoading.value = false
     if (mode.value === 'file') {
-      await renderFileView()
+      await renderFileView(createRenderToken('file'))
     }
   } catch (error) {
-    if (nextSessionId !== sessionId) {
+    if (nextSessionId !== sessionId || requestedPath !== filePath.value) {
       return
     }
     fileError.value = error instanceof Error ? error.message : 'Failed to load file'
@@ -285,24 +341,25 @@ async function loadFileDetail(nextSessionId: number) {
 }
 
 async function loadDiffDetail(nextSessionId: number) {
-  if (!hasFileNode.value) {
+  if (!hasFileNode.value || diffLoading.value) {
     return
   }
 
+  const requestedPath = filePath.value
   diffLoading.value = true
   diffError.value = ''
   try {
-    const diff = await fetchConversationWorkspaceDiff(props.conversationId, filePath.value)
-    if (nextSessionId !== sessionId) {
+    const diff = await fetchConversationWorkspaceDiff(props.conversationId, requestedPath)
+    if (nextSessionId !== sessionId || requestedPath !== filePath.value) {
       return
     }
     diffDetail.value = diff
     diffLoading.value = false
     if (mode.value === 'diff') {
-      await renderDiffView()
+      await renderDiffView(createRenderToken('diff'))
     }
   } catch (error) {
-    if (nextSessionId !== sessionId) {
+    if (nextSessionId !== sessionId || requestedPath !== filePath.value) {
       return
     }
     diffError.value = error instanceof Error ? error.message : 'Failed to load diff'
@@ -318,13 +375,25 @@ async function selectMode(nextMode: ViewMode) {
   if (!props.open || !hasFileNode.value) {
     return
   }
+  if (mode.value === nextMode) {
+    if (nextMode === 'diff' && diffLoading.value) {
+      return
+    }
+    if (nextMode === 'diff' && diffDetail.value) {
+      return
+    }
+    if (nextMode === 'file') {
+      return
+    }
+  }
+
+  invalidateRender()
   mode.value = nextMode
+  resetEditorState()
+  const token = createRenderToken(nextMode)
   if (nextMode === 'file') {
     if (fileDetail.value && !activeBinary.value) {
-      await renderFileView()
-    }
-    if (activeBinary.value) {
-      resetEditorState()
+      await renderFileView(token)
     }
     return
   }
@@ -335,7 +404,7 @@ async function selectMode(nextMode: ViewMode) {
   }
 
   if (diffDetail.value) {
-    await renderDiffView()
+    await renderDiffView(token)
     return
   }
 
@@ -366,11 +435,16 @@ watch(
     const currentSession = sessionId
     mode.value = props.initialMode ?? 'file'
     await loadFileDetail(currentSession)
+    if (props.initialMode === 'diff' && currentSession === sessionId && mode.value === 'diff' && !activeBinary.value) {
+      await loadDiffDetail(currentSession)
+    }
   },
   { immediate: true },
 )
 
 onBeforeUnmount(() => {
+  sessionId += 1
+  invalidateRender()
   unlockBodyScroll()
   resetEditorState()
 })
@@ -602,14 +676,4 @@ onBeforeUnmount(() => {
   background: var(--app-surface-strong, #f8fafb);
 }
 
-@media (max-width: 760px) {
-  .workspace-file-dialog-backdrop {
-    padding: 1rem;
-  }
-
-  .workspace-file-dialog-panel {
-    width: 100%;
-    max-height: calc(100vh - 2rem);
-  }
-}
 </style>
