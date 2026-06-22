@@ -1879,6 +1879,18 @@ describe('workspace browser API helpers', () => {
     expect(
       normalizeWorkspaceDiffResult({
         task_id: 'task_1',
+        path: 'src/app.ts',
+        UnifiedDiff: '@@ fallback @@',
+      } as any),
+    ).toMatchObject({
+      task_id: 'task_1',
+      path: 'src/app.ts',
+      diff: '@@ fallback @@',
+    })
+
+    expect(
+      normalizeWorkspaceDiffResult({
+        task_id: 'task_1',
         path: 'src/pascal.ts',
         UnifiedDiff: '@@ -3 +3 @@',
         HomeContent: 'pascal old',
