@@ -1366,14 +1366,15 @@ const docTemplate = `{
         },
         "/conversations/{id}/workspace/download": {
             "get": {
-                "description": "以二进制流方式下载当前 conversation 对应 task workspace 中指定路径的文件。",
+                "description": "以二进制流方式下载当前 conversation 对应 task workspace 中指定路径的文件；目录会打包为 zip。",
                 "produces": [
-                    "application/octet-stream"
+                    "application/octet-stream",
+                    "application/zip"
                 ],
                 "tags": [
                     "conversations"
                 ],
-                "summary": "下载当前 conversation 工作区文件",
+                "summary": "下载当前 conversation 工作区文件或目录",
                 "parameters": [
                     {
                         "type": "string",
@@ -1384,7 +1385,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "File path",
+                        "description": "File or directory path",
                         "name": "path",
                         "in": "query",
                         "required": true
@@ -1392,7 +1393,7 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "200": {
-                        "description": "workspace file content",
+                        "description": "workspace file content or directory zip",
                         "schema": {
                             "type": "file"
                         }
@@ -1502,6 +1503,12 @@ const docTemplate = `{
                         "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/app_handlers.WorkspaceBrowserSnapshotSwaggerResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
                         }
                     },
                     "401": {
@@ -5518,13 +5525,10 @@ const docTemplate = `{
                 "conversation_id": {
                     "type": "string"
                 },
-                "home_root": {
+                "path": {
                     "type": "string"
                 },
                 "task_id": {
-                    "type": "string"
-                },
-                "task_root": {
                     "type": "string"
                 },
                 "tree": {
@@ -5566,6 +5570,12 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/app_handlers.WorkspaceBrowserTreeNodeSwaggerDoc"
                     }
+                },
+                "children_loaded": {
+                    "type": "boolean"
+                },
+                "has_diff": {
+                    "type": "boolean"
                 },
                 "name": {
                     "type": "string"

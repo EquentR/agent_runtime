@@ -353,7 +353,7 @@ func TestSwaggerJSONIncludesWorkspacePathsAndDefinitions(t *testing.T) {
 	}
 	assertSwaggerPathHasResponses(t, paths, "/tasks/{id}/workspace/confirm", "post", "200", "400", "401", "404", "409")
 	assertSwaggerPathHasResponses(t, paths, "/conversations/{id}/workspace", "get", "200", "401", "404")
-	assertSwaggerPathHasResponses(t, paths, "/conversations/{id}/workspace/files", "get", "200", "401", "404")
+	assertSwaggerPathHasResponses(t, paths, "/conversations/{id}/workspace/files", "get", "200", "400", "401", "404")
 	assertSwaggerPathHasResponses(t, paths, "/conversations/{id}/workspace/file", "get", "200", "400", "401", "404")
 	assertSwaggerPathHasResponses(t, paths, "/conversations/{id}/workspace/diff", "get", "200", "400", "401", "404")
 	assertSwaggerPathHasResponses(t, paths, "/conversations/{id}/workspace/download", "get", "200", "400", "401", "404")
@@ -394,6 +394,50 @@ func TestSwaggerJSONIncludesWorkspacePathsAndDefinitions(t *testing.T) {
 			t.Fatalf("RunTaskResultSwaggerDoc properties missing %q", property)
 		}
 	}
+
+	downloadPath, ok := paths["/conversations/{id}/workspace/download"].(map[string]any)
+	if !ok {
+		t.Fatalf("workspace download path = %#v, want object", paths["/conversations/{id}/workspace/download"])
+	}
+	downloadGet, ok := downloadPath["get"].(map[string]any)
+	if !ok {
+		t.Fatalf("workspace download get = %#v, want object", downloadPath["get"])
+	}
+	gotProduces := swaggerStringValues(t, downloadGet["produces"])
+	if !equalSwaggerStringSlices(gotProduces, []string{"application/octet-stream", "application/zip"}) {
+		t.Fatalf("workspace download produces = %v, want octet-stream and zip", gotProduces)
+	}
+
+	browserSnapshotDefinition, ok := definitions["app_handlers.WorkspaceBrowserSnapshotSwaggerDoc"].(map[string]any)
+	if !ok {
+		t.Fatalf("WorkspaceBrowserSnapshotSwaggerDoc = %#v, want object", definitions["app_handlers.WorkspaceBrowserSnapshotSwaggerDoc"])
+	}
+	browserSnapshotProperties, ok := browserSnapshotDefinition["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("WorkspaceBrowserSnapshotSwaggerDoc.properties = %#v, want object", browserSnapshotDefinition["properties"])
+	}
+	for _, property := range []string{"home_root", "task_root"} {
+		if _, ok := browserSnapshotProperties[property]; ok {
+			t.Fatalf("WorkspaceBrowserSnapshotSwaggerDoc properties include %q, want hidden", property)
+		}
+	}
+	if _, ok := browserSnapshotProperties["path"]; !ok {
+		t.Fatalf("WorkspaceBrowserSnapshotSwaggerDoc properties missing path")
+	}
+
+	workspaceStateDefinition, ok := definitions["app_handlers.WorkspaceStateSwaggerDoc"].(map[string]any)
+	if !ok {
+		t.Fatalf("WorkspaceStateSwaggerDoc = %#v, want object", definitions["app_handlers.WorkspaceStateSwaggerDoc"])
+	}
+	workspaceStateProperties, ok := workspaceStateDefinition["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("WorkspaceStateSwaggerDoc.properties = %#v, want object", workspaceStateDefinition["properties"])
+	}
+	for _, property := range []string{"home_root", "task_root"} {
+		if _, ok := workspaceStateProperties[property]; !ok {
+			t.Fatalf("WorkspaceStateSwaggerDoc properties missing %q", property)
+		}
+	}
 }
 
 func assertSwaggerStatusEnumContainsWaiting(t *testing.T, definitions map[string]any, name string) {
@@ -423,15 +467,20 @@ func assertSwaggerStatusEnumContainsWaiting(t *testing.T, definitions map[string
 
 func swaggerEnumValues(t *testing.T, raw any) []string {
 	t.Helper()
+	return swaggerStringValues(t, raw)
+}
+
+func swaggerStringValues(t *testing.T, raw any) []string {
+	t.Helper()
 	values, ok := raw.([]any)
 	if !ok {
-		t.Fatalf("enum = %#v, want array", raw)
+		t.Fatalf("values = %#v, want array", raw)
 	}
 	result := make([]string, 0, len(values))
 	for _, value := range values {
 		item, ok := value.(string)
 		if !ok {
-			t.Fatalf("enum entry = %#v, want string", value)
+			t.Fatalf("value entry = %#v, want string", value)
 		}
 		result = append(result, item)
 	}

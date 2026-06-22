@@ -2730,7 +2730,7 @@ describe('ChatView', () => {
     expect(titleBlock.element.firstElementChild?.classList.contains('model-menu')).toBe(true)
   })
 
-  it('shows a workspace toggle beside the context and thinking controls', async () => {
+  it('keeps the workspace browser hidden by default on desktop', async () => {
     api.fetchConversations.mockResolvedValue([
       {
         id: 'conv_1',
@@ -2760,13 +2760,15 @@ describe('ChatView', () => {
 
     const topbarRight = wrapper.get('.topbar-right')
     const toggle = topbarRight.get('[data-workspace-toggle]')
-    expect(toggle.attributes('aria-label')).toBe('隐藏工作区')
-    expect(toggle.attributes('aria-pressed')).toBe('true')
+    expect(toggle.attributes('aria-pressed')).toBe('false')
     expect(topbarRight.element.contains(toggle.element)).toBe(true)
-    expect(wrapper.get('[data-workspace-shell]').classes()).not.toContain('hidden')
+    expect(wrapper.get('[data-workspace-shell]').classes()).toContain('hidden')
+    expect(wrapper.get('[data-workspace-shell]').attributes('aria-hidden')).toBe('true')
+    expect(wrapper.find('.workspace-browser-panel-shell').exists()).toBe(false)
+    expect(api.fetchConversationWorkspaceSnapshot).not.toHaveBeenCalled()
   })
 
-  it('mounts the workspace browser panel inside the chat view for an active conversation', async () => {
+  it('opens the workspace browser only after the toggle is clicked', async () => {
     api.fetchConversations.mockResolvedValue([
       {
         id: 'conv_1',
@@ -2794,9 +2796,74 @@ describe('ChatView', () => {
 
     await flushPromises()
 
+    expect(wrapper.get('[data-workspace-shell]').classes()).toContain('hidden')
+    expect(wrapper.find('.workspace-browser-panel-shell').exists()).toBe(false)
+    expect(api.fetchConversationWorkspaceSnapshot).not.toHaveBeenCalled()
+
+    await wrapper.get('[data-workspace-toggle]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-workspace-shell]').classes()).toContain('open')
+    expect(wrapper.get('[data-workspace-shell]').attributes('aria-hidden')).toBe('false')
     expect(wrapper.find('.workspace-browser-panel-shell').exists()).toBe(true)
     expect(wrapper.text()).toContain('Workspace')
     expect(wrapper.text()).toContain('Workspace chat')
+    expect(api.fetchConversationWorkspaceSnapshot).toHaveBeenCalledWith('conv_1')
+    expect(wrapper.text()).not.toContain('/home')
+    expect(wrapper.text()).not.toContain('/task')
+  })
+
+  it('closes the workspace browser when switching conversations', async () => {
+    api.fetchConversations.mockResolvedValue([
+      {
+        id: 'conv_1',
+        title: 'Workspace chat',
+        last_message: 'hello',
+        message_count: 1,
+        provider_id: 'openai',
+        model_id: 'gpt-5.4',
+        created_by: 'demo-user',
+        created_at: '',
+        updated_at: '',
+      },
+      {
+        id: 'conv_2',
+        title: 'Second workspace chat',
+        last_message: 'hello again',
+        message_count: 1,
+        provider_id: 'openai',
+        model_id: 'gpt-5.4',
+        created_by: 'demo-user',
+        created_at: '',
+        updated_at: '',
+      },
+    ])
+    api.fetchConversationMessages.mockResolvedValue([{ role: 'assistant', content: 'hello' }])
+
+    const router = makeRouter()
+    await router.push('/chat/conv_1')
+    await router.isReady()
+
+    const wrapper = mount(ChatView, {
+      global: {
+        plugins: [router],
+      },
+    })
+
+    await flushPromises()
+
+    await wrapper.get('[data-workspace-toggle]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-workspace-shell]').classes()).toContain('open')
+    expect(wrapper.find('.workspace-browser-panel-shell').exists()).toBe(true)
+
+    await router.push('/chat/conv_2')
+    await flushPromises()
+
+    expect(wrapper.get('[data-workspace-shell]').classes()).toContain('hidden')
+    expect(wrapper.get('[data-workspace-shell]').attributes('aria-hidden')).toBe('true')
+    expect(wrapper.find('.workspace-browser-panel-shell').exists()).toBe(false)
   })
 
   it('switches the workspace shell to a drawer on narrow screens', async () => {
@@ -2831,7 +2898,10 @@ describe('ChatView', () => {
     const shell = wrapper.get('[data-workspace-shell]')
     expect(shell.classes()).toContain('mobile')
     expect(shell.classes()).toContain('hidden')
+    expect(shell.attributes('aria-hidden')).toBe('true')
+    expect(wrapper.find('.workspace-browser-panel-shell').exists()).toBe(false)
     expect(wrapper.find('[data-workspace-backdrop]').exists()).toBe(false)
+    expect(api.fetchConversationWorkspaceSnapshot).not.toHaveBeenCalled()
 
     await wrapper.get('[data-workspace-toggle]').trigger('click')
     await flushPromises()
@@ -2839,12 +2909,69 @@ describe('ChatView', () => {
     expect(wrapper.get('[data-workspace-shell]').classes()).toContain('mobile')
     expect(wrapper.get('[data-workspace-shell]').classes()).toContain('open')
     expect(wrapper.get('[data-workspace-shell]').attributes('aria-hidden')).toBe('false')
+    expect(wrapper.find('.workspace-browser-panel-shell').exists()).toBe(true)
     expect(wrapper.find('[data-workspace-backdrop]').exists()).toBe(true)
 
     await wrapper.get('[data-workspace-backdrop]').trigger('click')
     await flushPromises()
 
     expect(wrapper.get('[data-workspace-shell]').classes()).toContain('hidden')
+    expect(wrapper.get('[data-workspace-shell]').attributes('aria-hidden')).toBe('true')
+    expect(wrapper.find('.workspace-browser-panel-shell').exists()).toBe(false)
+  })
+
+  it('keeps the workspace shell open when Escape closes the workspace file dialog', async () => {
+    api.fetchConversations.mockResolvedValue([
+      {
+        id: 'conv_1',
+        title: 'Workspace chat',
+        last_message: 'hello',
+        message_count: 1,
+        provider_id: 'openai',
+        model_id: 'gpt-5.4',
+        created_by: 'demo-user',
+        created_at: '',
+        updated_at: '',
+      },
+    ])
+    api.fetchConversationMessages.mockResolvedValue([{ role: 'assistant', content: 'hello' }])
+
+    const router = makeRouter()
+    await router.push('/chat/conv_1')
+    await router.isReady()
+
+    const wrapper = mount(ChatView, {
+      global: {
+        plugins: [router],
+      },
+    })
+
+    await flushPromises()
+
+    await wrapper.get('[data-workspace-toggle]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-workspace-shell]').classes()).toContain('open')
+    expect(wrapper.find('.workspace-browser-panel-shell').exists()).toBe(true)
+
+    await wrapper.get('[data-workspace-list-item="src"]').trigger('click')
+    await flushPromises()
+
+    await wrapper.get('[data-workspace-list-item="src/app.ts"]').trigger('click')
+    await flushPromises()
+
+    expect(document.body.querySelector('[data-workspace-file-dialog]')).not.toBeNull()
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    await flushPromises()
+
+    expect(document.body.querySelector('[data-workspace-file-dialog]')).toBeNull()
+    expect(wrapper.get('[data-workspace-shell]').classes()).toContain('open')
+    expect(wrapper.get('[data-workspace-shell]').attributes('aria-hidden')).toBe('false')
+    expect(wrapper.find('.workspace-browser-panel-shell').exists()).toBe(true)
+
+    wrapper.unmount()
+    document.body.innerHTML = ''
   })
 
   it('lets the Element Plus model menu scrollbar expand beyond the trigger height', () => {

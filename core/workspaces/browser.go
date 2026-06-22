@@ -1,9 +1,12 @@
 package workspaces
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -41,20 +44,23 @@ type Browser struct {
 }
 
 type WorkspaceTreeNode struct {
-	Path     string             `json:"path"`
-	Name     string             `json:"name"`
-	Type     string             `json:"type"`
-	Size     int64              `json:"size,omitempty"`
-	Binary   bool               `json:"binary,omitempty"`
-	Children []*WorkspaceTreeNode `json:"children,omitempty"`
+	Path           string               `json:"path"`
+	Name           string               `json:"name"`
+	Type           string               `json:"type"`
+	Size           int64                `json:"size,omitempty"`
+	Binary         bool                 `json:"binary,omitempty"`
+	HasDiff        bool                 `json:"has_diff,omitempty"`
+	ChildrenLoaded bool                 `json:"children_loaded,omitempty"`
+	Children       []*WorkspaceTreeNode `json:"children,omitempty"`
 }
 
 type WorkspaceSnapshot struct {
 	ConversationID string             `json:"conversation_id"`
 	TaskID         string             `json:"task_id"`
 	UserID         string             `json:"user_id"`
-	HomeRoot       string             `json:"home_root"`
-	TaskRoot       string             `json:"task_root"`
+	Path           string             `json:"path,omitempty"`
+	HomeRoot       string             `json:"-"`
+	TaskRoot       string             `json:"-"`
 	Tree           *WorkspaceTreeNode `json:"tree,omitempty"`
 }
 
@@ -80,6 +86,14 @@ type WorkspaceDiffResult struct {
 	TaskContent    string `json:"task_content,omitempty"`
 }
 
+type WorkspaceDownload struct {
+	Reader        io.ReadCloser
+	ContentLength int64
+	Data          []byte
+	FileName      string
+	ContentType   string
+}
+
 func NewBrowser(deps BrowserDeps) *Browser {
 	return &Browser{deps: deps}
 }
@@ -89,7 +103,14 @@ func (b *Browser) Snapshot(ctx context.Context, conversationID string, filterPat
 	if err != nil {
 		return nil, err
 	}
-	tree, err := b.buildTree(resolved.TaskRoot, filterPath)
+	cleanPath, err := normalizeBrowserPath(filterPath)
+	if err != nil {
+		return nil, err
+	}
+	if isHiddenBrowserPath(cleanPath) {
+		return nil, browserPathNotFoundError(cleanPath)
+	}
+	tree, err := b.buildTree(resolved.TaskRoot, resolved.HomeRoot, cleanPath)
 	if err != nil {
 		return nil, err
 	}
@@ -97,6 +118,7 @@ func (b *Browser) Snapshot(ctx context.Context, conversationID string, filterPat
 		ConversationID: resolved.ConversationID,
 		TaskID:         resolved.Task.ID,
 		UserID:         resolved.UserID,
+		Path:           cleanPath,
 		HomeRoot:       resolved.HomeRoot,
 		TaskRoot:       resolved.TaskRoot,
 		Tree:           tree,
@@ -111,6 +133,9 @@ func (b *Browser) File(ctx context.Context, conversationID string, filePath stri
 	cleanPath, err := normalizeBrowserPath(filePath)
 	if err != nil {
 		return nil, err
+	}
+	if isHiddenBrowserPath(cleanPath) {
+		return nil, browserPathNotFoundError(cleanPath)
 	}
 	taskPath, err := resolveBrowserPath(resolved.TaskRoot, cleanPath)
 	if err != nil {
@@ -143,6 +168,9 @@ func (b *Browser) Diff(ctx context.Context, conversationID string, filePath stri
 	cleanPath, err := normalizeBrowserPath(filePath)
 	if err != nil {
 		return nil, err
+	}
+	if isHiddenBrowserPath(cleanPath) {
+		return nil, browserPathNotFoundError(cleanPath)
 	}
 	taskPath, err := resolveBrowserPath(resolved.TaskRoot, cleanPath)
 	if err != nil {
@@ -204,24 +232,45 @@ func (b *Browser) DiffFile(ctx context.Context, conversationID string, filePath 
 	return b.Diff(ctx, conversationID, filePath)
 }
 
-func (b *Browser) Download(ctx context.Context, conversationID string, filePath string) ([]byte, string, error) {
+func (b *Browser) Download(ctx context.Context, conversationID string, filePath string) (*WorkspaceDownload, error) {
 	resolved, err := b.resolve(ctx, conversationID)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	cleanPath, err := normalizeBrowserPath(filePath)
 	if err != nil {
-		return nil, "", err
+		return nil, err
+	}
+	if isHiddenBrowserPath(cleanPath) {
+		return nil, browserPathNotFoundError(cleanPath)
 	}
 	taskPath, err := resolveBrowserPath(resolved.TaskRoot, cleanPath)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	_, data, err := readBrowserFile(taskPath)
-	if err != nil {
-		return nil, "", err
+	if err == nil {
+		return &WorkspaceDownload{
+			Reader:        io.NopCloser(bytes.NewReader(data)),
+			ContentLength: int64(len(data)),
+			Data:          data,
+			FileName:      filepath.Base(cleanPath),
+			ContentType:   "application/octet-stream",
+		}, nil
 	}
-	return data, filepath.Base(cleanPath), nil
+	if !infoIsDirectory(taskPath, err) {
+		return nil, err
+	}
+	reader, err := zipBrowserDirectory(resolved.TaskRoot, cleanPath)
+	if err != nil {
+		return nil, err
+	}
+	return &WorkspaceDownload{
+		Reader:        reader,
+		ContentLength: -1,
+		FileName:      browserDownloadZipFileName(cleanPath),
+		ContentType:   "application/zip",
+	}, nil
 }
 
 type browserResolution struct {
@@ -304,58 +353,46 @@ func (b *Browser) resolveLatestTask(ctx context.Context, conversationID string) 
 	return nil, nil
 }
 
-func (b *Browser) buildTree(root string, filterPath string) (*WorkspaceTreeNode, error) {
-	if err := ensureNoSymlink(root); err != nil {
+func (b *Browser) buildTree(taskRoot string, homeRoot string, filterPath string) (*WorkspaceTreeNode, error) {
+	if err := ensureNoSymlink(taskRoot); err != nil {
 		return nil, err
 	}
-	filterPath = strings.TrimSpace(filterPath)
-	if filterPath != "" {
-		normalized, err := normalizeBrowserPath(filterPath)
-		if err != nil {
-			return nil, err
-		}
-		filterPath = normalized
+	currentRoot, err := resolveBrowserPath(taskRoot, filterPath)
+	if err != nil {
+		return nil, err
 	}
-	rootNode := &WorkspaceTreeNode{Type: "dir"}
-	nodes := map[string]*WorkspaceTreeNode{"": rootNode}
-	if err := filepath.WalkDir(root, func(currentPath string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
+	currentInfo, err := os.Lstat(currentRoot)
+	if err != nil {
+		return nil, err
+	}
+	if currentInfo.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("symlink paths are not supported: %s", currentRoot)
+	}
+	if !currentInfo.IsDir() {
+		return nil, fmt.Errorf("workspace path is not a directory: %s", currentRoot)
+	}
+
+	rootNode := &WorkspaceTreeNode{
+		Path:           filterPath,
+		Name:           filepath.Base(filterPath),
+		Type:           "dir",
+		ChildrenLoaded: true,
+	}
+	if filterPath == "" {
+		rootNode.Name = ""
+	}
+	entries, err := os.ReadDir(currentRoot)
+	if err != nil {
+		return nil, err
+	}
+	for _, entry := range entries {
+		slashPath := browserChildPath(filterPath, entry.Name())
+		if isHiddenBrowserPath(slashPath) {
+			continue
 		}
-		if currentPath == root {
-			return nil
-		}
-		rel, err := filepath.Rel(root, currentPath)
-		if err != nil {
-			return err
-		}
-		slashPath := filepath.ToSlash(rel)
-		if isWorkspaceSidecar(slashPath) {
-			if entry.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if filterPath != "" && slashPath != filterPath {
-			descendant := strings.HasPrefix(slashPath, filterPath+"/")
-			ancestor := strings.HasPrefix(filterPath, slashPath+"/")
-			if !descendant && !ancestor {
-				if entry.IsDir() {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-		}
+		currentPath := filepath.Join(currentRoot, entry.Name())
 		if entry.Type()&os.ModeSymlink != 0 {
-			return fmt.Errorf("symlink paths are not supported: %s", currentPath)
-		}
-		parentKey := filepath.ToSlash(filepath.Dir(slashPath))
-		if parentKey == "." {
-			parentKey = ""
-		}
-		parent := nodes[parentKey]
-		if parent == nil {
-			parent = rootNode
+			return nil, fmt.Errorf("symlink paths are not supported: %s", currentPath)
 		}
 		node := &WorkspaceTreeNode{
 			Path: slashPath,
@@ -366,27 +403,205 @@ func (b *Browser) buildTree(root string, filterPath string) (*WorkspaceTreeNode,
 		} else {
 			info, data, err := readBrowserFile(currentPath)
 			if err != nil {
-				return err
+				return nil, err
+			}
+			hasDiff, err := browserFileHasDiff(homeRoot, slashPath, data)
+			if err != nil {
+				return nil, err
 			}
 			node.Type = "file"
 			node.Size = info.Size()
 			node.Binary = !utf8.Valid(data)
+			node.HasDiff = hasDiff
 		}
-		parent.Children = append(parent.Children, node)
-		sort.Slice(parent.Children, func(i, j int) bool {
-			if parent.Children[i].Type != parent.Children[j].Type {
-				return parent.Children[i].Type == "dir"
-			}
-			return parent.Children[i].Name < parent.Children[j].Name
-		})
-		if entry.IsDir() {
-			nodes[slashPath] = node
+		rootNode.Children = append(rootNode.Children, node)
+	}
+	sort.Slice(rootNode.Children, func(i, j int) bool {
+		if rootNode.Children[i].Type != rootNode.Children[j].Type {
+			return rootNode.Children[i].Type == "dir"
 		}
-		return nil
-	}); err != nil {
+		return rootNode.Children[i].Name < rootNode.Children[j].Name
+	})
+	return rootNode, nil
+}
+
+func browserChildPath(parentPath string, childName string) string {
+	if parentPath == "" {
+		return filepath.ToSlash(childName)
+	}
+	return parentPath + "/" + filepath.ToSlash(childName)
+}
+
+func browserFileHasDiff(homeRoot string, filePath string, taskData []byte) (bool, error) {
+	homePath, err := resolveBrowserPath(homeRoot, filePath)
+	if err != nil {
+		return false, err
+	}
+	_, homeData, err := readBrowserFile(homePath)
+	if err != nil {
+		if os.IsNotExist(err) || strings.Contains(err.Error(), "workspace path is a directory") {
+			return true, nil
+		}
+		return false, err
+	}
+	return !bytes.Equal(homeData, taskData), nil
+}
+
+func zipBrowserDirectory(taskRoot string, basePath string) (io.ReadCloser, error) {
+	if err := ensureNoSymlink(taskRoot); err != nil {
 		return nil, err
 	}
-	return rootNode, nil
+	directoryPath, err := resolveBrowserPath(taskRoot, basePath)
+	if err != nil {
+		return nil, err
+	}
+	info, err := os.Lstat(directoryPath)
+	if err != nil {
+		return nil, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("symlink paths are not supported: %s", directoryPath)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("workspace path is not a directory: %s", directoryPath)
+	}
+	if err := validateBrowserDirectoryZipSource(directoryPath, basePath); err != nil {
+		return nil, err
+	}
+
+	reader, writer := io.Pipe()
+	go func() {
+		if err := writeBrowserDirectoryZip(writer, taskRoot, directoryPath, basePath); err != nil {
+			_ = writer.CloseWithError(err)
+			return
+		}
+		_ = writer.Close()
+	}()
+	return reader, nil
+}
+
+func validateBrowserDirectoryZipSource(directoryPath string, basePath string) error {
+	return filepath.WalkDir(directoryPath, func(currentPath string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if currentPath == directoryPath {
+			return nil
+		}
+		relativeToBase, err := filepath.Rel(directoryPath, currentPath)
+		if err != nil {
+			return err
+		}
+		relativeToBase = filepath.ToSlash(relativeToBase)
+		entryPath := browserChildPath(basePath, relativeToBase)
+		if isHiddenBrowserPath(entryPath) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		return ensureNoSymlink(currentPath)
+	})
+}
+
+func writeBrowserDirectoryZip(writer io.Writer, taskRoot string, directoryPath string, basePath string) (err error) {
+	zipWriter := zip.NewWriter(writer)
+	defer func() {
+		closeErr := zipWriter.Close()
+		if err == nil {
+			err = closeErr
+		}
+	}()
+
+	err = filepath.WalkDir(directoryPath, func(currentPath string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if currentPath == directoryPath {
+			return nil
+		}
+		relativeToBase, err := filepath.Rel(directoryPath, currentPath)
+		if err != nil {
+			return err
+		}
+		relativeToBase = filepath.ToSlash(relativeToBase)
+		entryPath := browserChildPath(basePath, relativeToBase)
+		if isHiddenBrowserPath(entryPath) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return fmt.Errorf("symlink paths are not supported: %s", currentPath)
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		info, data, err := readBrowserFileMustStayInWorkspace(taskRoot, entryPath)
+		if err != nil {
+			return err
+		}
+		header, err := zip.FileInfoHeader(info)
+		if err != nil {
+			return err
+		}
+		header.Name = filepath.ToSlash(entryPath)
+		header.Method = zip.Deflate
+		fileWriter, err := zipWriter.CreateHeader(header)
+		if err != nil {
+			return err
+		}
+		_, err = fileWriter.Write(data)
+		return err
+	})
+	return err
+}
+
+func readBrowserFileMustStayInWorkspace(taskRoot string, relativePath string) (fs.FileInfo, []byte, error) {
+	path, err := resolveBrowserPath(taskRoot, relativePath)
+	if err != nil {
+		return nil, nil, err
+	}
+	return readBrowserFile(path)
+}
+
+func browserDownloadZipFileName(cleanPath string) string {
+	if strings.TrimSpace(cleanPath) == "" {
+		return "workspace.zip"
+	}
+	return filepath.Base(cleanPath) + ".zip"
+}
+
+func infoIsDirectory(path string, readErr error) bool {
+	if readErr == nil {
+		return false
+	}
+	info, statErr := os.Lstat(path)
+	return statErr == nil && info.IsDir()
+}
+
+func isHiddenBrowserPath(relativePath string) bool {
+	slashPath := strings.Trim(filepath.ToSlash(strings.TrimSpace(relativePath)), "/")
+	if slashPath == "" {
+		return false
+	}
+	for _, segment := range strings.Split(slashPath, "/") {
+		switch segment {
+		case "", ".":
+			continue
+		case "AGENTS.md", "skills", ".attachments", StateFileName, BaselineFileName:
+			return true
+		}
+	}
+	return false
+}
+
+func browserPathNotFoundError(relativePath string) error {
+	if strings.TrimSpace(relativePath) == "" {
+		return fmt.Errorf("workspace path not found: %w", os.ErrNotExist)
+	}
+	return fmt.Errorf("workspace path not found: %s: %w", relativePath, os.ErrNotExist)
 }
 
 func resolveBrowserPath(root string, rel string) (string, error) {

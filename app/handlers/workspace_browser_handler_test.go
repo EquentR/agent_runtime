@@ -1,10 +1,13 @@
 package handlers
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -109,33 +112,163 @@ func TestConversationWorkspaceBrowserDownloadsFileContent(t *testing.T) {
 	if string(body) != "download me\n" {
 		t.Fatalf("download body = %q, want file content", string(body))
 	}
+	if contentType := response.Header.Get("Content-Type"); !strings.Contains(contentType, "application/octet-stream") {
+		t.Fatalf("Content-Type = %q, want application/octet-stream", contentType)
+	}
 	if disposition := response.Header.Get("Content-Disposition"); !strings.Contains(disposition, "notes.md") {
 		t.Fatalf("Content-Disposition = %q, want filename", disposition)
 	}
 }
 
+func TestConversationWorkspaceBrowserSnapshotDoesNotExposeBackendRoots(t *testing.T) {
+	env := newWorkspaceBrowserHandlerTestEnv(t)
+	env.seedConversationTaskWorkspace(t, "conv_1", "42", "notes.md", "hello workspace\n")
+
+	response := workspaceBrowserGet(t, env, env.server.URL+"/api/v1/conversations/conv_1/workspace/files", nil)
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("ReadAll(snapshot) error = %v", err)
+	}
+
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body = %s", response.StatusCode, string(body))
+	}
+	for _, forbidden := range []string{
+		"home_root",
+		"task_root",
+		env.workspacesRoot,
+		filepath.ToSlash(env.workspacesRoot),
+		strings.ReplaceAll(env.workspacesRoot, `\`, `\\`),
+	} {
+		if forbidden != "" && strings.Contains(string(body), forbidden) {
+			t.Fatalf("snapshot body = %s, did not want %q", string(body), forbidden)
+		}
+	}
+}
+
+func TestConversationWorkspaceBrowserLoadsDirectorySnapshotByPath(t *testing.T) {
+	env := newWorkspaceBrowserHandlerTestEnv(t)
+	env.seedConversationTaskWorkspaceWithFiles(t, "conv_1", "42", map[string]string{
+		filepath.Join("docs", "guide.md"):          "guide\n",
+		filepath.Join("docs", "nested", "deep.md"): "deep\n",
+	})
+
+	response := workspaceBrowserGet(t, env, env.server.URL+"/api/v1/conversations/conv_1/workspace/files", map[string]string{"path": "docs"})
+	defer response.Body.Close()
+	got := decodeWorkspaceSnapshotResponse(t, response.Body)
+
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", response.StatusCode)
+	}
+	if got.Path != "docs" {
+		t.Fatalf("snapshot.Path = %q, want docs", got.Path)
+	}
+	if got.Tree == nil || got.Tree.Path != "docs" || got.Tree.Type != "dir" || !got.Tree.ChildrenLoaded {
+		t.Fatalf("tree = %#v, want loaded docs directory snapshot", got.Tree)
+	}
+	if !workspaceTreeContains(got.Tree, filepath.ToSlash(filepath.Join("docs", "guide.md"))) {
+		t.Fatalf("tree = %#v, want docs/guide.md", got.Tree)
+	}
+	if !workspaceTreeContains(got.Tree, filepath.ToSlash(filepath.Join("docs", "nested"))) {
+		t.Fatalf("tree = %#v, want docs/nested", got.Tree)
+	}
+	if workspaceTreeContains(got.Tree, filepath.ToSlash(filepath.Join("docs", "nested", "deep.md"))) {
+		t.Fatalf("tree = %#v, did not want unloaded nested descendant", got.Tree)
+	}
+}
+
+func TestConversationWorkspaceBrowserDownloadsDirectoryZip(t *testing.T) {
+	env := newWorkspaceBrowserHandlerTestEnv(t)
+	env.seedConversationTaskWorkspace(t, "conv_1", "42", filepath.Join("docs", "guide.md"), "guide\n")
+
+	response := workspaceBrowserGet(t, env, env.server.URL+"/api/v1/conversations/conv_1/workspace/download", map[string]string{"path": "docs"})
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("ReadAll(download zip) error = %v", err)
+	}
+
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body = %s", response.StatusCode, string(body))
+	}
+	if contentType := response.Header.Get("Content-Type"); !strings.Contains(contentType, "application/zip") {
+		t.Fatalf("Content-Type = %q, want application/zip", contentType)
+	}
+	if disposition := response.Header.Get("Content-Disposition"); !strings.Contains(disposition, "docs.zip") {
+		t.Fatalf("Content-Disposition = %q, want docs.zip", disposition)
+	}
+	entries := readWorkspaceBrowserZipEntries(t, body)
+	if got := entries[filepath.ToSlash(filepath.Join("docs", "guide.md"))]; got != "guide\n" {
+		t.Fatalf("zip entries = %#v, want docs/guide.md with guide content", entries)
+	}
+}
+
+func TestConversationWorkspaceBrowserFormatsDownloadDispositionSafely(t *testing.T) {
+	env := newWorkspaceDownloadHandlerTestEnv(t, &staticWorkspaceBrowser{
+		download: &coreworkspaces.WorkspaceDownload{
+			Reader:        io.NopCloser(strings.NewReader("download me\n")),
+			ContentLength: int64(len("download me\n")),
+			FileName:      `bad"name-报告.txt`,
+			ContentType:   "application/octet-stream",
+		},
+	})
+
+	response := workspaceBrowserGet(t, env, env.server.URL+"/api/v1/conversations/conv_1/workspace/download", map[string]string{"path": "notes.md"})
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("ReadAll(download) error = %v", err)
+	}
+
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body = %s", response.StatusCode, string(body))
+	}
+	if string(body) != "download me\n" {
+		t.Fatalf("download body = %q, want file content", string(body))
+	}
+
+	mediaType, params, err := mime.ParseMediaType(response.Header.Get("Content-Disposition"))
+	if err != nil {
+		t.Fatalf("ParseMediaType(Content-Disposition) error = %v", err)
+	}
+	if mediaType != "attachment" {
+		t.Fatalf("Content-Disposition media type = %q, want attachment", mediaType)
+	}
+	if params["filename"] != `bad"name-报告.txt` {
+		t.Fatalf("Content-Disposition filename = %q, want %q", params["filename"], `bad"name-报告.txt`)
+	}
+	if strings.Contains(response.Header.Get("Content-Disposition"), `filename="bad"name-报告.txt"`) {
+		t.Fatalf("Content-Disposition = %q, want escaped or encoded filename", response.Header.Get("Content-Disposition"))
+	}
+}
+
 type workspaceBrowserHandlerTestEnv struct {
-	db            *gorm.DB
-	conversations *coreagent.ConversationStore
-	taskStore     *coretasks.Store
-	taskManager   *coretasks.Manager
-	workspaces    *coreworkspaces.Manager
-	authLogic     *logics.AuthLogic
-	server        *httptest.Server
+	db             *gorm.DB
+	conversations  *coreagent.ConversationStore
+	taskStore      *coretasks.Store
+	taskManager    *coretasks.Manager
+	workspaces     *coreworkspaces.Manager
+	workspacesRoot string
+	authLogic      *logics.AuthLogic
+	server         *httptest.Server
 }
 
 type workspaceBrowserSnapshotResponse struct {
 	ConversationID string                         `json:"conversation_id"`
 	TaskID         string                         `json:"task_id"`
 	UserID         string                         `json:"user_id"`
+	Path           string                         `json:"path"`
 	Tree           *workspaceBrowserTreeNodeEntry `json:"tree"`
 }
 
 type workspaceBrowserTreeNodeEntry struct {
-	Path     string                          `json:"path"`
-	Name     string                          `json:"name"`
-	Type     string                          `json:"type"`
-	Children []workspaceBrowserTreeNodeEntry `json:"children"`
+	Path           string                          `json:"path"`
+	Name           string                          `json:"name"`
+	Type           string                          `json:"type"`
+	HasDiff        bool                            `json:"has_diff"`
+	ChildrenLoaded bool                            `json:"children_loaded"`
+	Children       []workspaceBrowserTreeNodeEntry `json:"children"`
 }
 
 type workspaceBrowserFileResponse struct {
@@ -185,13 +318,14 @@ func newWorkspaceBrowserHandlerTestEnv(t *testing.T) *workspaceBrowserHandlerTes
 
 	registerActiveAuthUserForTest(t, authLogic, "alice", "secret-123")
 	return &workspaceBrowserHandlerTestEnv{
-		db:            db,
-		conversations: conversations,
-		taskStore:     taskStore,
-		taskManager:   taskManager,
-		workspaces:    workspaces,
-		authLogic:     authLogic,
-		server:        server,
+		db:             db,
+		conversations:  conversations,
+		taskStore:      taskStore,
+		taskManager:    taskManager,
+		workspaces:     workspaces,
+		workspacesRoot: workspacesRoot,
+		authLogic:      authLogic,
+		server:         server,
 	}
 }
 
@@ -201,7 +335,7 @@ func (e *workspaceBrowserHandlerTestEnv) createTask(t *testing.T, conversationID
 		TaskType:  "agent.run",
 		CreatedBy: "alice",
 		Input: map[string]any{
-			"conversation_id":    conversationID,
+			"conversation_id":   conversationID,
 			"workspace_user_id": workspaceUserID,
 			"workspace_mode":    string(coreworkspaces.ModeReadonly),
 		},
@@ -223,12 +357,19 @@ func (e *workspaceBrowserHandlerTestEnv) createWorkspace(t *testing.T, userID st
 
 func (e *workspaceBrowserHandlerTestEnv) seedConversationTaskWorkspace(t *testing.T, conversationID string, workspaceUserID string, path string, content string) *coretasks.Task {
 	t.Helper()
+	return e.seedConversationTaskWorkspaceWithFiles(t, conversationID, workspaceUserID, map[string]string{path: content})
+}
+
+func (e *workspaceBrowserHandlerTestEnv) seedConversationTaskWorkspaceWithFiles(t *testing.T, conversationID string, workspaceUserID string, files map[string]string) *coretasks.Task {
+	t.Helper()
 	if _, err := e.conversations.CreateConversation(context.Background(), coreagent.CreateConversationInput{ID: conversationID, ProviderID: "openai", ModelID: "gpt-5.4", CreatedBy: "alice"}); err != nil {
 		t.Fatalf("CreateConversation() error = %v", err)
 	}
 	task := e.createTask(t, conversationID, workspaceUserID)
 	workspace := e.createWorkspace(t, workspaceUserID, task.ID, coreworkspaces.ModeReadonly)
-	writeWorkspaceBrowserTestFile(t, workspace.Root, path, content)
+	for path, content := range files {
+		writeWorkspaceBrowserTestFile(t, workspace.Root, path, content)
+	}
 	if _, _, err := e.taskStore.ClaimNextTask(context.Background(), "runner", time.Minute); err != nil {
 		t.Fatalf("ClaimNextTask() error = %v", err)
 	}
@@ -318,6 +459,92 @@ func workspaceTreeContains(node *workspaceBrowserTreeNodeEntry, path string) boo
 		}
 	}
 	return false
+}
+
+func readWorkspaceBrowserZipEntries(t *testing.T, data []byte) map[string]string {
+	t.Helper()
+	reader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatalf("zip.NewReader() error = %v", err)
+	}
+	entries := map[string]string{}
+	for _, file := range reader.File {
+		handle, err := file.Open()
+		if err != nil {
+			t.Fatalf("Open(%q) error = %v", file.Name, err)
+		}
+		content := new(bytes.Buffer)
+		if _, err := content.ReadFrom(handle); err != nil {
+			_ = handle.Close()
+			t.Fatalf("ReadFrom(%q) error = %v", file.Name, err)
+		}
+		if err := handle.Close(); err != nil {
+			t.Fatalf("Close(%q) error = %v", file.Name, err)
+		}
+		entries[file.Name] = content.String()
+	}
+	return entries
+}
+
+type staticWorkspaceBrowser struct {
+	download *coreworkspaces.WorkspaceDownload
+}
+
+func (b *staticWorkspaceBrowser) Snapshot(context.Context, string, string) (*coreworkspaces.WorkspaceSnapshot, error) {
+	return nil, fmt.Errorf("unexpected Snapshot call")
+}
+
+func (b *staticWorkspaceBrowser) File(context.Context, string, string) (*coreworkspaces.WorkspaceFileDetail, error) {
+	return nil, fmt.Errorf("unexpected File call")
+}
+
+func (b *staticWorkspaceBrowser) Diff(context.Context, string, string) (*coreworkspaces.WorkspaceDiffResult, error) {
+	return nil, fmt.Errorf("unexpected Diff call")
+}
+
+func (b *staticWorkspaceBrowser) Download(context.Context, string, string) (*coreworkspaces.WorkspaceDownload, error) {
+	return b.download, nil
+}
+
+func newWorkspaceDownloadHandlerTestEnv(t *testing.T, browser workspaceBrowser) *workspaceBrowserHandlerTestEnv {
+	t.Helper()
+
+	dsn := fmt.Sprintf("file:%s-workspace-download?mode=memory&cache=shared", t.Name())
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("gorm.Open() error = %v", err)
+	}
+	conversations := coreagent.NewConversationStore(db)
+	if err := conversations.AutoMigrate(); err != nil {
+		t.Fatalf("conversation AutoMigrate() error = %v", err)
+	}
+	authLogic := newAuthLogicForTest(t, db)
+	authMiddleware := NewAuthMiddleware(authLogic)
+
+	handler := NewWorkspaceHandler(conversations, nil, nil, authMiddleware.RequireSession())
+	handler.browser = browser
+
+	engine := rest.Init()
+	handler.Register(engine.Group("/api/v1"))
+	server := httptest.NewServer(engine)
+	t.Cleanup(server.Close)
+
+	registerActiveAuthUserForTest(t, authLogic, "alice", "secret-123")
+	if _, err := conversations.CreateConversation(context.Background(), coreagent.CreateConversationInput{
+		ID:         "conv_1",
+		ProviderID: "openai",
+		ModelID:    "gpt-5.4",
+		CreatedBy:  "alice",
+	}); err != nil {
+		t.Fatalf("CreateConversation() error = %v", err)
+	}
+
+	return &workspaceBrowserHandlerTestEnv{
+		db:            db,
+		conversations: conversations,
+		authLogic:     authLogic,
+		server:        server,
+	}
 }
 
 func writeWorkspaceBrowserTestFile(t *testing.T, root string, relativePath string, content string) {

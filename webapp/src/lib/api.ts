@@ -360,6 +360,17 @@ function normalizeFirstOptionalStringValue(...values: unknown[]) {
   return undefined
 }
 
+function normalizeFirstOptionalContentStringValue(...values: unknown[]) {
+  for (const value of values) {
+    const normalized = normalizeSafeStringValue(value)
+    if (normalized !== undefined) {
+      return normalized
+    }
+  }
+
+  return undefined
+}
+
 function normalizeConversationToolCalls(...values: unknown[]): ConversationMessage['tool_calls'] | undefined {
   for (const value of values) {
     if (!Array.isArray(value)) {
@@ -977,6 +988,8 @@ export function normalizeWorkspaceTreeNode(
     type: normalizeWorkspaceTreeNodeType(node.type ?? node.Type, children),
     binary: normalizeBooleanValue(node.binary ?? node.Binary),
     size: normalizeIntegerValue(node.size ?? node.Size),
+    has_diff: normalizeBooleanValue(node.has_diff ?? node.hasDiff ?? node.HasDiff),
+    children_loaded: normalizeBooleanValue(node.children_loaded ?? node.childrenLoaded ?? node.ChildrenLoaded),
     children: children.length > 0 ? children : undefined,
   }
 }
@@ -987,8 +1000,8 @@ export function normalizeConversationWorkspaceSnapshot(
   return {
     task_id: normalizeFirstStringValue(snapshot.task_id, snapshot.taskId, snapshot.TaskID),
     conversation_id: normalizeFirstOptionalStringValue(snapshot.conversation_id, snapshot.conversationId, snapshot.ConversationID),
-    home_root: normalizeFirstStringValue(snapshot.home_root, snapshot.homeRoot, snapshot.HomeRoot),
-    task_root: normalizeFirstStringValue(snapshot.task_root, snapshot.taskRoot, snapshot.TaskRoot),
+    home_root: normalizeFirstOptionalStringValue(snapshot.home_root, snapshot.homeRoot, snapshot.HomeRoot),
+    task_root: normalizeFirstOptionalStringValue(snapshot.task_root, snapshot.taskRoot, snapshot.TaskRoot),
     path: normalizeFirstOptionalStringValue(snapshot.path, snapshot.Path),
     tree: normalizeWorkspaceTreeNodes(snapshot.tree ?? snapshot.Tree),
   }
@@ -1017,7 +1030,9 @@ export function normalizeWorkspaceDiffResult(
     task_id: normalizeFirstStringValue(diff.task_id, diff.taskId, diff.TaskID),
     conversation_id: normalizeFirstOptionalStringValue(diff.conversation_id, diff.conversationId, diff.ConversationID),
     path: normalizeFirstStringValue(diff.path, diff.Path),
-    diff: normalizeFirstStringValue(diff.diff, diff.Diff),
+    diff: normalizeFirstStringValue(diff.diff, diff.Diff, diff.unified_diff, diff.unifiedDiff, diff.UnifiedDiff),
+    home_content: normalizeFirstOptionalContentStringValue(diff.home_content, diff.homeContent, diff.HomeContent),
+    task_content: normalizeFirstOptionalContentStringValue(diff.task_content, diff.taskContent, diff.TaskContent),
     truncated: normalizeBooleanValue(diff.truncated ?? diff.Truncated),
     binary: normalizeBooleanValue(diff.binary ?? diff.Binary),
   }

@@ -738,40 +738,41 @@ type WorkspaceStateSwaggerDoc struct {
 
 // WorkspaceBrowserSnapshotSwaggerResponse describes a workspace tree response.
 type WorkspaceBrowserSnapshotSwaggerResponse struct {
-	Code    int                            `json:"code"`
-	Message string                         `json:"message"`
+	Code    int                                `json:"code"`
+	Message string                             `json:"message"`
 	Data    WorkspaceBrowserSnapshotSwaggerDoc `json:"data"`
-	OK      bool                           `json:"ok"`
-	Time    string                         `json:"time"`
+	OK      bool                               `json:"ok"`
+	Time    string                             `json:"time"`
 }
 
 // WorkspaceBrowserSnapshotSwaggerDoc describes the workspace tree payload.
 type WorkspaceBrowserSnapshotSwaggerDoc struct {
-	ConversationID string                                `json:"conversation_id"`
-	TaskID         string                                `json:"task_id"`
-	UserID         string                                `json:"user_id"`
-	HomeRoot       string                                `json:"home_root"`
-	TaskRoot       string                                `json:"task_root"`
-	Tree           *WorkspaceBrowserTreeNodeSwaggerDoc   `json:"tree,omitempty"`
+	ConversationID string                              `json:"conversation_id"`
+	TaskID         string                              `json:"task_id"`
+	UserID         string                              `json:"user_id"`
+	Path           string                              `json:"path,omitempty"`
+	Tree           *WorkspaceBrowserTreeNodeSwaggerDoc `json:"tree,omitempty"`
 }
 
 // WorkspaceBrowserTreeNodeSwaggerDoc describes one tree node in the workspace browser.
 type WorkspaceBrowserTreeNodeSwaggerDoc struct {
-	Path     string                               `json:"path"`
-	Name     string                               `json:"name"`
-	Type     string                               `json:"type" enums:"dir,file"`
-	Size     int64                                `json:"size,omitempty"`
-	Binary   bool                                 `json:"binary,omitempty"`
-	Children []*WorkspaceBrowserTreeNodeSwaggerDoc `json:"children,omitempty"`
+	Path           string                                `json:"path"`
+	Name           string                                `json:"name"`
+	Type           string                                `json:"type" enums:"dir,file"`
+	Size           int64                                 `json:"size,omitempty"`
+	Binary         bool                                  `json:"binary,omitempty"`
+	HasDiff        bool                                  `json:"has_diff,omitempty"`
+	ChildrenLoaded bool                                  `json:"children_loaded,omitempty"`
+	Children       []*WorkspaceBrowserTreeNodeSwaggerDoc `json:"children,omitempty"`
 }
 
 // WorkspaceBrowserFileSwaggerResponse describes a workspace file detail response.
 type WorkspaceBrowserFileSwaggerResponse struct {
-	Code    int                          `json:"code"`
-	Message string                       `json:"message"`
+	Code    int                            `json:"code"`
+	Message string                         `json:"message"`
 	Data    WorkspaceBrowserFileSwaggerDoc `json:"data"`
-	OK      bool                         `json:"ok"`
-	Time    string                       `json:"time"`
+	OK      bool                           `json:"ok"`
+	Time    string                         `json:"time"`
 }
 
 // WorkspaceBrowserFileSwaggerDoc describes one workspace file payload.
@@ -788,11 +789,11 @@ type WorkspaceBrowserFileSwaggerDoc struct {
 
 // WorkspaceBrowserDiffSwaggerResponse describes a workspace diff response.
 type WorkspaceBrowserDiffSwaggerResponse struct {
-	Code    int                         `json:"code"`
-	Message string                      `json:"message"`
+	Code    int                            `json:"code"`
+	Message string                         `json:"message"`
 	Data    WorkspaceBrowserDiffSwaggerDoc `json:"data"`
-	OK      bool                        `json:"ok"`
-	Time    string                      `json:"time"`
+	OK      bool                           `json:"ok"`
+	Time    string                         `json:"time"`
 }
 
 // WorkspaceBrowserDiffSwaggerDoc describes one workspace diff payload.
