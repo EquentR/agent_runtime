@@ -360,6 +360,17 @@ function normalizeFirstOptionalStringValue(...values: unknown[]) {
   return undefined
 }
 
+function normalizeFirstOptionalContentStringValue(...values: unknown[]) {
+  for (const value of values) {
+    const normalized = normalizeSafeStringValue(value)
+    if (normalized !== undefined) {
+      return normalized
+    }
+  }
+
+  return undefined
+}
+
 function normalizeConversationToolCalls(...values: unknown[]): ConversationMessage['tool_calls'] | undefined {
   for (const value of values) {
     if (!Array.isArray(value)) {
@@ -1020,8 +1031,8 @@ export function normalizeWorkspaceDiffResult(
     conversation_id: normalizeFirstOptionalStringValue(diff.conversation_id, diff.conversationId, diff.ConversationID),
     path: normalizeFirstStringValue(diff.path, diff.Path),
     diff: normalizeFirstStringValue(diff.diff, diff.Diff, diff.unified_diff, diff.unifiedDiff, diff.UnifiedDiff),
-    home_content: normalizeFirstOptionalStringValue(diff.home_content, diff.homeContent, diff.HomeContent),
-    task_content: normalizeFirstOptionalStringValue(diff.task_content, diff.taskContent, diff.TaskContent),
+    home_content: normalizeFirstOptionalContentStringValue(diff.home_content, diff.homeContent, diff.HomeContent),
+    task_content: normalizeFirstOptionalContentStringValue(diff.task_content, diff.taskContent, diff.TaskContent),
     truncated: normalizeBooleanValue(diff.truncated ?? diff.Truncated),
     binary: normalizeBooleanValue(diff.binary ?? diff.Binary),
   }

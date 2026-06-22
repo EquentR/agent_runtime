@@ -1906,6 +1906,32 @@ describe('workspace browser API helpers', () => {
     })
   })
 
+  it('preserves raw workspace diff file contents', () => {
+    expect(
+      normalizeWorkspaceDiffResult({
+        task_id: 'task_1',
+        path: 'src/app.ts',
+        unified_diff: '@@ -1 +1 @@',
+        home_content: '',
+        task_content: 'line\n',
+      } as any),
+    ).toMatchObject({
+      home_content: '',
+      task_content: 'line\n',
+    })
+
+    expect(
+      normalizeWorkspaceDiffResult({
+        task_id: 'task_1',
+        path: 'src/app.ts',
+        unified_diff: '@@ -1 +1 @@',
+        home_content: '   ',
+      } as any),
+    ).toMatchObject({
+      home_content: '   ',
+    })
+  })
+
   it('fetches workspace snapshot, file, and diff endpoints', async () => {
     vi.mocked(fetch)
       .mockResolvedValueOnce({
