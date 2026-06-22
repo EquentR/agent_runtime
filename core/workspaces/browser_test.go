@@ -161,6 +161,12 @@ func TestBrowserRejectsHiddenBrowserPaths(t *testing.T) {
 	writeFile(t, workspace.Root, filepath.Join(".attachments", "att_1", "notes.txt"), "hidden attachment\n")
 	writeFile(t, workspace.Root, StateFileName, `{"hidden":true}`)
 	writeFile(t, workspace.Root, BaselineFileName, `{"hidden":true}`)
+	writeFile(t, workspace.Root, filepath.Join("docs", "guide.md"), "guide\n")
+	writeFile(t, workspace.Root, filepath.Join("docs", "AGENTS.md"), "# hidden nested agents\n")
+	writeFile(t, workspace.Root, filepath.Join("docs", "skills", "review", "SKILL.md"), "# hidden nested skill\n")
+	writeFile(t, workspace.Root, filepath.Join("docs", ".attachments", "att_1", "notes.txt"), "hidden nested attachment\n")
+	writeFile(t, workspace.Root, filepath.Join("docs", StateFileName), `{"hidden":true}`)
+	writeFile(t, workspace.Root, filepath.Join("docs", BaselineFileName), `{"hidden":true}`)
 
 	snapshot, err := env.browser.Snapshot(ctx, "conv_1", "")
 	if err != nil {
@@ -171,6 +177,24 @@ func TestBrowserRejectsHiddenBrowserPaths(t *testing.T) {
 			t.Fatalf("root tree = %#v, did not want hidden path %q", snapshot.Tree, path)
 		}
 	}
+	docsSnapshot, err := env.browser.Snapshot(ctx, "conv_1", "docs")
+	if err != nil {
+		t.Fatalf("Snapshot(docs) error = %v", err)
+	}
+	for _, path := range []string{
+		filepath.ToSlash(filepath.Join("docs", "AGENTS.md")),
+		filepath.ToSlash(filepath.Join("docs", "skills")),
+		filepath.ToSlash(filepath.Join("docs", ".attachments")),
+		filepath.ToSlash(filepath.Join("docs", StateFileName)),
+		filepath.ToSlash(filepath.Join("docs", BaselineFileName)),
+	} {
+		if browserTreeFind(docsSnapshot.Tree, path) != nil {
+			t.Fatalf("docs tree = %#v, did not want hidden path %q", docsSnapshot.Tree, path)
+		}
+	}
+	if browserTreeFind(docsSnapshot.Tree, filepath.ToSlash(filepath.Join("docs", "guide.md"))) == nil {
+		t.Fatalf("docs tree = %#v, want visible docs/guide.md", docsSnapshot.Tree)
+	}
 
 	for _, path := range []string{
 		"AGENTS.md",
@@ -178,16 +202,31 @@ func TestBrowserRejectsHiddenBrowserPaths(t *testing.T) {
 		filepath.ToSlash(filepath.Join(".attachments", "att_1", "notes.txt")),
 		StateFileName,
 		BaselineFileName,
+		filepath.ToSlash(filepath.Join("docs", "AGENTS.md")),
+		filepath.ToSlash(filepath.Join("docs", ".attachments", "att_1", "notes.txt")),
 	} {
 		if _, err := env.browser.File(ctx, "conv_1", path); err == nil || !strings.Contains(strings.ToLower(err.Error()), "not found") {
 			t.Fatalf("File(%q) error = %v, want not found", path, err)
 		}
+	}
+	for _, path := range []string{
+		"AGENTS.md",
+		filepath.ToSlash(filepath.Join("skills", "review", "SKILL.md")),
+		filepath.ToSlash(filepath.Join(".attachments", "att_1", "notes.txt")),
+		StateFileName,
+		BaselineFileName,
+		filepath.ToSlash(filepath.Join("docs", StateFileName)),
+		filepath.ToSlash(filepath.Join("docs", BaselineFileName)),
+	} {
 		if _, err := env.browser.Diff(ctx, "conv_1", path); err == nil || !strings.Contains(strings.ToLower(err.Error()), "not found") {
 			t.Fatalf("Diff(%q) error = %v, want not found", path, err)
 		}
 	}
 	if _, err := env.browser.Snapshot(ctx, "conv_1", "skills"); err == nil || !strings.Contains(strings.ToLower(err.Error()), "not found") {
 		t.Fatalf("Snapshot(skills) error = %v, want not found", err)
+	}
+	if _, err := env.browser.Download(ctx, "conv_1", filepath.ToSlash(filepath.Join("docs", "skills"))); err == nil || !strings.Contains(strings.ToLower(err.Error()), "not found") {
+		t.Fatalf("Download(docs/skills) error = %v, want not found", err)
 	}
 }
 
@@ -257,7 +296,9 @@ func TestBrowserDownloadDirectoryReturnsVisibleZip(t *testing.T) {
 	writeFile(t, workspace.Root, filepath.Join("docs", "nested", "deep.md"), "deep\n")
 	writeFile(t, workspace.Root, filepath.Join("docs", "AGENTS.md"), "# hidden agents\n")
 	writeFile(t, workspace.Root, filepath.Join("docs", "skills", "review", "SKILL.md"), "# hidden skill\n")
+	writeFile(t, workspace.Root, filepath.Join("docs", ".attachments", "att_1", "notes.txt"), "hidden attachment\n")
 	writeFile(t, workspace.Root, filepath.Join("docs", StateFileName), `{"hidden":true}`)
+	writeFile(t, workspace.Root, filepath.Join("docs", BaselineFileName), `{"hidden":true}`)
 
 	download, err := env.browser.Download(ctx, "conv_1", "docs")
 	if err != nil {
@@ -286,10 +327,37 @@ func TestBrowserDownloadDirectoryReturnsVisibleZip(t *testing.T) {
 	for _, hiddenPath := range []string{
 		filepath.ToSlash(filepath.Join("docs", "AGENTS.md")),
 		filepath.ToSlash(filepath.Join("docs", "skills", "review", "SKILL.md")),
+		filepath.ToSlash(filepath.Join("docs", ".attachments", "att_1", "notes.txt")),
 		filepath.ToSlash(filepath.Join("docs", StateFileName)),
+		filepath.ToSlash(filepath.Join("docs", BaselineFileName)),
 	} {
 		if _, ok := entries[hiddenPath]; ok {
 			t.Fatalf("zip entries = %#v, did not want hidden path %q", entries, hiddenPath)
+		}
+	}
+
+	rootDownload, err := env.browser.Download(ctx, "conv_1", "")
+	if err != nil {
+		t.Fatalf("Download(root) error = %v", err)
+	}
+	rootEntries := readZipEntries(t, rootDownload.Data)
+	for _, visiblePath := range []string{
+		filepath.ToSlash(filepath.Join("docs", "guide.md")),
+		filepath.ToSlash(filepath.Join("docs", "nested", "deep.md")),
+	} {
+		if _, ok := rootEntries[visiblePath]; !ok {
+			t.Fatalf("root zip entries = %#v, want visible path %q", rootEntries, visiblePath)
+		}
+	}
+	for _, hiddenPath := range []string{
+		filepath.ToSlash(filepath.Join("docs", "AGENTS.md")),
+		filepath.ToSlash(filepath.Join("docs", "skills", "review", "SKILL.md")),
+		filepath.ToSlash(filepath.Join("docs", ".attachments", "att_1", "notes.txt")),
+		filepath.ToSlash(filepath.Join("docs", StateFileName)),
+		filepath.ToSlash(filepath.Join("docs", BaselineFileName)),
+	} {
+		if _, ok := rootEntries[hiddenPath]; ok {
+			t.Fatalf("root zip entries = %#v, did not want hidden path %q", rootEntries, hiddenPath)
 		}
 	}
 }

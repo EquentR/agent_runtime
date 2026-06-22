@@ -475,7 +475,7 @@ func zipBrowserDirectory(taskRoot string, basePath string) ([]byte, error) {
 		}
 		relativeToBase = filepath.ToSlash(relativeToBase)
 		entryPath := browserChildPath(basePath, relativeToBase)
-		if isHiddenBrowserZipPath(basePath, entryPath) {
+		if isHiddenBrowserPath(entryPath) {
 			if entry.IsDir() {
 				return filepath.SkipDir
 			}
@@ -537,50 +537,20 @@ func infoIsDirectory(path string, readErr error) bool {
 	return statErr == nil && info.IsDir()
 }
 
-func isHiddenBrowserZipPath(basePath string, entryPath string) bool {
-	if isHiddenBrowserPath(entryPath) {
-		return true
-	}
-	trimmedBase := strings.Trim(filepath.ToSlash(strings.TrimSpace(basePath)), "/")
-	trimmedEntry := strings.Trim(filepath.ToSlash(strings.TrimSpace(entryPath)), "/")
-	if trimmedBase == "" {
-		return false
-	}
-	if trimmedEntry == trimmedBase {
-		return isHiddenBrowserPath("")
-	}
-	prefix := trimmedBase + "/"
-	if !strings.HasPrefix(trimmedEntry, prefix) {
-		return false
-	}
-	relativeToBase := strings.TrimPrefix(trimmedEntry, prefix)
-	return pathHasHiddenBrowserSuffix(relativeToBase)
-}
-
-func pathHasHiddenBrowserSuffix(relativePath string) bool {
-	slashPath := strings.Trim(filepath.ToSlash(strings.TrimSpace(relativePath)), "/")
-	for slashPath != "" {
-		if isHiddenBrowserPath(slashPath) {
-			return true
-		}
-		index := strings.Index(slashPath, "/")
-		if index < 0 {
-			break
-		}
-		slashPath = slashPath[index+1:]
-	}
-	return false
-}
-
 func isHiddenBrowserPath(relativePath string) bool {
-	slashPath := filepath.ToSlash(strings.TrimSpace(relativePath))
+	slashPath := strings.Trim(filepath.ToSlash(strings.TrimSpace(relativePath)), "/")
 	if slashPath == "" {
 		return false
 	}
-	if isWorkspaceSidecar(slashPath) {
-		return true
+	for _, segment := range strings.Split(slashPath, "/") {
+		switch segment {
+		case "", ".":
+			continue
+		case "AGENTS.md", "skills", ".attachments", StateFileName, BaselineFileName:
+			return true
+		}
 	}
-	return slashPath == "AGENTS.md" || slashPath == "skills" || strings.HasPrefix(slashPath, "skills/")
+	return false
 }
 
 func browserPathNotFoundError(relativePath string) error {
