@@ -76,6 +76,32 @@ describe('WorkspaceBrowserPanel', () => {
     expect(api.fetchConversationWorkspaceSnapshot).toHaveBeenCalledWith('conv_1')
   })
 
+  it('does not fetch snapshots when the closed panel switches conversations', async () => {
+    api.fetchConversationWorkspaceSnapshot.mockResolvedValue(snapshot([]))
+
+    const wrapper = mount(WorkspaceBrowserPanel, {
+      props: {
+        conversationId: 'conv_1',
+        open: false,
+      },
+    })
+
+    await flushPromises()
+
+    expect(api.fetchConversationWorkspaceSnapshot).not.toHaveBeenCalled()
+
+    await wrapper.setProps({ conversationId: 'conv_2' })
+    await flushPromises()
+
+    expect(api.fetchConversationWorkspaceSnapshot).not.toHaveBeenCalled()
+
+    await wrapper.setProps({ open: true })
+    await flushPromises()
+
+    expect(api.fetchConversationWorkspaceSnapshot).toHaveBeenCalledTimes(1)
+    expect(api.fetchConversationWorkspaceSnapshot).toHaveBeenCalledWith('conv_2')
+  })
+
   it('lazy loads folder children on first expansion', async () => {
     api.fetchConversationWorkspaceSnapshot.mockImplementation((_conversationId: string, path?: string) => {
       if (path === 'docs') {
