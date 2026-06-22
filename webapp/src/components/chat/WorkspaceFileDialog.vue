@@ -92,7 +92,7 @@ function lockBodyScroll() {
   }
   bodyOverflowBefore = document.body.style.overflow
   document.body.style.overflow = 'hidden'
-  window.addEventListener('keydown', handleKeydown)
+  window.addEventListener('keydown', handleKeydown, true)
   escapeListenerAttached = true
 }
 
@@ -100,7 +100,7 @@ function unlockBodyScroll() {
   if (!escapeListenerAttached) {
     return
   }
-  window.removeEventListener('keydown', handleKeydown)
+  window.removeEventListener('keydown', handleKeydown, true)
   document.body.style.overflow = bodyOverflowBefore
   bodyOverflowBefore = ''
   escapeListenerAttached = false
@@ -108,6 +108,7 @@ function unlockBodyScroll() {
 
 function handleKeydown(event: KeyboardEvent) {
   if (event.key === 'Escape') {
+    event.stopPropagation()
     emit('close')
   }
 }

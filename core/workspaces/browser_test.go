@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -275,8 +276,16 @@ func TestBrowserFileDiffAndDownloadFollowWorkspaceContents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Download() error = %v", err)
 	}
-	if string(download.Data) != "task line\n" {
-		t.Fatalf("download body = %q, want task line", string(download.Data))
+	if download.Reader == nil {
+		t.Fatal("download Reader = nil, want file reader")
+	}
+	defer download.Reader.Close()
+	body, err := io.ReadAll(download.Reader)
+	if err != nil {
+		t.Fatalf("ReadAll(download.Reader) error = %v", err)
+	}
+	if string(body) != "task line\n" {
+		t.Fatalf("download body = %q, want task line", string(body))
 	}
 	if download.FileName != "notes.md" {
 		t.Fatalf("download fileName = %q, want notes.md", download.FileName)
@@ -310,8 +319,21 @@ func TestBrowserDownloadDirectoryReturnsVisibleZip(t *testing.T) {
 	if download.ContentType != "application/zip" {
 		t.Fatalf("download ContentType = %q, want application/zip", download.ContentType)
 	}
-
-	entries := readZipEntries(t, download.Data)
+	if download.Reader == nil {
+		t.Fatal("download Reader = nil, want zip reader")
+	}
+	if download.Data != nil && len(download.Data) != 0 {
+		t.Fatalf("download Data = %q, want empty for streamed zip", string(download.Data))
+	}
+	if download.ContentLength != -1 {
+		t.Fatalf("download ContentLength = %d, want -1 for streamed zip", download.ContentLength)
+	}
+	defer download.Reader.Close()
+	data, err := io.ReadAll(download.Reader)
+	if err != nil {
+		t.Fatalf("ReadAll(download.Reader) error = %v", err)
+	}
+	entries := readZipEntries(t, data)
 	for path, want := range map[string]string{
 		filepath.ToSlash(filepath.Join("docs", "guide.md")):          "guide\n",
 		filepath.ToSlash(filepath.Join("docs", "nested", "deep.md")): "deep\n",
@@ -340,7 +362,21 @@ func TestBrowserDownloadDirectoryReturnsVisibleZip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Download(root) error = %v", err)
 	}
-	rootEntries := readZipEntries(t, rootDownload.Data)
+	if rootDownload.Reader == nil {
+		t.Fatal("root download Reader = nil, want zip reader")
+	}
+	if rootDownload.Data != nil && len(rootDownload.Data) != 0 {
+		t.Fatalf("root download Data = %q, want empty for streamed zip", string(rootDownload.Data))
+	}
+	if rootDownload.ContentLength != -1 {
+		t.Fatalf("root download ContentLength = %d, want -1 for streamed zip", rootDownload.ContentLength)
+	}
+	defer rootDownload.Reader.Close()
+	rootData, err := io.ReadAll(rootDownload.Reader)
+	if err != nil {
+		t.Fatalf("ReadAll(root download.Reader) error = %v", err)
+	}
+	rootEntries := readZipEntries(t, rootData)
 	for _, visiblePath := range []string{
 		filepath.ToSlash(filepath.Join("docs", "guide.md")),
 		filepath.ToSlash(filepath.Join("docs", "nested", "deep.md")),

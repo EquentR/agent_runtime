@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"mime"
 	"net/http"
 	"os"
 	"reflect"
@@ -280,13 +282,20 @@ func (h *WorkspaceHandler) handleDownloadConversationWorkspace() gin.HandlerFunc
 		}
 		headers := map[string]string{}
 		if download.FileName != "" {
-			headers["Content-Disposition"] = fmt.Sprintf(`attachment; filename="%s"`, download.FileName)
+			if disposition := mime.FormatMediaType("attachment", map[string]string{"filename": download.FileName}); disposition != "" {
+				headers["Content-Disposition"] = disposition
+			}
 		}
 		contentType := download.ContentType
 		if contentType == "" {
 			contentType = "application/octet-stream"
 		}
-		c.DataFromReader(http.StatusOK, int64(len(download.Data)), contentType, bytes.NewReader(download.Data), headers)
+		reader := download.Reader
+		if reader == nil {
+			reader = io.NopCloser(bytes.NewReader(download.Data))
+		}
+		defer reader.Close()
+		c.DataFromReader(http.StatusOK, download.ContentLength, contentType, reader, headers)
 	}
 }
 

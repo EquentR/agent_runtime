@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -86,9 +87,11 @@ type WorkspaceDiffResult struct {
 }
 
 type WorkspaceDownload struct {
-	Data        []byte
-	FileName    string
-	ContentType string
+	Reader        io.ReadCloser
+	ContentLength int64
+	Data          []byte
+	FileName      string
+	ContentType   string
 }
 
 func NewBrowser(deps BrowserDeps) *Browser {
@@ -248,22 +251,25 @@ func (b *Browser) Download(ctx context.Context, conversationID string, filePath 
 	_, data, err := readBrowserFile(taskPath)
 	if err == nil {
 		return &WorkspaceDownload{
-			Data:        data,
-			FileName:    filepath.Base(cleanPath),
-			ContentType: "application/octet-stream",
+			Reader:        io.NopCloser(bytes.NewReader(data)),
+			ContentLength: int64(len(data)),
+			Data:          data,
+			FileName:      filepath.Base(cleanPath),
+			ContentType:   "application/octet-stream",
 		}, nil
 	}
 	if !infoIsDirectory(taskPath, err) {
 		return nil, err
 	}
-	data, err = zipBrowserDirectory(resolved.TaskRoot, cleanPath)
+	reader, err := zipBrowserDirectory(resolved.TaskRoot, cleanPath)
 	if err != nil {
 		return nil, err
 	}
 	return &WorkspaceDownload{
-		Data:        data,
-		FileName:    browserDownloadZipFileName(cleanPath),
-		ContentType: "application/zip",
+		Reader:        reader,
+		ContentLength: -1,
+		FileName:      browserDownloadZipFileName(cleanPath),
+		ContentType:   "application/zip",
 	}, nil
 }
 
@@ -441,7 +447,7 @@ func browserFileHasDiff(homeRoot string, filePath string, taskData []byte) (bool
 	return !bytes.Equal(homeData, taskData), nil
 }
 
-func zipBrowserDirectory(taskRoot string, basePath string) ([]byte, error) {
+func zipBrowserDirectory(taskRoot string, basePath string) (io.ReadCloser, error) {
 	if err := ensureNoSymlink(taskRoot); err != nil {
 		return nil, err
 	}
@@ -459,10 +465,55 @@ func zipBrowserDirectory(taskRoot string, basePath string) ([]byte, error) {
 	if !info.IsDir() {
 		return nil, fmt.Errorf("workspace path is not a directory: %s", directoryPath)
 	}
+	if err := validateBrowserDirectoryZipSource(directoryPath, basePath); err != nil {
+		return nil, err
+	}
 
-	var buffer bytes.Buffer
-	writer := zip.NewWriter(&buffer)
-	walkErr := filepath.WalkDir(directoryPath, func(currentPath string, entry fs.DirEntry, walkErr error) error {
+	reader, writer := io.Pipe()
+	go func() {
+		if err := writeBrowserDirectoryZip(writer, taskRoot, directoryPath, basePath); err != nil {
+			_ = writer.CloseWithError(err)
+			return
+		}
+		_ = writer.Close()
+	}()
+	return reader, nil
+}
+
+func validateBrowserDirectoryZipSource(directoryPath string, basePath string) error {
+	return filepath.WalkDir(directoryPath, func(currentPath string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if currentPath == directoryPath {
+			return nil
+		}
+		relativeToBase, err := filepath.Rel(directoryPath, currentPath)
+		if err != nil {
+			return err
+		}
+		relativeToBase = filepath.ToSlash(relativeToBase)
+		entryPath := browserChildPath(basePath, relativeToBase)
+		if isHiddenBrowserPath(entryPath) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		return ensureNoSymlink(currentPath)
+	})
+}
+
+func writeBrowserDirectoryZip(writer io.Writer, taskRoot string, directoryPath string, basePath string) (err error) {
+	zipWriter := zip.NewWriter(writer)
+	defer func() {
+		closeErr := zipWriter.Close()
+		if err == nil {
+			err = closeErr
+		}
+	}()
+
+	err = filepath.WalkDir(directoryPath, func(currentPath string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
@@ -497,21 +548,14 @@ func zipBrowserDirectory(taskRoot string, basePath string) ([]byte, error) {
 		}
 		header.Name = filepath.ToSlash(entryPath)
 		header.Method = zip.Deflate
-		fileWriter, err := writer.CreateHeader(header)
+		fileWriter, err := zipWriter.CreateHeader(header)
 		if err != nil {
 			return err
 		}
 		_, err = fileWriter.Write(data)
 		return err
 	})
-	closeErr := writer.Close()
-	if walkErr != nil {
-		return nil, walkErr
-	}
-	if closeErr != nil {
-		return nil, closeErr
-	}
-	return buffer.Bytes(), nil
+	return err
 }
 
 func readBrowserFileMustStayInWorkspace(taskRoot string, relativePath string) (fs.FileInfo, []byte, error) {

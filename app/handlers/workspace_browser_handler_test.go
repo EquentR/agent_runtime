@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -200,6 +201,45 @@ func TestConversationWorkspaceBrowserDownloadsDirectoryZip(t *testing.T) {
 	entries := readWorkspaceBrowserZipEntries(t, body)
 	if got := entries[filepath.ToSlash(filepath.Join("docs", "guide.md"))]; got != "guide\n" {
 		t.Fatalf("zip entries = %#v, want docs/guide.md with guide content", entries)
+	}
+}
+
+func TestConversationWorkspaceBrowserFormatsDownloadDispositionSafely(t *testing.T) {
+	env := newWorkspaceDownloadHandlerTestEnv(t, &staticWorkspaceBrowser{
+		download: &coreworkspaces.WorkspaceDownload{
+			Reader:        io.NopCloser(strings.NewReader("download me\n")),
+			ContentLength: int64(len("download me\n")),
+			FileName:      `bad"name-报告.txt`,
+			ContentType:   "application/octet-stream",
+		},
+	})
+
+	response := workspaceBrowserGet(t, env, env.server.URL+"/api/v1/conversations/conv_1/workspace/download", map[string]string{"path": "notes.md"})
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("ReadAll(download) error = %v", err)
+	}
+
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body = %s", response.StatusCode, string(body))
+	}
+	if string(body) != "download me\n" {
+		t.Fatalf("download body = %q, want file content", string(body))
+	}
+
+	mediaType, params, err := mime.ParseMediaType(response.Header.Get("Content-Disposition"))
+	if err != nil {
+		t.Fatalf("ParseMediaType(Content-Disposition) error = %v", err)
+	}
+	if mediaType != "attachment" {
+		t.Fatalf("Content-Disposition media type = %q, want attachment", mediaType)
+	}
+	if params["filename"] != `bad"name-报告.txt` {
+		t.Fatalf("Content-Disposition filename = %q, want %q", params["filename"], `bad"name-报告.txt`)
+	}
+	if strings.Contains(response.Header.Get("Content-Disposition"), `filename="bad"name-报告.txt"`) {
+		t.Fatalf("Content-Disposition = %q, want escaped or encoded filename", response.Header.Get("Content-Disposition"))
 	}
 }
 
@@ -444,6 +484,67 @@ func readWorkspaceBrowserZipEntries(t *testing.T, data []byte) map[string]string
 		entries[file.Name] = content.String()
 	}
 	return entries
+}
+
+type staticWorkspaceBrowser struct {
+	download *coreworkspaces.WorkspaceDownload
+}
+
+func (b *staticWorkspaceBrowser) Snapshot(context.Context, string, string) (*coreworkspaces.WorkspaceSnapshot, error) {
+	return nil, fmt.Errorf("unexpected Snapshot call")
+}
+
+func (b *staticWorkspaceBrowser) File(context.Context, string, string) (*coreworkspaces.WorkspaceFileDetail, error) {
+	return nil, fmt.Errorf("unexpected File call")
+}
+
+func (b *staticWorkspaceBrowser) Diff(context.Context, string, string) (*coreworkspaces.WorkspaceDiffResult, error) {
+	return nil, fmt.Errorf("unexpected Diff call")
+}
+
+func (b *staticWorkspaceBrowser) Download(context.Context, string, string) (*coreworkspaces.WorkspaceDownload, error) {
+	return b.download, nil
+}
+
+func newWorkspaceDownloadHandlerTestEnv(t *testing.T, browser workspaceBrowser) *workspaceBrowserHandlerTestEnv {
+	t.Helper()
+
+	dsn := fmt.Sprintf("file:%s-workspace-download?mode=memory&cache=shared", t.Name())
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("gorm.Open() error = %v", err)
+	}
+	conversations := coreagent.NewConversationStore(db)
+	if err := conversations.AutoMigrate(); err != nil {
+		t.Fatalf("conversation AutoMigrate() error = %v", err)
+	}
+	authLogic := newAuthLogicForTest(t, db)
+	authMiddleware := NewAuthMiddleware(authLogic)
+
+	handler := NewWorkspaceHandler(conversations, nil, nil, authMiddleware.RequireSession())
+	handler.browser = browser
+
+	engine := rest.Init()
+	handler.Register(engine.Group("/api/v1"))
+	server := httptest.NewServer(engine)
+	t.Cleanup(server.Close)
+
+	registerActiveAuthUserForTest(t, authLogic, "alice", "secret-123")
+	if _, err := conversations.CreateConversation(context.Background(), coreagent.CreateConversationInput{
+		ID:         "conv_1",
+		ProviderID: "openai",
+		ModelID:    "gpt-5.4",
+		CreatedBy:  "alice",
+	}); err != nil {
+		t.Fatalf("CreateConversation() error = %v", err)
+	}
+
+	return &workspaceBrowserHandlerTestEnv{
+		db:            db,
+		conversations: conversations,
+		authLogic:     authLogic,
+		server:        server,
+	}
 }
 
 func writeWorkspaceBrowserTestFile(t *testing.T, root string, relativePath string, content string) {
