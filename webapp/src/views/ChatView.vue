@@ -1833,8 +1833,9 @@ onBeforeUnmount(() => {
         </button>
       </div>
 
-      <div class="chat-main">
-        <div class="chat-main-layout" :class="chatMainLayoutClass">
+      <div class="chat-main-layout" :class="chatMainLayoutClass">
+        <div class="chat-body-column">
+          <div class="chat-main">
           <div class="chat-main-content">
             <div v-if="showNoModelEmpty" class="chat-no-model-empty" data-no-model-empty>
               <h2>当前没有可用模型</h2>
@@ -1853,33 +1854,7 @@ onBeforeUnmount(() => {
               @interaction-respond="handleInteractionRespond"
             />
           </div>
-
-          <button
-            v-if="activeConversationId && sidebarMobile && workspacePanelVisible"
-            class="workspace-backdrop"
-            type="button"
-            aria-label="关闭工作区"
-            data-workspace-backdrop
-            @click="toggleWorkspacePanel"
-          ></button>
-
-          <aside
-            v-if="activeConversationId"
-            class="workspace-shell"
-            :class="workspaceShellClass"
-            data-workspace-shell
-            :aria-hidden="workspacePanelVisible ? 'false' : 'true'"
-          >
-            <WorkspaceBrowserPanel
-              v-if="workspacePanelVisible"
-              class="workspace-browser-panel-shell"
-              :conversation-id="activeConversationId"
-              :conversation-title="activeConversationTitle()"
-              :open="workspacePanelVisible"
-            />
-          </aside>
-        </div>
-      </div>
+          </div>
       <div class="chat-composer-dock">
         <p v-if="showComposerWelcome" class="composer-welcome">请尽情使唤 ~</p>
         <MessageComposer
@@ -1953,6 +1928,33 @@ onBeforeUnmount(() => {
             </div>
           </template>
         </MessageComposer>
+      </div>
+        </div>
+
+          <button
+            v-if="activeConversationId && sidebarMobile && workspacePanelVisible"
+            class="workspace-backdrop"
+            type="button"
+            aria-label="关闭工作区"
+            data-workspace-backdrop
+            @click="toggleWorkspacePanel"
+          ></button>
+
+          <aside
+            v-if="activeConversationId"
+            class="workspace-shell"
+            :class="workspaceShellClass"
+            data-workspace-shell
+            :aria-hidden="workspacePanelVisible ? 'false' : 'true'"
+          >
+            <WorkspaceBrowserPanel
+              v-if="workspacePanelVisible"
+              class="workspace-browser-panel-shell"
+              :conversation-id="activeConversationId"
+              :conversation-title="activeConversationTitle()"
+              :open="workspacePanelVisible"
+            />
+          </aside>
       </div>
     </section>
   </main>

@@ -1532,6 +1532,7 @@ p {
   overflow: hidden;
   flex: 1 1 auto;
   display: flex;
+  flex-direction: column;
   opacity: 1;
   transition:
     opacity 200ms ease,
@@ -1542,6 +1543,7 @@ p {
   position: relative;
   width: 100%;
   min-height: 0;
+  flex: 1 1 auto;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 0;
   gap: 0;
@@ -1569,6 +1571,16 @@ p {
 .chat-main-content {
   min-width: 0;
   min-height: 0;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+
+.chat-body-column {
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
   display: flex;
   flex-direction: column;
   gap: 0.7rem;
@@ -1583,6 +1595,18 @@ p {
   flex: 0 0 0px;
   opacity: 0;
   overflow: hidden;
+  pointer-events: none;
+}
+
+.chat-stage.composer-centered .chat-main-layout {
+  grid-template-columns: minmax(0, 1fr) 0;
+  gap: 0;
+}
+
+.chat-stage.composer-centered .workspace-shell:not(.mobile) {
+  width: 0;
+  min-width: 0;
+  opacity: 0;
   pointer-events: none;
 }
 

@@ -7,8 +7,8 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        // target: 'http://127.0.0.1:18080',
-        target: 'https://art.istart.uk',
+        target: 'http://127.0.0.1:18080',
+        // target: 'https://art.istart.uk',
         changeOrigin: true,
       },
     },

@@ -1,4 +1,4 @@
-<script setup lang='ts'>
+﻿<script setup lang='ts'>
 import { computed, ref, watch } from 'vue'
 import { ArrowRight, Download, Document, FolderOpened, Refresh, Search } from '@element-plus/icons-vue'
 
@@ -20,7 +20,6 @@ const props = defineProps<{
 }>()
 
 const rootNodes = ref<WorkspaceTreeNode[]>([])
-const selectedDirectoryPath = ref(ROOT_DIRECTORY)
 const searchQuery = ref('')
 const loadingRoot = ref(false)
 const errorMessage = ref('')
@@ -34,13 +33,6 @@ let rootLoadToken = 0
 
 const normalizedQuery = computed(() => searchQuery.value.trim().toLowerCase())
 const flatTree = computed(() => flattenTree(rootNodes.value))
-const selectedDirectoryNode = computed(() =>
-  selectedDirectoryPath.value ? flatTree.value.find((node) => node.path === selectedDirectoryPath.value && node.type === 'directory') ?? null : null,
-)
-const currentDirectoryItems = computed(() => {
-  const nodes = selectedDirectoryPath.value ? selectedDirectoryNode.value?.children ?? [] : rootNodes.value
-  return filterNodes(nodes, normalizedQuery.value)
-})
 const visibleTree = computed(() => {
   if (!normalizedQuery.value) {
     return flatTree.value.filter((node) => node.ancestorPaths.every((ancestorPath) => expandedPaths.value.has(ancestorPath)))
@@ -59,7 +51,6 @@ const visibleTree = computed(() => {
   return flatTree.value.filter((node) => visiblePaths.has(node.path))
 })
 const displayTitle = computed(() => props.conversationTitle?.trim() || 'Workspace')
-const currentDirectoryLabel = computed(() => selectedDirectoryPath.value || 'Workspace root')
 
 function normalizeNode(node: WorkspaceTreeNode, parentPath = ROOT_DIRECTORY): WorkspaceTreeNode {
   const path = node.path || (parentPath ? parentPath + '/' + node.name : node.name)
@@ -83,13 +74,6 @@ function flattenTree(nodes: WorkspaceTreeNode[], depth = 0, ancestorPaths: strin
     const children = node.children?.length ? flattenTree(node.children, depth + 1, [...ancestorPaths, node.path]) : []
     return [current, ...children]
   })
-}
-
-function filterNodes(nodes: WorkspaceTreeNode[], query: string) {
-  if (!query) {
-    return nodes
-  }
-  return nodes.filter((node) => nodeMatchesQuery(node, query))
 }
 
 function nodeMatchesQuery(node: WorkspaceTreeNode, query: string) {
@@ -179,7 +163,6 @@ function setDirectoryLoading(path: string, loading: boolean) {
 function resetBrowserState() {
   rootLoadToken += 1
   rootNodes.value = []
-  selectedDirectoryPath.value = ROOT_DIRECTORY
   searchQuery.value = ''
   loadingRoot.value = false
   errorMessage.value = ''
@@ -205,7 +188,6 @@ async function loadRootSnapshot() {
     }
     const nodes = normalizeNodes(workspaceSnapshot.tree)
     rootNodes.value = nodes
-    selectedDirectoryPath.value = ROOT_DIRECTORY
     expandedPaths.value = new Set()
     loadedDirectoryPaths.value = collectLoadedDirectoryPaths(nodes)
     loadingDirectoryPaths.value = new Set()
@@ -260,9 +242,6 @@ async function toggleDirectory(node: WorkspaceTreeNode) {
   if (node.type !== 'directory') {
     return
   }
-  selectedDirectoryPath.value = node.path
-  dialogOpen.value = false
-  dialogNode.value = null
   const nextExpanded = !expandedPaths.value.has(node.path)
   setExpanded(node.path, nextExpanded)
   if (nextExpanded) {
@@ -283,16 +262,12 @@ function closeDialog() {
   dialogNode.value = null
 }
 
-function selectItem(node: WorkspaceTreeNode) {
+function handleNodeClick(node: WorkspaceTreeNode) {
   if (node.type === 'directory') {
     void toggleDirectory(node)
     return
   }
   openFile(node)
-}
-
-function selectRootDirectory() {
-  selectedDirectoryPath.value = ROOT_DIRECTORY
 }
 
 watch(
@@ -339,66 +314,34 @@ watch(
     <p v-else-if='loadingRoot' class='workspace-browser-status'>Loading workspace...</p>
 
     <div class='workspace-browser-body'>
-      <aside class='workspace-browser-tree'>
-        <button
-          type='button'
-          class='workspace-browser-root-button'
-          :class='{ active: selectedDirectoryPath === ROOT_DIRECTORY }'
-          @click='selectRootDirectory'
-        >
-          <FolderOpened />
-          <span>Workspace root</span>
-        </button>
-
+      <div class='workspace-browser-tree'>
         <el-scrollbar class='workspace-browser-tree-scrollbar' view-class='workspace-browser-tree-view'>
-          <button
+          <div v-if='visibleTree.length === 0' class='workspace-browser-empty'>No loaded items</div>
+          <div
             v-for='node in visibleTree'
             :key='node.path'
-            type='button'
-            class='workspace-browser-node'
-            :class='{ active: node.path === selectedDirectoryPath, directory: node.type === `directory`, file: node.type === `file` }'
+            class='workspace-browser-row'
             :style='nodeIndent(node)'
-            :data-workspace-tree-node='node.path'
-            :aria-expanded='node.type === `directory` ? (isExpanded(node.path) ? `true` : `false`) : undefined'
-            @click='node.type === `directory` ? toggleDirectory(node) : openFile(node)'
           >
-            <span class='workspace-browser-node-icon' aria-hidden='true'>
-              <ArrowRight v-if='node.type === `directory` && !isExpanded(node.path)' class='workspace-browser-node-toggle' />
-              <FolderOpened v-else-if='node.type === `directory`' />
-              <Document v-else />
-            </span>
-            <span class='workspace-browser-node-path' :title='node.path'>{{ node.path }}</span>
-            <span v-if='node.has_diff' class='workspace-browser-diff-badge' :data-workspace-diff-badge='node.path'>Diff</span>
-          </button>
-        </el-scrollbar>
-      </aside>
-
-      <section class='workspace-browser-list'>
-        <header class='workspace-browser-list-header'>
-          <div class='workspace-browser-list-title-block'>
-            <strong class='workspace-browser-list-title' :title='currentDirectoryLabel'>{{ currentDirectoryLabel }}</strong>
-            <span class='workspace-browser-list-count'>{{ currentDirectoryItems.length }} items</span>
-          </div>
-        </header>
-
-        <el-scrollbar class='workspace-browser-list-scrollbar' view-class='workspace-browser-list-view'>
-          <div v-if='currentDirectoryItems.length === 0' class='workspace-browser-empty'>No loaded items</div>
-          <div v-for='node in currentDirectoryItems' :key='node.path' class='workspace-browser-list-row'>
             <button
               type='button'
-              class='workspace-browser-list-item'
+              class='workspace-browser-node'
+              :class='{ directory: node.type === `directory`, file: node.type === `file` }'
+              :data-workspace-tree-node='node.path'
               :data-workspace-list-item='node.path'
-              @click='selectItem(node)'
+              :aria-expanded='node.type === `directory` ? (isExpanded(node.path) ? `true` : `false`) : undefined'
+              @click='handleNodeClick(node)'
             >
-              <span class='workspace-browser-list-icon' aria-hidden='true'>
-                <FolderOpened v-if='node.type === `directory`' />
+              <span class='workspace-browser-node-icon' aria-hidden='true'>
+                <ArrowRight v-if='node.type === `directory` && !isExpanded(node.path)' class='workspace-browser-node-toggle' />
+                <FolderOpened v-else-if='node.type === `directory`' />
                 <Document v-else />
               </span>
-              <span class='workspace-browser-list-text'>
-                <span class='workspace-browser-list-name' :title='node.name'>{{ node.name }}</span>
-                <span class='workspace-browser-list-path' :title='node.path'>{{ node.path }}</span>
+              <span class='workspace-browser-node-text'>
+                <span class='workspace-browser-node-name' :title='node.name'>{{ node.name }}</span>
+                <span class='workspace-browser-node-path' :title='node.path'>{{ node.path }}</span>
               </span>
-              <span class='workspace-browser-list-kind'>{{ node.type === `directory` ? `Folder` : `File` }}</span>
+              <span class='workspace-browser-node-kind'>{{ node.type === `directory` ? `Folder` : `File` }}</span>
               <span v-if='node.has_diff' class='workspace-browser-diff-badge' :data-workspace-diff-badge='node.path'>Diff</span>
               <span v-if='node.type === `directory` && isDirectoryLoading(node.path)' class='workspace-browser-loading'>Loading</span>
             </button>
@@ -415,7 +358,7 @@ watch(
             </a>
           </div>
         </el-scrollbar>
-      </section>
+      </div>
     </div>
 
     <WorkspaceFileDialog
@@ -441,8 +384,7 @@ watch(
 }
 
 .workspace-browser-header,
-.workspace-browser-toolbar,
-.workspace-browser-list-header {
+.workspace-browser-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -450,8 +392,7 @@ watch(
   min-width: 0;
 }
 
-.workspace-browser-title-block,
-.workspace-browser-list-title-block {
+.workspace-browser-title-block {
   min-width: 0;
 }
 
@@ -463,8 +404,7 @@ watch(
   color: var(--app-text-muted);
 }
 
-.workspace-browser-title,
-.workspace-browser-list-title {
+.workspace-browser-title {
   display: block;
   min-width: 0;
   overflow: hidden;
@@ -507,93 +447,71 @@ watch(
 .workspace-browser-body {
   flex: 1 1 auto;
   min-height: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.25fr);
-  gap: 0.6rem;
+  display: flex;
+  flex-direction: column;
 }
 
-.workspace-browser-tree,
-.workspace-browser-list {
+.workspace-browser-tree {
+  flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
   border: 1px solid var(--app-border-subtle);
   border-radius: 8px;
   background: var(--app-surface-strong);
-}
-
-.workspace-browser-tree,
-.workspace-browser-list {
   display: flex;
   flex-direction: column;
 }
 
-.workspace-browser-root-button,
+.workspace-browser-tree-scrollbar {
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.workspace-browser-tree-view {
+  display: grid;
+  gap: 0.24rem;
+  padding: 0.45rem;
+}
+
+.workspace-browser-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 2rem;
+  align-items: center;
+  gap: 0.25rem;
+}
+
 .workspace-browser-node,
-.workspace-browser-list-item,
 .workspace-browser-item-download {
   border: 1px solid transparent;
   background: transparent;
   color: inherit;
 }
 
-.workspace-browser-root-button,
-.workspace-browser-node,
-.workspace-browser-list-item {
+.workspace-browser-node {
   min-width: 0;
-  cursor: pointer;
-  text-align: left;
-}
-
-.workspace-browser-root-button {
-  height: 2.2rem;
-  display: flex;
+  height: 2.85rem;
+  display: grid;
+  grid-template-columns: 1.75rem minmax(0, 1fr) auto auto auto;
   align-items: center;
   gap: 0.4rem;
-  margin: 0.45rem 0.45rem 0;
-  padding: 0 0.55rem;
+  padding: 0 0.45rem;
   border-radius: 8px;
-  font-weight: 650;
-}
-
-.workspace-browser-tree-scrollbar,
-.workspace-browser-list-scrollbar {
-  min-height: 0;
-  flex: 1 1 auto;
-}
-
-.workspace-browser-tree-view,
-.workspace-browser-list-view {
-  display: grid;
-  gap: 0.24rem;
-  padding: 0.45rem;
-}
-
-.workspace-browser-node {
-  width: 100%;
-  height: 2.05rem;
-  display: flex;
-  align-items: center;
-  gap: 0.36rem;
-  padding-right: 0.42rem;
-  border-radius: 8px;
+  cursor: pointer;
+  text-align: left;
 }
 
 .workspace-browser-node.directory {
   font-weight: 650;
 }
 
-.workspace-browser-root-button:hover,
-.workspace-browser-root-button.active,
-.workspace-browser-node:hover,
-.workspace-browser-node.active,
-.workspace-browser-list-item:hover {
+.workspace-browser-node:hover {
   border-color: rgba(var(--app-accent-rgb), 0.16);
   background: rgba(var(--app-accent-rgb), 0.08);
 }
 
 .workspace-browser-node-icon,
-.workspace-browser-list-icon,
 .workspace-browser-item-download {
   flex: 0 0 auto;
   width: 1.75rem;
@@ -604,11 +522,9 @@ watch(
 }
 
 .workspace-browser-node-icon svg,
-.workspace-browser-list-icon svg,
 .workspace-browser-item-download svg,
 .workspace-browser-search svg,
-.workspace-browser-icon-button svg,
-.workspace-browser-root-button svg {
+.workspace-browser-icon-button svg {
   width: 1rem;
   height: 1rem;
 }
@@ -617,71 +533,31 @@ watch(
   transform: rotate(0deg);
 }
 
-.workspace-browser-node-path,
-.workspace-browser-list-name,
-.workspace-browser-list-path,
-.workspace-browser-list-title,
-.workspace-browser-title,
-.workspace-browser-root-button span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.workspace-browser-node-path {
-  flex: 1 1 auto;
-  font-size: 0.82rem;
-}
-
-.workspace-browser-list {
-  padding: 0.55rem;
-}
-
-.workspace-browser-list-count {
-  display: block;
-  margin-top: 0.12rem;
-  font-size: 0.76rem;
-  color: var(--app-text-muted);
-}
-
-.workspace-browser-list-row {
-  min-width: 0;
-  height: 2.85rem;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 2rem;
-  align-items: center;
-  gap: 0.25rem;
-}
-
-.workspace-browser-list-item {
-  min-width: 0;
-  height: 2.7rem;
-  display: grid;
-  grid-template-columns: 1.75rem minmax(0, 1fr) auto auto auto;
-  align-items: center;
-  gap: 0.4rem;
-  padding: 0 0.45rem;
-  border-radius: 8px;
-}
-
-.workspace-browser-list-text {
+.workspace-browser-node-text {
   min-width: 0;
   display: grid;
   gap: 0.12rem;
 }
 
-.workspace-browser-list-name {
+.workspace-browser-node-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 0.86rem;
   font-weight: 650;
 }
 
-.workspace-browser-list-path {
+.workspace-browser-node-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 0.74rem;
   color: var(--app-text-muted);
 }
 
-.workspace-browser-list-kind,
+.workspace-browser-node-kind,
 .workspace-browser-loading,
 .workspace-browser-diff-badge {
   flex: 0 0 auto;
@@ -692,7 +568,7 @@ watch(
   white-space: nowrap;
 }
 
-.workspace-browser-list-kind,
+.workspace-browser-node-kind,
 .workspace-browser-loading {
   color: var(--app-text-muted);
 }
@@ -723,11 +599,5 @@ watch(
 
 .workspace-browser-status.error {
   color: #b24343;
-}
-
-@media (max-width: 960px) {
-  .workspace-browser-body {
-    grid-template-columns: 1fr;
-  }
 }
 </style>

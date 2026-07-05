@@ -10,3 +10,4 @@ workspace/*
 !workspace/skills/**
 .worktrees/
 .worktree/
+.superpowers
