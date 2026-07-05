@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 import ElementPlus from 'element-plus'
-import { config, flushPromises, mount } from '@vue/test-utils'
+import { config, enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { nextTick } from 'vue'
 import { createRouter, createMemoryHistory } from 'vue-router'
@@ -10,6 +10,7 @@ import { createRouter, createMemoryHistory } from 'vue-router'
 const chatStyles = readFileSync(resolve(process.cwd(), 'src/style.css'), 'utf8')
 
 config.global.plugins = [ElementPlus]
+enableAutoUnmount(afterEach)
 
 const api = vi.hoisted(() => {
   class MockApiError extends Error {
@@ -225,6 +226,7 @@ describe('ChatView', () => {
   })
 
   afterEach(() => {
+    vi.useRealTimers()
     document.body.querySelectorAll('.sidebar-user-menu-panel, .sidebar-confirm-overlay').forEach((node) => {
       node.parentNode?.removeChild(node)
     })
