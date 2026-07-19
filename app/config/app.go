@@ -1,6 +1,8 @@
 package config
 
 import (
+	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -31,10 +33,109 @@ type Config struct {
 	Tasks             TaskManagerConfig           `yaml:"tasks"`
 	Tools             ToolsConfig                 `yaml:"tools"`
 	Attachments       AttachmentStorageConfig     `yaml:"attachments"`
+	Updates           UpdatesConfig               `yaml:"updates"`
 	LLMRequestTimeout time.Duration               `yaml:"llmRequestTimeout"`
 	LLM               []coretypes.LLMProvider     `yaml:"llmProviders"`
 	Embedding         coretypes.EmbeddingProvider `yaml:"embeddingProvider"`
 	Rerank            coretypes.RerankingProvider `yaml:"rerankProvider"`
+}
+
+type UpdatesConfig struct {
+	Enabled             bool               `yaml:"enabled"`
+	CheckInterval       time.Duration      `yaml:"checkInterval"`
+	RuntimeMode         string             `yaml:"runtimeMode"`
+	ServiceName         string             `yaml:"serviceName"`
+	GitHubAPIBaseURL    string             `yaml:"githubApiBaseUrl"`
+	DownloadURLTemplate string             `yaml:"downloadUrlTemplate"`
+	GitHubTokenEnv      string             `yaml:"githubTokenEnv"`
+	DrainTimeout        time.Duration      `yaml:"drainTimeout"`
+	HealthTimeout       time.Duration      `yaml:"healthTimeout"`
+	Backup              UpdateBackupConfig `yaml:"backup"`
+}
+
+type UpdateBackupConfig struct {
+	DefaultMode string `yaml:"defaultMode"`
+	RetainCount int    `yaml:"retainCount"`
+	RetainDays  int    `yaml:"retainDays"`
+}
+
+func (c UpdatesConfig) Validate() error {
+	if c.CheckInterval == 0 {
+		c.CheckInterval = time.Hour
+	}
+	if c.CheckInterval < 15*time.Minute {
+		return fmt.Errorf("updates.checkInterval must be at least 15m")
+	}
+	if c.DrainTimeout < 0 || c.HealthTimeout < 0 {
+		return fmt.Errorf("updates timeouts cannot be negative")
+	}
+	if c.DrainTimeout > time.Hour || c.HealthTimeout > time.Hour {
+		return fmt.Errorf("updates timeouts cannot exceed 1h")
+	}
+	if c.RuntimeMode != "" && c.RuntimeMode != "auto" && c.RuntimeMode != "direct" && c.RuntimeMode != "systemd" && c.RuntimeMode != "windows-service" {
+		return fmt.Errorf("updates.runtimeMode %q is invalid", c.RuntimeMode)
+	}
+	if c.GitHubAPIBaseURL != "" {
+		parsed, err := url.Parse(c.GitHubAPIBaseURL)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+			return fmt.Errorf("updates.githubApiBaseUrl must be an HTTP(S) URL")
+		}
+	}
+	if c.DownloadURLTemplate != "" && !strings.Contains(c.DownloadURLTemplate, "{url}") && !strings.Contains(c.DownloadURLTemplate, "{name}") {
+		return fmt.Errorf("updates.downloadUrlTemplate must contain {url} or {name}")
+	}
+	if c.Backup.DefaultMode != "" && c.Backup.DefaultMode != "compact" && c.Backup.DefaultMode != "full" {
+		return fmt.Errorf("updates.backup.defaultMode %q is invalid", c.Backup.DefaultMode)
+	}
+	if c.Backup.RetainCount < 0 || c.Backup.RetainDays < 0 {
+		return fmt.Errorf("updates backup retention cannot be negative")
+	}
+	if c.Backup.RetainCount > 100 || c.Backup.RetainDays > 3650 {
+		return fmt.Errorf("updates backup retention exceeds supported limits")
+	}
+	return nil
+}
+
+func (c UpdatesConfig) ResolvedCheckInterval() time.Duration {
+	if c.CheckInterval >= 15*time.Minute {
+		return c.CheckInterval
+	}
+	return time.Hour
+}
+
+func (c UpdatesConfig) ResolvedDrainTimeout() time.Duration {
+	if c.DrainTimeout > 0 && c.DrainTimeout <= time.Hour {
+		return c.DrainTimeout
+	}
+	return 5 * time.Minute
+}
+
+func (c UpdatesConfig) ResolvedHealthTimeout() time.Duration {
+	if c.HealthTimeout > 0 && c.HealthTimeout <= time.Hour {
+		return c.HealthTimeout
+	}
+	return 90 * time.Second
+}
+
+func (c UpdatesConfig) ResolvedGitHubAPIBaseURL() string {
+	if value := strings.TrimSpace(c.GitHubAPIBaseURL); value != "" {
+		return value
+	}
+	return "https://api.github.com"
+}
+
+func (c UpdatesConfig) ResolvedGitHubTokenEnv() string {
+	if value := strings.TrimSpace(c.GitHubTokenEnv); value != "" {
+		return value
+	}
+	return "GITHUB_TOKEN"
+}
+
+func (c UpdateBackupConfig) ResolvedMode() string {
+	if c.DefaultMode == "full" {
+		return "full"
+	}
+	return "compact"
 }
 
 func (c Config) ResolvedLLMRequestTimeout() time.Duration {

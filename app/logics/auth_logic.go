@@ -310,6 +310,23 @@ func (l *AuthLogic) Login(ctx context.Context, username, password string) (*mode
 	return &user, session, nil
 }
 
+func (l *AuthLogic) VerifyPassword(ctx context.Context, userID uint64, password string) error {
+	if l == nil || l.db == nil || userID == 0 || password == "" {
+		return ErrInvalidCredentials
+	}
+	var user models.User
+	if err := l.db.WithContext(ctx).First(&user, userID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrInvalidCredentials
+		}
+		return err
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
+		return ErrInvalidCredentials
+	}
+	return nil
+}
+
 func validateUserCanLogin(user *models.User) error {
 	if user == nil {
 		return ErrUnauthorized

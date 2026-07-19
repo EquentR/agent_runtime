@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -54,6 +55,29 @@ llmProviders: []
 	assertFileContent(t, filepath.Join(destDir, "workspace", "skills", "test-skill", "SKILL.md"), "# Test skill\n")
 	if _, err := os.Stat(filepath.Join(destDir, "workspace", "ignored.txt")); !os.IsNotExist(err) {
 		t.Fatalf("workspace ignored file was copied: %v", err)
+	}
+}
+
+func TestPackReleaseWritesBuildInfo(t *testing.T) {
+	sourceDir := t.TempDir()
+	destDir := t.TempDir()
+	writeFile(t, filepath.Join(sourceDir, "conf", "app.release.yaml"), []byte("security:\n  appSecret: test\n"))
+	writeFile(t, filepath.Join(sourceDir, "workspace", "AGENTS.md"), []byte("# Workspace\n"))
+
+	info := BuildInfo{Version: "v1.2.3", Commit: "abc123", Distribution: "release", GOOS: "windows", GOARCH: "amd64"}
+	if err := PackReleaseWithInfo(sourceDir, destDir, info); err != nil {
+		t.Fatalf("PackReleaseWithInfo() error = %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(destDir, "build-info.json"))
+	if err != nil {
+		t.Fatalf("ReadFile(build-info.json) error = %v", err)
+	}
+	var got BuildInfo
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("Unmarshal(build-info.json) error = %v", err)
+	}
+	if got != info {
+		t.Fatalf("BuildInfo = %#v, want %#v", got, info)
 	}
 }
 

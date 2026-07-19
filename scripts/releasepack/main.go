@@ -1,27 +1,53 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
+
+type BuildInfo struct {
+	Version      string `json:"version"`
+	Commit       string `json:"commit"`
+	Distribution string `json:"distribution"`
+	GOOS         string `json:"goos"`
+	GOARCH       string `json:"goarch"`
+}
+
+type ManagedManifest struct {
+	Version string            `json:"version"`
+	Files   map[string]string `json:"files"`
+}
 
 func main() {
 	sourceDir := flag.String("source", ".", "repository root")
 	destDir := flag.String("dest", "", "package output directory")
+	version := flag.String("version", "dev", "release version")
+	commit := flag.String("commit", "none", "source commit")
+	distribution := flag.String("distribution", "release", "build distribution")
+	goos := flag.String("goos", runtime.GOOS, "target operating system")
+	goarch := flag.String("goarch", runtime.GOARCH, "target architecture")
 	flag.Parse()
 
-	if err := PackRelease(*sourceDir, *destDir); err != nil {
+	if err := PackReleaseWithInfo(*sourceDir, *destDir, BuildInfo{Version: *version, Commit: *commit, Distribution: *distribution, GOOS: *goos, GOARCH: *goarch}); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
 func PackRelease(sourceDir string, destDir string) error {
+	return PackReleaseWithInfo(sourceDir, destDir, BuildInfo{Version: "dev", Commit: "none", Distribution: "source", GOOS: runtime.GOOS, GOARCH: runtime.GOARCH})
+}
+
+func PackReleaseWithInfo(sourceDir string, destDir string, buildInfo BuildInfo) error {
 	sourceDir = cleanPath(sourceDir)
 	destDir = cleanPath(destDir)
 	if sourceDir == "" {
@@ -44,7 +70,63 @@ func PackRelease(sourceDir string, destDir string) error {
 	if err := copyWorkspaceTemplate(filepath.Join(sourceDir, "workspace"), filepath.Join(destDir, "workspace")); err != nil {
 		return err
 	}
+	manifest, err := buildManagedManifest(destDir, buildInfo.Version, []string{"conf", "workspace"})
+	if err != nil {
+		return err
+	}
+	manifestData, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(destDir, "managed-manifest.json"), append(manifestData, '\n'), 0o644); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(buildInfo, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode build info: %w", err)
+	}
+	data = append(data, '\n')
+	if err := os.WriteFile(filepath.Join(destDir, "build-info.json"), data, 0o644); err != nil {
+		return fmt.Errorf("write build info: %w", err)
+	}
 	return nil
+}
+
+func buildManagedManifest(root, version string, directories []string) (ManagedManifest, error) {
+	manifest := ManagedManifest{Version: version, Files: map[string]string{}}
+	for _, directory := range directories {
+		base := filepath.Join(root, directory)
+		if err := filepath.WalkDir(base, func(path string, entry fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if entry.IsDir() {
+				return nil
+			}
+			file, err := os.Open(path)
+			if err != nil {
+				return err
+			}
+			hash := sha256.New()
+			_, copyErr := io.Copy(hash, file)
+			closeErr := file.Close()
+			if copyErr != nil {
+				return copyErr
+			}
+			if closeErr != nil {
+				return closeErr
+			}
+			relative, err := filepath.Rel(root, path)
+			if err != nil {
+				return err
+			}
+			manifest.Files[filepath.ToSlash(relative)] = hex.EncodeToString(hash.Sum(nil))
+			return nil
+		}); err != nil {
+			return ManagedManifest{}, err
+		}
+	}
+	return manifest, nil
 }
 
 func preparePackageDirs(destDir string) error {

@@ -47,6 +47,36 @@ func (m *AuthMiddleware) RequireAdmin() gin.HandlerFunc {
 	})
 }
 
+// RequireAdminHTTP is the real-status variant used by endpoints that expose HTTP status contracts.
+func (m *AuthMiddleware) RequireAdminHTTP() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		user, session, err := m.resolve(c)
+		if err != nil {
+			writeAuthHTTPError(c, http.StatusUnauthorized, err)
+			return
+		}
+		if err := requireActiveUserState(user); err != nil {
+			writeAuthHTTPError(c, authStatusCode(err, http.StatusForbidden), err)
+			return
+		}
+		if user.Role != models.UserRoleAdmin {
+			writeAuthHTTPError(c, http.StatusForbidden, errAdminRequired)
+			return
+		}
+		c.Set(authUserContextKey, user)
+		c.Set(authSessionContextKey, session)
+		c.Next()
+	}
+}
+
+func writeAuthHTTPError(c *gin.Context, status int, err error) {
+	result := resp.NewResult()
+	result.SetCode(status)
+	result.SetMessage(err.Error())
+	c.JSON(status, result)
+	c.Abort()
+}
+
 func (m *AuthMiddleware) RequireActiveUserOption() resp.WrapperOption {
 	return resp.WithMiddlewares(m.RequireActiveUser())
 }
@@ -91,6 +121,15 @@ func (m *AuthMiddleware) CurrentUser(c *gin.Context) (*models.User, bool) {
 	}
 	user, ok := value.(*models.User)
 	return user, ok
+}
+
+func (m *AuthMiddleware) CurrentSession(c *gin.Context) (*models.UserSession, bool) {
+	value, ok := c.Get(authSessionContextKey)
+	if !ok {
+		return nil, false
+	}
+	session, ok := value.(*models.UserSession)
+	return session, ok
 }
 
 func (m *AuthMiddleware) resolve(c *gin.Context) (*models.User, *models.UserSession, error) {

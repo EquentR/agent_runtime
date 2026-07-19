@@ -315,6 +315,290 @@
                 }
             }
         },
+        "/admin/updates/authorize": {
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-updates"
+                ],
+                "summary": "复核管理员密码并签发一次性升级授权",
+                "parameters": [
+                    {
+                        "description": "授权动作",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/app_handlers.AdminUpdateAuthorizeSwaggerRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/app_handlers.AdminUpdateAuthorizationSwaggerResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/updates/check": {
+            "post": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-updates"
+                ],
+                "summary": "立即检查稳定版更新",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/app_handlers.AdminUpdateCheckSwaggerResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/updates/force-install": {
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-updates"
+                ],
+                "summary": "在排空超时后强制继续升级",
+                "parameters": [
+                    {
+                        "description": "强制升级参数",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/app_handlers.AdminUpdateInstallSwaggerRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "$ref": "#/definitions/app_handlers.AdminUpdateOperationSwaggerResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/updates/install": {
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-updates"
+                ],
+                "summary": "下载并安装已检查的发行版",
+                "parameters": [
+                    {
+                        "description": "升级参数",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/app_handlers.AdminUpdateInstallSwaggerRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "$ref": "#/definitions/app_handlers.AdminUpdateOperationSwaggerResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/updates/rollback": {
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-updates"
+                ],
+                "summary": "回滚最近一次受保护备份",
+                "parameters": [
+                    {
+                        "description": "回滚参数",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/app_handlers.AdminUpdateInstallSwaggerRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "$ref": "#/definitions/app_handlers.AdminUpdateOperationSwaggerResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/updates/status": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-updates"
+                ],
+                "summary": "获取自升级状态",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/app_handlers.AdminUpdateStatusSwaggerResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/app_handlers.ErrorSwaggerResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/admin/workspaces/users/{user_id}": {
             "get": {
                 "description": "管理员查看指定用户 home/task workspace 状态，并写入后台审计记录。",
@@ -3133,6 +3417,234 @@
         }
     },
     "definitions": {
+        "app_handlers.AdminUpdateAuthorizationSwaggerResponse": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "integer"
+                },
+                "data": {
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "message": {
+                    "type": "string"
+                },
+                "ok": {
+                    "type": "boolean"
+                },
+                "time": {
+                    "type": "string"
+                }
+            }
+        },
+        "app_handlers.AdminUpdateAuthorizeSwaggerRequest": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": [
+                        "install",
+                        "force_install",
+                        "rollback"
+                    ]
+                },
+                "password": {
+                    "type": "string"
+                },
+                "target": {
+                    "type": "string"
+                }
+            }
+        },
+        "app_handlers.AdminUpdateCheckSwaggerResponse": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "integer"
+                },
+                "data": {
+                    "$ref": "#/definitions/app_handlers.AdminUpdateStatusSwaggerDoc"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "ok": {
+                    "type": "boolean"
+                },
+                "time": {
+                    "type": "string"
+                }
+            }
+        },
+        "app_handlers.AdminUpdateInstallSwaggerRequest": {
+            "type": "object",
+            "properties": {
+                "authorization_token": {
+                    "type": "string"
+                },
+                "backup_mode": {
+                    "type": "string",
+                    "enum": [
+                        "compact",
+                        "full"
+                    ]
+                },
+                "operation_id": {
+                    "type": "string"
+                },
+                "target": {
+                    "type": "string"
+                }
+            }
+        },
+        "app_handlers.AdminUpdateOperationSwaggerDoc": {
+            "type": "object",
+            "properties": {
+                "backup_id": {
+                    "type": "string"
+                },
+                "backup_mode": {
+                    "type": "string"
+                },
+                "backup_version": {
+                    "type": "string"
+                },
+                "current_version": {
+                    "type": "string"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "generation": {
+                    "type": "integer"
+                },
+                "operation_id": {
+                    "type": "string"
+                },
+                "phase": {
+                    "type": "string"
+                },
+                "target_version": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "app_handlers.AdminUpdateOperationSwaggerResponse": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "integer"
+                },
+                "data": {
+                    "$ref": "#/definitions/app_handlers.AdminUpdateOperationSwaggerDoc"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "ok": {
+                    "type": "boolean"
+                },
+                "time": {
+                    "type": "string"
+                }
+            }
+        },
+        "app_handlers.AdminUpdateStatusPayloadSwaggerDoc": {
+            "type": "object",
+            "properties": {
+                "csrf_token": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/app_handlers.AdminUpdateStatusSwaggerDoc"
+                }
+            }
+        },
+        "app_handlers.AdminUpdateStatusSwaggerDoc": {
+            "type": "object",
+            "properties": {
+                "backup": {
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "cache_stale": {
+                    "type": "boolean"
+                },
+                "cache_updated_at": {
+                    "type": "string"
+                },
+                "capability": {
+                    "type": "string"
+                },
+                "capability_reason": {
+                    "type": "string"
+                },
+                "capable": {
+                    "type": "boolean"
+                },
+                "checked_at": {
+                    "type": "string"
+                },
+                "current": {
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "force_install_allowed": {
+                    "type": "boolean"
+                },
+                "last_error": {
+                    "type": "string"
+                },
+                "latest": {
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "maintenance": {
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "preflight": {
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "runtime_mode": {
+                    "type": "string"
+                },
+                "signature_status": {
+                    "type": "string"
+                },
+                "state": {
+                    "$ref": "#/definitions/app_handlers.AdminUpdateOperationSwaggerDoc"
+                },
+                "update_available": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "app_handlers.AdminUpdateStatusSwaggerResponse": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "integer"
+                },
+                "data": {
+                    "$ref": "#/definitions/app_handlers.AdminUpdateStatusPayloadSwaggerDoc"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "ok": {
+                    "type": "boolean"
+                },
+                "time": {
+                    "type": "string"
+                }
+            }
+        },
         "app_handlers.AdminYAMLModelCatalogSwaggerDoc": {
             "type": "object",
             "properties": {

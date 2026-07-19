@@ -23,6 +23,7 @@ func Init(e *gin.Engine, baseUrl string, staticPath []rest.Static, deps Dependen
 	activeUser := authMiddleware.RequireActiveUser()
 	adminUser := authMiddleware.RequireAdmin()
 	registers := []Register{
+		handlers.NewHealthHandler(deps.CurrentBuild, deps.UpdateHealthStore),
 		handlers.NewAuthHandler(deps.AuthLogic, authHandlerOptions...),
 		handlers.NewExampleHandler(),
 		handlers.NewSettingsHandler(deps.AuthSettings),
@@ -30,6 +31,7 @@ func Init(e *gin.Engine, baseUrl string, staticPath []rest.Static, deps Dependen
 		handlers.NewAdminUserHandler(deps.UserDB, deps.AdminAuditLogic, deps.EmailVerification, adminUser),
 		handlers.NewAdminSettingsHandler(deps.AuthSettings, deps.AdminAuditLogic, deps.AdminSMTPTester, adminUser),
 		handlers.NewAdminAuditEventHandler(deps.AdminAuditLogic, adminUser),
+		handlers.NewAdminUpdateHandler(deps.UpdateManager, authMiddleware, deps.AdminAuditLogic, authMiddleware.RequireAdminHTTP()),
 		handlers.NewAdminModelHandler(deps.ModelLogic, deps.AdminAuditLogic, deps.ModelTester, adminUser),
 		handlers.NewAdminWorkspaceHandler(deps.WorkspaceManager, deps.AdminAuditLogic, adminUser),
 		handlers.NewUserModelHandler(deps.ModelLogic, deps.ModelTester, activeUser),
@@ -44,6 +46,10 @@ func Init(e *gin.Engine, baseUrl string, staticPath []rest.Static, deps Dependen
 		handlers.NewWorkspaceBrowserHandler(deps.ConversationStore, deps.TaskManager, deps.WorkspaceManager, activeUser),
 		handlers.NewAuditHandler(deps.AuditStore, activeUser).WithConversationStore(deps.ConversationStore),
 		handlers.NewSwaggerHandler(),
+	}
+	if deps.MaintenanceGate != nil {
+		InitRouter(e, registers, baseUrl, staticPath, maintenanceMiddleware(deps.MaintenanceGate))
+		return
 	}
 	InitRouter(e, registers, baseUrl, staticPath)
 }

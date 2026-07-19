@@ -87,10 +87,12 @@ type Manager struct {
 	leaseDuration     time.Duration
 	heartbeatInterval time.Duration
 
-	mu           sync.RWMutex
-	executors    map[string]Executor
-	activeCancel map[string]context.CancelFunc
-	startOnce    sync.Once
+	mu            sync.RWMutex
+	maintenanceMu sync.RWMutex
+	executors     map[string]Executor
+	activeCancel  map[string]context.CancelFunc
+	claimsPaused  bool
+	startOnce     sync.Once
 }
 
 // NewManager 创建一个串行任务管理器实例。
@@ -167,7 +169,13 @@ func (m *Manager) Start(ctx context.Context) {
 
 // CreateTask 创建并发布一个新的任务。
 func (m *Manager) CreateTask(ctx context.Context, input CreateTaskInput) (*Task, error) {
+	m.maintenanceMu.RLock()
+	if m.ClaimsPaused() {
+		m.maintenanceMu.RUnlock()
+		return nil, fmt.Errorf("task creation paused for maintenance")
+	}
 	task, events, err := m.store.CreateTask(ctx, input)
+	m.maintenanceMu.RUnlock()
 	if err != nil {
 		corelog.Error("task create failed", corelog.String("component", "tasks"), corelog.String("module", "task_manager"), corelog.String("task_type", input.TaskType), corelog.Err(err))
 		return nil, err
@@ -473,7 +481,13 @@ func (m *Manager) CancelTask(ctx context.Context, id string) (*Task, error) {
 
 // RetryTask 基于原任务创建新的排队任务。
 func (m *Manager) RetryTask(ctx context.Context, id string) (*Task, error) {
+	m.maintenanceMu.RLock()
+	if m.ClaimsPaused() {
+		m.maintenanceMu.RUnlock()
+		return nil, fmt.Errorf("task retry paused for maintenance")
+	}
 	task, events, err := m.store.RetryTask(ctx, id)
+	m.maintenanceMu.RUnlock()
 	if err != nil {
 		return nil, err
 	}
@@ -482,17 +496,103 @@ func (m *Manager) RetryTask(ctx context.Context, id string) (*Task, error) {
 	return task, nil
 }
 
+// PauseClaims prevents workers from claiming queued tasks during maintenance.
+func (m *Manager) PauseClaims() {
+	if m == nil {
+		return
+	}
+	m.maintenanceMu.Lock()
+	m.mu.Lock()
+	m.claimsPaused = true
+	m.mu.Unlock()
+	m.maintenanceMu.Unlock()
+}
+
+// ResumeClaims allows workers to claim queued tasks after maintenance.
+func (m *Manager) ResumeClaims() {
+	if m == nil {
+		return
+	}
+	m.maintenanceMu.Lock()
+	m.mu.Lock()
+	m.claimsPaused = false
+	m.mu.Unlock()
+	m.maintenanceMu.Unlock()
+	m.notifyWorkers()
+}
+
+func (m *Manager) ClaimsPaused() bool {
+	if m == nil {
+		return false
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.claimsPaused
+}
+
+func (m *Manager) ActiveTaskCount() int {
+	if m == nil {
+		return 0
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.activeCancel)
+}
+
+func (m *Manager) CancelActiveTasks() {
+	if m == nil {
+		return
+	}
+	m.mu.RLock()
+	cancels := make([]context.CancelFunc, 0, len(m.activeCancel))
+	for _, cancel := range m.activeCancel {
+		cancels = append(cancels, cancel)
+	}
+	m.mu.RUnlock()
+	for _, cancel := range cancels {
+		cancel()
+	}
+}
+
+func (m *Manager) WaitForIdle(ctx context.Context) error {
+	if m == nil {
+		return nil
+	}
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if m.ActiveTaskCount() == 0 {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
 // runWorker 持续领取并执行任务；空队列时等待显式唤醒或低频兜底轮询。
 func (m *Manager) runWorker(ctx context.Context, workerIndex int) {
 	for {
+		m.maintenanceMu.RLock()
+		if m.ClaimsPaused() {
+			m.maintenanceMu.RUnlock()
+			if !m.waitForWork(ctx, m.workNotifier.current()) {
+				return
+			}
+			continue
+		}
 		waitCh := m.workNotifier.current()
 		select {
 		case <-ctx.Done():
+			m.maintenanceMu.RUnlock()
 			return
 		default:
 		}
 
 		task, events, err := m.store.ClaimNextTask(ctx, m.runnerID, m.leaseDuration)
+		m.maintenanceMu.RUnlock()
 		if err != nil {
 			corelog.Error("task claim failed", corelog.String("component", "tasks"), corelog.String("module", "task_manager"), corelog.String("runner_id", m.runnerID), corelog.Int("worker_index", workerIndex), corelog.Err(err))
 			if !m.waitForWork(ctx, waitCh) {

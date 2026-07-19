@@ -775,3 +775,80 @@ export interface RunTaskRequest {
     workspace_mode?: WorkspaceMode
   }
 }
+
+export interface UpdateBuildInfo {
+  version: string
+  commit: string
+  distribution: 'release' | 'container' | 'source' | string
+  goos: string
+  goarch: string
+}
+
+export interface UpdateRelease {
+  tag_name: string
+  name: string
+  body: string
+  html_url: string
+  published_at: string
+}
+
+export interface UpdateOperationState {
+  operation_id?: string
+  phase: string
+  generation: number
+  current_version?: string
+  target_version?: string
+  backup_id?: string
+  backup_mode?: 'compact' | 'full' | string
+  backup_created_at?: string
+  backup_version?: string
+  error?: string
+  updated_at?: string
+}
+
+export interface AdminUpdateStatus {
+  current: UpdateBuildInfo
+  latest?: UpdateRelease
+  update_available: boolean
+  checked_at?: string
+  cache_stale: boolean
+  capability: 'native' | 'notification_only' | string
+  capable: boolean
+  capability_reason?: string
+  runtime_mode: string
+  signature_status: string
+  cache_updated_at?: string
+  backup?: {
+    id: string
+    mode?: 'compact' | 'full' | string
+    created_at?: string
+    version?: string
+  }
+  state: UpdateOperationState
+  maintenance: {
+    active: boolean
+    operation_id?: string
+    started_at?: string
+  }
+  last_error?: string
+  force_install_allowed: boolean
+  preflight?: {
+    estimated_download_bytes: number
+    estimated_compact_backup_bytes: number
+    estimated_full_backup_bytes: number
+    available_bytes?: number
+    active_task_count: number
+    maintenance_impact: string
+    error?: string
+  }
+}
+
+export interface AdminUpdateStatusPayload {
+  status: AdminUpdateStatus
+  csrf_token: string
+}
+
+export interface AdminUpdateAuthorization {
+  authorization_token: string
+  expires_at: string
+}

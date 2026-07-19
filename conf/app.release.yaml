@@ -58,6 +58,21 @@ tasks:
   runnerId: ice-art
   pollInterval: 5s
 
+updates:
+  enabled: true
+  checkInterval: 1h
+  runtimeMode: auto
+  serviceName: ""
+  githubApiBaseUrl: https://api.github.com
+  downloadUrlTemplate: ""
+  githubTokenEnv: GITHUB_TOKEN
+  drainTimeout: 5m
+  healthTimeout: 90s
+  backup:
+    defaultMode: compact
+    retainCount: 3
+    retainDays: 30
+
 attachments:
   storageBackend: filesystem
   filesystem:

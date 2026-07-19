@@ -440,6 +440,34 @@ func TestSwaggerJSONIncludesWorkspacePathsAndDefinitions(t *testing.T) {
 	}
 }
 
+func TestSwaggerJSONIncludesAdminUpdatePaths(t *testing.T) {
+	engine := rest.Init()
+	NewSwaggerHandler().Register(engine.Group("/api/v1"))
+	server := httptest.NewServer(engine)
+	t.Cleanup(server.Close)
+
+	response, err := http.Get(server.URL + "/api/v1/swagger/swagger.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	var document map[string]any
+	if err := json.NewDecoder(response.Body).Decode(&document); err != nil {
+		t.Fatal(err)
+	}
+	paths, ok := document["paths"].(map[string]any)
+	if !ok {
+		t.Fatalf("paths = %#v", document["paths"])
+	}
+	for _, path := range []string{"/admin/updates/status", "/admin/updates/check", "/admin/updates/authorize", "/admin/updates/install", "/admin/updates/force-install", "/admin/updates/rollback"} {
+		if _, ok := paths[path]; !ok {
+			t.Errorf("swagger paths missing %q", path)
+		}
+	}
+	assertSwaggerPathHasResponses(t, paths, "/admin/updates/install", "post", "202", "400", "401", "403", "409", "503")
+	assertSwaggerPathHasResponses(t, paths, "/admin/updates/force-install", "post", "202", "400", "401", "403", "409")
+}
+
 func assertSwaggerStatusEnumContainsWaiting(t *testing.T, definitions map[string]any, name string) {
 	t.Helper()
 

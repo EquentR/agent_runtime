@@ -13,6 +13,7 @@ import (
 	coreprompt "github.com/EquentR/agent_runtime/core/prompt"
 	coreskills "github.com/EquentR/agent_runtime/core/skills"
 	coretasks "github.com/EquentR/agent_runtime/core/tasks"
+	coreupdater "github.com/EquentR/agent_runtime/core/updater"
 	"github.com/EquentR/agent_runtime/core/workspaces"
 	"github.com/EquentR/agent_runtime/pkg/mail"
 	"gorm.io/gorm"
@@ -42,6 +43,10 @@ type Dependencies struct {
 	TurnstileVerifier  logics.TurnstileVerifier
 	AdminAuditLogic    *logics.AdminAuditLogic
 	AdminSMTPTester    AdminSMTPTester
+	MaintenanceGate    *coreupdater.MaintenanceGate
+	CurrentBuild       coreupdater.BuildInfo
+	UpdateHealthStore  *coreupdater.HealthHandshakeStore
+	UpdateManager      *logics.UpdateManager
 }
 
 type AdminSMTPTester interface {

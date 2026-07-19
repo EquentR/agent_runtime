@@ -9,6 +9,9 @@ import type {
   AdminSMTPTestInput,
   AdminTurnstileSettings,
   AdminTurnstileSettingsInput,
+  AdminUpdateAuthorization,
+  AdminUpdateStatus,
+  AdminUpdateStatusPayload,
   AdminUserFilter,
   AdminUserUpdateInput,
   ApiEnvelope,
@@ -56,6 +59,7 @@ import type {
   InteractionRecord,
   TranscriptTokenUsage,
   UpdatePromptDocumentInput,
+  UpdateOperationState,
   UpdateUserProfileInput,
   UserEmailVerificationConfirmInput,
   UserEmailVerificationStartInput,
@@ -73,6 +77,7 @@ import type {
 const API_BASE = '/api/v1'
 const POLL_INTERVAL_MS = 1200
 const POLL_TIMEOUT_MS = 90000
+let updateCSRFToken = ''
 export const TASK_STREAM_ABORTED_MESSAGE = 'Task event stream aborted'
 
 export class ApiError extends Error {
@@ -1300,6 +1305,43 @@ export async function fetchAdminAuditEvents(filter: AdminAuditEventFilter = {}) 
   return Array.isArray(events)
     ? events.map((event) => normalizeAdminAuditEvent(event as Partial<AdminAuditEvent> & Record<string, unknown>))
     : []
+}
+
+export async function fetchAdminUpdateStatus() {
+  const payload = await request<AdminUpdateStatusPayload>('/admin/updates/status')
+  updateCSRFToken = payload.csrf_token
+  return payload.status
+}
+
+function updateMutation<T>(path: string, body?: unknown) {
+  if (!updateCSRFToken) {
+    throw new Error('Update security token is unavailable; reload update status')
+  }
+  return request<T>(path, {
+    method: 'POST',
+    headers: { 'X-Ice-Art-Update-CSRF': updateCSRFToken },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
+}
+
+export async function checkAdminUpdate() {
+  return updateMutation<AdminUpdateStatus>('/admin/updates/check', {})
+}
+
+export async function authorizeAdminUpdate(input: { password: string; action: 'install' | 'force_install' | 'rollback'; target: string }) {
+  return updateMutation<AdminUpdateAuthorization>('/admin/updates/authorize', input)
+}
+
+export async function installAdminUpdate(input: { authorization_token: string; operation_id: string; target: string; backup_mode: 'compact' | 'full' }) {
+  return updateMutation<UpdateOperationState>('/admin/updates/install', input)
+}
+
+export async function forceInstallAdminUpdate(input: { authorization_token: string; operation_id: string; target: string; backup_mode: 'compact' | 'full' }) {
+  return updateMutation<UpdateOperationState>('/admin/updates/force-install', input)
+}
+
+export async function rollbackAdminUpdate(input: { authorization_token: string; operation_id: string; target: string }) {
+  return updateMutation<UpdateOperationState>('/admin/updates/rollback', input)
 }
 
 export async function fetchAdminModels() {

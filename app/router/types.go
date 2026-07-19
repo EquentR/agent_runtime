@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"path"
 	"strings"
+	"time"
 
+	coreupdater "github.com/EquentR/agent_runtime/core/updater"
 	"github.com/EquentR/agent_runtime/pkg/log"
 	"github.com/EquentR/agent_runtime/pkg/rest"
 	"github.com/gin-gonic/gin"
@@ -23,11 +25,11 @@ func RegisterAPI(apiGroup *gin.RouterGroup, registers []Register) {
 	}
 }
 
-func InitRouter(e *gin.Engine, registers []Register, baseUrl string, staticPaths []rest.Static) {
-	initRouterWithEmbeddedFrontend(e, registers, baseUrl, staticPaths, embeddedFrontendFiles())
+func InitRouter(e *gin.Engine, registers []Register, baseUrl string, staticPaths []rest.Static, middlewares ...gin.HandlerFunc) {
+	initRouterWithEmbeddedFrontend(e, registers, baseUrl, staticPaths, embeddedFrontendFiles(), middlewares...)
 }
 
-func initRouterWithEmbeddedFrontend(e *gin.Engine, registers []Register, baseUrl string, staticPaths []rest.Static, embeddedFrontend fs.FS) {
+func initRouterWithEmbeddedFrontend(e *gin.Engine, registers []Register, baseUrl string, staticPaths []rest.Static, embeddedFrontend fs.FS, middlewares ...gin.HandlerFunc) {
 	embeddedFrontend = validatedEmbeddedFrontendFS(embeddedFrontend)
 	e.NoRoute(func(c *gin.Context) {
 		if embeddedFrontend != nil && !isAPIPath(c.Request.URL.Path, baseUrl) && serveEmbeddedFrontend(c, embeddedFrontend) {
@@ -39,6 +41,9 @@ func initRouterWithEmbeddedFrontend(e *gin.Engine, registers []Register, baseUrl
 	})
 
 	rg := e.Group(baseUrl)
+	if len(middlewares) > 0 {
+		rg.Use(middlewares...)
+	}
 	RegisterAPI(rg, registers)
 
 	if embeddedFrontend != nil {
@@ -50,6 +55,24 @@ func initRouterWithEmbeddedFrontend(e *gin.Engine, registers []Register, baseUrl
 			e.Use(gStatic.Serve(static.Path, gStatic.LocalFile(static.Dir, true)))
 			log.Infof("Registered static path: Dir[%s] -> Server[%s]", static.Dir, static.Path)
 		}
+	}
+}
+
+func maintenanceMiddleware(gate *coreupdater.MaintenanceGate) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if gate == nil || !gate.Active() || c.Request.Method == http.MethodGet || c.Request.Method == http.MethodHead || c.Request.Method == http.MethodOptions {
+			c.Next()
+			return
+		}
+		c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{
+			"code":    http.StatusServiceUnavailable,
+			"message": "system maintenance in progress",
+			"data": gin.H{
+				"error_code": "maintenance_mode",
+			},
+			"ok":   false,
+			"time": time.Now().Format("2006-01-02 15:04:05"),
+		})
 	}
 }
 

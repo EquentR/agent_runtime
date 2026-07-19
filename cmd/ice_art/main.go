@@ -16,12 +16,20 @@ import (
 )
 
 var (
-	Version   = "0.1.3-dev"
-	GitCommit = "none"
+	Version                 = "0.1.3-dev"
+	GitCommit               = "none"
+	Distribution            = "source"
+	ReleaseSigningKeyID     = ""
+	ReleaseSigningPublicKey = ""
 )
 
 var (
-	configFile = flag.String("config", "conf/app.yaml", "config file")
+	configFile          = flag.String("config", "conf/app.yaml", "config file")
+	runtimeMode         = flag.String("runtime-mode", "", "runtime mode (direct, systemd, windows-service)")
+	serviceName         = flag.String("service-name", "IceArt", "service name")
+	updateHelperJob     = flag.String("update-helper-job", "", "internal updater helper job")
+	updateStateOwner    = flag.String("update-state-owner", "", "internal updater state owner")
+	updateProtectedRoot = flag.String("update-protected-root", "", "internal protected updater root")
 )
 
 // init 打印当前构建版本信息，便于启动时快速确认二进制来源。
@@ -39,12 +47,29 @@ func init() {
 // @BasePath /api/v1
 func main() {
 	flag.Parse()
-	cfg, err := loadConfig(*configFile)
-	if err != nil {
+	if strings.TrimSpace(*updateHelperJob) != "" {
+		cfg, err := loadConfig(*configFile)
+		if err == nil {
+			err = commands.RunUpdateHelper(cfg, *updateHelperJob, ReleaseSigningKeyID, ReleaseSigningPublicKey, *runtimeMode, *serviceName, *updateStateOwner, *updateProtectedRoot)
+		}
+		if err != nil {
+			panic(err)
+		}
+		return
+	}
+	if err := runProgram(*runtimeMode, *serviceName, func() error {
+		cfg, err := loadConfig(*configFile)
+		if err != nil {
+			return err
+		}
+		if *runtimeMode == "" || *runtimeMode == "direct" {
+			go openConfiguredBrowserWhenReady(cfg, waitForServerReady, openBrowser)
+		}
+		commands.Serve(cfg, Version, GitCommit, Distribution, ReleaseSigningKeyID, ReleaseSigningPublicKey, *configFile, *runtimeMode, *serviceName)
+		return nil
+	}); err != nil {
 		panic(err)
 	}
-	go openConfiguredBrowserWhenReady(cfg, waitForServerReady, openBrowser)
-	commands.Serve(cfg, Version, GitCommit)
 }
 
 func openConfiguredBrowserWhenReady(cfg *config.Config, waiter func(string) bool, opener func(string) error) {

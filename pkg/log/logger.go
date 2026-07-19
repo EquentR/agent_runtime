@@ -3,6 +3,7 @@ package log
 import (
 	"errors"
 	"os"
+	"path/filepath"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -64,7 +65,9 @@ func NewZapLoggerWithConf(config *zap.Config, lumber *lumberjack.Logger, opts ..
 		if p == "stdout" || p == "stderr" {
 			ws, closeFn, err := zap.Open(p)
 			if err != nil {
-				closeFn()
+				if closeFn != nil {
+					closeFn()
+				}
 				continue
 			}
 			consoleSyncers = append(consoleSyncers, ws)
@@ -95,7 +98,9 @@ func NewZapLoggerWithConf(config *zap.Config, lumber *lumberjack.Logger, opts ..
 			} else {
 				ws, closeFn, err := zap.Open(p)
 				if err != nil {
-					closeFn()
+					if closeFn != nil {
+						closeFn()
+					}
 					continue
 				}
 				fileSyncers = append(fileSyncers, ws)
@@ -137,6 +142,9 @@ func NewLogger(l *Config) *zap.Logger {
 	}
 	zc.Level = level
 	if l.File != "" {
+		if err := os.MkdirAll(filepath.Dir(l.File), 0o755); err != nil {
+			panic(err)
+		}
 		zc.OutputPaths = append(zc.OutputPaths, l.File)
 		zc.ErrorOutputPaths = append(zc.ErrorOutputPaths, l.File)
 	}

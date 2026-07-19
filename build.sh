@@ -62,12 +62,14 @@ printf '==> building backend\n'
 go build \
   -tags embed_web \
   -trimpath \
-  -ldflags "-s -w -X main.Version=$VERSION -X main.GitCommit=$GIT_COMMIT" \
+  -ldflags "-s -w -X main.Version=$VERSION -X main.GitCommit=$GIT_COMMIT -X main.Distribution=source" \
   -o "$DIST_DIR/$APP_NAME" \
   ./cmd/ice_art
 
 printf '==> packaging release defaults\n'
-go run ./scripts/releasepack -source "$ROOT_DIR" -dest "$DIST_DIR"
+go run ./scripts/releasepack -source "$ROOT_DIR" -dest "$DIST_DIR" \
+  -version "$VERSION" -commit "$GIT_COMMIT" -distribution source \
+  -goos "$(go env GOOS)" -goarch "$(go env GOARCH)"
 
 printf '\nBuild completed.\n'
 printf 'Output: %s\n' "$DIST_DIR"

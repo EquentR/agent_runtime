@@ -29,12 +29,14 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
       -tags embed_web \
       -trimpath \
-      -ldflags "-s -w -X main.Version=${VERSION} -X main.GitCommit=${GIT_COMMIT}" \
+      -ldflags "-s -w -X main.Version=${VERSION} -X main.GitCommit=${GIT_COMMIT} -X main.Distribution=container" \
       -o /out/ice_art \
       ./cmd/ice_art
 
 RUN mkdir -p /out/runtime/data /out/runtime/logs && \
-    go run ./scripts/releasepack -source /src -dest /out/runtime
+    go run ./scripts/releasepack -source /src -dest /out/runtime \
+      -version "${VERSION}" -commit "${GIT_COMMIT}" -distribution container \
+      -goos "${TARGETOS}" -goarch "${TARGETARCH}"
 
 FROM debian:bookworm
 WORKDIR /app

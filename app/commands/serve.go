@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,6 +33,7 @@ import (
 	coretools "github.com/EquentR/agent_runtime/core/tools"
 	builtin "github.com/EquentR/agent_runtime/core/tools/builtin"
 	coretypes "github.com/EquentR/agent_runtime/core/types"
+	coreupdater "github.com/EquentR/agent_runtime/core/updater"
 	"github.com/EquentR/agent_runtime/core/workspaces"
 	"github.com/EquentR/agent_runtime/pkg/db"
 	"github.com/EquentR/agent_runtime/pkg/log"
@@ -43,12 +45,33 @@ import (
 )
 
 // Serve 负责装配应用依赖并启动 HTTP 服务。
-func Serve(c *config.Config, version, commit string) {
+func Serve(c *config.Config, version, commit string, buildArgs ...string) {
 	GracefulExit()
 	log.Init(&c.Log)
 	corelog.SetLogger(applogging.NewCoreAdapter(log.Log().WithOptions(zap.AddCallerSkip(3))))
 
 	log.Infof("Application: Version: %s, Git Commit: %s", version, commit)
+	distribution, signingKeyID, signingPublicKey, configPath := coreupdater.DistributionSource, "", "", ""
+	if len(buildArgs) > 0 && strings.TrimSpace(buildArgs[0]) != "" {
+		distribution = buildArgs[0]
+	}
+	if len(buildArgs) > 1 {
+		signingKeyID = buildArgs[1]
+	}
+	if len(buildArgs) > 2 {
+		signingPublicKey = buildArgs[2]
+	}
+	if len(buildArgs) > 3 {
+		configPath = buildArgs[3]
+	}
+	runtimeMode, serviceName := c.Updates.RuntimeMode, c.Updates.ServiceName
+	if len(buildArgs) > 4 && strings.TrimSpace(buildArgs[4]) != "" {
+		runtimeMode = buildArgs[4]
+	}
+	if len(buildArgs) > 5 && strings.TrimSpace(buildArgs[5]) != "" {
+		serviceName = buildArgs[5]
+	}
+	currentBuild := coreupdater.CurrentBuildInfo(version, commit, distribution)
 
 	db.Init(&c.Sqlite)
 	migration.Bootstrap(version)
@@ -106,9 +129,22 @@ func Serve(c *config.Config, version, commit string) {
 		log.Panicf("Failed to register agent.run executor: %v", err)
 	}
 	taskManager.Start(globalCtx)
+	maintenanceGate := coreupdater.NewMaintenanceGate()
 
 	deps := buildRouterDependencies(taskManager, approvalStore, attachmentStore, attachmentStorage, c.Attachments.ResolvedDraftTTL(), conversationStore, auditRuntime.Store, resolver, promptRuntime.Store, promptRuntime.Resolver, skillLoader, authRuntime.AuthLogic, authRuntime, interactionStore)
 	deps.WorkspaceManager = workspaceRuntime.Manager
+	deps.MaintenanceGate = maintenanceGate
+	deps.CurrentBuild = currentBuild
+	updateManager, updateErr := initUpdateManager(c, currentBuild, configPath, signingKeyID, signingPublicKey, runtimeMode, serviceName, taskManager, maintenanceGate, authRuntime.AuthLogic, deps.AdminAuditLogic)
+	if updateErr != nil {
+		log.Warnf("Self-update runtime unavailable: %v", updateErr)
+	} else {
+		deps.UpdateManager = updateManager
+		deps.UpdateHealthStore = updateManager.HealthStore()
+		if c.Updates.Enabled {
+			startUpdateCheckLoop(updateManager, c.Updates.ResolvedCheckInterval())
+		}
+	}
 	router.Init(engine, c.Server.ApiBasePath, c.Server.StaticPaths, deps)
 
 	addr := fmt.Sprintf("%s:%d", c.Server.Host, c.Server.Port)
@@ -116,17 +152,48 @@ func Serve(c *config.Config, version, commit string) {
 	if err != nil {
 		log.Panicf("Failed to listen on %s: %v", addr, err)
 	}
+	serverDone := make(chan error, 1)
 	go func() {
-		if err := engine.RunListener(ln); err != nil {
-			log.Panicf("Failed to run server: %v", err)
-		}
+		serverDone <- serveHTTPUntilCanceled(globalCtx, ln, engine, 30*time.Second)
 	}()
 	log.Infof("gin listening on %s", addr)
 
 	select {
 	case <-globalCtx.Done():
-		_ = ln.Close()
 		log.Info("Shutting down server...")
+		if err := <-serverDone; err != nil {
+			log.Warnf("HTTP server shutdown: %v", err)
+		}
+	case err := <-serverDone:
+		if err != nil {
+			log.Panicf("Failed to run server: %v", err)
+		}
+	}
+}
+
+func serveHTTPUntilCanceled(ctx context.Context, listener net.Listener, handler http.Handler, shutdownTimeout time.Duration) error {
+	server := &http.Server{Handler: handler}
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- server.Serve(listener) }()
+	select {
+	case err := <-serveDone:
+		if err == http.ErrServerClosed {
+			return nil
+		}
+		return err
+	case <-ctx.Done():
+		shutdownCtx := context.Background()
+		cancel := func() {}
+		if shutdownTimeout > 0 {
+			shutdownCtx, cancel = context.WithTimeout(shutdownCtx, shutdownTimeout)
+		}
+		defer cancel()
+		shutdownErr := server.Shutdown(shutdownCtx)
+		serveErr := <-serveDone
+		if serveErr != nil && serveErr != http.ErrServerClosed {
+			return serveErr
+		}
+		return shutdownErr
 	}
 }
 
@@ -551,7 +618,7 @@ func newDefaultBuiltinOptionsWithJudge(workspaceRoot string, webSearch builtin.W
 }
 
 type configuredCommandJudge struct {
-	resolver     *coreagent.ModelResolver
+	resolver      *coreagent.ModelResolver
 	clientFactory coreagent.ClientFactory
 }
 

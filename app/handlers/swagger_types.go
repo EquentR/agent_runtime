@@ -1044,3 +1044,86 @@ type ExampleSayHelloSwaggerResponse struct {
 	OK      bool   `json:"ok"`
 	Time    string `json:"time"`
 }
+
+type AdminUpdateAuthorizeSwaggerRequest struct {
+	Password string `json:"password"`
+	Action   string `json:"action" enums:"install,force_install,rollback"`
+	Target   string `json:"target"`
+}
+
+type AdminUpdateInstallSwaggerRequest struct {
+	AuthorizationToken string `json:"authorization_token"`
+	OperationID        string `json:"operation_id"`
+	Target             string `json:"target"`
+	BackupMode         string `json:"backup_mode" enums:"compact,full"`
+}
+
+type AdminUpdateOperationSwaggerDoc struct {
+	OperationID    string `json:"operation_id,omitempty"`
+	Phase          string `json:"phase"`
+	Generation     int64  `json:"generation"`
+	CurrentVersion string `json:"current_version,omitempty"`
+	TargetVersion  string `json:"target_version,omitempty"`
+	BackupID       string `json:"backup_id,omitempty"`
+	BackupMode     string `json:"backup_mode,omitempty"`
+	BackupVersion  string `json:"backup_version,omitempty"`
+	Error          string `json:"error,omitempty"`
+	UpdatedAt      string `json:"updated_at,omitempty"`
+}
+
+type AdminUpdateStatusSwaggerDoc struct {
+	Current             map[string]any                 `json:"current"`
+	Latest              map[string]any                 `json:"latest,omitempty"`
+	UpdateAvailable     bool                           `json:"update_available"`
+	CheckedAt           string                         `json:"checked_at,omitempty"`
+	CacheStale          bool                           `json:"cache_stale"`
+	CacheUpdatedAt      string                         `json:"cache_updated_at,omitempty"`
+	Capability          string                         `json:"capability"`
+	Capable             bool                           `json:"capable"`
+	CapabilityReason    string                         `json:"capability_reason,omitempty"`
+	RuntimeMode         string                         `json:"runtime_mode"`
+	SignatureStatus     string                         `json:"signature_status"`
+	State               AdminUpdateOperationSwaggerDoc `json:"state"`
+	Backup              map[string]any                 `json:"backup,omitempty"`
+	Maintenance         map[string]any                 `json:"maintenance"`
+	LastError           string                         `json:"last_error,omitempty"`
+	ForceInstallAllowed bool                           `json:"force_install_allowed"`
+	Preflight           map[string]any                 `json:"preflight,omitempty"`
+}
+
+type AdminUpdateStatusPayloadSwaggerDoc struct {
+	Status    AdminUpdateStatusSwaggerDoc `json:"status"`
+	CSRFToken string                      `json:"csrf_token"`
+}
+
+type AdminUpdateStatusSwaggerResponse struct {
+	Code    int                                `json:"code"`
+	Message string                             `json:"message"`
+	Data    AdminUpdateStatusPayloadSwaggerDoc `json:"data"`
+	OK      bool                               `json:"ok"`
+	Time    string                             `json:"time"`
+}
+
+type AdminUpdateCheckSwaggerResponse struct {
+	Code    int                         `json:"code"`
+	Message string                      `json:"message"`
+	Data    AdminUpdateStatusSwaggerDoc `json:"data"`
+	OK      bool                        `json:"ok"`
+	Time    string                      `json:"time"`
+}
+
+type AdminUpdateAuthorizationSwaggerResponse struct {
+	Code    int            `json:"code"`
+	Message string         `json:"message"`
+	Data    map[string]any `json:"data"`
+	OK      bool           `json:"ok"`
+	Time    string         `json:"time"`
+}
+
+type AdminUpdateOperationSwaggerResponse struct {
+	Code    int                            `json:"code"`
+	Message string                         `json:"message"`
+	Data    AdminUpdateOperationSwaggerDoc `json:"data"`
+	OK      bool                           `json:"ok"`
+	Time    string                         `json:"time"`
+}

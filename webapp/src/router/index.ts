@@ -11,6 +11,7 @@ import AdminOperationAuditView from '../views/AdminOperationAuditView.vue'
 import AdminPromptView from '../views/AdminPromptView.vue'
 import AdminSettingsView from '../views/AdminSettingsView.vue'
 import AdminUsersView from '../views/AdminUsersView.vue'
+import AdminUpdateView from '../views/AdminUpdateView.vue'
 import ChatView from '../views/ChatView.vue'
 import LoginView from '../views/LoginView.vue'
 import ProfileView from '../views/ProfileView.vue'
@@ -88,6 +89,14 @@ const routes = [
         component: AdminSettingsView,
         meta: {
           title: '系统设置',
+        },
+      },
+      {
+        path: 'updates',
+        name: 'admin-updates',
+        component: AdminUpdateView,
+        meta: {
+          title: '系统升级',
         },
       },
       {
