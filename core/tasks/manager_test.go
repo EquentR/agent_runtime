@@ -1520,6 +1520,50 @@ func TestManagerCancelRunningTaskCancelsExecutorContext(t *testing.T) {
 	}
 }
 
+func TestManagerCancelRequestedBeforeExecuteTaskCancelsExecutorContext(t *testing.T) {
+	store := newTestStore(t)
+	manager := NewManager(store, ManagerOptions{RunnerID: "runner-1"})
+
+	created, err := manager.CreateTask(context.Background(), CreateTaskInput{TaskType: "agent.run"})
+	if err != nil {
+		t.Fatalf("CreateTask() error = %v", err)
+	}
+	claimed, _, err := store.ClaimNextTask(context.Background(), "runner-1", time.Minute)
+	if err != nil {
+		t.Fatalf("ClaimNextTask() error = %v", err)
+	}
+	if _, _, err := store.RequestCancel(context.Background(), created.ID); err != nil {
+		t.Fatalf("RequestCancel() error = %v", err)
+	}
+
+	ctxCanceled := make(chan struct{}, 1)
+	if err := manager.RegisterExecutor("agent.run", func(ctx context.Context, task *Task, runtime *Runtime) (any, error) {
+		<-ctx.Done()
+		ctxCanceled <- struct{}{}
+		return nil, ctx.Err()
+	}); err != nil {
+		t.Fatalf("RegisterExecutor() error = %v", err)
+	}
+
+	done := make(chan struct{}, 1)
+	go func() {
+		manager.executeTask(context.Background(), claimed)
+		done <- struct{}{}
+	}()
+
+	select {
+	case <-ctxCanceled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("executor context was not cancelled when cancel was requested before executeTask")
+	}
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("executeTask did not finish after cancellation")
+	}
+}
+
 func TestManagerCancelRunningTaskCancelsExecutorContextWithMultipleWorkers(t *testing.T) {
 	store := newTestStore(t)
 	manager := NewManager(store, ManagerOptions{

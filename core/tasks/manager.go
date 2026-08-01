@@ -716,6 +716,12 @@ func (m *Manager) executeTask(ctx context.Context, task *Task) {
 		m.clearActiveCancel(task.ID)
 	}()
 
+	// A cancel can arrive after ClaimNextTask marks the task running but before
+	// activeCancel is registered, so re-check before starting the executor.
+	if m.taskStatusIs(context.Background(), task.ID, StatusCancelRequested) {
+		cancel()
+	}
+
 	startedAt := time.Now()
 	go m.heartbeatLoop(taskCtx, task.ID)
 
