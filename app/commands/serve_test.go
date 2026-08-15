@@ -30,6 +30,7 @@ import (
 	builtin "github.com/EquentR/agent_runtime/core/tools/builtin"
 	coretypes "github.com/EquentR/agent_runtime/core/types"
 	"github.com/EquentR/agent_runtime/core/workspaces"
+	pkglog "github.com/EquentR/agent_runtime/pkg/log"
 	"github.com/EquentR/agent_runtime/pkg/rest"
 	"github.com/EquentR/agent_runtime/pkg/secret"
 	"github.com/glebarez/sqlite"
@@ -1091,6 +1092,62 @@ func TestBuildAgentRunExecutorDependenciesThreadsWorkspaceManagerAndRegistryFact
 	if deps.ToolRegistryFactory == nil {
 		t.Fatal("deps.ToolRegistryFactory = nil, want configured factory")
 	}
+}
+
+func TestStartWorkspaceGCLoopDeletesExpiredTerminalWorkspace(t *testing.T) {
+	pkglog.Init(&pkglog.Config{Level: "error"})
+	templateRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(templateRoot, "AGENTS.md"), []byte("# Template\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(template AGENTS.md) error = %v", err)
+	}
+	workspaceManager, err := workspaces.NewManager(workspaces.Config{
+		TemplateRoot: templateRoot,
+		Root:         t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("workspaces.NewManager() error = %v", err)
+	}
+	if _, err := workspaceManager.EnsureHomeWorkspace(context.Background(), "42"); err != nil {
+		t.Fatalf("EnsureHomeWorkspace() error = %v", err)
+	}
+	workspace, err := workspaceManager.CreateTaskWorkspace(context.Background(), "42", "tsk_old", workspaces.ModeMutable)
+	if err != nil {
+		t.Fatalf("CreateTaskWorkspace() error = %v", err)
+	}
+	if _, err := workspaceManager.CompleteTaskWorkspace(context.Background(), "42", "tsk_old", ""); err != nil {
+		t.Fatalf("CompleteTaskWorkspace() error = %v", err)
+	}
+	statePath := filepath.Join(workspace.Root, workspaces.StateFileName)
+	stateData, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("ReadFile(state) error = %v", err)
+	}
+	var state workspaces.WorkspaceStateFile
+	if err := json.Unmarshal(stateData, &state); err != nil {
+		t.Fatalf("json.Unmarshal(state) error = %v", err)
+	}
+	old := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	state.TerminalAt = &old
+	stateData, err = json.Marshal(state)
+	if err != nil {
+		t.Fatalf("json.Marshal(state) error = %v", err)
+	}
+	if err := os.WriteFile(statePath, stateData, 0o644); err != nil {
+		t.Fatalf("WriteFile(state) error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	startWorkspaceGCLoop(ctx, workspaceManager, 10*time.Millisecond, time.Nanosecond, 0)
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(workspace.Root); errors.Is(err, os.ErrNotExist) {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("expired workspace %q was not deleted by GC loop", workspace.Root)
 }
 
 func TestRegisterAgentRunExecutorPromptWiringKeepsAuditRecorder(t *testing.T) {

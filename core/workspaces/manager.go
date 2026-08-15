@@ -812,6 +812,7 @@ func (m *Manager) cleanupExpiredTaskWorkspaces(ctx context.Context, userID strin
 			continue
 		}
 		if !ok {
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("workspace state not found: %s", taskRoot))
 			continue
 		}
 		if err := m.normalizeLoadedState(userID, entry.Name(), taskRoot, &state); err != nil {

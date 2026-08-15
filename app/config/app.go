@@ -214,10 +214,10 @@ func (c TaskManagerConfig) ManagerOptions(auditRecorder coretasks.AuditRecorder)
 }
 
 type WorkspacesConfig struct {
-	Root            string        `yaml:"root"`
-	TaskRetention   time.Duration `yaml:"taskRetention"`
-	BackupRetention time.Duration `yaml:"backupRetention"`
-	GCInterval      time.Duration `yaml:"gcInterval"`
+	Root            string         `yaml:"root"`
+	TaskRetention   *time.Duration `yaml:"taskRetention"`
+	BackupRetention *time.Duration `yaml:"backupRetention"`
+	GCInterval      *time.Duration `yaml:"gcInterval"`
 }
 
 func (c WorkspacesConfig) ResolvedRoot() string {
@@ -228,22 +228,22 @@ func (c WorkspacesConfig) ResolvedRoot() string {
 }
 
 func (c WorkspacesConfig) ResolvedTaskRetention() time.Duration {
-	if c.TaskRetention > 0 {
-		return c.TaskRetention
+	if c.TaskRetention != nil {
+		return *c.TaskRetention
 	}
 	return defaultWorkspaceTaskRetention
 }
 
 func (c WorkspacesConfig) ResolvedBackupRetention() time.Duration {
-	if c.BackupRetention > 0 {
-		return c.BackupRetention
+	if c.BackupRetention != nil {
+		return *c.BackupRetention
 	}
 	return defaultWorkspaceBackupRetention
 }
 
 func (c WorkspacesConfig) ResolvedGCInterval() time.Duration {
-	if c.GCInterval > 0 {
-		return c.GCInterval
+	if c.GCInterval != nil {
+		return *c.GCInterval
 	}
 	return defaultWorkspaceGCInterval
 }

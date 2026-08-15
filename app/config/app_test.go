@@ -76,6 +76,36 @@ workspaces:
 	if got := cfg.Workspaces.ResolvedRoot(); got != "data/workspaces" {
 		t.Fatalf("cfg.Workspaces.ResolvedRoot() = %q, want data/workspaces", got)
 	}
+	if got := cfg.Workspaces.ResolvedTaskRetention(); got != 30*24*time.Hour {
+		t.Fatalf("cfg.Workspaces.ResolvedTaskRetention() = %v, want default 720h", got)
+	}
+	if got := cfg.Workspaces.ResolvedBackupRetention(); got != 30*24*time.Hour {
+		t.Fatalf("cfg.Workspaces.ResolvedBackupRetention() = %v, want default 720h", got)
+	}
+	if got := cfg.Workspaces.ResolvedGCInterval(); got != time.Hour {
+		t.Fatalf("cfg.Workspaces.ResolvedGCInterval() = %v, want default 1h", got)
+	}
+}
+
+func TestConfigWorkspaceRetentionZeroDisablesCleanup(t *testing.T) {
+	var cfg Config
+	if err := yaml.Unmarshal([]byte(`
+workspaces:
+  taskRetention: 0h
+  backupRetention: 0h
+  gcInterval: 0h
+`), &cfg); err != nil {
+		t.Fatalf("yaml.Unmarshal() error = %v", err)
+	}
+	if got := cfg.Workspaces.ResolvedTaskRetention(); got != 0 {
+		t.Fatalf("cfg.Workspaces.ResolvedTaskRetention() = %v, want 0", got)
+	}
+	if got := cfg.Workspaces.ResolvedBackupRetention(); got != 0 {
+		t.Fatalf("cfg.Workspaces.ResolvedBackupRetention() = %v, want 0", got)
+	}
+	if got := cfg.Workspaces.ResolvedGCInterval(); got != 0 {
+		t.Fatalf("cfg.Workspaces.ResolvedGCInterval() = %v, want 0", got)
+	}
 }
 
 func TestConfigResolvedWorkspaceTemplateRootDefaultsToWorkspace(t *testing.T) {
