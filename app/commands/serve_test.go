@@ -1179,6 +1179,16 @@ func TestStartAuditGCLoopDeletesExpiredRuns(t *testing.T) {
 	t.Fatal("expired audit run was not deleted by GC loop")
 }
 
+func TestCheckpointDatabaseRunsWalCheckpoint(t *testing.T) {
+	db := newServeTestDB(t)
+	if err := db.Exec("PRAGMA journal_mode=WAL").Error; err != nil {
+		t.Fatalf("set WAL mode error = %v", err)
+	}
+	if err := checkpointDatabase(db); err != nil {
+		t.Fatalf("checkpointDatabase() error = %v", err)
+	}
+}
+
 func TestRegisterAgentRunExecutorPromptWiringKeepsAuditRecorder(t *testing.T) {
 	db := newServeTestDB(t)
 	taskStore := coretasks.NewStore(db)

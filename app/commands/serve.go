@@ -167,11 +167,30 @@ func Serve(c *config.Config, version, commit string, buildArgs ...string) {
 		if err := <-serverDone; err != nil {
 			log.Warnf("HTTP server shutdown: %v", err)
 		}
+		if err := checkpointDatabase(db.DB()); err != nil {
+			log.Warnf("Database checkpoint failed: %v", err)
+		}
 	case err := <-serverDone:
 		if err != nil {
 			log.Panicf("Failed to run server: %v", err)
 		}
 	}
+}
+
+func checkpointDatabase(database *gorm.DB) error {
+	if database == nil {
+		return nil
+	}
+	var result []struct {
+		Busy         int
+		Log          int
+		Checkpointed int
+	}
+	if err := database.Raw("PRAGMA wal_checkpoint(TRUNCATE)").Scan(&result).Error; err != nil {
+		return err
+	}
+	_ = result
+	return nil
 }
 
 func serveHTTPUntilCanceled(ctx context.Context, listener net.Listener, handler http.Handler, shutdownTimeout time.Duration) error {
