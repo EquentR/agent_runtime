@@ -292,7 +292,7 @@ func (r *Runner) emitMemoryContextState(ctx context.Context, state *MemoryContex
 		if ok {
 			runtime := sink.TaskRuntime()
 			if runtime != nil {
-				_ = runtime.Emit(ctx, coretasks.EventMemoryContextState, "info", memoryContextPayload(state))
+				_ = runtime.EmitLive(ctx, coretasks.EventMemoryContextState, "info", memoryContextPayload(state))
 			}
 		}
 	}

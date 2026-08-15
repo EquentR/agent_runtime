@@ -2539,11 +2539,20 @@ func TestTaskRuntimeSinkMapsRunStreamEventsToLogMessages(t *testing.T) {
 	if err := sink.OnStreamEvent(context.Background(), RunStreamEvent{Kind: EventTextDelta, Step: 1, Text: "he"}); err != nil {
 		t.Fatalf("OnStreamEvent() error = %v", err)
 	}
-	if len(recorder.emits) != 1 {
-		t.Fatalf("emit count = %d, want 1", len(recorder.emits))
+	if len(recorder.liveEmits) != 1 {
+		t.Fatalf("live emit count = %d, want 1", len(recorder.liveEmits))
 	}
-	if recorder.emits[0].eventType != coretasks.EventLogMessage {
-		t.Fatalf("event type = %q, want log.message", recorder.emits[0].eventType)
+	if recorder.liveEmits[0].eventType != coretasks.EventLogMessage {
+		t.Fatalf("event type = %q, want log.message", recorder.liveEmits[0].eventType)
+	}
+}
+
+func TestRunnerMemoryContextStateUsesLiveOnlyForTaskEvents(t *testing.T) {
+	recorder := &recordingTaskRuntime{}
+	runner := &Runner{options: Options{EventSink: &taskRuntimeSink{runtime: recorder}}}
+	runner.emitMemoryContextState(context.Background(), &MemoryContextSnapshot{TotalTokens: 100})
+	if len(recorder.liveEmits) != 1 || recorder.liveEmits[0].eventType != coretasks.EventMemoryContextState {
+		t.Fatalf("liveEmits = %#v, want one memory.context_state live event", recorder.liveEmits)
 	}
 }
 
@@ -2642,6 +2651,7 @@ type recordingTaskRuntime struct {
 	started       []string
 	finished      []any
 	emits         []recordedEmit
+	liveEmits     []recordedEmit
 	metadata      map[string]any
 	suspendReason string
 	approvals     []*approvals.ToolApproval
@@ -2855,6 +2865,7 @@ func (r *recordingTaskRuntime) Emit(_ context.Context, eventType string, level s
 
 func (r *recordingTaskRuntime) EmitLive(_ context.Context, eventType string, level string, payload any) error {
 	r.emits = append(r.emits, recordedEmit{eventType: eventType, level: level, payload: payload})
+	r.liveEmits = append(r.liveEmits, recordedEmit{eventType: eventType, level: level, payload: payload})
 	return nil
 }
 
