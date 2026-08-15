@@ -58,6 +58,7 @@ type TaskEvent struct {
 	Level       string          `json:"level" gorm:"type:varchar(16);not null"`
 	PayloadJSON json.RawMessage `json:"payload" gorm:"column:payload_json;type:blob;not null"`
 	CreatedAt   time.Time       `json:"created_at" gorm:"not null;index"`
+	Live        bool            `json:"live,omitempty" gorm:"-"`
 }
 
 // TableName 返回任务事件表名。

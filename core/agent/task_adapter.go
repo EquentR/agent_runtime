@@ -14,6 +14,7 @@ type taskRuntime interface {
 	StartStep(ctx context.Context, key string, title string) error
 	FinishStep(ctx context.Context, payload any) error
 	Emit(ctx context.Context, eventType string, level string, payload any) error
+	EmitLive(ctx context.Context, eventType string, level string, payload any) error
 	TaskID() string
 	GetTask(ctx context.Context) (*coretasks.Task, error)
 	UpdateMetadata(ctx context.Context, metadata any) error
@@ -72,5 +73,5 @@ func (s *taskRuntimeSink) OnLog(ctx context.Context, event LogEvent) error {
 }
 
 func (s *taskRuntimeSink) OnStreamEvent(ctx context.Context, event RunStreamEvent) error {
-	return s.runtime.Emit(ctx, coretasks.EventLogMessage, "info", event)
+	return s.runtime.EmitLive(ctx, coretasks.EventLogMessage, "info", event)
 }

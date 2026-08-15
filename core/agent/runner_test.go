@@ -2799,6 +2799,11 @@ func (r *recordingTaskRuntime) Emit(_ context.Context, eventType string, level s
 	return nil
 }
 
+func (r *recordingTaskRuntime) EmitLive(_ context.Context, eventType string, level string, payload any) error {
+	r.emits = append(r.emits, recordedEmit{eventType: eventType, level: level, payload: payload})
+	return nil
+}
+
 func (r *recordingTaskRuntime) TaskID() string {
 	return r.taskID
 }

@@ -643,6 +643,13 @@ func (h *TaskHandler) handleEvents(c *gin.Context) {
 			if !ok {
 				return
 			}
+			if event.Live {
+				if err := writeSSEEvent(writer, event); err != nil {
+					return
+				}
+				flusher.Flush()
+				continue
+			}
 			if event.Seq <= lastSeq {
 				continue
 			}
@@ -688,18 +695,22 @@ func writeSSEEvent(writer http.ResponseWriter, event coretasks.TaskEvent) error 
 		Type    string          `json:"type"`
 		TS      time.Time       `json:"ts"`
 		Payload json.RawMessage `json:"payload"`
+		Live    bool            `json:"live,omitempty"`
 	}{
 		TaskID:  event.TaskID,
 		Seq:     event.Seq,
 		Type:    event.EventType,
 		TS:      event.CreatedAt,
 		Payload: event.PayloadJSON,
+		Live:    event.Live,
 	})
 	if err != nil {
 		return err
 	}
-	if _, err := writer.Write([]byte("id: " + strconv.FormatInt(event.Seq, 10) + "\n")); err != nil {
-		return err
+	if !event.Live {
+		if _, err := writer.Write([]byte("id: " + strconv.FormatInt(event.Seq, 10) + "\n")); err != nil {
+			return err
+		}
 	}
 	if _, err := writer.Write([]byte("event: " + event.EventType + "\n")); err != nil {
 		return err

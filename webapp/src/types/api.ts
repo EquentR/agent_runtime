@@ -623,6 +623,7 @@ export interface TaskStreamEvent {
   type: string
   ts?: string
   payload?: Record<string, unknown>
+  live?: boolean
 }
 
 export type ApprovalDecision = 'approve' | 'reject'

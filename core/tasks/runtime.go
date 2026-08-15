@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/EquentR/agent_runtime/core/approvals"
 	"github.com/EquentR/agent_runtime/core/interactions"
@@ -181,6 +182,29 @@ func (r *Runtime) Emit(ctx context.Context, eventType string, level string, payl
 		return nil
 	}
 	r.manager.publish(event)
+	return nil
+}
+
+// EmitLive 只广播实时事件，不写入 task_events。
+func (r *Runtime) EmitLive(ctx context.Context, eventType string, level string, payload any) error {
+	if r == nil || r.manager == nil {
+		return fmt.Errorf("task runtime is not configured")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	payloadJSON, err := marshalJSON(payload, true)
+	if err != nil {
+		return err
+	}
+	r.manager.publish(TaskEvent{
+		TaskID:      r.taskID,
+		EventType:   eventType,
+		Level:       level,
+		PayloadJSON: payloadJSON,
+		CreatedAt:   time.Now().UTC(),
+		Live:        true,
+	})
 	return nil
 }
 
