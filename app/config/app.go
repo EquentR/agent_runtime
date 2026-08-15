@@ -22,6 +22,9 @@ const defaultAttachmentGCInterval = 1 * time.Hour
 const defaultAttachmentFilesystemRoot = "data/attachments"
 const defaultWorkspaceTemplateRoot = "workspace"
 const defaultWorkspacesRoot = "data/workspaces"
+const defaultWorkspaceTaskRetention = 30 * 24 * time.Hour
+const defaultWorkspaceBackupRetention = 30 * 24 * time.Hour
+const defaultWorkspaceGCInterval = time.Hour
 
 type Config struct {
 	WorkspaceDir      string                      `yaml:"workspaceDir"`
@@ -211,7 +214,10 @@ func (c TaskManagerConfig) ManagerOptions(auditRecorder coretasks.AuditRecorder)
 }
 
 type WorkspacesConfig struct {
-	Root string `yaml:"root"`
+	Root            string        `yaml:"root"`
+	TaskRetention   time.Duration `yaml:"taskRetention"`
+	BackupRetention time.Duration `yaml:"backupRetention"`
+	GCInterval      time.Duration `yaml:"gcInterval"`
 }
 
 func (c WorkspacesConfig) ResolvedRoot() string {
@@ -219,6 +225,27 @@ func (c WorkspacesConfig) ResolvedRoot() string {
 		return root
 	}
 	return defaultWorkspacesRoot
+}
+
+func (c WorkspacesConfig) ResolvedTaskRetention() time.Duration {
+	if c.TaskRetention > 0 {
+		return c.TaskRetention
+	}
+	return defaultWorkspaceTaskRetention
+}
+
+func (c WorkspacesConfig) ResolvedBackupRetention() time.Duration {
+	if c.BackupRetention > 0 {
+		return c.BackupRetention
+	}
+	return defaultWorkspaceBackupRetention
+}
+
+func (c WorkspacesConfig) ResolvedGCInterval() time.Duration {
+	if c.GCInterval > 0 {
+		return c.GCInterval
+	}
+	return defaultWorkspaceGCInterval
 }
 
 type ToolsConfig struct {

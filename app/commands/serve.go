@@ -104,6 +104,7 @@ func Serve(c *config.Config, version, commit string, buildArgs ...string) {
 	if err != nil {
 		log.Panicf("Failed to init workspace runtime: %v", err)
 	}
+	startWorkspaceGCLoop(globalCtx, workspaceRuntime.Manager, c.Workspaces.ResolvedGCInterval(), c.Workspaces.ResolvedTaskRetention(), c.Workspaces.ResolvedBackupRetention())
 	skillLoader := coreskills.NewLoader(workspaceRuntime.TemplateRoot)
 	authRuntime, err := initAuthRuntime(db.DB(), c.Security)
 	if err != nil {
@@ -472,6 +473,37 @@ func startAttachmentGCLoop(ctx context.Context, store *attachments.Store, interv
 					log.Warnf("Attachment GC failed: %v", err)
 				} else if processed > 0 {
 					log.Infof("Attachment GC processed %d expired attachments", processed)
+				}
+			}
+		}
+	}()
+}
+
+func startWorkspaceGCLoop(ctx context.Context, manager *workspaces.Manager, interval time.Duration, taskRetention time.Duration, backupRetention time.Duration) {
+	if ctx == nil || manager == nil || interval <= 0 || (taskRetention <= 0 && backupRetention <= 0) {
+		return
+	}
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				report, err := manager.CleanupExpired(ctx, time.Now().UTC(), workspaces.CleanupOptions{
+					TaskRetention:   taskRetention,
+					BackupRetention: backupRetention,
+				})
+				if err != nil {
+					log.Warnf("Workspace GC failed: %v", err)
+					continue
+				}
+				for _, cleanupErr := range report.Errors {
+					log.Warnf("Workspace GC item failed: %v", cleanupErr)
+				}
+				if report.DeletedTaskWorkspaces > 0 || report.DeletedBackups > 0 {
+					log.Infof("Workspace GC deleted %d task workspaces and %d backups", report.DeletedTaskWorkspaces, report.DeletedBackups)
 				}
 			}
 		}

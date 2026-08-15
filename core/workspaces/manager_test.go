@@ -1018,6 +1018,145 @@ func TestCopyDirectoryContentsRejectsNestedDestinationSymlinkBeforeMkdirAll(t *t
 	assertPathMissing(t, externalRoot, "file.txt")
 }
 
+func TestCleanupExpiredDeletesTerminalWorkspacesAndKeepsActivePending(t *testing.T) {
+	templateRoot := t.TempDir()
+	workspacesRoot := t.TempDir()
+	writeFile(t, templateRoot, "AGENTS.md", "# Workspace rules\n")
+	manager := newTestManager(t, templateRoot, workspacesRoot)
+	if _, err := manager.EnsureHomeWorkspace(context.Background(), "42"); err != nil {
+		t.Fatalf("EnsureHomeWorkspace() error = %v", err)
+	}
+
+	old := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	completed, err := manager.CreateTaskWorkspace(context.Background(), "42", "tsk_completed", ModeMutable)
+	if err != nil {
+		t.Fatalf("CreateTaskWorkspace(completed) error = %v", err)
+	}
+	setState(t, completed.Root, func(state *WorkspaceStateFile) {
+		state.State = StateCompleted
+		state.TerminalAt = &old
+		state.UpdatedAt = old
+	})
+	active, err := manager.CreateTaskWorkspace(context.Background(), "42", "tsk_active", ModeMutable)
+	if err != nil {
+		t.Fatalf("CreateTaskWorkspace(active) error = %v", err)
+	}
+	pending, err := manager.CreateTaskWorkspace(context.Background(), "42", "tsk_pending", ModeMutable)
+	if err != nil {
+		t.Fatalf("CreateTaskWorkspace(pending) error = %v", err)
+	}
+	setState(t, pending.Root, func(state *WorkspaceStateFile) {
+		state.State = StatePendingMerge
+		state.TerminalAt = &old
+	})
+
+	report, err := manager.CleanupExpired(context.Background(), time.Date(2026, 5, 23, 12, 0, 0, 0, time.UTC), CleanupOptions{TaskRetention: 24 * time.Hour})
+	if err != nil {
+		t.Fatalf("CleanupExpired() error = %v", err)
+	}
+	if report.DeletedTaskWorkspaces != 1 {
+		t.Fatalf("DeletedTaskWorkspaces = %d, want 1", report.DeletedTaskWorkspaces)
+	}
+	assertPathMissing(t, filepath.Dir(completed.Root), filepath.Base(completed.Root))
+	if _, err := os.Stat(active.Root); err != nil {
+		t.Fatalf("active workspace should remain: %v", err)
+	}
+	if _, err := os.Stat(pending.Root); err != nil {
+		t.Fatalf("pending_merge workspace should remain: %v", err)
+	}
+}
+
+func TestCleanupExpiredDeletesExpiredBackupsAndSkipsRecent(t *testing.T) {
+	templateRoot := t.TempDir()
+	workspacesRoot := t.TempDir()
+	writeFile(t, templateRoot, "AGENTS.md", "# Workspace rules\n")
+	manager := newTestManager(t, templateRoot, workspacesRoot)
+	if _, err := manager.EnsureHomeWorkspace(context.Background(), "42"); err != nil {
+		t.Fatalf("EnsureHomeWorkspace() error = %v", err)
+	}
+
+	backupsRoot := filepath.Join(workspacesRoot, "users", "42", "backups")
+	oldBackup := filepath.Join(backupsRoot, "old-backup")
+	recentBackup := filepath.Join(backupsRoot, "recent-backup")
+	for _, path := range []string{oldBackup, recentBackup} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q) error = %v", path, err)
+		}
+	}
+	oldTime := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := os.Chtimes(oldBackup, oldTime, oldTime); err != nil {
+		t.Fatalf("Chtimes(old backup) error = %v", err)
+	}
+
+	report, err := manager.CleanupExpired(context.Background(), time.Date(2026, 5, 23, 12, 0, 0, 0, time.UTC), CleanupOptions{BackupRetention: 24 * time.Hour})
+	if err != nil {
+		t.Fatalf("CleanupExpired() error = %v", err)
+	}
+	if report.DeletedBackups != 1 {
+		t.Fatalf("DeletedBackups = %d, want 1", report.DeletedBackups)
+	}
+	if _, err := os.Stat(oldBackup); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("old backup should be removed, stat error = %v", err)
+	}
+	if _, err := os.Stat(recentBackup); err != nil {
+		t.Fatalf("recent backup should remain: %v", err)
+	}
+}
+
+func TestCleanupExpiredSkipsWhenRetentionDisabled(t *testing.T) {
+	templateRoot := t.TempDir()
+	workspacesRoot := t.TempDir()
+	writeFile(t, templateRoot, "AGENTS.md", "# Workspace rules\n")
+	manager := newTestManager(t, templateRoot, workspacesRoot)
+	if _, err := manager.EnsureHomeWorkspace(context.Background(), "42"); err != nil {
+		t.Fatalf("EnsureHomeWorkspace() error = %v", err)
+	}
+	task, err := manager.CreateTaskWorkspace(context.Background(), "42", "tsk_keep", ModeMutable)
+	if err != nil {
+		t.Fatalf("CreateTaskWorkspace() error = %v", err)
+	}
+	old := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	setState(t, task.Root, func(state *WorkspaceStateFile) {
+		state.State = StateCompleted
+		state.TerminalAt = &old
+	})
+
+	report, err := manager.CleanupExpired(context.Background(), time.Date(2026, 5, 23, 12, 0, 0, 0, time.UTC), CleanupOptions{})
+	if err != nil {
+		t.Fatalf("CleanupExpired() error = %v", err)
+	}
+	if report.DeletedTaskWorkspaces != 0 || report.DeletedBackups != 0 {
+		t.Fatalf("CleanupExpired() report = %#v, want no deletions", report)
+	}
+	if _, err := os.Stat(task.Root); err != nil {
+		t.Fatalf("workspace should remain with retention disabled: %v", err)
+	}
+}
+
+func TestCompleteTaskWorkspaceMarksReadonlyCompleted(t *testing.T) {
+	templateRoot := t.TempDir()
+	workspacesRoot := t.TempDir()
+	writeFile(t, templateRoot, "AGENTS.md", "# Workspace rules\n")
+	manager := newTestManager(t, templateRoot, workspacesRoot)
+	if _, err := manager.EnsureHomeWorkspace(context.Background(), "42"); err != nil {
+		t.Fatalf("EnsureHomeWorkspace() error = %v", err)
+	}
+	task, err := manager.CreateTaskWorkspace(context.Background(), "42", "tsk_readonly", ModeReadonly)
+	if err != nil {
+		t.Fatalf("CreateTaskWorkspace() error = %v", err)
+	}
+	state, err := manager.CompleteTaskWorkspace(context.Background(), "42", "tsk_readonly", "")
+	if err != nil {
+		t.Fatalf("CompleteTaskWorkspace() error = %v", err)
+	}
+	if state.State != StateCompleted || state.TerminalAt == nil {
+		t.Fatalf("readonly state = %#v, want completed with terminal time", state)
+	}
+	if _, err := os.Stat(task.Root); err != nil {
+		t.Fatalf("completed readonly workspace should remain until GC: %v", err)
+	}
+}
+
 func TestCopyFileRejectsDestinationSymlink(t *testing.T) {
 	sourceRoot := t.TempDir()
 	destinationRoot := t.TempDir()

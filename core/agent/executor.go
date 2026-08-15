@@ -555,14 +555,18 @@ func finishSuccessfulExecutorWorkspace(ctx context.Context, deps ExecutorDepende
 		}
 		return state.State, nil
 	}
+	if info.Mode == workspaces.ModeReadonly {
+		state, err := deps.WorkspaceManager.CompleteTaskWorkspace(ctx, info.UserID, info.WorkspaceID, "")
+		if err != nil {
+			return "", err
+		}
+		return state.State, nil
+	}
 	return "", nil
 }
 
 func completeExecutorWorkspace(ctx context.Context, deps ExecutorDependencies, info executorWorkspaceInfo, cause error) (*workspaces.WorkspaceStateFile, error) {
 	if deps.WorkspaceManager == nil || info.UserID == "" || info.WorkspaceID == "" {
-		return nil, nil
-	}
-	if info.Mode == workspaces.ModeReadonly {
 		return nil, nil
 	}
 	message := ""

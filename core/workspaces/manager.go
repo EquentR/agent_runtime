@@ -414,6 +414,7 @@ func (m *Manager) ConfirmTaskWorkspace(ctx context.Context, userID string, taskI
 	now := m.nowUTC()
 	state.State = StateMerged
 	state.MergedAt = &now
+	state.TerminalAt = &now
 	state.UpdatedAt = now
 	if err := m.saveState(taskRoot, state); err != nil {
 		return nil, err
@@ -463,6 +464,7 @@ func (m *Manager) finishMutableWorkspace(userID string, taskID string) (*Workspa
 			return nil, err
 		}
 		state.State = StateCompleted
+		state.TerminalAt = &now
 		if err := m.saveState(taskRoot, state); err != nil {
 			return nil, err
 		}
@@ -471,6 +473,7 @@ func (m *Manager) finishMutableWorkspace(userID string, taskID string) (*Workspa
 
 	if manifestsEqual(currentManifest, baseline) {
 		state.State = StateCompleted
+		state.TerminalAt = &now
 	} else {
 		state.State = StatePendingMerge
 	}
@@ -525,13 +528,16 @@ func (m *Manager) CompleteTaskWorkspace(ctx context.Context, userID string, task
 				return nil, err
 			}
 			state.State = StateCompleted
+			state.TerminalAt = &now
 		} else if manifestsEqual(currentManifest, baseline) {
 			state.State = StateCompleted
+			state.TerminalAt = &now
 		} else {
 			state.State = StatePendingMerge
 		}
 	} else {
 		state.State = StateCompleted
+		state.TerminalAt = &now
 	}
 	if err := m.saveState(taskRoot, state); err != nil {
 		return nil, err
@@ -578,6 +584,7 @@ func (m *Manager) DiscardTaskWorkspace(ctx context.Context, userID string, taskI
 	now := m.nowUTC()
 	state.State = StateDiscarded
 	state.DiscardedAt = &now
+	state.TerminalAt = &now
 	state.UpdatedAt = now
 	if err := m.saveState(taskRoot, state); err != nil {
 		return nil, err
@@ -706,6 +713,7 @@ func (m *Manager) SummarizeUserWorkspaces(ctx context.Context, userID string) (*
 			BackupRoot:  state.BackupRoot,
 			CreatedAt:   state.CreatedAt,
 			UpdatedAt:   state.UpdatedAt,
+			TerminalAt:  state.TerminalAt,
 			MergedAt:    state.MergedAt,
 			DiscardedAt: state.DiscardedAt,
 		})
@@ -714,6 +722,169 @@ func (m *Manager) SummarizeUserWorkspaces(ctx context.Context, userID string) (*
 		return summary.Tasks[i].TaskID < summary.Tasks[j].TaskID
 	})
 	return summary, nil
+}
+
+func (m *Manager) CleanupExpired(ctx context.Context, now time.Time, options CleanupOptions) (CleanupReport, error) {
+	report := CleanupReport{}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if options.TaskRetention <= 0 && options.BackupRetention <= 0 {
+		return report, nil
+	}
+	usersRoot, err := m.resolveWorkspacePath("users")
+	if err != nil {
+		return report, err
+	}
+	if err := ensureNoSymlink(usersRoot); err != nil {
+		return report, err
+	}
+	entries, err := os.ReadDir(usersRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return report, nil
+		}
+		return report, err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return report, err
+		}
+		userID := entry.Name()
+		userRoot := filepath.Join(usersRoot, userID)
+		if err := ensureNoSymlink(userRoot); err != nil {
+			report.Errors = append(report.Errors, err)
+			continue
+		}
+		if options.TaskRetention > 0 {
+			deleted, cleanupErr := m.cleanupExpiredTaskWorkspaces(ctx, userID, now, options.TaskRetention)
+			report.DeletedTaskWorkspaces += deleted
+			report.Errors = append(report.Errors, cleanupErr...)
+		}
+		if options.BackupRetention > 0 {
+			deleted, cleanupErr := m.cleanupExpiredBackups(ctx, userID, now, options.BackupRetention)
+			report.DeletedBackups += deleted
+			report.Errors = append(report.Errors, cleanupErr...)
+		}
+	}
+	return report, nil
+}
+
+func (m *Manager) cleanupExpiredTaskWorkspaces(ctx context.Context, userID string, now time.Time, retention time.Duration) (int, []error) {
+	unlock := m.lockUserWorkspace(userID)
+	defer unlock()
+
+	tasksRoot, err := m.resolveWorkspacePath("users", userID, "tasks")
+	if err != nil {
+		return 0, []error{err}
+	}
+	if err := ensureNoSymlink(tasksRoot); err != nil {
+		return 0, []error{err}
+	}
+	entries, err := os.ReadDir(tasksRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, []error{err}
+	}
+
+	deleted := 0
+	var cleanupErrors []error
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return deleted, append(cleanupErrors, err)
+		}
+		taskRoot, err := m.resolveWorkspacePath("users", userID, "tasks", entry.Name())
+		if err != nil {
+			cleanupErrors = append(cleanupErrors, err)
+			continue
+		}
+		state, ok, err := m.loadState(taskRoot)
+		if err != nil {
+			cleanupErrors = append(cleanupErrors, err)
+			continue
+		}
+		if !ok {
+			continue
+		}
+		if err := m.normalizeLoadedState(userID, entry.Name(), taskRoot, &state); err != nil {
+			cleanupErrors = append(cleanupErrors, err)
+			continue
+		}
+		if state.State == StateActive || state.State == StatePendingMerge {
+			continue
+		}
+		terminalAt := state.TerminalAt
+		if terminalAt == nil {
+			terminalAt = &state.UpdatedAt
+		}
+		if now.Before(terminalAt.Add(retention)) {
+			continue
+		}
+		if err := os.RemoveAll(taskRoot); err != nil {
+			cleanupErrors = append(cleanupErrors, err)
+			continue
+		}
+		deleted++
+	}
+	return deleted, cleanupErrors
+}
+
+func (m *Manager) cleanupExpiredBackups(ctx context.Context, userID string, now time.Time, retention time.Duration) (int, []error) {
+	unlock := m.lockUserWorkspace(userID)
+	defer unlock()
+
+	backupsRoot, err := m.resolveWorkspacePath("users", userID, "backups")
+	if err != nil {
+		return 0, []error{err}
+	}
+	if err := ensureNoSymlink(backupsRoot); err != nil {
+		return 0, []error{err}
+	}
+	entries, err := os.ReadDir(backupsRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, []error{err}
+	}
+
+	deleted := 0
+	var cleanupErrors []error
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return deleted, append(cleanupErrors, err)
+		}
+		backupRoot, err := m.resolveWorkspacePath("users", userID, "backups", entry.Name())
+		if err != nil {
+			cleanupErrors = append(cleanupErrors, err)
+			continue
+		}
+		info, err := os.Stat(backupRoot)
+		if err != nil {
+			cleanupErrors = append(cleanupErrors, err)
+			continue
+		}
+		if now.Before(info.ModTime().UTC().Add(retention)) {
+			continue
+		}
+		if err := os.RemoveAll(backupRoot); err != nil {
+			cleanupErrors = append(cleanupErrors, err)
+			continue
+		}
+		deleted++
+	}
+	return deleted, cleanupErrors
 }
 
 func (m *Manager) findPendingMergeWorkspace(userID string, exceptTaskID string) (*TaskWorkspaceSummary, error) {
@@ -1017,6 +1188,16 @@ func (m *Manager) normalizeLoadedState(userID string, taskID string, taskRoot st
 	}
 	if state.Mode != ModeMutable && state.Mode != ModeReadonly {
 		state.Mode = ModeMutable
+	}
+	if state.TerminalAt == nil {
+		switch state.State {
+		case StateMerged:
+			state.TerminalAt = state.MergedAt
+		case StateDiscarded:
+			state.TerminalAt = state.DiscardedAt
+		case StateCompleted:
+			state.TerminalAt = &state.UpdatedAt
+		}
 	}
 	return nil
 }

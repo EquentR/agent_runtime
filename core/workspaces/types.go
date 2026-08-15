@@ -128,6 +128,7 @@ type TaskWorkspaceSummary struct {
 	BackupRoot  string     `json:"backup_root,omitempty"`
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`
+	TerminalAt  *time.Time `json:"terminal_at,omitempty"`
 	MergedAt    *time.Time `json:"merged_at,omitempty"`
 	DiscardedAt *time.Time `json:"discarded_at,omitempty"`
 }
@@ -154,7 +155,19 @@ type WorkspaceStateFile struct {
 	BackupRoot   string     `json:"backup_root,omitempty"`
 	CreatedAt    time.Time  `json:"created_at"`
 	UpdatedAt    time.Time  `json:"updated_at"`
+	TerminalAt   *time.Time `json:"terminal_at,omitempty"`
 	MergedAt     *time.Time `json:"merged_at,omitempty"`
 	DiscardedAt  *time.Time `json:"discarded_at"`
 	ErrorMessage string     `json:"error_message,omitempty"`
+}
+
+type CleanupOptions struct {
+	TaskRetention   time.Duration
+	BackupRetention time.Duration
+}
+
+type CleanupReport struct {
+	DeletedTaskWorkspaces int
+	DeletedBackups        int
+	Errors                []error
 }
