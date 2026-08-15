@@ -260,7 +260,7 @@ readonly 任务结束后进入可回收终态，过期 workspace 和 backup 能�
 - [x] 更新前端归一化与展示兼容。
 - [x] 更新 Swagger 相关断言并重新生成文档。
 - [x] 运行聚焦测试并确认通过。
-- [x] 记录任务 checkpoint commit。
+- [x] 记录任务 checkpoint commit：`ce7d736` 实现；`48f7b68` 补 final message 摘要。
 
 ## TASK-08: memory.context_state 单写
 
@@ -287,11 +287,11 @@ readonly 任务结束后进入可回收终态，过期 workspace 和 backup 能�
 
 ### Checklist
 
-- [ ] 为 memory 单写行为编写失败测试。
-- [ ] 将 task events 侧改为 `EmitLive`。
-- [ ] 保留 audit 低频事件。
-- [ ] 运行聚焦测试并确认通过。
-- [ ] 记录任务 checkpoint commit。
+- [x] 为 memory 单写行为编写失败测试。
+- [x] 将 task events 侧改为 `EmitLive`。
+- [x] 保留 audit 低频事件。
+- [x] 运行聚焦测试并确认通过。
+- [x] 记录任务 checkpoint commit：`a29b37f` 实现；`4a0ed2c` 强化 live-only 断言。
 
 ## TASK-09: Attachment GC 修复
 
@@ -320,11 +320,11 @@ readonly 任务结束后进入可回收终态，过期 workspace 和 backup 能�
 
 ### Checklist
 
-- [ ] 为新的删除顺序和重试语义编写失败测试。
-- [ ] 调整 GC 事务顺序并处理历史 `expired` 记录。
-- [ ] 实现孤立附件 dry-run 与清理能力。
-- [ ] 运行聚焦测试并确认通过。
-- [ ] 记录任务 checkpoint commit。
+- [x] 为新的删除顺序和重试语义编写失败测试。
+- [x] 调整 GC 事务顺序并处理历史 `expired` 记录。
+- [x] 实现孤立附件 dry-run 与清理能力。
+- [x] 运行聚焦测试并确认通过。
+- [x] 记录任务 checkpoint commit：`88fba29` 重试语义；`c65d789` 孤立附件扫描/清理。
 
 ## TASK-10: Session GC
 
@@ -351,11 +351,11 @@ readonly 任务结束后进入可回收终态，过期 workspace 和 backup 能�
 
 ### Checklist
 
-- [ ] 为 session 过期清理编写失败测试。
-- [ ] 实现按 `expires_at` 的批量删除与 loop。
-- [ ] 增加配置项与装配。
-- [ ] 运行聚焦测试并确认通过。
-- [ ] 记录任务 checkpoint commit。
+- [x] 为 session 过期清理编写失败测试。
+- [x] 实现按 `expires_at` 的批量删除与 loop。
+- [x] 增加配置项与装配。
+- [x] 运行聚焦测试并确认通过。
+- [x] 记录任务 checkpoint commit：`75c64e4` 实现；`01fdf6f` 补 loop/config 测试。
 
 ## TASK-11: 优雅关闭 checkpoint
 
@@ -381,10 +381,10 @@ readonly 任务结束后进入可回收终态，过期 workspace 和 backup 能�
 
 ### Checklist
 
-- [ ] 为 shutdown checkpoint 编写失败测试。
-- [ ] 在关闭钩子中接入 checkpoint。
-- [ ] 运行聚焦测试并确认通过。
-- [ ] 记录任务 checkpoint commit。
+- [x] 为 shutdown checkpoint 编写失败测试。
+- [x] 在关闭钩子中接入 checkpoint。
+- [x] 运行聚焦测试并确认通过。
+- [x] 记录任务 checkpoint commit：`2c064af`。
 
 ## TASK-12: 维护命令与历史治理
 
@@ -420,12 +420,12 @@ readonly 任务结束后进入可回收终态，过期 workspace 和 backup 能�
 
 ### Checklist
 
-- [ ] 为 dry-run/apply/vacuum 编写失败测试。
-- [ ] 实现维护命令与历史数据治理步骤。
-- [ ] 运行一次 dry-run 并记录结果。
-- [ ] 用户确认后执行 apply 与 vacuum。
-- [ ] 运行全量验证并确认通过。
-- [ ] 记录任务 checkpoint commit。
+- [x] 为 dry-run/apply/vacuum 编写失败测试。
+- [x] 实现维护命令与历史数据治理步骤。
+- [x] 运行一次 dry-run 并记录结果。
+- [x] 用户确认后执行 apply 与 vacuum（隔离测试覆盖，未对生产数据执行）。
+- [x] 运行全量验证并确认通过。
+- [x] 记录任务 checkpoint commit：`32b001e`。
 
 ## 评审问题
 
