@@ -188,12 +188,12 @@ readonly 任务结束后进入可回收终态，过期 workspace 和 backup 能�
 
 ### Checklist
 
-- [ ] 为 canonical artifact 和 SHA256 编写失败测试。
-- [ ] 压缩 `runtime_prompt_envelope` 并移除 `request_messages`。
-- [ ] 确保 `model_response` 为最终完整消息。
-- [ ] 在 audit store 层补齐 SHA256。
-- [ ] 运行聚焦测试并确认通过。
-- [ ] 记录任务 checkpoint commit。
+- [x] 为 canonical artifact 和 SHA256 编写失败测试。
+- [x] 压缩 `runtime_prompt_envelope` 并移除 `request_messages`。
+- [x] 确保 `model_response` 为最终完整消息。
+- [x] 在 audit store 层补齐 SHA256。
+- [x] 运行聚焦测试并确认通过。
+- [x] 记录任务 checkpoint commit：`8474cdc`。
 
 ## TASK-06: 审计保留期 GC
 
