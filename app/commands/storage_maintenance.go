@@ -115,64 +115,76 @@ func RunStorageMaintenance(cfg *config.Config, dryRun bool, apply bool, vacuum b
 	fmt.Printf("database backup: %s\n", backupPath)
 
 	totalTaskDeltaDeleted := int64(0)
+	fmt.Println("cleaning task stream delta events")
 	for {
 		deleted, err := taskStore.DeleteStreamDeltaEvents(ctx, 500)
 		if err != nil {
 			return err
 		}
 		totalTaskDeltaDeleted += deleted
+		fmt.Printf("  task delta batch deleted: %d\n", deleted)
 		if deleted == 0 {
 			break
 		}
 	}
 	totalLegacyCompacted := int64(0)
+	fmt.Println("compacting legacy audit artifacts")
 	for {
 		compacted, err := auditStore.CompactLegacyArtifacts(ctx, 500)
 		if err != nil {
 			return err
 		}
 		totalLegacyCompacted += compacted
+		fmt.Printf("  legacy artifact batch compacted: %d\n", compacted)
 		if compacted == 0 {
 			break
 		}
 	}
 	totalAuditDeleted := 0
+	fmt.Println("cleaning expired audit runs")
 	for {
 		deleted, err := auditStore.CleanupExpiredRuns(ctx, now, auditRetention, 100)
 		if err != nil {
 			return err
 		}
 		totalAuditDeleted += deleted
+		fmt.Printf("  audit run batch deleted: %d\n", deleted)
 		if deleted == 0 {
 			break
 		}
 	}
 	totalAttachmentDeleted := 0
+	fmt.Println("cleaning expired attachments")
 	for {
 		deleted, err := attachmentStore.GCExpired(ctx, now, 100)
 		if err != nil {
 			return err
 		}
 		totalAttachmentDeleted += deleted
+		fmt.Printf("  attachment batch processed: %d\n", deleted)
 		if deleted == 0 {
 			break
 		}
 	}
+	fmt.Println("cleaning orphan attachments")
 	orphanReport, err := attachmentStore.CleanupOrphans(ctx, false)
 	if err != nil {
 		return err
 	}
 	totalSessionDeleted := 0
+	fmt.Println("cleaning expired sessions")
 	for {
 		deleted, err := authRuntime.AuthLogic.CleanupExpiredSessions(ctx, now, 100)
 		if err != nil {
 			return err
 		}
 		totalSessionDeleted += deleted
+		fmt.Printf("  session batch deleted: %d\n", deleted)
 		if deleted == 0 {
 			break
 		}
 	}
+	fmt.Println("cleaning expired workspaces and backups")
 	workspaceReport, err := workspaceRuntime.Manager.CleanupExpired(ctx, now, workspaceOptions)
 	if err != nil {
 		return err
@@ -194,6 +206,7 @@ func RunStorageMaintenance(cfg *config.Config, dryRun bool, apply bool, vacuum b
 	fmt.Printf("  expired backups deleted: %d\n", workspaceReport.DeletedBackups)
 
 	if vacuum {
+		fmt.Println("checkpointing and vacuuming database")
 		if err := checkpointDatabase(db.DB()); err != nil {
 			return err
 		}
