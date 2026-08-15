@@ -183,6 +183,21 @@ func (s *Store) CountExpiredAttachments(ctx context.Context, now time.Time) (int
 	return count, err
 }
 
+func (s *Store) SumExpiredAttachmentBytes(ctx context.Context, now time.Time) (int64, error) {
+	if err := s.requireDB(); err != nil {
+		return 0, err
+	}
+	var total int64
+	err := s.db.WithContext(ctx).
+		Model(&Attachment{}).
+		Where("status IN ?", []Status{StatusDraft, StatusSent, StatusExpired}).
+		Where("expires_at IS NOT NULL").
+		Where("expires_at <= ?", now.UTC()).
+		Select("COALESCE(SUM(size_bytes), 0)").
+		Scan(&total).Error
+	return total, err
+}
+
 func (s *Store) GCExpired(ctx context.Context, now time.Time, limit int) (int, error) {
 	if err := s.requireDB(); err != nil {
 		return 0, err

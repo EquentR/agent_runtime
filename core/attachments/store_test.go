@@ -451,6 +451,36 @@ func TestAttachmentStoreGCExpiredRetriesAfterStorageDeleteFailure(t *testing.T) 
 	}
 }
 
+func TestAttachmentStoreSumExpiredBytesTracksCleanup(t *testing.T) {
+	ctx := context.Background()
+	storage := &failingDeleteStorage{}
+	store := newTestStoreWithStorage(t, storage)
+	expiredAt := time.Now().UTC().Add(-time.Minute)
+	if _, err := store.CreateDraft(ctx, CreateDraftInput{
+		ID: "att_sum", StorageBackend: BackendFilesystem, StorageKey: "drafts/sum.txt",
+		FileName: "sum.txt", MimeType: "text/plain", SizeBytes: 4096, ExpiresAt: &expiredAt,
+	}); err != nil {
+		t.Fatalf("CreateDraft() error = %v", err)
+	}
+	total, err := store.SumExpiredAttachmentBytes(ctx, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("SumExpiredAttachmentBytes() error = %v", err)
+	}
+	if total != 4096 {
+		t.Fatalf("SumExpiredAttachmentBytes() = %d, want 4096", total)
+	}
+	if _, err := store.GCExpired(ctx, time.Now().UTC(), 10); err != nil {
+		t.Fatalf("GCExpired() error = %v", err)
+	}
+	total, err = store.SumExpiredAttachmentBytes(ctx, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("second SumExpiredAttachmentBytes() error = %v", err)
+	}
+	if total != 0 {
+		t.Fatalf("second SumExpiredAttachmentBytes() = %d, want 0", total)
+	}
+}
+
 func TestAttachmentStoreScanOrphansClassifiesRecordsAndFiles(t *testing.T) {
 	ctx := context.Background()
 	storage, err := NewFilesystemStore(t.TempDir())

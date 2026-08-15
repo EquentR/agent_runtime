@@ -892,6 +892,77 @@ func TestStoreCleanupExpiredSkipsWhenRetentionDisabled(t *testing.T) {
 	}
 }
 
+func TestStoreCompactLegacyArtifactsAndSumExpiredBytes(t *testing.T) {
+	db := newTestDB(t)
+	store := NewStore(db)
+	if err := store.AutoMigrate(); err != nil {
+		t.Fatalf("AutoMigrate() error = %v", err)
+	}
+	ctx := context.Background()
+	now := time.Date(2026, 5, 23, 12, 0, 0, 0, time.UTC)
+	oldFinished := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	for _, runID := range []string{"run_old", "run_recent"} {
+		if _, err := store.CreateRun(ctx, StartRunInput{RunID: runID, TaskID: "task_" + runID, TaskType: "agent.run"}); err != nil {
+			t.Fatalf("CreateRun(%s) error = %v", runID, err)
+		}
+		if _, err := store.CreateArtifact(ctx, runID, CreateArtifactInput{
+			Kind: ArtifactKindRequestMessages, MimeType: "application/json",
+			Body: map[string]any{"messages": []map[string]any{{"role": "user", "content": strings.Repeat("x", 2048)}}},
+		}); err != nil {
+			t.Fatalf("CreateArtifact(%s) error = %v", runID, err)
+		}
+		if _, err := store.CreateArtifact(ctx, runID, CreateArtifactInput{
+			Kind: ArtifactKindRuntimePromptEnvelope, MimeType: "application/json",
+			Body: map[string]any{"segments": []map[string]any{{"content": strings.Repeat("y", 2048)}}},
+		}); err != nil {
+			t.Fatalf("CreateArtifact(%s) error = %v", runID, err)
+		}
+	}
+	if err := store.FinishRun(ctx, "run_old", StatusSucceeded, oldFinished); err != nil {
+		t.Fatalf("FinishRun(run_old) error = %v", err)
+	}
+	if err := store.FinishRun(ctx, "run_recent", StatusSucceeded, now.Add(-time.Hour)); err != nil {
+		t.Fatalf("FinishRun(run_recent) error = %v", err)
+	}
+
+	legacyCount, err := store.CountLegacyRedundantArtifacts(ctx)
+	if err != nil {
+		t.Fatalf("CountLegacyRedundantArtifacts() error = %v", err)
+	}
+	if legacyCount != 4 {
+		t.Fatalf("legacy artifact count = %d, want 4", legacyCount)
+	}
+	compacted, err := store.CompactLegacyArtifacts(ctx, 10)
+	if err != nil {
+		t.Fatalf("CompactLegacyArtifacts() error = %v", err)
+	}
+	if compacted != 4 {
+		t.Fatalf("compacted artifact count = %d, want 4", compacted)
+	}
+
+	var artifacts []Artifact
+	if err := db.Where("run_id IN ?", []string{"run_old", "run_recent"}).Find(&artifacts).Error; err != nil {
+		t.Fatalf("load artifacts error = %v", err)
+	}
+	for _, artifact := range artifacts {
+		if !strings.Contains(string(artifact.BodyJSON), `"compacted":true`) {
+			t.Fatalf("artifact %s body = %s, want compacted metadata", artifact.ID, artifact.BodyJSON)
+		}
+		if artifact.SizeBytes > 256 || artifact.SHA256 == "" {
+			t.Fatalf("artifact %s size/sha = %d/%q, want compact body with digest", artifact.ID, artifact.SizeBytes, artifact.SHA256)
+		}
+	}
+
+	total, err := store.SumExpiredRunArtifactBytes(ctx, now, 24*time.Hour)
+	if err != nil {
+		t.Fatalf("SumExpiredRunArtifactBytes() error = %v", err)
+	}
+	if total <= 0 {
+		t.Fatalf("expired artifact bytes = %d, want > 0", total)
+	}
+}
+
 func TestRecorderFinishRunSetsTerminalStatusAndTimestamp(t *testing.T) {
 	db := newTestDB(t)
 	store := NewStore(db)
