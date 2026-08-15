@@ -1428,6 +1428,8 @@ definitions:
         type: string
       provider_id:
         type: string
+      stop_reason:
+        type: string
       workspace_mode:
         enum:
         - mutable

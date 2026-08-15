@@ -5592,6 +5592,9 @@
                 "provider_id": {
                     "type": "string"
                 },
+                "stop_reason": {
+                    "type": "string"
+                },
                 "workspace_mode": {
                     "type": "string",
                     "enum": [

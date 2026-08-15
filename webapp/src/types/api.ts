@@ -609,6 +609,7 @@ export interface RunTaskResult {
   provider_id: string
   model_id: string
   final_message: ConversationMessage
+  stop_reason?: string
   usage?: TranscriptTokenUsage
   messages_appended: number
   memory_context?: MemoryContextState

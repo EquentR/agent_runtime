@@ -695,6 +695,7 @@ type RunTaskResultSwaggerDoc struct {
 	ProviderID        string                       `json:"provider_id"`
 	ModelID           string                       `json:"model_id"`
 	FinalMessage      ConversationMessageDoc       `json:"final_message"`
+	StopReason        string                       `json:"stop_reason,omitempty"`
 	MessagesAppended  int                          `json:"messages_appended"`
 	MemoryContext     *MemoryContextSwaggerDoc     `json:"memory_context,omitempty"`
 	MemoryCompression *MemoryCompressionSwaggerDoc `json:"memory_compression,omitempty"`

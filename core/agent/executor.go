@@ -86,6 +86,7 @@ type RunTaskResult struct {
 	ProviderID        string                     `json:"provider_id"`
 	ModelID           string                     `json:"model_id"`
 	FinalMessage      model.Message              `json:"final_message"`
+	StopReason        string                     `json:"stop_reason,omitempty"`
 	Usage             model.TokenUsage           `json:"usage"`
 	Cost              *coretypes.CostBreakdown   `json:"cost,omitempty"`
 	MessagesAppended  int                        `json:"messages_appended"`
@@ -488,7 +489,8 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 			ConversationID:    conversation.ID,
 			ProviderID:        conversation.ProviderID,
 			ModelID:           conversation.ModelID,
-			FinalMessage:      result.FinalMessage,
+			FinalMessage:      summarizeTaskFinalMessage(result.FinalMessage),
+			StopReason:        result.StopReason,
 			Usage:             result.Usage,
 			Cost:              result.Cost,
 			MessagesAppended:  len(result.Messages) + boolToInt(checkpoint == nil),
@@ -498,6 +500,28 @@ func NewTaskExecutor(deps ExecutorDependencies) coretasks.Executor {
 			WorkspaceState:    workspaceState,
 		}, nil
 	}
+}
+
+const maxTaskResultFinalContentRunes = 512
+
+func summarizeTaskFinalMessage(message model.Message) model.Message {
+	message.Content = truncateTaskResultContent(message.Content)
+	message.Reasoning = ""
+	message.ReasoningItems = nil
+	message.ToolCalls = nil
+	message.ProviderState = nil
+	message.ProviderData = nil
+	message.Attachments = nil
+	message.Usage = nil
+	return message
+}
+
+func truncateTaskResultContent(content string) string {
+	runes := []rune(content)
+	if len(runes) <= maxTaskResultFinalContentRunes {
+		return content
+	}
+	return string(runes[:maxTaskResultFinalContentRunes])
 }
 
 type executorWorkspaceInfo struct {

@@ -4184,6 +4184,28 @@ func TestNormalizeSkillNamesTrimsDeduplicatesAndFiltersEmpty(t *testing.T) {
 	}
 }
 
+func TestSummarizeTaskFinalMessageTruncatesAndStripsHeavyFields(t *testing.T) {
+	longContent := strings.Repeat("a", 600)
+	message := model.Message{
+		Role:           model.RoleAssistant,
+		Content:        longContent,
+		Reasoning:      "reasoning",
+		ReasoningItems: []model.ReasoningItem{{ID: "rs_1"}},
+		ToolCalls:      []coretypes.ToolCall{{ID: "call_1", Name: "lookup_weather"}},
+		ProviderState:  &model.ProviderState{Provider: "openai"},
+	}
+	summary := summarizeTaskFinalMessage(message)
+	if len([]rune(summary.Content)) != maxTaskResultFinalContentRunes {
+		t.Fatalf("summary content rune count = %d, want %d", len([]rune(summary.Content)), maxTaskResultFinalContentRunes)
+	}
+	if summary.Reasoning != "" || len(summary.ReasoningItems) != 0 || len(summary.ToolCalls) != 0 || summary.ProviderState != nil {
+		t.Fatalf("summary = %#v, want heavy fields stripped", summary)
+	}
+	if summary.Role != model.RoleAssistant {
+		t.Fatalf("summary role = %q, want assistant", summary.Role)
+	}
+}
+
 func assertExecutorAuditEventTypes(t *testing.T, recorder *recordingExecutorAuditRecorder, runID string, want ...string) {
 	t.Helper()
 
