@@ -1372,7 +1372,7 @@ export function updateTranscriptFromStreamEvent(entries: TranscriptEntry[], even
         error: Boolean(err),
       })
     }
-    const output = err || safeStringify(payload.Output ?? '')
+    const output = err || (typeof payload.Output === 'string' && payload.Output.length > 0 ? payload.Output : typeof payload.output_length === 'number' ? `[output ${payload.output_length} bytes]` : '')
     const next = upsertToolInGroup(entries, {
       groupKey,
       toolCallId,

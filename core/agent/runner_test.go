@@ -2465,6 +2465,60 @@ func TestTaskRuntimeSinkMapsToolEvents(t *testing.T) {
 	}
 }
 
+func TestTaskRuntimeSinkPersistsToolSummariesAndPublishesFullLivePayload(t *testing.T) {
+	recorder := &recordingTaskRuntime{}
+	sink := &taskRuntimeSink{runtime: recorder}
+	if err := sink.OnToolStart(context.Background(), ToolEvent{
+		Step:       1,
+		ToolCallID: "call_1",
+		ToolName:   "lookup_weather",
+		Arguments:  `{"city":"singapore"}`,
+	}); err != nil {
+		t.Fatalf("OnToolStart() error = %v", err)
+	}
+	if err := sink.OnToolFinish(context.Background(), ToolEvent{
+		Step:       1,
+		ToolCallID: "call_1",
+		ToolName:   "lookup_weather",
+		Arguments:  `{"city":"singapore"}`,
+		Output:     "sunny",
+	}); err != nil {
+		t.Fatalf("OnToolFinish() error = %v", err)
+	}
+	if len(recorder.emits) != 2 {
+		t.Fatalf("emit count = %d, want 2", len(recorder.emits))
+	}
+
+	startPayload, ok := recorder.emits[0].payload.(coretasks.RuntimeEventPayload)
+	if !ok {
+		t.Fatalf("start payload type = %T, want RuntimeEventPayload", recorder.emits[0].payload)
+	}
+	startPersistent := startPayload.Persistent.(map[string]any)
+	if startPersistent["tool_call_id"] != "call_1" || startPersistent["arguments_length"] != len(`{"city":"singapore"}`) {
+		t.Fatalf("start persistent payload = %#v, want summary only", startPersistent)
+	}
+	startLive := startPayload.Live.(map[string]any)
+	if startLive["Arguments"] != `{"city":"singapore"}` {
+		t.Fatalf("start live payload = %#v, want full arguments", startLive)
+	}
+
+	finishPayload, ok := recorder.emits[1].payload.(coretasks.RuntimeEventPayload)
+	if !ok {
+		t.Fatalf("finish payload type = %T, want RuntimeEventPayload", recorder.emits[1].payload)
+	}
+	finishPersistent := finishPayload.Persistent.(map[string]any)
+	if finishPersistent["tool_name"] != "lookup_weather" || finishPersistent["output_length"] != len("sunny") {
+		t.Fatalf("finish persistent payload = %#v, want summary only", finishPersistent)
+	}
+	if _, ok := finishPersistent["Output"]; ok {
+		t.Fatalf("finish persistent payload = %#v, must not contain full Output", finishPersistent)
+	}
+	finishLive := finishPayload.Live.(map[string]any)
+	if finishLive["Output"] != "sunny" {
+		t.Fatalf("finish live payload = %#v, want full output", finishLive)
+	}
+}
+
 func TestTaskRuntimeSinkMapsLogEvents(t *testing.T) {
 	recorder := &recordingTaskRuntime{}
 	sink := &taskRuntimeSink{runtime: recorder}

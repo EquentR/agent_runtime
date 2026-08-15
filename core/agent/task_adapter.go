@@ -57,7 +57,12 @@ func (s *taskRuntimeSink) OnStepFinish(ctx context.Context, event StepEvent) err
 }
 
 func (s *taskRuntimeSink) OnToolStart(ctx context.Context, event ToolEvent) error {
-	return s.runtime.Emit(ctx, coretasks.EventToolStarted, "info", event)
+	persistent := map[string]any{
+		"tool_call_id":     event.ToolCallID,
+		"tool_name":        event.ToolName,
+		"arguments_length": len(event.Arguments),
+	}
+	return s.runtime.Emit(ctx, coretasks.EventToolStarted, "info", coretasks.NewRuntimeEventPayload(persistent, toolEventLivePayload(event, false)))
 }
 
 func (s *taskRuntimeSink) OnToolFinish(ctx context.Context, event ToolEvent) error {
@@ -65,7 +70,33 @@ func (s *taskRuntimeSink) OnToolFinish(ctx context.Context, event ToolEvent) err
 	if event.Err != nil {
 		level = "error"
 	}
-	return s.runtime.Emit(ctx, coretasks.EventToolFinished, level, event)
+	persistent := map[string]any{
+		"tool_call_id":     event.ToolCallID,
+		"tool_name":        event.ToolName,
+		"arguments_length": len(event.Arguments),
+		"output_length":    len(event.Output),
+	}
+	if event.Err != nil {
+		persistent["error"] = event.Err.Error()
+	}
+	return s.runtime.Emit(ctx, coretasks.EventToolFinished, level, coretasks.NewRuntimeEventPayload(persistent, toolEventLivePayload(event, true)))
+}
+
+func toolEventLivePayload(event ToolEvent, includeOutput bool) map[string]any {
+	live := map[string]any{
+		"Step":       event.Step,
+		"ToolCallID": event.ToolCallID,
+		"ToolName":   event.ToolName,
+		"Arguments":  event.Arguments,
+		"Metadata":   event.Metadata,
+	}
+	if includeOutput {
+		live["Output"] = event.Output
+	}
+	if event.Err != nil {
+		live["Err"] = event.Err.Error()
+	}
+	return live
 }
 
 func (s *taskRuntimeSink) OnLog(ctx context.Context, event LogEvent) error {

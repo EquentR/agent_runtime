@@ -725,6 +725,22 @@ describe('updateTranscriptFromStreamEvent', () => {
     expect(entries[4]).toMatchObject({ content: 'boom' })
   })
 
+  it('tolerates tool.finished summary payload without full output', () => {
+    let entries: TranscriptEntry[] = [{ id: 'user-1', kind: 'user', title: '', content: 'hello' }]
+
+    entries = updateTranscriptFromStreamEvent(entries, {
+      type: 'tool.started',
+      payload: { ToolCallID: 'call_1', ToolName: 'read_file', Arguments: '{"path":"README.md"}' },
+    })
+    entries = updateTranscriptFromStreamEvent(entries, {
+      type: 'tool.finished',
+      payload: { tool_call_id: 'call_1', tool_name: 'read_file', output_length: 12 },
+    })
+
+    expect(entries[1]).toMatchObject({ kind: 'tool', status: 'done' })
+    expect(entries[1].details?.[0]?.blocks?.[1]?.value).toContain('12')
+  })
+
   it('groups multiple tools from the same step into one tools strip', () => {
     let entries: TranscriptEntry[] = []
 
