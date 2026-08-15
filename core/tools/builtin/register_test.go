@@ -282,6 +282,39 @@ func TestReadFileMapsSharedSkillResourceToReadOnlyRoot(t *testing.T) {
 	}
 }
 
+func TestListFilesListsSharedSkillResources(t *testing.T) {
+	workspace := t.TempDir()
+	skillsRoot := t.TempDir()
+	mustWriteFile(t, filepath.Join(skillsRoot, "skills", "debugging", "SKILL.md"), "# Debugging\n")
+	mustWriteFile(t, filepath.Join(skillsRoot, "skills", "debugging", "checklist.md"), "step 1")
+	registry := newBuiltinRegistry(t, Options{WorkspaceRoot: workspace, SkillsRoot: skillsRoot})
+
+	raw, err := registry.Execute(context.Background(), "list_files", map[string]any{
+		"path":      "skills",
+		"recursive": true,
+	})
+	if err != nil {
+		t.Fatalf("Execute(list_files) error = %v", err)
+	}
+	var payload struct {
+		Entries []struct {
+			Path string `json:"path"`
+			Type string `json:"type"`
+		} `json:"entries"`
+	}
+	if err := json.Unmarshal([]byte(raw.Content), &payload); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error = %v", raw.Content, err)
+	}
+	paths := make([]string, 0, len(payload.Entries))
+	for _, entry := range payload.Entries {
+		paths = append(paths, entry.Path)
+	}
+	joined := strings.Join(paths, ",")
+	if !strings.Contains(joined, "skills/debugging/SKILL.md") || !strings.Contains(joined, "skills/debugging/checklist.md") {
+		t.Fatalf("list_files entries = %#v, want shared skill resources", paths)
+	}
+}
+
 func TestWriteFileRejectsSharedSkillResourcePath(t *testing.T) {
 	workspace := t.TempDir()
 	skillsRoot := t.TempDir()

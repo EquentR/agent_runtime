@@ -51,12 +51,12 @@
 
 ### Checklist
 
-- [ ] 为共享 skills root 编写失败的 workspace、skills、using_skills 测试。
-- [ ] 拆分执行根、prompt 根和 skills 根，停止复制 `skills/`。
-- [ ] 让 `using_skills` 从共享 skills root 读取，并处理资源路径语义。
-- [ ] 更新配置装配与技能管理入口。
-- [ ] 运行聚焦测试并确认通过。
-- [ ] 记录任务 checkpoint commit。
+- [x] 为共享 skills root 编写失败的 workspace、skills、using_skills 测试。
+- [x] 拆分执行根、prompt 根和 skills 根，停止复制 `skills/`。
+- [x] 让 `using_skills` 从共享 skills root 读取，并处理资源路径语义。
+- [x] 更新配置装配与技能管理入口。
+- [x] 运行聚焦测试并确认通过。
+- [x] 记录任务 checkpoint commit：`33d5ac1` 实现；收尾 commit 补充 readonly 与 `list_files` 测试。
 
 ## TASK-02: Readonly 终态与 Workspace GC
 

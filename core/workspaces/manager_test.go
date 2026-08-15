@@ -140,6 +140,13 @@ func TestCreateTaskWorkspaceDoesNotCopySharedSkills(t *testing.T) {
 	}
 	assertPathMissing(t, task.Root, "skills")
 	assertFileContent(t, task.Root, "AGENTS.md", "# Workspace rules\n")
+
+	readonlyTask, err := manager.CreateTaskWorkspace(context.Background(), "42", "tsk_readonly", ModeReadonly)
+	if err != nil {
+		t.Fatalf("CreateTaskWorkspace(readonly) error = %v", err)
+	}
+	assertPathMissing(t, readonlyTask.Root, "skills")
+	assertFileContent(t, readonlyTask.Root, "AGENTS.md", "# Workspace rules\n")
 }
 
 func TestConfirmTaskWorkspacePreservesSharedSkillsFromHome(t *testing.T) {
