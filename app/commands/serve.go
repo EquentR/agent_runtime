@@ -85,6 +85,7 @@ func Serve(c *config.Config, version, commit string, buildArgs ...string) {
 	if err != nil {
 		log.Panicf("Failed to init audit runtime: %v", err)
 	}
+	startAuditGCLoop(globalCtx, auditRuntime.Store, c.Storage.ResolvedMaintenanceInterval(), c.Storage.ResolvedAuditRetention())
 	taskManager := newTaskManager(taskStore, approvalStore, interactionStore, c.Tasks, auditRuntime.TaskRecorder)
 	conversationStore := coreagent.NewConversationStore(db.DB())
 	if err := conversationStore.AutoMigrate(); err != nil {
@@ -504,6 +505,31 @@ func startWorkspaceGCLoop(ctx context.Context, manager *workspaces.Manager, inte
 				}
 				if report.DeletedTaskWorkspaces > 0 || report.DeletedBackups > 0 {
 					log.Infof("Workspace GC deleted %d task workspaces and %d backups", report.DeletedTaskWorkspaces, report.DeletedBackups)
+				}
+			}
+		}
+	}()
+}
+
+func startAuditGCLoop(ctx context.Context, store *coreaudit.Store, interval time.Duration, retention time.Duration) {
+	if ctx == nil || store == nil || interval <= 0 || retention <= 0 {
+		return
+	}
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				processed, err := store.CleanupExpiredRuns(ctx, time.Now().UTC(), retention, 100)
+				if err != nil {
+					log.Warnf("Audit GC failed: %v", err)
+					continue
+				}
+				if processed > 0 {
+					log.Infof("Audit GC processed %d expired runs", processed)
 				}
 			}
 		}

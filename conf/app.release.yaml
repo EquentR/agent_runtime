@@ -84,6 +84,13 @@ attachments:
   sentRetention: 720h
   gcInterval: 1h
 
+storage:
+  auditRetention: 720h
+  taskEventRetention: 720h
+  sessionRetention: 720h
+  maintenanceInterval: 24h
+  vacuumEnabled: true
+
 llmRequestTimeout: 10m
 
 # tools:

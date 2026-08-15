@@ -572,6 +572,47 @@ func (s *Store) FinishRun(ctx context.Context, runID string, status Status, fini
 	})
 }
 
+// CleanupExpiredRuns 删除超过保留期且已结束的 audit run，按 run 粒度清理 event、artifact 和 run。
+func (s *Store) CleanupExpiredRuns(ctx context.Context, now time.Time, retention time.Duration, limit int) (int, error) {
+	if s == nil || s.db == nil {
+		return 0, fmt.Errorf("store db cannot be nil")
+	}
+	if retention <= 0 {
+		return 0, nil
+	}
+	cutoff := now.UTC().Add(-retention)
+	query := s.db.WithContext(ctx).
+		Where("finished_at IS NOT NULL").
+		Where("finished_at <= ?", cutoff).
+		Order("finished_at asc").
+		Order("id asc")
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	var runs []Run
+	if err := query.Find(&runs).Error; err != nil {
+		return 0, err
+	}
+
+	processed := 0
+	for _, run := range runs {
+		err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			if err := tx.Where("run_id = ?", run.ID).Delete(&Event{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("run_id = ?", run.ID).Delete(&Artifact{}).Error; err != nil {
+				return err
+			}
+			return tx.Delete(&Run{}, "id = ?", run.ID).Error
+		})
+		if err != nil {
+			return processed, err
+		}
+		processed++
+	}
+	return processed, nil
+}
+
 func getRunByTaskIDTx(tx *gorm.DB, taskID string) (*Run, error) {
 	var run Run
 	err := tx.First(&run, "task_id = ?", taskID).Error

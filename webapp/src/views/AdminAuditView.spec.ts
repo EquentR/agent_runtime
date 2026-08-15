@@ -70,6 +70,7 @@ describe('AdminAuditView', () => {
     expect(api.fetchAuditConversationRuns).toHaveBeenCalledWith('conv_owner')
     expect(wrapper.text()).toContain('Owner audit chat')
     expect(wrapper.text()).toContain('owner')
+    expect(wrapper.find('.admin-audit-timeline-panel').text()).toContain('审计数据已过期或不存在')
   })
 
 

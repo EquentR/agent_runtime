@@ -797,6 +797,101 @@ func TestStoreCreateArtifactRejectsInvalidRawJSONBody(t *testing.T) {
 	}
 }
 
+func TestStoreCleanupExpiredDeletesOnlyOldFinishedRuns(t *testing.T) {
+	db := newTestDB(t)
+	store := NewStore(db)
+	if err := store.AutoMigrate(); err != nil {
+		t.Fatalf("AutoMigrate() error = %v", err)
+	}
+	ctx := context.Background()
+	now := time.Date(2026, 5, 23, 12, 0, 0, 0, time.UTC)
+	oldFinished := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	recentFinished := now.Add(-time.Hour)
+
+	for _, runID := range []string{"run_old", "run_recent", "run_active"} {
+		if _, err := store.CreateRun(ctx, StartRunInput{RunID: runID, TaskID: "task_" + runID, TaskType: "agent.run"}); err != nil {
+			t.Fatalf("CreateRun(%s) error = %v", runID, err)
+		}
+		if _, err := store.AppendEvent(ctx, runID, AppendEventInput{EventType: "step.started", Phase: PhaseStep, Payload: map[string]any{"title": "step"}}); err != nil {
+			t.Fatalf("AppendEvent(%s) error = %v", runID, err)
+		}
+		if _, err := store.CreateArtifact(ctx, runID, CreateArtifactInput{Kind: ArtifactKindModelRequest, MimeType: "application/json", Body: map[string]any{"model": "test"}}); err != nil {
+			t.Fatalf("CreateArtifact(%s) error = %v", runID, err)
+		}
+	}
+	if err := store.FinishRun(ctx, "run_old", StatusSucceeded, oldFinished); err != nil {
+		t.Fatalf("FinishRun(run_old) error = %v", err)
+	}
+	if err := store.FinishRun(ctx, "run_recent", StatusSucceeded, recentFinished); err != nil {
+		t.Fatalf("FinishRun(run_recent) error = %v", err)
+	}
+
+	processed, err := store.CleanupExpiredRuns(ctx, now, 24*time.Hour, 10)
+	if err != nil {
+		t.Fatalf("CleanupExpiredRuns() error = %v", err)
+	}
+	if processed != 1 {
+		t.Fatalf("CleanupExpiredRuns() processed = %d, want 1", processed)
+	}
+
+	if _, err := store.GetRun(ctx, "run_old"); !errors.Is(err, ErrRunNotFound) {
+		t.Fatalf("GetRun(run_old) error = %v, want ErrRunNotFound", err)
+	}
+	var oldEventCount, oldArtifactCount int64
+	if err := db.Model(&Event{}).Where("run_id = ?", "run_old").Count(&oldEventCount).Error; err != nil {
+		t.Fatalf("count old events error = %v", err)
+	}
+	if err := db.Model(&Artifact{}).Where("run_id = ?", "run_old").Count(&oldArtifactCount).Error; err != nil {
+		t.Fatalf("count old artifacts error = %v", err)
+	}
+	if oldEventCount != 0 || oldArtifactCount != 0 {
+		t.Fatalf("old run leftovers = events %d artifacts %d, want 0", oldEventCount, oldArtifactCount)
+	}
+
+	for _, runID := range []string{"run_recent", "run_active"} {
+		if _, err := store.GetRun(ctx, runID); err != nil {
+			t.Fatalf("GetRun(%s) error = %v, want preserved", runID, err)
+		}
+		var eventCount, artifactCount int64
+		if err := db.Model(&Event{}).Where("run_id = ?", runID).Count(&eventCount).Error; err != nil {
+			t.Fatalf("count %s events error = %v", runID, err)
+		}
+		if err := db.Model(&Artifact{}).Where("run_id = ?", runID).Count(&artifactCount).Error; err != nil {
+			t.Fatalf("count %s artifacts error = %v", runID, err)
+		}
+		if eventCount != 1 || artifactCount != 1 {
+			t.Fatalf("%s leftovers = events %d artifacts %d, want 1 each", runID, eventCount, artifactCount)
+		}
+	}
+}
+
+func TestStoreCleanupExpiredSkipsWhenRetentionDisabled(t *testing.T) {
+	db := newTestDB(t)
+	store := NewStore(db)
+	if err := store.AutoMigrate(); err != nil {
+		t.Fatalf("AutoMigrate() error = %v", err)
+	}
+	ctx := context.Background()
+	oldFinished := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	if _, err := store.CreateRun(ctx, StartRunInput{RunID: "run_keep", TaskID: "task_keep", TaskType: "agent.run"}); err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	if err := store.FinishRun(ctx, "run_keep", StatusSucceeded, oldFinished); err != nil {
+		t.Fatalf("FinishRun() error = %v", err)
+	}
+
+	processed, err := store.CleanupExpiredRuns(ctx, time.Date(2026, 5, 23, 12, 0, 0, 0, time.UTC), 0, 10)
+	if err != nil {
+		t.Fatalf("CleanupExpiredRuns() error = %v", err)
+	}
+	if processed != 0 {
+		t.Fatalf("CleanupExpiredRuns() processed = %d, want 0", processed)
+	}
+	if _, err := store.GetRun(ctx, "run_keep"); err != nil {
+		t.Fatalf("GetRun() error = %v, want run preserved", err)
+	}
+}
+
 func TestRecorderFinishRunSetsTerminalStatusAndTimestamp(t *testing.T) {
 	db := newTestDB(t)
 	store := NewStore(db)
@@ -824,6 +919,64 @@ func TestRecorderFinishRunSetsTerminalStatusAndTimestamp(t *testing.T) {
 	}
 	if run.FinishedAt == nil || !run.FinishedAt.Equal(finishedAt) {
 		t.Fatalf("finished_at = %v, want %v", run.FinishedAt, finishedAt)
+	}
+}
+
+func TestStoreCleanupExpiredRunsDeletesFinishedRunsOnly(t *testing.T) {
+	db := newTestDB(t)
+	store := NewStore(db)
+	if err := store.AutoMigrate(); err != nil {
+		t.Fatalf("AutoMigrate() error = %v", err)
+	}
+	recorder := NewRecorder(store)
+	ctx := context.Background()
+	oldFinished := time.Now().UTC().Add(-48 * time.Hour)
+
+	if _, err := recorder.StartRun(ctx, StartRunInput{RunID: "old_run", TaskID: "task_old", TaskType: "agent.run"}); err != nil {
+		t.Fatalf("StartRun(old_run) error = %v", err)
+	}
+	if _, err := recorder.AttachArtifact(ctx, "old_run", CreateArtifactInput{Kind: ArtifactKindModelRequest, MimeType: "application/json", Body: map[string]any{"model": "test"}}); err != nil {
+		t.Fatalf("AttachArtifact(old_run) error = %v", err)
+	}
+	if _, err := recorder.AppendEvent(ctx, "old_run", AppendEventInput{EventType: "run.started", Payload: map[string]any{"ok": true}}); err != nil {
+		t.Fatalf("AppendEvent(old_run) error = %v", err)
+	}
+	if err := recorder.FinishRun(ctx, "old_run", FinishRunInput{Status: StatusSucceeded, FinishedAt: oldFinished}); err != nil {
+		t.Fatalf("FinishRun(old_run) error = %v", err)
+	}
+
+	if _, err := recorder.StartRun(ctx, StartRunInput{RunID: "active_run", TaskID: "task_active", TaskType: "agent.run"}); err != nil {
+		t.Fatalf("StartRun(active_run) error = %v", err)
+	}
+
+	processed, err := store.CleanupExpiredRuns(ctx, time.Now().UTC(), 24*time.Hour, 10)
+	if err != nil {
+		t.Fatalf("CleanupExpiredRuns() error = %v", err)
+	}
+	if processed != 1 {
+		t.Fatalf("CleanupExpiredRuns() processed = %d, want 1", processed)
+	}
+	var runCount int64
+	if err := db.Model(&Run{}).Where("id = ?", "old_run").Count(&runCount).Error; err != nil {
+		t.Fatalf("count old run error = %v", err)
+	}
+	if runCount != 0 {
+		t.Fatalf("old run count = %d, want 0", runCount)
+	}
+	if err := db.Model(&Event{}).Where("run_id = ?", "old_run").Count(&runCount).Error; err != nil {
+		t.Fatalf("count old events error = %v", err)
+	}
+	if runCount != 0 {
+		t.Fatalf("old event count = %d, want 0", runCount)
+	}
+	if err := db.Model(&Artifact{}).Where("run_id = ?", "old_run").Count(&runCount).Error; err != nil {
+		t.Fatalf("count old artifacts error = %v", err)
+	}
+	if runCount != 0 {
+		t.Fatalf("old artifact count = %d, want 0", runCount)
+	}
+	if _, err := store.GetRun(ctx, "active_run"); err != nil {
+		t.Fatalf("active run should remain: %v", err)
 	}
 }
 

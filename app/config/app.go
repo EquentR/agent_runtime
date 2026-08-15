@@ -25,6 +25,8 @@ const defaultWorkspacesRoot = "data/workspaces"
 const defaultWorkspaceTaskRetention = 30 * 24 * time.Hour
 const defaultWorkspaceBackupRetention = 30 * 24 * time.Hour
 const defaultWorkspaceGCInterval = time.Hour
+const defaultAuditRetention = 30 * 24 * time.Hour
+const defaultStorageMaintenanceInterval = 24 * time.Hour
 
 type Config struct {
 	WorkspaceDir      string                      `yaml:"workspaceDir"`
@@ -36,6 +38,7 @@ type Config struct {
 	Tasks             TaskManagerConfig           `yaml:"tasks"`
 	Tools             ToolsConfig                 `yaml:"tools"`
 	Attachments       AttachmentStorageConfig     `yaml:"attachments"`
+	Storage           StorageConfig               `yaml:"storage"`
 	Updates           UpdatesConfig               `yaml:"updates"`
 	LLMRequestTimeout time.Duration               `yaml:"llmRequestTimeout"`
 	LLM               []coretypes.LLMProvider     `yaml:"llmProviders"`
@@ -259,6 +262,28 @@ type AttachmentStorageConfig struct {
 	DraftTTL       time.Duration              `yaml:"draftTTL"`
 	SentRetention  time.Duration              `yaml:"sentRetention"`
 	GCInterval     time.Duration              `yaml:"gcInterval"`
+}
+
+type StorageConfig struct {
+	AuditRetention      *time.Duration `yaml:"auditRetention"`
+	TaskEventRetention  *time.Duration `yaml:"taskEventRetention"`
+	SessionRetention    *time.Duration `yaml:"sessionRetention"`
+	MaintenanceInterval *time.Duration `yaml:"maintenanceInterval"`
+	VacuumEnabled       bool           `yaml:"vacuumEnabled"`
+}
+
+func (c StorageConfig) ResolvedAuditRetention() time.Duration {
+	if c.AuditRetention != nil {
+		return *c.AuditRetention
+	}
+	return defaultAuditRetention
+}
+
+func (c StorageConfig) ResolvedMaintenanceInterval() time.Duration {
+	if c.MaintenanceInterval != nil {
+		return *c.MaintenanceInterval
+	}
+	return defaultStorageMaintenanceInterval
 }
 
 type AttachmentFilesystemConfig struct {

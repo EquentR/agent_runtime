@@ -50,7 +50,7 @@ const summaryFacts = computed<SummaryFact[]>(() => {
     { label: '创建者', value: conversation?.created_by || '-' },
     { label: '开始时间', value: formatCompactTimestamp(conversation?.created_at) },
     { label: '轮次数', value: String(auditRuns.value.length) },
-    { label: '状态', value: selectedAuditRun.value?.status || '未找到审计运行' },
+    { label: '状态', value: selectedAuditRun.value?.status || '审计数据已过期或不存在' },
     { label: 'Run ID', value: selectedAuditRun.value?.id || resolveAuditRunId(conversation) || '未暴露 run_id' },
     { label: 'Task ID', value: selectedAuditRun.value?.task_id || '-' },
     { label: '对话 ID', value: conversation?.id || '-' },
@@ -411,7 +411,7 @@ onBeforeUnmount(() => {
       </div>
 
       <p v-if="loading" class="sidebar-empty">正在加载会话...</p>
-      <div v-else-if="conversations.length === 0" class="sidebar-empty">暂无可查看的会话。</div>
+      <div v-else-if="conversations.length === 0" class="sidebar-empty">暂无审计数据（可能已过期）。</div>
       <el-scrollbar v-else class="sidebar-list-scrollbar admin-audit-list-scrollbar" view-class="sidebar-list admin-audit-list">
         <button
           v-for="conversation in conversations"
@@ -556,6 +556,7 @@ onBeforeUnmount(() => {
                 <span class="admin-audit-artifact-chip">{{ displayTimelineTitle(entry) }}</span>
               </button>
             </el-scrollbar>
+            <p v-else-if="auditReplays.length === 0" class="messages-empty admin-audit-timeline-empty">该会话的审计数据已过期或不存在。</p>
             <p v-else class="messages-empty admin-audit-timeline-empty">当前筛选条件下没有可展示的时间线。</p>
           </article>
 
