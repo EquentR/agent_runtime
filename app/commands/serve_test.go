@@ -1150,6 +1150,35 @@ func TestStartWorkspaceGCLoopDeletesExpiredTerminalWorkspace(t *testing.T) {
 	t.Fatalf("expired workspace %q was not deleted by GC loop", workspace.Root)
 }
 
+func TestStartAuditGCLoopDeletesExpiredRuns(t *testing.T) {
+	pkglog.Init(&pkglog.Config{Level: "error"})
+	db := newServeTestDB(t)
+	store := coreaudit.NewStore(db)
+	if err := store.AutoMigrate(); err != nil {
+		t.Fatalf("audit store migrate error = %v", err)
+	}
+	ctx := context.Background()
+	if _, err := store.CreateRun(ctx, coreaudit.StartRunInput{RunID: "run_old", TaskID: "task_old", TaskType: "agent.run"}); err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	if err := store.FinishRun(ctx, "run_old", coreaudit.StatusSucceeded, time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("FinishRun() error = %v", err)
+	}
+
+	loopCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	startAuditGCLoop(loopCtx, store, 10*time.Millisecond, time.Nanosecond)
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := store.GetRun(ctx, "run_old"); errors.Is(err, coreaudit.ErrRunNotFound) {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("expired audit run was not deleted by GC loop")
+}
+
 func TestRegisterAgentRunExecutorPromptWiringKeepsAuditRecorder(t *testing.T) {
 	db := newServeTestDB(t)
 	taskStore := coretasks.NewStore(db)

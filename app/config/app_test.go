@@ -108,6 +108,38 @@ workspaces:
 	}
 }
 
+func TestConfigStorageRetentionDefaultsAndZeroDisablesAuditGC(t *testing.T) {
+	var cfg Config
+	if err := yaml.Unmarshal([]byte(`
+storage:
+  auditRetention: 720h
+  maintenanceInterval: 24h
+`), &cfg); err != nil {
+		t.Fatalf("yaml.Unmarshal() error = %v", err)
+	}
+	if got := cfg.Storage.ResolvedAuditRetention(); got != 30*24*time.Hour {
+		t.Fatalf("cfg.Storage.ResolvedAuditRetention() = %v, want 720h", got)
+	}
+	if got := cfg.Storage.ResolvedMaintenanceInterval(); got != 24*time.Hour {
+		t.Fatalf("cfg.Storage.ResolvedMaintenanceInterval() = %v, want 24h", got)
+	}
+
+	var disabled Config
+	if err := yaml.Unmarshal([]byte(`
+storage:
+  auditRetention: 0h
+  maintenanceInterval: 0h
+`), &disabled); err != nil {
+		t.Fatalf("yaml.Unmarshal(disabled) error = %v", err)
+	}
+	if got := disabled.Storage.ResolvedAuditRetention(); got != 0 {
+		t.Fatalf("disabled.Storage.ResolvedAuditRetention() = %v, want 0", got)
+	}
+	if got := disabled.Storage.ResolvedMaintenanceInterval(); got != 0 {
+		t.Fatalf("disabled.Storage.ResolvedMaintenanceInterval() = %v, want 0", got)
+	}
+}
+
 func TestConfigResolvedWorkspaceTemplateRootDefaultsToWorkspace(t *testing.T) {
 	var cfg Config
 
