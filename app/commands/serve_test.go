@@ -1229,8 +1229,11 @@ func TestRegisterAgentRunExecutorPromptWiringKeepsAuditRecorder(t *testing.T) {
 	if err := db.WithContext(ctx).Where("run_id = ?", run.ID).Find(&artifacts).Error; err != nil {
 		t.Fatalf("load artifacts error = %v", err)
 	}
-	if !hasServeTestArtifactKind(artifacts, coreaudit.ArtifactKindRequestMessages) {
-		t.Fatalf("artifact kinds = %#v, want %q", artifacts, coreaudit.ArtifactKindRequestMessages)
+	if hasServeTestArtifactKind(artifacts, coreaudit.ArtifactKindRequestMessages) {
+		t.Fatalf("artifact kinds = %#v, want no request_messages artifact", artifacts)
+	}
+	if !hasServeTestArtifactKind(artifacts, coreaudit.ArtifactKindModelRequest) || !hasServeTestArtifactKind(artifacts, coreaudit.ArtifactKindModelResponse) {
+		t.Fatalf("artifact kinds = %#v, want model_request and model_response", artifacts)
 	}
 }
 

@@ -2,6 +2,8 @@ package audit
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -506,6 +508,11 @@ func (s *Store) CreateArtifact(ctx context.Context, runID string, input CreateAr
 		if err != nil {
 			return err
 		}
+		artifactSHA256 := strings.TrimSpace(input.SHA256)
+		if artifactSHA256 == "" {
+			sum := sha256.Sum256(bodyJSON)
+			artifactSHA256 = hex.EncodeToString(sum[:])
+		}
 
 		createdAt := input.CreatedAt.UTC()
 		if input.CreatedAt.IsZero() {
@@ -519,7 +526,7 @@ func (s *Store) CreateArtifact(ctx context.Context, runID string, input CreateAr
 			MimeType:       strings.TrimSpace(input.MimeType),
 			Encoding:       normalizeEncoding(input.Encoding),
 			SizeBytes:      int64(len(bodyJSON)),
-			SHA256:         strings.TrimSpace(input.SHA256),
+			SHA256:         artifactSHA256,
 			RedactionState: normalizeRedactionState(input.RedactionState),
 			BodyJSON:       bodyJSON,
 			CreatedAt:      createdAt,

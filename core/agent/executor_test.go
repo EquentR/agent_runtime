@@ -21,7 +21,6 @@ import (
 	"github.com/EquentR/agent_runtime/core/memory"
 	coreprompt "github.com/EquentR/agent_runtime/core/prompt"
 	model "github.com/EquentR/agent_runtime/core/providers/types"
-	"github.com/EquentR/agent_runtime/core/runtimeprompt"
 	coreskills "github.com/EquentR/agent_runtime/core/skills"
 	coretasks "github.com/EquentR/agent_runtime/core/tasks"
 	coretools "github.com/EquentR/agent_runtime/core/tools"
@@ -1052,17 +1051,13 @@ func TestAgentExecutorPromptRoutesLegacySystemPromptThroughResolver(t *testing.T
 	runID := recorder.requireRunIDForTask(t, task.ID)
 	promptArtifact := recorder.requireArtifactByKind(t, runID, coreaudit.ArtifactKindRuntimePromptEnvelope)
 	envelope := decodeExecutorRuntimePromptEnvelopeArtifact(t, promptArtifact)
-	if len(envelope.Segments) != 6 {
+	if envelope.SegmentCount != 6 || len(envelope.Segments) != 6 {
 		t.Fatalf("len(runtime prompt segments) = %d, want 6 (3 forced + db + legacy + workspace)", len(envelope.Segments))
 	}
-	if envelope.Segments[3].Content != "DB prompt" {
-		t.Fatalf("runtime prompt segments[3] = %#v, want DB prompt after forced blocks", envelope.Segments[3])
-	}
-	if envelope.Segments[4].Content != "Legacy prompt" {
-		t.Fatalf("runtime prompt segments[4] = %#v, want legacy prompt routed through resolved prompt after db prompt", envelope.Segments[4])
-	}
-	if envelope.Segments[5].Content != "The following AGENTS.md file was injected from the user's working directory. Treat it as guidance and operating rules for the current workspace.\n---\nWorkspace prompt" {
-		t.Fatalf("runtime prompt segments[5] = %#v, want workspace prompt last", envelope.Segments[5])
+	for index, segment := range envelope.Segments {
+		if segment.SourceType == "" || segment.SHA256 == "" || segment.SizeBytes <= 0 {
+			t.Fatalf("runtime prompt segments[%d] = %#v, want source metadata and digest", index, segment)
+		}
 	}
 }
 
@@ -3665,17 +3660,7 @@ func TestAgentExecutorRecordsConversationAuditEvents(t *testing.T) {
 			model.Message{Role: model.RoleAssistant, Content: "second answer"},
 			nil,
 		)}},
-		beforeStream: func(req model.ChatRequest) {
-			runID := recorder.requireRunIDForTask(t, "task_1")
-			artifact := recorder.requireArtifactByKind(t, runID, coreaudit.ArtifactKindRequestMessages)
-			snapshot := decodeRequestMessagesArtifact(t, artifact)
-			if snapshot.ConversationID != "conv_1" {
-				t.Fatalf("request artifact conversation id = %q, want conv_1", snapshot.ConversationID)
-			}
-			if !reflect.DeepEqual(snapshot.Messages, stripExecutorForcedPromptMessages(req.Messages)) {
-				t.Fatalf("request artifact messages = %#v, want %#v after removing forced prompt prefix from model request", snapshot.Messages, stripExecutorForcedPromptMessages(req.Messages))
-			}
-		},
+		beforeStream: func(model.ChatRequest) {},
 	}
 	executor := newTaskExecutorForTest(t, ExecutorDependencies{
 		Resolver:          newExecutorResolverForTest(),
@@ -3715,8 +3700,8 @@ func TestAgentExecutorRecordsConversationAuditEvents(t *testing.T) {
 	}
 
 	userEvent := recorder.requireEvent(t, runID, "user_message.appended")
-	if userEvent.RefArtifactID == "" {
-		t.Fatal("user_message.appended ref artifact id = empty, want request_messages artifact reference")
+	if userEvent.RefArtifactID != "" {
+		t.Fatalf("user_message.appended ref artifact id = %q, want empty without request_messages artifact", userEvent.RefArtifactID)
 	}
 	userPayload := decodeAuditPayload(t, userEvent)
 	if got := int(userPayload["request_message_count"].(float64)); got != 3 {
@@ -3726,17 +3711,6 @@ func TestAgentExecutorRecordsConversationAuditEvents(t *testing.T) {
 		t.Fatalf("user_message.appended payload = %#v, want compact payload without full messages", userPayload)
 	}
 
-	requestArtifact := recorder.requireArtifactByKind(t, runID, coreaudit.ArtifactKindRequestMessages)
-	if requestArtifact.ID != userEvent.RefArtifactID {
-		t.Fatalf("request artifact id = %q, want user event ref %q", requestArtifact.ID, userEvent.RefArtifactID)
-	}
-	requestSnapshot := decodeRequestMessagesArtifact(t, requestArtifact)
-	if len(requestSnapshot.Messages) != 3 {
-		t.Fatalf("request artifact message count = %d, want 3", len(requestSnapshot.Messages))
-	}
-	if requestSnapshot.Messages[2].Role != model.RoleUser || requestSnapshot.Messages[2].Content != "second" {
-		t.Fatalf("request artifact last message = %#v, want appended user message", requestSnapshot.Messages[2])
-	}
 }
 
 func TestAgentExecutorWiresRunnerAuditEvidence(t *testing.T) {
@@ -4234,16 +4208,6 @@ func decodeAuditPayload(t *testing.T, event *coreaudit.Event) map[string]any {
 	return payload
 }
 
-func decodeRequestMessagesArtifact(t *testing.T, artifact *coreaudit.Artifact) requestMessagesArtifact {
-	t.Helper()
-
-	var snapshot requestMessagesArtifact
-	if err := json.Unmarshal(artifact.BodyJSON, &snapshot); err != nil {
-		t.Fatalf("decode request_messages artifact error = %v", err)
-	}
-	return snapshot
-}
-
 func decodeErrorSnapshotArtifact(t *testing.T, artifact *coreaudit.Artifact) errorSnapshotArtifact {
 	t.Helper()
 
@@ -4255,11 +4219,11 @@ func decodeErrorSnapshotArtifact(t *testing.T, artifact *coreaudit.Artifact) err
 }
 
 type executorRuntimePromptEnvelopeAuditArtifact struct {
-	Segments           []runtimeprompt.Segment `json:"segments,omitempty"`
-	Messages           []model.Message         `json:"messages"`
-	PromptMessageCount int                     `json:"prompt_message_count"`
-	PhaseSegmentCounts map[string]int          `json:"phase_segment_counts,omitempty"`
-	SourceCounts       map[string]int          `json:"source_counts,omitempty"`
+	Segments           []runnerPromptSegmentSummary `json:"segments,omitempty"`
+	SegmentCount       int                          `json:"segment_count"`
+	PromptMessageCount int                          `json:"prompt_message_count"`
+	PhaseSegmentCounts map[string]int               `json:"phase_segment_counts,omitempty"`
+	SourceCounts       map[string]int               `json:"source_counts,omitempty"`
 }
 
 func decodeExecutorRuntimePromptEnvelopeArtifact(t *testing.T, artifact *coreaudit.Artifact) executorRuntimePromptEnvelopeAuditArtifact {

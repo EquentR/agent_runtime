@@ -18,11 +18,6 @@ type executorAuditor struct {
 	createdBy      string
 }
 
-type requestMessagesArtifact struct {
-	ConversationID string          `json:"conversation_id,omitempty"`
-	Messages       []model.Message `json:"messages"`
-}
-
 type errorSnapshotArtifact struct {
 	TaskID          string          `json:"task_id,omitempty"`
 	ConversationID  string          `json:"conversation_id,omitempty"`
@@ -68,16 +63,12 @@ func (a *executorAuditor) recordConversationLoaded(ctx context.Context, history 
 }
 
 func (a *executorAuditor) recordUserMessageAppended(ctx context.Context, userMessage model.Message, requestMessages []model.Message) {
-	artifactID := a.attachArtifact(ctx, coreaudit.ArtifactKindRequestMessages, requestMessagesArtifact{
-		ConversationID: a.conversationID,
-		Messages:       cloneMessages(requestMessages),
-	})
 	a.appendEvent(ctx, "user_message.appended", map[string]any{
 		"conversation_id":       a.conversationID,
 		"message_role":          userMessage.Role,
 		"content_length":        len(userMessage.Content),
 		"request_message_count": len(requestMessages),
-	}, artifactID)
+	}, "")
 }
 
 func (a *executorAuditor) recordMessagesPersisted(ctx context.Context, messages []model.Message) {

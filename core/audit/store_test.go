@@ -2,7 +2,9 @@ package audit
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -747,6 +749,34 @@ func TestRecorderAttachArtifactPersistsJSONBody(t *testing.T) {
 	messages, ok := body["messages"].([]any)
 	if !ok || len(messages) != 1 {
 		t.Fatalf("artifact messages = %#v, want one persisted message", body["messages"])
+	}
+}
+
+func TestStoreCreateArtifactComputesSHA256WhenMissing(t *testing.T) {
+	db := newTestDB(t)
+	store := NewStore(db)
+	if err := store.AutoMigrate(); err != nil {
+		t.Fatalf("AutoMigrate() error = %v", err)
+	}
+	ctx := context.Background()
+	if _, err := store.CreateRun(ctx, StartRunInput{RunID: "run_1", TaskID: "task_1", TaskType: "agent.run"}); err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+
+	artifact, err := store.CreateArtifact(ctx, "run_1", CreateArtifactInput{
+		Kind:     ArtifactKindModelRequest,
+		MimeType: "application/json",
+		Body:     map[string]any{"model": "test-model"},
+	})
+	if err != nil {
+		t.Fatalf("CreateArtifact() error = %v", err)
+	}
+	if artifact.SHA256 == "" {
+		t.Fatal("artifact sha256 = empty, want computed digest")
+	}
+	sum := sha256.Sum256(artifact.BodyJSON)
+	if artifact.SHA256 != hex.EncodeToString(sum[:]) {
+		t.Fatalf("artifact sha256 = %q, want body digest %x", artifact.SHA256, sum)
 	}
 }
 
