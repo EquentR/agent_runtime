@@ -396,6 +396,59 @@ func TestAttachmentStoreMarksSentAttachmentExpiredWithoutRemovingMetadata(t *tes
 	if _, err := storage.Stat(ctx, sent.StorageKey); !errors.Is(err, ErrObjectNotFound) {
 		t.Fatalf("Stat() error = %v, want ErrObjectNotFound", err)
 	}
+
+	processed, err = store.GCExpired(ctx, time.Now().UTC(), 10)
+	if err != nil {
+		t.Fatalf("second GCExpired() error = %v", err)
+	}
+	if processed != 1 {
+		t.Fatalf("second GCExpired() processed = %d, want 1 for expired leftover retry", processed)
+	}
+}
+
+func TestAttachmentStoreGCExpiredRetriesAfterStorageDeleteFailure(t *testing.T) {
+	ctx := context.Background()
+	storage := &failingDeleteStorage{deleteErr: errors.New("disk full")}
+	store := newTestStoreWithStorage(t, storage)
+
+	storedObject, err := storage.PutDraft(ctx, PutDraftInput{FileName: "draft.txt", MimeType: "text/plain", Data: []byte("draft")})
+	if err != nil {
+		t.Fatalf("PutDraft() error = %v", err)
+	}
+	expiredAt := time.Now().UTC().Add(-time.Minute)
+	attachment, err := store.CreateDraft(ctx, CreateDraftInput{
+		ID:             "att_draft_retry",
+		CreatedBy:      "alice",
+		StorageBackend: storedObject.StorageBackend,
+		StorageKey:     storedObject.StorageKey,
+		FileName:       storedObject.FileName,
+		MimeType:       storedObject.MimeType,
+		SizeBytes:      storedObject.SizeBytes,
+		Kind:           storedObject.Kind,
+		ExpiresAt:      &expiredAt,
+	})
+	if err != nil {
+		t.Fatalf("CreateDraft() error = %v", err)
+	}
+
+	if processed, err := store.GCExpired(ctx, time.Now().UTC(), 10); err == nil || processed != 0 {
+		t.Fatalf("first GCExpired() = %d/%v, want 0 and storage delete error", processed, err)
+	}
+	if _, err := store.GetAttachment(ctx, attachment.ID); err != nil {
+		t.Fatalf("draft should remain after storage delete failure: %v", err)
+	}
+
+	storage.deleteErr = nil
+	processed, err := store.GCExpired(ctx, time.Now().UTC(), 10)
+	if err != nil {
+		t.Fatalf("second GCExpired() error = %v", err)
+	}
+	if processed != 1 {
+		t.Fatalf("second GCExpired() processed = %d, want 1", processed)
+	}
+	if _, err := store.GetAttachment(ctx, attachment.ID); !errors.Is(err, ErrAttachmentNotFound) {
+		t.Fatalf("GetAttachment() error = %v, want ErrAttachmentNotFound after retry", err)
+	}
 }
 
 func newTestStore(t *testing.T) *Store {
@@ -416,6 +469,36 @@ func newTestStoreWithStorage(t *testing.T, storage Storage) *Store {
 		t.Fatalf("AutoMigrate() error = %v", err)
 	}
 	return store
+}
+
+type failingDeleteStorage struct {
+	deleteErr error
+	deleted   []string
+}
+
+func (f *failingDeleteStorage) PutDraft(context.Context, PutDraftInput) (*StoredObject, error) {
+	return &StoredObject{StorageBackend: BackendFilesystem, StorageKey: "drafts/draft.txt", FileName: "draft.txt", MimeType: "text/plain", SizeBytes: 5, Kind: "text"}, nil
+}
+
+func (f *failingDeleteStorage) PromoteDraft(context.Context, string) (string, error) {
+	return "sent/draft.txt", nil
+}
+
+func (f *failingDeleteStorage) Open(context.Context, string) (io.ReadCloser, ObjectMeta, error) {
+	return nil, ObjectMeta{}, ErrObjectNotFound
+}
+
+func (f *failingDeleteStorage) Delete(_ context.Context, storageKey string) error {
+	f.deleted = append(f.deleted, storageKey)
+	return f.deleteErr
+}
+
+func (f *failingDeleteStorage) Stat(context.Context, string) (ObjectMeta, error) {
+	return ObjectMeta{}, ErrObjectNotFound
+}
+
+func (f *failingDeleteStorage) GCExpired(context.Context, time.Time, int) (int, error) {
+	return 0, nil
 }
 
 func newTestDB(t *testing.T) *gorm.DB {

@@ -152,7 +152,7 @@ func (s *Store) ListExpiredAttachments(ctx context.Context, now time.Time, limit
 
 	query := s.db.WithContext(ctx).
 		Model(&Attachment{}).
-		Where("status IN ?", []Status{StatusDraft, StatusSent}).
+		Where("status IN ?", []Status{StatusDraft, StatusSent, StatusExpired}).
 		Where("expires_at IS NOT NULL").
 		Where("expires_at <= ?", now.UTC()).
 		Order("expires_at asc").
@@ -183,6 +183,11 @@ func (s *Store) GCExpired(ctx context.Context, now time.Time, limit int) (int, e
 
 	processed := 0
 	for _, attachment := range expired {
+		if s.storage != nil && strings.TrimSpace(attachment.StorageKey) != "" {
+			if err := s.storage.Delete(ctx, attachment.StorageKey); err != nil && !errors.Is(err, ErrObjectNotFound) {
+				return processed, err
+			}
+		}
 		if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 			switch attachment.Status {
 			case StatusDraft:
@@ -210,16 +215,13 @@ func (s *Store) GCExpired(ctx context.Context, now time.Time, limit int) (int, e
 					return fmt.Errorf("%w: %s", ErrAttachmentNotFound, attachment.ID)
 				}
 				return nil
+			case StatusExpired:
+				return nil
 			default:
 				return nil
 			}
 		}); err != nil {
 			return processed, err
-		}
-		if s.storage != nil {
-			if err := s.storage.Delete(ctx, attachment.StorageKey); err != nil && !errors.Is(err, ErrObjectNotFound) {
-				return processed, err
-			}
 		}
 		processed++
 	}
