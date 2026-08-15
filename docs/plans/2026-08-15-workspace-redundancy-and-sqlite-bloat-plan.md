@@ -221,12 +221,12 @@ readonly 任务结束后进入可回收终态，过期 workspace 和 backup 能�
 
 ### Checklist
 
-- [ ] 为 run 级审计清理编写失败测试。
-- [ ] 实现按 `finished_at` 判断的保留期删除。
-- [ ] 增加后台 GC loop 与配置。
-- [ ] 适配前端过期展示。
-- [ ] 运行聚焦测试并确认通过。
-- [ ] 记录任务 checkpoint commit。
+- [x] 为 run 级审计清理编写失败测试。
+- [x] 实现按 `finished_at` 判断的保留期删除。
+- [x] 增加后台 GC loop 与配置。
+- [x] 适配前端过期展示。
+- [x] 运行聚焦测试并确认通过。
+- [x] 记录任务 checkpoint commit：`dd3b21d` 实现；`24d23d3` 补 GC loop/config 测试。
 
 ## TASK-07: result_json 摘要化
 
@@ -255,12 +255,12 @@ readonly 任务结束后进入可回收终态，过期 workspace 和 backup 能�
 
 ### Checklist
 
-- [ ] 为摘要化 result 编写失败测试。
-- [ ] 新增摘要 DTO 并替换 `RunTaskResult` 落库形态。
-- [ ] 更新前端归一化与展示兼容。
-- [ ] 更新 Swagger 相关断言并重新生成文档。
-- [ ] 运行聚焦测试并确认通过。
-- [ ] 记录任务 checkpoint commit。
+- [x] 为摘要化 result 编写失败测试。
+- [x] 新增摘要 DTO 并替换 `RunTaskResult` 落库形态。
+- [x] 更新前端归一化与展示兼容。
+- [x] 更新 Swagger 相关断言并重新生成文档。
+- [x] 运行聚焦测试并确认通过。
+- [x] 记录任务 checkpoint commit。
 
 ## TASK-08: memory.context_state 单写
 
