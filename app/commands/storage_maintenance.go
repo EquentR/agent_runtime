@@ -3,6 +3,9 @@ package commands
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/EquentR/agent_runtime/app/config"
@@ -105,6 +108,12 @@ func RunStorageMaintenance(cfg *config.Config, dryRun bool, apply bool, vacuum b
 		return fmt.Errorf("storage maintenance requires --storage-maintenance-apply or --storage-maintenance-vacuum")
 	}
 
+	backupPath, err := backupDatabaseBeforeMaintenance(cfg)
+	if err != nil {
+		return fmt.Errorf("backup database before maintenance: %w", err)
+	}
+	fmt.Printf("database backup: %s\n", backupPath)
+
 	totalTaskDeltaDeleted := int64(0)
 	for {
 		deleted, err := taskStore.DeleteStreamDeltaEvents(ctx, 500)
@@ -194,4 +203,20 @@ func RunStorageMaintenance(cfg *config.Config, dryRun bool, apply bool, vacuum b
 		fmt.Println("VACUUM complete")
 	}
 	return nil
+}
+
+func backupDatabaseBeforeMaintenance(cfg *config.Config) (string, error) {
+	if cfg == nil || strings.TrimSpace(cfg.Sqlite.DbDir) == "" {
+		return "", nil
+	}
+	backupRoot := filepath.Join(cfg.Sqlite.DbDir, "maintenance-backups")
+	if err := os.MkdirAll(backupRoot, 0o755); err != nil {
+		return "", err
+	}
+	backupPath := filepath.Join(backupRoot, fmt.Sprintf("app-%s.db", time.Now().UTC().Format("20060102T150405Z")))
+	escaped := strings.ReplaceAll(filepath.ToSlash(backupPath), "'", "''")
+	if err := db.DB().Exec("VACUUM INTO '" + escaped + "'").Error; err != nil {
+		return "", err
+	}
+	return backupPath, nil
 }

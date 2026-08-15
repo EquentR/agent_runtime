@@ -59,6 +59,13 @@ func TestRunStorageMaintenanceDryRun(t *testing.T) {
 	if count != 0 {
 		t.Fatalf("CountStreamDeltaEvents() after apply = %d, want 0", count)
 	}
+	backupEntries, err := os.ReadDir(filepath.Join(cfg.Sqlite.DbDir, "maintenance-backups"))
+	if err != nil {
+		t.Fatalf("ReadDir(maintenance-backups) error = %v", err)
+	}
+	if len(backupEntries) == 0 {
+		t.Fatal("maintenance backup file missing after apply")
+	}
 }
 
 func durationPtr(value time.Duration) *time.Duration {
