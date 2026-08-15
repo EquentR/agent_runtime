@@ -76,3 +76,30 @@ func TestUsingSkillsRejectsMissingOrInvalidSkillNames(t *testing.T) {
 		})
 	}
 }
+
+func TestUsingSkillsReadsSharedSkillsRoot(t *testing.T) {
+	workspace := t.TempDir()
+	skillsRoot := t.TempDir()
+	mustWriteFile(t, filepath.Join(skillsRoot, "skills", "debugging", "SKILL.md"), "---\nname: debugging\ndescription: Debug skill\n---\n\n# Debugging\n\nDebug carefully.\n")
+	mustWriteFile(t, filepath.Join(skillsRoot, "skills", "debugging", "checklist.md"), "step 1")
+
+	registry := newBuiltinRegistry(t, Options{WorkspaceRoot: workspace, SkillsRoot: skillsRoot})
+	result, err := registry.Execute(context.Background(), "using_skills", map[string]any{"name": "debugging"})
+	if err != nil {
+		t.Fatalf("Execute(using_skills) error = %v", err)
+	}
+	var payload struct {
+		Content      string   `json:"content"`
+		ResourceRefs []string `json:"resource_refs"`
+	}
+	if err := json.Unmarshal([]byte(result.Content), &payload); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error = %v", result.Content, err)
+	}
+	if payload.Content != "# Debugging\n\nDebug carefully.\n" {
+		t.Fatalf("Content = %q, want shared skill body", payload.Content)
+	}
+	joined := strings.Join(payload.ResourceRefs, ",")
+	if !strings.Contains(joined, "skills/debugging/SKILL.md") || !strings.Contains(joined, "skills/debugging/checklist.md") {
+		t.Fatalf("ResourceRefs = %#v, want shared resource refs", payload.ResourceRefs)
+	}
+}

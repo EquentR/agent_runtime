@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/EquentR/agent_runtime/core/attachments"
@@ -23,6 +24,7 @@ const (
 
 type Options struct {
 	WorkspaceRoot     string
+	SkillsRoot        string
 	WorkspaceMode     workspaces.Mode
 	CommandJudge      CommandJudge
 	CommandTimeout    time.Duration
@@ -76,6 +78,7 @@ type ImageGenProviderConfig struct {
 
 type runtimeEnv struct {
 	workspaceRoot     string
+	skillsRoot        string
 	workspaceMode     workspaces.Mode
 	commandJudge      CommandJudge
 	commandTimeout    time.Duration
@@ -103,6 +106,20 @@ func normalizeOptions(options Options) (runtimeEnv, error) {
 	}
 	root = filepath.Clean(root)
 
+	skillsRoot := strings.TrimSpace(options.SkillsRoot)
+	if skillsRoot == "" {
+		skillsRoot = root
+	} else {
+		skillsRoot, err = filepath.Abs(skillsRoot)
+		if err != nil {
+			return runtimeEnv{}, fmt.Errorf("resolve skills root: %w", err)
+		}
+		skillsRoot = filepath.Clean(skillsRoot)
+	}
+	if err := ensureNoSymlink(skillsRoot); err != nil {
+		return runtimeEnv{}, fmt.Errorf("skills root cannot be a symlink: %w", err)
+	}
+
 	info, err := os.Lstat(root)
 	if err != nil {
 		return runtimeEnv{}, fmt.Errorf("workspace root is invalid: %w", err)
@@ -126,6 +143,7 @@ func normalizeOptions(options Options) (runtimeEnv, error) {
 
 	return runtimeEnv{
 		workspaceRoot:     root,
+		skillsRoot:        skillsRoot,
 		workspaceMode:     options.WorkspaceMode,
 		commandJudge:      options.CommandJudge,
 		commandTimeout:    clampDuration(timeout, minCommandTimeout, maxCommandTimeout),

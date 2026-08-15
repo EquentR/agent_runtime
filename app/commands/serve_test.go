@@ -649,7 +649,7 @@ func TestResolveEffectiveWorkspaceRootCreatesCanonicalConfiguredDirectory(t *tes
 	if !info.IsDir() {
 		t.Fatalf("workspace root %q is not a directory", want)
 	}
-	registry, err := newDefaultToolRegistry(resolved, builtin.WebSearchOptions{}, builtin.ImageGenOptions{}, nil, nil, 7*24*time.Hour)
+	registry, err := newDefaultToolRegistry(resolved, resolved, builtin.WebSearchOptions{}, builtin.ImageGenOptions{}, nil, nil, 7*24*time.Hour)
 	if err != nil {
 		t.Fatalf("newDefaultToolRegistry() error = %v", err)
 	}
@@ -705,14 +705,18 @@ func TestNewDefaultToolRegistryUsesConfiguredWebSearchOptions(t *testing.T) {
 	defer server.Close()
 
 	fn := reflect.ValueOf(newDefaultToolRegistry)
-	if fn.Type().NumIn() != 6 {
-		t.Fatalf("newDefaultToolRegistry arg count = %d, want 6", fn.Type().NumIn())
+	if fn.Type().NumIn() != 7 {
+		t.Fatalf("newDefaultToolRegistry arg count = %d, want 7", fn.Type().NumIn())
 	}
-	if fn.Type().In(1) != reflect.TypeOf(builtin.WebSearchOptions{}) {
-		t.Fatalf("newDefaultToolRegistry second arg = %s, want %s", fn.Type().In(1), reflect.TypeOf(builtin.WebSearchOptions{}))
+	if fn.Type().In(1) != reflect.TypeOf("") {
+		t.Fatalf("newDefaultToolRegistry second arg = %s, want string", fn.Type().In(1))
+	}
+	if fn.Type().In(2) != reflect.TypeOf(builtin.WebSearchOptions{}) {
+		t.Fatalf("newDefaultToolRegistry third arg = %s, want %s", fn.Type().In(2), reflect.TypeOf(builtin.WebSearchOptions{}))
 	}
 
 	results := fn.Call([]reflect.Value{
+		reflect.ValueOf(t.TempDir()),
 		reflect.ValueOf(t.TempDir()),
 		reflect.ValueOf(builtin.WebSearchOptions{
 			DefaultProvider: "tavily",
@@ -756,7 +760,7 @@ func TestNewDefaultToolRegistryUsesConfiguredWebSearchOptions(t *testing.T) {
 }
 
 func TestNewDefaultToolRegistryPassesImageGenSentRetention(t *testing.T) {
-	options := newDefaultBuiltinOptions(t.TempDir(), builtin.WebSearchOptions{}, builtin.ImageGenOptions{DefaultProvider: "openai"}, nil, nil, 45*24*time.Hour)
+	options := newDefaultBuiltinOptions(t.TempDir(), t.TempDir(), builtin.WebSearchOptions{}, builtin.ImageGenOptions{DefaultProvider: "openai"}, nil, nil, 45*24*time.Hour)
 	if options.ImageGen.SentRetention != 45*24*time.Hour {
 		t.Fatalf("options.ImageGen.SentRetention = %v, want 1080h", options.ImageGen.SentRetention)
 	}
@@ -770,7 +774,7 @@ func TestNewDefaultToolRegistryInfersWorkspaceModeFromWorkspaceState(t *testing.
 	if err := os.WriteFile(filepath.Join(workspaceRoot, workspaces.StateFileName), []byte(`{"mode":"readonly"}`), 0o644); err != nil {
 		t.Fatalf("WriteFile(workspace state) error = %v", err)
 	}
-	registry, err := newDefaultToolRegistryWithJudge(workspaceRoot, builtin.WebSearchOptions{}, builtin.ImageGenOptions{}, nil, nil, 0, &serveCommandJudgeStub{result: builtin.CommandJudgeResult{Verdict: builtin.CommandVerdictNeutral}})
+	registry, err := newDefaultToolRegistryWithJudge(workspaceRoot, workspaceRoot, builtin.WebSearchOptions{}, builtin.ImageGenOptions{}, nil, nil, 0, &serveCommandJudgeStub{result: builtin.CommandJudgeResult{Verdict: builtin.CommandVerdictNeutral}})
 	if err != nil {
 		t.Fatalf("newDefaultToolRegistryWithJudge() error = %v", err)
 	}
@@ -1076,7 +1080,7 @@ func TestBuildAgentRunExecutorDependenciesThreadsWorkspaceManagerAndRegistryFact
 	if err != nil {
 		t.Fatalf("workspaces.NewManager() error = %v", err)
 	}
-	factory := func(workspaceRoot string) (*coretools.Registry, error) {
+	factory := func(workspaceRoot string, skillsRoot string) (*coretools.Registry, error) {
 		return coretools.NewRegistry(), nil
 	}
 

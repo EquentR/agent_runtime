@@ -303,7 +303,7 @@ func (m *Manager) CreateTaskWorkspace(ctx context.Context, userID string, taskID
 
 	filter := func(relativePath string, entry os.DirEntry) bool {
 		_ = entry
-		return isWorkspaceSidecar(relativePath)
+		return isWorkspaceCopyExcluded(relativePath)
 	}
 	if err := copyDirectoryContents(home.Root, taskRoot, filter); err != nil {
 		return nil, fmt.Errorf("copy home workspace: %w", err)
@@ -390,12 +390,18 @@ func (m *Manager) ConfirmTaskWorkspace(ctx context.Context, userID string, taskI
 
 	if err := replaceDirectoryContents(taskRoot, state.HomeRoot, func(relativePath string, entry os.DirEntry) bool {
 		_ = entry
-		return isWorkspaceSidecar(relativePath)
+		return isWorkspaceCopyExcluded(relativePath)
 	}); err != nil {
 		if restoreErr := replaceDirectoryContents(backupRoot, state.HomeRoot, nil); restoreErr != nil {
 			return nil, fmt.Errorf("replace home workspace: %w (restore backup failed: %v)", err, restoreErr)
 		}
 		return nil, fmt.Errorf("replace home workspace: %w", err)
+	}
+	if err := restoreSharedHomeResources(backupRoot, state.HomeRoot); err != nil {
+		if restoreErr := replaceDirectoryContents(backupRoot, state.HomeRoot, nil); restoreErr != nil {
+			return nil, fmt.Errorf("preserve shared home resources: %w (restore backup failed: %v)", err, restoreErr)
+		}
+		return nil, fmt.Errorf("preserve shared home resources: %w", err)
 	}
 	mergedManifest, err := m.buildManifest(state.HomeRoot)
 	if err != nil {
@@ -557,7 +563,7 @@ func (m *Manager) DiscardTaskWorkspace(ctx context.Context, userID string, taskI
 	if state.Mode == ModeMutable {
 		if err := replaceDirectoryContents(state.HomeRoot, taskRoot, func(relativePath string, entry os.DirEntry) bool {
 			_ = entry
-			return isWorkspaceSidecar(relativePath)
+			return isWorkspaceCopyExcluded(relativePath)
 		}); err != nil {
 			return nil, fmt.Errorf("restore workspace from home: %w", err)
 		}
@@ -597,6 +603,26 @@ func isWorkspaceSidecar(relativePath string) bool {
 	default:
 		return false
 	}
+}
+
+func isWorkspaceSharedResource(relativePath string) bool {
+	slashPath := filepath.ToSlash(relativePath)
+	return slashPath == "skills" || strings.HasPrefix(slashPath, "skills/")
+}
+
+func isWorkspaceCopyExcluded(relativePath string) bool {
+	return isWorkspaceSidecar(relativePath) || isWorkspaceSharedResource(relativePath)
+}
+
+func restoreSharedHomeResources(backupRoot string, homeRoot string) error {
+	skillsSource := filepath.Join(backupRoot, "skills")
+	if _, err := os.Stat(skillsSource); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	return copyDirectoryContents(skillsSource, filepath.Join(homeRoot, "skills"), nil)
 }
 
 func comparableManifestEntries(entries []WorkspaceManifestEntry) []WorkspaceManifestEntry {
@@ -863,7 +889,7 @@ func (m *Manager) buildManifest(root string) (WorkspaceManifest, error) {
 			return err
 		}
 		slashPath := filepath.ToSlash(relativePath)
-		if isWorkspaceSidecar(slashPath) {
+		if isWorkspaceSidecar(slashPath) || isWorkspaceSharedResource(slashPath) {
 			if entry.IsDir() {
 				return filepath.SkipDir
 			}

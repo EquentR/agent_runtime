@@ -46,7 +46,7 @@ func newReadFileTool(env runtimeEnv) coretools.Tool {
 
 			startedAt := time.Now()
 			logToolStart(ctx, "read_file", corelog.String("path", pathArg), corelog.Int("start_line", startLine), corelog.Int("line_count", lineCount))
-			filePath, relPath, err := env.resolveWorkspaceFile(pathArg, true)
+			filePath, relPath, err := env.resolveWorkspaceReadFile(pathArg, true)
 			if err != nil {
 				logToolFailure(ctx, "read_file", err, corelog.String("path", pathArg))
 				return "", err

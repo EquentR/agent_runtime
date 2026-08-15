@@ -118,10 +118,10 @@ func Serve(c *config.Config, version, commit string, buildArgs ...string) {
 	authRuntime.ModelTester = &modelConnectionTester{clientFactory: buildConfiguredLLMClientFactory(c)}
 	resolver = modelLogic.Resolver()
 	commandJudge := newCommandJudge(resolver, buildConfiguredLLMClientFactory(c))
-	toolRegistryFactory := func(workspaceRoot string) (*coretools.Registry, error) {
-		return newDefaultToolRegistryWithJudge(workspaceRoot, c.Tools.WebSearch.BuiltinOptions(), c.Tools.ImageGen.BuiltinOptions(), attachmentStore, attachmentStorage, c.Attachments.ResolvedSentRetention(), commandJudge)
+	toolRegistryFactory := func(workspaceRoot string, skillsRoot string) (*coretools.Registry, error) {
+		return newDefaultToolRegistryWithJudge(workspaceRoot, skillsRoot, c.Tools.WebSearch.BuiltinOptions(), c.Tools.ImageGen.BuiltinOptions(), attachmentStore, attachmentStorage, c.Attachments.ResolvedSentRetention(), commandJudge)
 	}
-	toolRegistry, err := toolRegistryFactory(workspaceRuntime.TemplateRoot)
+	toolRegistry, err := toolRegistryFactory(workspaceRuntime.TemplateRoot, workspaceRuntime.TemplateRoot)
 	if err != nil {
 		log.Panicf("Failed to register builtin tools: %v", err)
 	}
@@ -588,26 +588,27 @@ func newTaskManager(store *coretasks.Store, approvalStore *approvals.Store, inte
 	return coretasks.NewManager(store, options)
 }
 
-func newDefaultToolRegistry(workspaceRoot string, webSearch builtin.WebSearchOptions, imageGen builtin.ImageGenOptions, attachmentStore *attachments.Store, attachmentStorage attachments.Storage, attachmentSentRetention time.Duration) (*coretools.Registry, error) {
-	return newDefaultToolRegistryWithJudge(workspaceRoot, webSearch, imageGen, attachmentStore, attachmentStorage, attachmentSentRetention, nil)
+func newDefaultToolRegistry(workspaceRoot string, skillsRoot string, webSearch builtin.WebSearchOptions, imageGen builtin.ImageGenOptions, attachmentStore *attachments.Store, attachmentStorage attachments.Storage, attachmentSentRetention time.Duration) (*coretools.Registry, error) {
+	return newDefaultToolRegistryWithJudge(workspaceRoot, skillsRoot, webSearch, imageGen, attachmentStore, attachmentStorage, attachmentSentRetention, nil)
 }
 
-func newDefaultToolRegistryWithJudge(workspaceRoot string, webSearch builtin.WebSearchOptions, imageGen builtin.ImageGenOptions, attachmentStore *attachments.Store, attachmentStorage attachments.Storage, attachmentSentRetention time.Duration, commandJudge builtin.CommandJudge) (*coretools.Registry, error) {
+func newDefaultToolRegistryWithJudge(workspaceRoot string, skillsRoot string, webSearch builtin.WebSearchOptions, imageGen builtin.ImageGenOptions, attachmentStore *attachments.Store, attachmentStorage attachments.Storage, attachmentSentRetention time.Duration, commandJudge builtin.CommandJudge) (*coretools.Registry, error) {
 	registry := coretools.NewRegistry()
-	if err := builtin.Register(registry, newDefaultBuiltinOptionsWithJudge(workspaceRoot, webSearch, imageGen, attachmentStore, attachmentStorage, attachmentSentRetention, commandJudge)); err != nil {
+	if err := builtin.Register(registry, newDefaultBuiltinOptionsWithJudge(workspaceRoot, skillsRoot, webSearch, imageGen, attachmentStore, attachmentStorage, attachmentSentRetention, commandJudge)); err != nil {
 		return nil, err
 	}
 	return registry, nil
 }
 
-func newDefaultBuiltinOptions(workspaceRoot string, webSearch builtin.WebSearchOptions, imageGen builtin.ImageGenOptions, attachmentStore *attachments.Store, attachmentStorage attachments.Storage, attachmentSentRetention time.Duration) builtin.Options {
-	return newDefaultBuiltinOptionsWithJudge(workspaceRoot, webSearch, imageGen, attachmentStore, attachmentStorage, attachmentSentRetention, nil)
+func newDefaultBuiltinOptions(workspaceRoot string, skillsRoot string, webSearch builtin.WebSearchOptions, imageGen builtin.ImageGenOptions, attachmentStore *attachments.Store, attachmentStorage attachments.Storage, attachmentSentRetention time.Duration) builtin.Options {
+	return newDefaultBuiltinOptionsWithJudge(workspaceRoot, skillsRoot, webSearch, imageGen, attachmentStore, attachmentStorage, attachmentSentRetention, nil)
 }
 
-func newDefaultBuiltinOptionsWithJudge(workspaceRoot string, webSearch builtin.WebSearchOptions, imageGen builtin.ImageGenOptions, attachmentStore *attachments.Store, attachmentStorage attachments.Storage, attachmentSentRetention time.Duration, commandJudge builtin.CommandJudge) builtin.Options {
+func newDefaultBuiltinOptionsWithJudge(workspaceRoot string, skillsRoot string, webSearch builtin.WebSearchOptions, imageGen builtin.ImageGenOptions, attachmentStore *attachments.Store, attachmentStorage attachments.Storage, attachmentSentRetention time.Duration, commandJudge builtin.CommandJudge) builtin.Options {
 	imageGen.SentRetention = attachmentSentRetention
 	return builtin.Options{
 		WorkspaceRoot:     workspaceRoot,
+		SkillsRoot:        skillsRoot,
 		WorkspaceMode:     builtin.WorkspaceModeFromRoot(workspaceRoot),
 		CommandJudge:      commandJudge,
 		WebSearch:         webSearch,

@@ -121,6 +121,84 @@ func TestCreateTaskWorkspaceCopiesCurrentHomeAndWritesActiveState(t *testing.T) 
 	}
 }
 
+func TestCreateTaskWorkspaceDoesNotCopySharedSkills(t *testing.T) {
+	templateRoot := t.TempDir()
+	workspacesRoot := t.TempDir()
+	writeFile(t, templateRoot, "AGENTS.md", "# Workspace rules\n")
+	writeFile(t, templateRoot, filepath.Join("skills", "review", "SKILL.md"), "# Review skill\n")
+	manager := newTestManager(t, templateRoot, workspacesRoot)
+
+	home, err := manager.EnsureHomeWorkspace(context.Background(), "42")
+	if err != nil {
+		t.Fatalf("EnsureHomeWorkspace() error = %v", err)
+	}
+	assertFileContent(t, home.Root, filepath.Join("skills", "review", "SKILL.md"), "# Review skill\n")
+
+	task, err := manager.CreateTaskWorkspace(context.Background(), "42", "tsk_123", ModeMutable)
+	if err != nil {
+		t.Fatalf("CreateTaskWorkspace() error = %v", err)
+	}
+	assertPathMissing(t, task.Root, "skills")
+	assertFileContent(t, task.Root, "AGENTS.md", "# Workspace rules\n")
+}
+
+func TestConfirmTaskWorkspacePreservesSharedSkillsFromHome(t *testing.T) {
+	templateRoot := t.TempDir()
+	workspacesRoot := t.TempDir()
+	writeFile(t, templateRoot, "AGENTS.md", "# Workspace rules\n")
+	writeFile(t, templateRoot, filepath.Join("skills", "review", "SKILL.md"), "# Review skill\n")
+	manager := newTestManager(t, templateRoot, workspacesRoot)
+
+	home, err := manager.EnsureHomeWorkspace(context.Background(), "42")
+	if err != nil {
+		t.Fatalf("EnsureHomeWorkspace() error = %v", err)
+	}
+	writeFile(t, home.Root, "home-only.txt", "preserve")
+	task, err := manager.CreateTaskWorkspace(context.Background(), "42", "tsk_123", ModeMutable)
+	if err != nil {
+		t.Fatalf("CreateTaskWorkspace() error = %v", err)
+	}
+	writeFile(t, task.Root, "task-only.txt", "merged")
+	if _, err := manager.MarkTaskWorkspacePendingMerge(context.Background(), "42", "tsk_123"); err != nil {
+		t.Fatalf("MarkTaskWorkspacePendingMerge() error = %v", err)
+	}
+	if _, err := manager.ConfirmTaskWorkspace(context.Background(), "42", "tsk_123"); err != nil {
+		t.Fatalf("ConfirmTaskWorkspace() error = %v", err)
+	}
+
+	assertFileContent(t, home.Root, filepath.Join("skills", "review", "SKILL.md"), "# Review skill\n")
+	assertFileContent(t, home.Root, "task-only.txt", "merged")
+	assertFileContent(t, home.Root, "home-only.txt", "preserve")
+}
+
+func TestConfirmTaskWorkspaceIgnoresSharedSkillsInHomeChangedCheck(t *testing.T) {
+	templateRoot := t.TempDir()
+	workspacesRoot := t.TempDir()
+	writeFile(t, templateRoot, "AGENTS.md", "# Workspace rules\n")
+	writeFile(t, templateRoot, filepath.Join("skills", "review", "SKILL.md"), "# Review skill\n")
+	manager := newTestManager(t, templateRoot, workspacesRoot)
+
+	home, err := manager.EnsureHomeWorkspace(context.Background(), "42")
+	if err != nil {
+		t.Fatalf("EnsureHomeWorkspace() error = %v", err)
+	}
+	task, err := manager.CreateTaskWorkspace(context.Background(), "42", "conv_1", ModeMutable)
+	if err != nil {
+		t.Fatalf("CreateTaskWorkspace() error = %v", err)
+	}
+	writeFile(t, task.Root, "notes.txt", "workspace change")
+	if _, err := manager.FinishMutableWorkspace(context.Background(), "42", "conv_1"); err != nil {
+		t.Fatalf("FinishMutableWorkspace() error = %v", err)
+	}
+	writeFile(t, home.Root, filepath.Join("skills", "review", "SKILL.md"), "# Updated review skill\n")
+
+	if _, err := manager.ConfirmTaskWorkspace(context.Background(), "42", "conv_1"); err != nil {
+		t.Fatalf("ConfirmTaskWorkspace() error = %v, want shared skills change ignored", err)
+	}
+	assertFileContent(t, home.Root, filepath.Join("skills", "review", "SKILL.md"), "# Updated review skill\n")
+	assertFileContent(t, home.Root, "notes.txt", "workspace change")
+}
+
 func TestGetWorkspaceStateReturnsNormalizedStateAndMissingFlag(t *testing.T) {
 	templateRoot := t.TempDir()
 	workspacesRoot := t.TempDir()

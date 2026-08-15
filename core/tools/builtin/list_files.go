@@ -36,7 +36,7 @@ func newListFilesTool(env runtimeEnv) coretools.Tool {
 				return "", err
 			}
 
-			dirPath, _, err := env.resolveWorkspaceDir(pathArg, true)
+			dirPath, baseRel, err := env.resolveWorkspaceReadDir(pathArg, true)
 			if err != nil {
 				return "", err
 			}
@@ -78,15 +78,11 @@ func newListFilesTool(env runtimeEnv) coretools.Tool {
 					return nil
 				}
 
-				relToWorkspace, err := filepath.Rel(env.workspaceRoot, path)
-				if err != nil {
-					return err
-				}
 				entryType := "file"
 				if d.IsDir() {
 					entryType = "dir"
 				}
-				entries = append(entries, entry{Path: filepath.ToSlash(relToWorkspace), Type: entryType})
+				entries = append(entries, entry{Path: joinWorkspaceRelative(baseRel, relToDir), Type: entryType})
 
 				if d.IsDir() && maxDepth > 0 && depth == maxDepth {
 					return fs.SkipDir

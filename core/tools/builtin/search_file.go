@@ -45,7 +45,7 @@ func newSearchFileTool(env runtimeEnv) coretools.Tool {
 			if err != nil {
 				return "", err
 			}
-			dirPath, _, err := env.resolveWorkspaceDir(pathArg, true)
+			dirPath, baseRel, err := env.resolveWorkspaceReadDir(pathArg, true)
 			if err != nil {
 				return "", err
 			}
@@ -94,13 +94,9 @@ func newSearchFileTool(env runtimeEnv) coretools.Tool {
 				if err != nil {
 					return err
 				}
-				relToWorkspace, err := filepath.Rel(env.workspaceRoot, path)
-				if err != nil {
-					return err
-				}
 				for _, lineMatch := range findLineMatches(string(data), matcher) {
 					totalMatches++
-					matches = append(matches, match{Path: filepath.ToSlash(relToWorkspace), Line: lineMatch.Line, Text: truncateMatchText(lineMatch.Text, env.outputBudget.matchTextMaxBytes)})
+					matches = append(matches, match{Path: joinWorkspaceRelative(baseRel, relToDir), Line: lineMatch.Line, Text: truncateMatchText(lineMatch.Text, env.outputBudget.matchTextMaxBytes)})
 				}
 				return nil
 			})

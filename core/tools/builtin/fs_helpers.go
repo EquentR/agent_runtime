@@ -21,6 +21,12 @@ func (e runtimeEnv) resolveWorkspacePath(raw string) (string, string, error) {
 		return "", "", fmt.Errorf("path is required")
 	}
 
+	if e.skillsRoot != "" && !samePath(e.skillsRoot, e.workspaceRoot) {
+		if _, ok := sharedSkillPath(trimmed); ok {
+			return "", "", fmt.Errorf("shared skills are read-only: %s", raw)
+		}
+	}
+
 	clean := filepath.Clean(filepath.FromSlash(trimmed))
 	if filepath.IsAbs(clean) {
 		return "", "", fmt.Errorf("absolute paths are not allowed: %s", raw)
@@ -45,6 +51,88 @@ func (e runtimeEnv) resolveWorkspacePath(raw string) (string, string, error) {
 		return "", "", err
 	}
 	return abs, filepath.ToSlash(rel), nil
+}
+
+func (e runtimeEnv) resolveWorkspaceReadPath(raw string) (string, string, error) {
+	if e.skillsRoot != "" && !samePath(e.skillsRoot, e.workspaceRoot) {
+		sharedRel, ok := sharedSkillPath(raw)
+		if ok {
+			skillsRoot := filepath.Clean(e.skillsRoot)
+			abs := filepath.Clean(filepath.Join(skillsRoot, "skills", filepath.FromSlash(sharedRel)))
+			rel, err := filepath.Rel(skillsRoot, abs)
+			if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+				return "", "", fmt.Errorf("path escapes shared skills root: %s", raw)
+			}
+			if err := ensureNoSymlink(abs); err != nil {
+				return "", "", err
+			}
+			workspaceRel := "skills"
+			if sharedRel != "" {
+				workspaceRel = filepath.ToSlash(filepath.Join(workspaceRel, sharedRel))
+			}
+			return abs, workspaceRel, nil
+		}
+	}
+	return e.resolveWorkspacePath(raw)
+}
+
+func (e runtimeEnv) resolveWorkspaceReadFile(raw string, mustExist bool) (string, string, error) {
+	abs, rel, err := e.resolveWorkspaceReadPath(raw)
+	if err != nil {
+		return "", "", err
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		if mustExist || !errors.Is(err, os.ErrNotExist) {
+			return "", "", err
+		}
+		return abs, rel, nil
+	}
+	if info.IsDir() {
+		return "", "", fmt.Errorf("path is a directory: %s", rel)
+	}
+	return abs, rel, nil
+}
+
+func (e runtimeEnv) resolveWorkspaceReadDir(raw string, mustExist bool) (string, string, error) {
+	abs, rel, err := e.resolveWorkspaceReadPath(raw)
+	if err != nil {
+		return "", "", err
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		if mustExist || !errors.Is(err, os.ErrNotExist) {
+			return "", "", err
+		}
+		return abs, rel, nil
+	}
+	if !info.IsDir() {
+		return "", "", fmt.Errorf("path is not a directory: %s", rel)
+	}
+	return abs, rel, nil
+}
+
+func sharedSkillPath(raw string) (string, bool) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", false
+	}
+	clean := filepath.Clean(filepath.FromSlash(trimmed))
+	slash := filepath.ToSlash(clean)
+	if slash == "skills" {
+		return "", true
+	}
+	if strings.HasPrefix(slash, "skills/") {
+		return strings.TrimPrefix(slash, "skills/"), true
+	}
+	return "", false
+}
+
+func joinWorkspaceRelative(baseRel string, childRel string) string {
+	if baseRel == "" || baseRel == "." {
+		return filepath.ToSlash(childRel)
+	}
+	return filepath.ToSlash(filepath.Join(baseRel, childRel))
 }
 
 func (e runtimeEnv) resolveWorkspaceFile(raw string, mustExist bool) (string, string, error) {

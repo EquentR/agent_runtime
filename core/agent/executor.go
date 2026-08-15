@@ -101,7 +101,7 @@ type MemoryFactory func(model *coretypes.LLMModel) (*memory.Manager, error)
 
 type EventSinkFactory func(runtime *coretasks.Runtime) EventSink
 
-type ToolRegistryFactory func(workspaceRoot string) (*tools.Registry, error)
+type ToolRegistryFactory func(workspaceRoot string, skillsRoot string) (*tools.Registry, error)
 
 type ExecutorDependencies struct {
 	Resolver            *ModelResolver
@@ -509,6 +509,7 @@ type executorWorkspaceInfo struct {
 
 func resolveExecutorWorkspace(ctx context.Context, deps ExecutorDependencies, task *coretasks.Task, input RunTaskInput) (string, *tools.Registry, *coreskills.Resolver, executorWorkspaceInfo, error) {
 	workspaceRoot := deps.WorkspaceRoot
+	skillsRoot := workspaceRoot
 	registry := deps.Registry
 	skillsResolver := deps.SkillsResolver
 	info := executorWorkspaceInfo{Mode: normalizeWorkspaceMode(input.WorkspaceMode)}
@@ -528,9 +529,14 @@ func resolveExecutorWorkspace(ctx context.Context, deps ExecutorDependencies, ta
 		return "", nil, nil, info, err
 	}
 	workspaceRoot = taskWorkspace.Root
-	skillsResolver = coreskills.NewResolver(coreskills.NewLoader(workspaceRoot))
+	home, err := deps.WorkspaceManager.EnsureHomeWorkspace(ctx, workspaceUserID)
+	if err != nil {
+		return "", nil, nil, info, err
+	}
+	skillsRoot = home.Root
+	skillsResolver = coreskills.NewResolver(coreskills.NewLoader(skillsRoot))
 	if deps.ToolRegistryFactory != nil {
-		registry, err = deps.ToolRegistryFactory(workspaceRoot)
+		registry, err = deps.ToolRegistryFactory(workspaceRoot, skillsRoot)
 		if err != nil {
 			return "", nil, nil, info, err
 		}

@@ -255,6 +255,48 @@ func TestReadFileReturnsLineWindow(t *testing.T) {
 	}
 }
 
+func TestReadFileMapsSharedSkillResourceToReadOnlyRoot(t *testing.T) {
+	workspace := t.TempDir()
+	skillsRoot := t.TempDir()
+	mustWriteFile(t, filepath.Join(skillsRoot, "skills", "debugging", "checklist.md"), "step 1")
+	registry := newBuiltinRegistry(t, Options{WorkspaceRoot: workspace, SkillsRoot: skillsRoot})
+
+	raw, err := registry.Execute(context.Background(), "read_file", map[string]any{
+		"path": "skills/debugging/checklist.md",
+	})
+	if err != nil {
+		t.Fatalf("Execute(read_file) error = %v", err)
+	}
+	var payload struct {
+		Path    string `json:"path"`
+		Content string `json:"content"`
+	}
+	if err := json.Unmarshal([]byte(raw.Content), &payload); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error = %v", raw.Content, err)
+	}
+	if payload.Path != "skills/debugging/checklist.md" {
+		t.Fatalf("Path = %q, want shared skills path", payload.Path)
+	}
+	if payload.Content != "step 1" {
+		t.Fatalf("Content = %q, want shared skill resource", payload.Content)
+	}
+}
+
+func TestWriteFileRejectsSharedSkillResourcePath(t *testing.T) {
+	workspace := t.TempDir()
+	skillsRoot := t.TempDir()
+	mustWriteFile(t, filepath.Join(skillsRoot, "skills", "debugging", "checklist.md"), "step 1")
+	registry := newBuiltinRegistry(t, Options{WorkspaceRoot: workspace, SkillsRoot: skillsRoot})
+
+	_, err := registry.Execute(context.Background(), "write_file", map[string]any{
+		"path":    "skills/debugging/checklist.md",
+		"content": "tampered",
+	})
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "read-only") {
+		t.Fatalf("Execute(write_file) error = %v, want shared skills read-only rejection", err)
+	}
+}
+
 func TestWriteFileSupportsInsertAndReplace(t *testing.T) {
 	workspace := t.TempDir()
 	target := filepath.Join(workspace, "draft.txt")

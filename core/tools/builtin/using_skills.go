@@ -29,7 +29,7 @@ func newUsingSkillsTool(env runtimeEnv) coretools.Tool {
 			}
 			startedAt := time.Now()
 			logToolStart(ctx, "using_skills")
-			loader := coreskills.NewLoader(env.workspaceRoot)
+			loader := coreskills.NewLoader(env.skillsRoot)
 			skill, err := loader.Get(ctx, name)
 			if err != nil {
 				logToolFailure(ctx, "using_skills", err)

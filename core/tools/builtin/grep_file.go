@@ -36,7 +36,7 @@ func newGrepFileTool(env runtimeEnv) coretools.Tool {
 			if err != nil {
 				return "", err
 			}
-			filePath, relPath, err := env.resolveWorkspaceFile(pathArg, true)
+			filePath, relPath, err := env.resolveWorkspaceReadFile(pathArg, true)
 			if err != nil {
 				return "", err
 			}
