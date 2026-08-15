@@ -1179,6 +1179,43 @@ func TestStartAuditGCLoopDeletesExpiredRuns(t *testing.T) {
 	t.Fatal("expired audit run was not deleted by GC loop")
 }
 
+func TestStartSessionGCLoopDeletesExpiredSessions(t *testing.T) {
+	pkglog.Init(&pkglog.Config{Level: "error"})
+	db := newServeTestDB(t)
+	authLogic, err := logics.NewAuthLogic(db, logics.AuthConfig{})
+	if err != nil {
+		t.Fatalf("NewAuthLogic() error = %v", err)
+	}
+	if err := authLogic.AutoMigrate(); err != nil {
+		t.Fatalf("auth logic migrate error = %v", err)
+	}
+	if err := db.Create(&models.UserSession{
+		ID:        "sess_old",
+		UserID:    1,
+		Username:  "alice",
+		ExpiresAt: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC),
+	}).Error; err != nil {
+		t.Fatalf("Create(expired session) error = %v", err)
+	}
+
+	loopCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	startSessionGCLoop(loopCtx, authLogic, 10*time.Millisecond, time.Nanosecond)
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		var count int64
+		if err := db.Model(&models.UserSession{}).Where("id = ?", "sess_old").Count(&count).Error; err != nil {
+			t.Fatalf("count sessions error = %v", err)
+		}
+		if count == 0 {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("expired session was not deleted by GC loop")
+}
+
 func TestCheckpointDatabaseRunsWalCheckpoint(t *testing.T) {
 	db := newServeTestDB(t)
 	if err := db.Exec("PRAGMA journal_mode=WAL").Error; err != nil {

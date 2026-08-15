@@ -113,6 +113,7 @@ func TestConfigStorageRetentionDefaultsAndZeroDisablesAuditGC(t *testing.T) {
 	if err := yaml.Unmarshal([]byte(`
 storage:
   auditRetention: 720h
+  sessionRetention: 720h
   maintenanceInterval: 24h
 `), &cfg); err != nil {
 		t.Fatalf("yaml.Unmarshal() error = %v", err)
@@ -123,11 +124,15 @@ storage:
 	if got := cfg.Storage.ResolvedMaintenanceInterval(); got != 24*time.Hour {
 		t.Fatalf("cfg.Storage.ResolvedMaintenanceInterval() = %v, want 24h", got)
 	}
+	if got := cfg.Storage.ResolvedSessionRetention(); got != 30*24*time.Hour {
+		t.Fatalf("cfg.Storage.ResolvedSessionRetention() = %v, want 720h", got)
+	}
 
 	var disabled Config
 	if err := yaml.Unmarshal([]byte(`
 storage:
   auditRetention: 0h
+  sessionRetention: 0h
   maintenanceInterval: 0h
 `), &disabled); err != nil {
 		t.Fatalf("yaml.Unmarshal(disabled) error = %v", err)
@@ -137,6 +142,9 @@ storage:
 	}
 	if got := disabled.Storage.ResolvedMaintenanceInterval(); got != 0 {
 		t.Fatalf("disabled.Storage.ResolvedMaintenanceInterval() = %v, want 0", got)
+	}
+	if got := disabled.Storage.ResolvedSessionRetention(); got != 0 {
+		t.Fatalf("disabled.Storage.ResolvedSessionRetention() = %v, want 0", got)
 	}
 }
 
