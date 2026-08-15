@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/EquentR/agent_runtime/app/config"
+	coreaudit "github.com/EquentR/agent_runtime/core/audit"
 	coretasks "github.com/EquentR/agent_runtime/core/tasks"
 	"github.com/EquentR/agent_runtime/pkg/db"
 )
@@ -48,6 +49,16 @@ func TestRunStorageMaintenanceDryRun(t *testing.T) {
 	if _, err := taskStore.AppendEvent(ctx, created.ID, coretasks.EventLogMessage, "info", map[string]any{"Kind": "text_delta", "Text": "he"}); err != nil {
 		t.Fatalf("AppendEvent() error = %v", err)
 	}
+	auditStore := coreaudit.NewStore(db.DB())
+	if _, err := auditStore.CreateRun(ctx, coreaudit.StartRunInput{RunID: "run_legacy", TaskID: "task_legacy", TaskType: "agent.run"}); err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	if _, err := auditStore.CreateArtifact(ctx, "run_legacy", coreaudit.CreateArtifactInput{
+		Kind: coreaudit.ArtifactKindRequestMessages, MimeType: "application/json",
+		Body: map[string]any{"messages": []map[string]any{{"role": "user", "content": "legacy"}}},
+	}); err != nil {
+		t.Fatalf("CreateArtifact() error = %v", err)
+	}
 
 	if err := RunStorageMaintenance(&cfg, false, true, true); err != nil {
 		t.Fatalf("RunStorageMaintenance(apply+vacuum) error = %v", err)
@@ -58,6 +69,13 @@ func TestRunStorageMaintenanceDryRun(t *testing.T) {
 	}
 	if count != 0 {
 		t.Fatalf("CountStreamDeltaEvents() after apply = %d, want 0", count)
+	}
+	legacyCount, err := auditStore.CountLegacyRedundantArtifacts(ctx)
+	if err != nil {
+		t.Fatalf("CountLegacyRedundantArtifacts() error = %v", err)
+	}
+	if legacyCount != 0 {
+		t.Fatalf("CountLegacyRedundantArtifacts() after apply = %d, want 0", legacyCount)
 	}
 	backupEntries, err := os.ReadDir(filepath.Join(cfg.Sqlite.DbDir, "maintenance-backups"))
 	if err != nil {

@@ -940,6 +940,13 @@ func TestStoreCompactLegacyArtifactsAndSumExpiredBytes(t *testing.T) {
 	if compacted != 4 {
 		t.Fatalf("compacted artifact count = %d, want 4", compacted)
 	}
+	legacyCount, err = store.CountLegacyRedundantArtifacts(ctx)
+	if err != nil {
+		t.Fatalf("second CountLegacyRedundantArtifacts() error = %v", err)
+	}
+	if legacyCount != 0 {
+		t.Fatalf("legacy artifact count after compaction = %d, want 0", legacyCount)
+	}
 
 	var artifacts []Artifact
 	if err := db.Where("run_id IN ?", []string{"run_old", "run_recent"}).Find(&artifacts).Error; err != nil {

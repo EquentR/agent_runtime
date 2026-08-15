@@ -401,8 +401,8 @@ func TestAttachmentStoreMarksSentAttachmentExpiredWithoutRemovingMetadata(t *tes
 	if err != nil {
 		t.Fatalf("second GCExpired() error = %v", err)
 	}
-	if processed != 1 {
-		t.Fatalf("second GCExpired() processed = %d, want 1 for expired leftover retry", processed)
+	if processed != 0 {
+		t.Fatalf("second GCExpired() processed = %d, want 0 for retained expired metadata", processed)
 	}
 }
 

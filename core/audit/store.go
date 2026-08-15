@@ -638,6 +638,7 @@ func (s *Store) CountLegacyRedundantArtifacts(ctx context.Context) (int64, error
 	err := s.db.WithContext(ctx).
 		Model(&Artifact{}).
 		Where("kind IN ?", []ArtifactKind{ArtifactKindRequestMessages, ArtifactKindRuntimePromptEnvelope}).
+		Where("redaction_state <> ? OR redaction_state IS NULL", "redacted").
 		Count(&count).Error
 	return count, err
 }
@@ -649,6 +650,7 @@ func (s *Store) CompactLegacyArtifacts(ctx context.Context, limit int) (int64, e
 	}
 	query := s.db.WithContext(ctx).
 		Where("kind IN ?", []ArtifactKind{ArtifactKindRequestMessages, ArtifactKindRuntimePromptEnvelope}).
+		Where("redaction_state <> ? OR redaction_state IS NULL", "redacted").
 		Order("created_at asc").
 		Order("id asc")
 	if limit > 0 {
