@@ -86,12 +86,12 @@ readonly 任务结束后进入可回收终态，过期 workspace 和 backup 能�
 
 ### Checklist
 
-- [ ] 为 readonly 终态和 `CleanupExpired` 编写失败测试。
-- [ ] 补齐 readonly 任务终态流转。
-- [ ] 实现 workspace/backup 保留期与安全删除。
-- [ ] 增加后台 GC loop 和配置。
-- [ ] 运行聚焦测试并确认通过。
-- [ ] 记录任务 checkpoint commit。
+- [x] 为 readonly 终态和 `CleanupExpired` 编写失败测试。
+- [x] 补齐 readonly 任务终态流转。
+- [x] 实现 workspace/backup 保留期与安全删除。
+- [x] 增加后台 GC loop 和配置。
+- [x] 运行聚焦测试并确认通过。
+- [x] 记录任务 checkpoint commit：`58f869a` 实现；`ee6ad6c` 修复配置零值关闭回收与 GC loop 测试。
 
 ## TASK-03: EmitLive 与流式 delta
 
@@ -120,12 +120,12 @@ readonly 任务结束后进入可回收终态，过期 workspace 和 backup 能�
 
 ### Checklist
 
-- [ ] 为 live-only 事件编写失败测试。
-- [ ] 增加 `EmitLive` 并接入 `OnStreamEvent`。
-- [ ] 明确 live 事件序号语义，保证不污染 `after_seq`。
-- [ ] 适配 SSE 重连与前端 transcript。
-- [ ] 运行聚焦测试并确认通过。
-- [ ] 记录任务 checkpoint commit。
+- [x] 为 live-only 事件编写失败测试。
+- [x] 增加 `EmitLive` 并接入 `OnStreamEvent`。
+- [x] 明确 live 事件序号语义，保证不污染 `after_seq`。
+- [x] 适配 SSE 重连与前端 transcript。
+- [x] 运行聚焦测试并确认通过。
+- [x] 记录任务 checkpoint commit：`774117e`。
 
 ## TASK-04: Tool 事件载荷裁剪
 
@@ -154,11 +154,11 @@ readonly 任务结束后进入可回收终态，过期 workspace 和 backup 能�
 
 ### Checklist
 
-- [ ] 为摘要化持久化载荷编写失败测试。
-- [ ] 用 Persistent/Live 分离实现 tool 事件双载荷。
-- [ ] 适配前端 transcript 对缺失 Output 的容忍。
-- [ ] 运行聚焦测试并确认通过。
-- [ ] 记录任务 checkpoint commit。
+- [x] 为摘要化持久化载荷编写失败测试。
+- [x] 用 Persistent/Live 分离实现 tool 事件双载荷。
+- [x] 适配前端 transcript 对缺失 Output 的容忍。
+- [x] 运行聚焦测试并确认通过。
+- [x] 记录任务 checkpoint commit：`fdf554e`。
 
 ## TASK-05: 审计 canonical artifact
 
