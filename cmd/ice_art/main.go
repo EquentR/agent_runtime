@@ -24,12 +24,15 @@ var (
 )
 
 var (
-	configFile          = flag.String("config", "conf/app.yaml", "config file")
-	runtimeMode         = flag.String("runtime-mode", "", "runtime mode (direct, systemd, windows-service)")
-	serviceName         = flag.String("service-name", "IceArt", "service name")
-	updateHelperJob     = flag.String("update-helper-job", "", "internal updater helper job")
-	updateStateOwner    = flag.String("update-state-owner", "", "internal updater state owner")
-	updateProtectedRoot = flag.String("update-protected-root", "", "internal protected updater root")
+	configFile               = flag.String("config", "conf/app.yaml", "config file")
+	runtimeMode              = flag.String("runtime-mode", "", "runtime mode (direct, systemd, windows-service)")
+	serviceName              = flag.String("service-name", "IceArt", "service name")
+	updateHelperJob          = flag.String("update-helper-job", "", "internal updater helper job")
+	updateStateOwner         = flag.String("update-state-owner", "", "internal updater state owner")
+	updateProtectedRoot      = flag.String("update-protected-root", "", "internal protected updater root")
+	storageMaintenanceDryRun = flag.Bool("storage-maintenance-dry-run", false, "print storage maintenance dry run summary")
+	storageMaintenanceApply  = flag.Bool("storage-maintenance-apply", false, "apply storage maintenance cleanup")
+	storageMaintenanceVacuum = flag.Bool("storage-maintenance-vacuum", false, "run storage maintenance and vacuum database")
 )
 
 // init 打印当前构建版本信息，便于启动时快速确认二进制来源。
@@ -46,6 +49,12 @@ func init() {
 // @description Agent Runtime 示例应用 API 文档。
 // @BasePath /api/v1
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "storage-maintenance" {
+		if err := runStorageMaintenanceCommand(os.Args[2:]); err != nil {
+			panic(err)
+		}
+		return
+	}
 	flag.Parse()
 	if strings.TrimSpace(*updateHelperJob) != "" {
 		cfg, err := loadConfig(*configFile)
@@ -53,6 +62,16 @@ func main() {
 			err = commands.RunUpdateHelper(cfg, *updateHelperJob, ReleaseSigningKeyID, ReleaseSigningPublicKey, *runtimeMode, *serviceName, *updateStateOwner, *updateProtectedRoot)
 		}
 		if err != nil {
+			panic(err)
+		}
+		return
+	}
+	if *storageMaintenanceDryRun || *storageMaintenanceApply || *storageMaintenanceVacuum {
+		cfg, err := loadConfig(*configFile)
+		if err != nil {
+			panic(err)
+		}
+		if err := commands.RunStorageMaintenance(cfg, *storageMaintenanceDryRun, *storageMaintenanceApply || *storageMaintenanceVacuum, *storageMaintenanceVacuum); err != nil {
 			panic(err)
 		}
 		return
@@ -70,6 +89,22 @@ func main() {
 	}); err != nil {
 		panic(err)
 	}
+}
+
+func runStorageMaintenanceCommand(args []string) error {
+	flags := flag.NewFlagSet("storage-maintenance", flag.ExitOnError)
+	configPath := flags.String("config", "conf/app.yaml", "config file")
+	dryRun := flags.Bool("dry-run", false, "print storage maintenance dry run summary")
+	apply := flags.Bool("apply", false, "apply storage maintenance cleanup")
+	vacuum := flags.Bool("vacuum", false, "run storage maintenance and vacuum database")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	cfg, err := loadConfig(*configPath)
+	if err != nil {
+		return err
+	}
+	return commands.RunStorageMaintenance(cfg, *dryRun, *apply || *vacuum, *vacuum)
 }
 
 func openConfiguredBrowserWhenReady(cfg *config.Config, waiter func(string) bool, opener func(string) error) {

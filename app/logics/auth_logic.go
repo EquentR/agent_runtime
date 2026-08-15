@@ -405,6 +405,15 @@ func (l *AuthLogic) CleanupExpiredSessions(ctx context.Context, now time.Time, l
 	return deleted, nil
 }
 
+func (l *AuthLogic) CountExpiredSessions(ctx context.Context, now time.Time) (int64, error) {
+	if l == nil || l.db == nil {
+		return 0, fmt.Errorf("auth db is required")
+	}
+	var count int64
+	err := l.db.WithContext(ctx).Model(&models.UserSession{}).Where("expires_at <= ?", now.UTC()).Count(&count).Error
+	return count, err
+}
+
 func normalizeAuthEmail(email string) string {
 	return strings.ToLower(strings.TrimSpace(email))
 }

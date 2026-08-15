@@ -641,6 +641,70 @@ func (s *Store) ListEvents(ctx context.Context, taskID string, afterSeq int64, l
 	return events, nil
 }
 
+func streamDeltaEventQuery(query *gorm.DB) *gorm.DB {
+	patterns := []string{
+		`%"Kind":"text_delta"%`,
+		`%"Kind":"reasoning_delta"%`,
+		`%"Kind":"tool_call_delta"%`,
+		`%"Kind":"usage"%`,
+		`%"Kind":"completed"%`,
+		`%"Kind":"stream_recovery"%`,
+	}
+	query = query.Where("event_type = ?", EventLogMessage)
+	clause := ""
+	args := make([]any, 0, len(patterns))
+	for index, pattern := range patterns {
+		if index > 0 {
+			clause += " OR "
+		}
+		clause += "CAST(payload_json AS TEXT) LIKE ?"
+		args = append(args, pattern)
+	}
+	return query.Where("("+clause+")", args...)
+}
+
+func (s *Store) CountStreamDeltaEvents(ctx context.Context) (int64, error) {
+	if s == nil || s.db == nil {
+		return 0, fmt.Errorf("store db cannot be nil")
+	}
+	var count int64
+	err := streamDeltaEventQuery(s.db.WithContext(ctx).Model(&TaskEvent{})).Count(&count).Error
+	return count, err
+}
+
+func (s *Store) DeleteStreamDeltaEvents(ctx context.Context, limit int) (int64, error) {
+	if s == nil || s.db == nil {
+		return 0, fmt.Errorf("store db cannot be nil")
+	}
+	query := streamDeltaEventQuery(s.db.WithContext(ctx).Model(&TaskEvent{})).Order("id asc")
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	var events []TaskEvent
+	if err := query.Find(&events).Error; err != nil {
+		return 0, err
+	}
+	deleted := int64(0)
+	for _, event := range events {
+		if err := s.db.WithContext(ctx).Delete(&TaskEvent{}, "id = ?", event.ID).Error; err != nil {
+			return deleted, err
+		}
+		deleted++
+	}
+	return deleted, nil
+}
+
+func (s *Store) StreamDeltaEventBytes(ctx context.Context) (int64, error) {
+	if s == nil || s.db == nil {
+		return 0, fmt.Errorf("store db cannot be nil")
+	}
+	var total int64
+	err := streamDeltaEventQuery(s.db.WithContext(ctx).Model(&TaskEvent{})).
+		Select("COALESCE(SUM(LENGTH(payload_json)), 0)").
+		Scan(&total).Error
+	return total, err
+}
+
 // MarkCancelled 将任务推进到 cancelled 终态。
 func (s *Store) MarkCancelled(ctx context.Context, id string, reason any) (*Task, []TaskEvent, error) {
 	return s.finishTask(ctx, id, StatusCancelled, nil, reason)

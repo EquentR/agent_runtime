@@ -1,0 +1,197 @@
+package commands
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/EquentR/agent_runtime/app/config"
+	"github.com/EquentR/agent_runtime/app/migration"
+	"github.com/EquentR/agent_runtime/core/attachments"
+	coreaudit "github.com/EquentR/agent_runtime/core/audit"
+	coretasks "github.com/EquentR/agent_runtime/core/tasks"
+	"github.com/EquentR/agent_runtime/core/workspaces"
+	"github.com/EquentR/agent_runtime/pkg/db"
+	"github.com/EquentR/agent_runtime/pkg/log"
+)
+
+func RunStorageMaintenance(cfg *config.Config, dryRun bool, apply bool, vacuum bool) error {
+	if cfg == nil {
+		return fmt.Errorf("config is required")
+	}
+	log.Init(&cfg.Log)
+	db.Init(&cfg.Sqlite)
+	migration.Bootstrap("0.0.0-maintenance")
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	taskStore := coretasks.NewStore(db.DB())
+	auditStore := coreaudit.NewStore(db.DB())
+	attachmentStorage, err := initAttachmentStorage(cfg.Attachments)
+	if err != nil {
+		return err
+	}
+	attachmentStore := attachments.NewStore(db.DB(), attachmentStorage)
+	workspaceRuntime, err := initWorkspaceRuntime(*cfg)
+	if err != nil {
+		return err
+	}
+	authRuntime, err := initAuthRuntime(db.DB(), cfg.Security)
+	if err != nil {
+		return err
+	}
+
+	auditRetention := cfg.Storage.ResolvedAuditRetention()
+	workspaceOptions := workspaces.CleanupOptions{
+		TaskRetention:   cfg.Workspaces.ResolvedTaskRetention(),
+		BackupRetention: cfg.Workspaces.ResolvedBackupRetention(),
+	}
+
+	if dryRun {
+		taskDeltaCount, err := taskStore.CountStreamDeltaEvents(ctx)
+		if err != nil {
+			return err
+		}
+		taskDeltaBytes, err := taskStore.StreamDeltaEventBytes(ctx)
+		if err != nil {
+			return err
+		}
+		auditRunCount, err := auditStore.CountExpiredRuns(ctx, now, auditRetention)
+		if err != nil {
+			return err
+		}
+		auditArtifactBytes, err := auditStore.SumExpiredRunArtifactBytes(ctx, now, auditRetention)
+		if err != nil {
+			return err
+		}
+		legacyArtifactCount, err := auditStore.CountLegacyRedundantArtifacts(ctx)
+		if err != nil {
+			return err
+		}
+		attachmentCount, err := attachmentStore.CountExpiredAttachments(ctx, now)
+		if err != nil {
+			return err
+		}
+		attachmentBytes, err := attachmentStore.SumExpiredAttachmentBytes(ctx, now)
+		if err != nil {
+			return err
+		}
+		orphanReport, err := attachmentStore.ScanOrphans(ctx)
+		if err != nil {
+			return err
+		}
+		sessionCount, err := authRuntime.AuthLogic.CountExpiredSessions(ctx, now)
+		if err != nil {
+			return err
+		}
+		workspaceReport, err := workspaceRuntime.Manager.CountExpired(ctx, now, workspaceOptions)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("DRY RUN maintenance\n")
+		fmt.Printf("  task stream delta events: %d (%d bytes)\n", taskDeltaCount, taskDeltaBytes)
+		fmt.Printf("  legacy redundant audit artifacts: %d\n", legacyArtifactCount)
+		fmt.Printf("  expired audit runs: %d\n", auditRunCount)
+		fmt.Printf("  expired audit artifact bytes: %d\n", auditArtifactBytes)
+		fmt.Printf("  expired attachments: %d (%d bytes)\n", attachmentCount, attachmentBytes)
+		fmt.Printf("  orphan attachments: %d records, %d files\n", len(orphanReport.Attachments), len(orphanReport.Files))
+		fmt.Printf("  expired sessions: %d\n", sessionCount)
+		fmt.Printf("  expired task workspaces: %d\n", workspaceReport.DeletedTaskWorkspaces)
+		fmt.Printf("  expired backups: %d\n", workspaceReport.DeletedBackups)
+		return nil
+	}
+
+	if !apply {
+		return fmt.Errorf("storage maintenance requires --storage-maintenance-apply or --storage-maintenance-vacuum")
+	}
+
+	totalTaskDeltaDeleted := int64(0)
+	for {
+		deleted, err := taskStore.DeleteStreamDeltaEvents(ctx, 500)
+		if err != nil {
+			return err
+		}
+		totalTaskDeltaDeleted += deleted
+		if deleted == 0 {
+			break
+		}
+	}
+	totalLegacyCompacted := int64(0)
+	for {
+		compacted, err := auditStore.CompactLegacyArtifacts(ctx, 500)
+		if err != nil {
+			return err
+		}
+		totalLegacyCompacted += compacted
+		if compacted == 0 {
+			break
+		}
+	}
+	totalAuditDeleted := 0
+	for {
+		deleted, err := auditStore.CleanupExpiredRuns(ctx, now, auditRetention, 100)
+		if err != nil {
+			return err
+		}
+		totalAuditDeleted += deleted
+		if deleted == 0 {
+			break
+		}
+	}
+	totalAttachmentDeleted := 0
+	for {
+		deleted, err := attachmentStore.GCExpired(ctx, now, 100)
+		if err != nil {
+			return err
+		}
+		totalAttachmentDeleted += deleted
+		if deleted == 0 {
+			break
+		}
+	}
+	orphanReport, err := attachmentStore.CleanupOrphans(ctx, false)
+	if err != nil {
+		return err
+	}
+	totalSessionDeleted := 0
+	for {
+		deleted, err := authRuntime.AuthLogic.CleanupExpiredSessions(ctx, now, 100)
+		if err != nil {
+			return err
+		}
+		totalSessionDeleted += deleted
+		if deleted == 0 {
+			break
+		}
+	}
+	workspaceReport, err := workspaceRuntime.Manager.CleanupExpired(ctx, now, workspaceOptions)
+	if err != nil {
+		return err
+	}
+	if len(workspaceReport.Errors) > 0 {
+		for _, cleanupErr := range workspaceReport.Errors {
+			log.Warnf("Workspace maintenance item failed: %v", cleanupErr)
+		}
+	}
+
+	fmt.Printf("APPLY maintenance\n")
+	fmt.Printf("  task stream delta events deleted: %d\n", totalTaskDeltaDeleted)
+	fmt.Printf("  legacy redundant audit artifacts compacted: %d\n", totalLegacyCompacted)
+	fmt.Printf("  expired audit runs deleted: %d\n", totalAuditDeleted)
+	fmt.Printf("  expired attachments processed: %d\n", totalAttachmentDeleted)
+	fmt.Printf("  orphan attachments cleaned: %d records, %d files\n", len(orphanReport.Attachments), len(orphanReport.Files))
+	fmt.Printf("  expired sessions deleted: %d\n", totalSessionDeleted)
+	fmt.Printf("  expired task workspaces deleted: %d\n", workspaceReport.DeletedTaskWorkspaces)
+	fmt.Printf("  expired backups deleted: %d\n", workspaceReport.DeletedBackups)
+
+	if vacuum {
+		if err := checkpointDatabase(db.DB()); err != nil {
+			return err
+		}
+		if err := db.DB().Exec("VACUUM").Error; err != nil {
+			return err
+		}
+		fmt.Println("VACUUM complete")
+	}
+	return nil
+}

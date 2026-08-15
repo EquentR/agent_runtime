@@ -773,6 +773,55 @@ func (m *Manager) CleanupExpired(ctx context.Context, now time.Time, options Cle
 	return report, nil
 }
 
+func (m *Manager) CountExpired(ctx context.Context, now time.Time, options CleanupOptions) (CleanupReport, error) {
+	report := CleanupReport{}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if options.TaskRetention <= 0 && options.BackupRetention <= 0 {
+		return report, nil
+	}
+	usersRoot, err := m.resolveWorkspacePath("users")
+	if err != nil {
+		return report, err
+	}
+	if err := ensureNoSymlink(usersRoot); err != nil {
+		return report, err
+	}
+	entries, err := os.ReadDir(usersRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return report, nil
+		}
+		return report, err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return report, err
+		}
+		userID := entry.Name()
+		userRoot := filepath.Join(usersRoot, userID)
+		if err := ensureNoSymlink(userRoot); err != nil {
+			report.Errors = append(report.Errors, err)
+			continue
+		}
+		if options.TaskRetention > 0 {
+			count, cleanupErr := m.countExpiredTaskWorkspaces(ctx, userID, now, options.TaskRetention)
+			report.DeletedTaskWorkspaces += count
+			report.Errors = append(report.Errors, cleanupErr...)
+		}
+		if options.BackupRetention > 0 {
+			count, cleanupErr := m.countExpiredBackups(ctx, userID, now, options.BackupRetention)
+			report.DeletedBackups += count
+			report.Errors = append(report.Errors, cleanupErr...)
+		}
+	}
+	return report, nil
+}
+
 func (m *Manager) cleanupExpiredTaskWorkspaces(ctx context.Context, userID string, now time.Time, retention time.Duration) (int, []error) {
 	unlock := m.lockUserWorkspace(userID)
 	defer unlock()
@@ -838,6 +887,66 @@ func (m *Manager) cleanupExpiredTaskWorkspaces(ctx context.Context, userID strin
 	return deleted, cleanupErrors
 }
 
+func (m *Manager) countExpiredTaskWorkspaces(ctx context.Context, userID string, now time.Time, retention time.Duration) (int, []error) {
+	unlock := m.lockUserWorkspace(userID)
+	defer unlock()
+
+	tasksRoot, err := m.resolveWorkspacePath("users", userID, "tasks")
+	if err != nil {
+		return 0, []error{err}
+	}
+	if err := ensureNoSymlink(tasksRoot); err != nil {
+		return 0, []error{err}
+	}
+	entries, err := os.ReadDir(tasksRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, []error{err}
+	}
+
+	count := 0
+	var cleanupErrors []error
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return count, append(cleanupErrors, err)
+		}
+		taskRoot, err := m.resolveWorkspacePath("users", userID, "tasks", entry.Name())
+		if err != nil {
+			cleanupErrors = append(cleanupErrors, err)
+			continue
+		}
+		state, ok, err := m.loadState(taskRoot)
+		if err != nil {
+			cleanupErrors = append(cleanupErrors, err)
+			continue
+		}
+		if !ok {
+			continue
+		}
+		if err := m.normalizeLoadedState(userID, entry.Name(), taskRoot, &state); err != nil {
+			cleanupErrors = append(cleanupErrors, err)
+			continue
+		}
+		if state.State == StateActive || state.State == StatePendingMerge {
+			continue
+		}
+		terminalAt := state.TerminalAt
+		if terminalAt == nil {
+			terminalAt = &state.UpdatedAt
+		}
+		if now.Before(terminalAt.Add(retention)) {
+			continue
+		}
+		count++
+	}
+	return count, cleanupErrors
+}
+
 func (m *Manager) cleanupExpiredBackups(ctx context.Context, userID string, now time.Time, retention time.Duration) (int, []error) {
 	unlock := m.lockUserWorkspace(userID)
 	defer unlock()
@@ -886,6 +995,52 @@ func (m *Manager) cleanupExpiredBackups(ctx context.Context, userID string, now 
 		deleted++
 	}
 	return deleted, cleanupErrors
+}
+
+func (m *Manager) countExpiredBackups(ctx context.Context, userID string, now time.Time, retention time.Duration) (int, []error) {
+	unlock := m.lockUserWorkspace(userID)
+	defer unlock()
+
+	backupsRoot, err := m.resolveWorkspacePath("users", userID, "backups")
+	if err != nil {
+		return 0, []error{err}
+	}
+	if err := ensureNoSymlink(backupsRoot); err != nil {
+		return 0, []error{err}
+	}
+	entries, err := os.ReadDir(backupsRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, []error{err}
+	}
+
+	count := 0
+	var cleanupErrors []error
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return count, append(cleanupErrors, err)
+		}
+		backupRoot, err := m.resolveWorkspacePath("users", userID, "backups", entry.Name())
+		if err != nil {
+			cleanupErrors = append(cleanupErrors, err)
+			continue
+		}
+		info, err := os.Stat(backupRoot)
+		if err != nil {
+			cleanupErrors = append(cleanupErrors, err)
+			continue
+		}
+		if now.Before(info.ModTime().UTC().Add(retention)) {
+			continue
+		}
+		count++
+	}
+	return count, cleanupErrors
 }
 
 func (m *Manager) findPendingMergeWorkspace(userID string, exceptTaskID string) (*TaskWorkspaceSummary, error) {

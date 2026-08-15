@@ -1218,3 +1218,65 @@ func TestStoreUpdateHeartbeatRetriesTransientSQLiteWriteError(t *testing.T) {
 		t.Fatal("heartbeat timestamps = nil, want non-nil")
 	}
 }
+
+func TestStoreDeleteStreamDeltaEventsRemovesOnlyDeltaRows(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	created, _, err := store.CreateTask(ctx, CreateTaskInput{TaskType: "agent.run"})
+	if err != nil {
+		t.Fatalf("CreateTask() error = %v", err)
+	}
+	if _, err := store.AppendEvent(ctx, created.ID, EventLogMessage, "info", map[string]any{"Kind": "text_delta", "Text": "he"}); err != nil {
+		t.Fatalf("AppendEvent(text_delta) error = %v", err)
+	}
+	if _, err := store.AppendEvent(ctx, created.ID, EventTaskStarted, "info", map[string]any{"status": "running"}); err != nil {
+		t.Fatalf("AppendEvent(task.started) error = %v", err)
+	}
+
+	count, err := store.CountStreamDeltaEvents(ctx)
+	if err != nil {
+		t.Fatalf("CountStreamDeltaEvents() error = %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("CountStreamDeltaEvents() = %d, want 1", count)
+	}
+	deltaBytes, err := store.StreamDeltaEventBytes(ctx)
+	if err != nil {
+		t.Fatalf("StreamDeltaEventBytes() error = %v", err)
+	}
+	if deltaBytes <= 0 {
+		t.Fatalf("StreamDeltaEventBytes() = %d, want > 0", deltaBytes)
+	}
+
+	deleted, err := store.DeleteStreamDeltaEvents(ctx, 10)
+	if err != nil {
+		t.Fatalf("DeleteStreamDeltaEvents() error = %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("DeleteStreamDeltaEvents() = %d, want 1", deleted)
+	}
+
+	count, err = store.CountStreamDeltaEvents(ctx)
+	if err != nil {
+		t.Fatalf("second CountStreamDeltaEvents() error = %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("second CountStreamDeltaEvents() = %d, want 0", count)
+	}
+	deltaBytes, err = store.StreamDeltaEventBytes(ctx)
+	if err != nil {
+		t.Fatalf("second StreamDeltaEventBytes() error = %v", err)
+	}
+	if deltaBytes != 0 {
+		t.Fatalf("second StreamDeltaEventBytes() = %d, want 0", deltaBytes)
+	}
+	events, err := store.ListEvents(ctx, created.ID, 0, 0)
+	if err != nil {
+		t.Fatalf("ListEvents() error = %v", err)
+	}
+	for _, event := range events {
+		if event.EventType == EventLogMessage {
+			t.Fatalf("ListEvents() still contains log.message event: %#v", event)
+		}
+	}
+}

@@ -613,6 +613,90 @@ func (s *Store) CleanupExpiredRuns(ctx context.Context, now time.Time, retention
 	return processed, nil
 }
 
+func (s *Store) CountExpiredRuns(ctx context.Context, now time.Time, retention time.Duration) (int64, error) {
+	if s == nil || s.db == nil {
+		return 0, fmt.Errorf("store db cannot be nil")
+	}
+	if retention <= 0 {
+		return 0, nil
+	}
+	var count int64
+	err := s.db.WithContext(ctx).
+		Model(&Run{}).
+		Where("finished_at IS NOT NULL").
+		Where("finished_at <= ?", now.UTC().Add(-retention)).
+		Count(&count).Error
+	return count, err
+}
+
+// CountLegacyRedundantArtifacts 统计仍可压缩的历史 request_messages / runtime_prompt_envelope artifact。
+func (s *Store) CountLegacyRedundantArtifacts(ctx context.Context) (int64, error) {
+	if s == nil || s.db == nil {
+		return 0, fmt.Errorf("store db cannot be nil")
+	}
+	var count int64
+	err := s.db.WithContext(ctx).
+		Model(&Artifact{}).
+		Where("kind IN ?", []ArtifactKind{ArtifactKindRequestMessages, ArtifactKindRuntimePromptEnvelope}).
+		Count(&count).Error
+	return count, err
+}
+
+// CompactLegacyArtifacts 把历史 request_messages / runtime_prompt_envelope 替换为轻量元数据，保留 artifact ID 供 replay 引用。
+func (s *Store) CompactLegacyArtifacts(ctx context.Context, limit int) (int64, error) {
+	if s == nil || s.db == nil {
+		return 0, fmt.Errorf("store db cannot be nil")
+	}
+	query := s.db.WithContext(ctx).
+		Where("kind IN ?", []ArtifactKind{ArtifactKindRequestMessages, ArtifactKindRuntimePromptEnvelope}).
+		Order("created_at asc").
+		Order("id asc")
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	var artifacts []Artifact
+	if err := query.Find(&artifacts).Error; err != nil {
+		return 0, err
+	}
+
+	compacted := int64(0)
+	for _, artifact := range artifacts {
+		bodyJSON := json.RawMessage(fmt.Sprintf(`{"compacted":true,"original_kind":%q}`, artifact.Kind))
+		sum := sha256.Sum256(bodyJSON)
+		result := s.db.WithContext(ctx).Model(&Artifact{}).
+			Where("id = ?", artifact.ID).
+			Updates(map[string]any{
+				"body_json":       bodyJSON,
+				"size_bytes":      int64(len(bodyJSON)),
+				"sha256":          hex.EncodeToString(sum[:]),
+				"redaction_state": normalizeRedactionState("redacted"),
+			})
+		if result.Error != nil {
+			return compacted, result.Error
+		}
+		compacted++
+	}
+	return compacted, nil
+}
+
+// SumExpiredRunArtifactBytes 返回已结束且超过保留期的 run 关联 artifact 总字节数。
+func (s *Store) SumExpiredRunArtifactBytes(ctx context.Context, now time.Time, retention time.Duration) (int64, error) {
+	if s == nil || s.db == nil {
+		return 0, fmt.Errorf("store db cannot be nil")
+	}
+	if retention <= 0 {
+		return 0, nil
+	}
+	var total int64
+	err := s.db.WithContext(ctx).Raw(`
+		SELECT COALESCE(SUM(a.size_bytes), 0)
+		FROM audit_artifacts a
+		JOIN audit_runs r ON r.id = a.run_id
+		WHERE r.finished_at IS NOT NULL AND r.finished_at <= ?
+	`, now.UTC().Add(-retention)).Scan(&total).Error
+	return total, err
+}
+
 func getRunByTaskIDTx(tx *gorm.DB, taskID string) (*Run, error) {
 	var run Run
 	err := tx.First(&run, "task_id = ?", taskID).Error
