@@ -111,6 +111,7 @@ func Serve(c *config.Config, version, commit string, buildArgs ...string) {
 	if err != nil {
 		log.Panicf("Failed to init auth runtime: %v", err)
 	}
+	startSessionGCLoop(globalCtx, authRuntime.AuthLogic, c.Storage.ResolvedMaintenanceInterval(), c.Storage.ResolvedSessionRetention())
 	resolver := &coreagent.ModelResolver{Providers: c.LLM}
 	modelLogic, err := logics.NewModelLogic(db.DB(), c.LLM, authRuntime.SecretCodec)
 	if err != nil {
@@ -530,6 +531,31 @@ func startAuditGCLoop(ctx context.Context, store *coreaudit.Store, interval time
 				}
 				if processed > 0 {
 					log.Infof("Audit GC processed %d expired runs", processed)
+				}
+			}
+		}
+	}()
+}
+
+func startSessionGCLoop(ctx context.Context, authLogic *logics.AuthLogic, interval time.Duration, retention time.Duration) {
+	if ctx == nil || authLogic == nil || interval <= 0 || retention <= 0 {
+		return
+	}
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				processed, err := authLogic.CleanupExpiredSessions(ctx, time.Now().UTC(), 100)
+				if err != nil {
+					log.Warnf("Session GC failed: %v", err)
+					continue
+				}
+				if processed > 0 {
+					log.Infof("Session GC processed %d expired sessions", processed)
 				}
 			}
 		}

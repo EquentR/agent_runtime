@@ -380,6 +380,31 @@ func (l *AuthLogic) Logout(ctx context.Context, sessionID string) error {
 	return l.db.WithContext(ctx).Delete(&models.UserSession{}, "id = ?", sessionID).Error
 }
 
+func (l *AuthLogic) CleanupExpiredSessions(ctx context.Context, now time.Time, limit int) (int, error) {
+	if l == nil || l.db == nil {
+		return 0, fmt.Errorf("auth db is required")
+	}
+	query := l.db.WithContext(ctx).
+		Where("expires_at <= ?", now.UTC()).
+		Order("expires_at asc").
+		Order("id asc")
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	var sessions []models.UserSession
+	if err := query.Find(&sessions).Error; err != nil {
+		return 0, err
+	}
+	deleted := 0
+	for _, session := range sessions {
+		if err := l.db.WithContext(ctx).Delete(&models.UserSession{}, "id = ?", session.ID).Error; err != nil {
+			return deleted, err
+		}
+		deleted++
+	}
+	return deleted, nil
+}
+
 func normalizeAuthEmail(email string) string {
 	return strings.ToLower(strings.TrimSpace(email))
 }

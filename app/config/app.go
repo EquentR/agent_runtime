@@ -27,6 +27,7 @@ const defaultWorkspaceBackupRetention = 30 * 24 * time.Hour
 const defaultWorkspaceGCInterval = time.Hour
 const defaultAuditRetention = 30 * 24 * time.Hour
 const defaultStorageMaintenanceInterval = 24 * time.Hour
+const defaultSessionRetention = 30 * 24 * time.Hour
 
 type Config struct {
 	WorkspaceDir      string                      `yaml:"workspaceDir"`
@@ -284,6 +285,13 @@ func (c StorageConfig) ResolvedMaintenanceInterval() time.Duration {
 		return *c.MaintenanceInterval
 	}
 	return defaultStorageMaintenanceInterval
+}
+
+func (c StorageConfig) ResolvedSessionRetention() time.Duration {
+	if c.SessionRetention != nil {
+		return *c.SessionRetention
+	}
+	return defaultSessionRetention
 }
 
 type AttachmentFilesystemConfig struct {

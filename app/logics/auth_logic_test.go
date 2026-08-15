@@ -502,6 +502,41 @@ func withAuthTestMailer(sender *fakeAuthMailSender, code string) authLogicTestOp
 	}
 }
 
+func TestAuthLogicCleanupExpiredSessionsDeletesOnlyExpired(t *testing.T) {
+	logic := newAuthLogicTestSubject(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	expired := models.UserSession{ID: "sess_expired", UserID: 1, Username: "alice", ExpiresAt: now.Add(-time.Hour)}
+	active := models.UserSession{ID: "sess_active", UserID: 1, Username: "alice", ExpiresAt: now.Add(time.Hour)}
+	if err := logic.db.Create(&expired).Error; err != nil {
+		t.Fatalf("Create(expired) error = %v", err)
+	}
+	if err := logic.db.Create(&active).Error; err != nil {
+		t.Fatalf("Create(active) error = %v", err)
+	}
+
+	processed, err := logic.CleanupExpiredSessions(ctx, now, 10)
+	if err != nil {
+		t.Fatalf("CleanupExpiredSessions() error = %v", err)
+	}
+	if processed != 1 {
+		t.Fatalf("CleanupExpiredSessions() processed = %d, want 1", processed)
+	}
+	var count int64
+	if err := logic.db.Model(&models.UserSession{}).Where("id = ?", expired.ID).Count(&count).Error; err != nil {
+		t.Fatalf("count expired session error = %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expired session count = %d, want 0", count)
+	}
+	if err := logic.db.Model(&models.UserSession{}).Where("id = ?", active.ID).Count(&count).Error; err != nil {
+		t.Fatalf("count active session error = %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("active session count = %d, want 1", count)
+	}
+}
+
 func newAuthLogicTestSubject(t *testing.T, opts ...authLogicTestOption) *AuthLogic {
 	t.Helper()
 
