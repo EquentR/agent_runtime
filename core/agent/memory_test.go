@@ -415,7 +415,12 @@ func TestPrepareConversationContextEmitsMemorySnapshotWhenInitialCompressionOccu
 		t.Fatalf("memory.compressed rendered_summary_tokens_after = %d, want %d", got, wantAfterRenderedSummary)
 	}
 
-	statePayload := requireRecordedEmitPayloadMap(t, runtime.emits, coretasks.EventMemoryContextState)
+	for _, emit := range runtime.emits {
+		if emit.eventType == coretasks.EventMemoryContextState {
+			t.Fatalf("memory.context_state should be live-only, but found in persistent emits")
+		}
+	}
+	statePayload := requireRecordedEmitPayloadMap(t, runtime.liveEmits, coretasks.EventMemoryContextState)
 	if got := requireRecordedEmitInt64(t, statePayload, "summary_tokens"); got != wantAfterSummary {
 		t.Fatalf("memory.context_state summary_tokens = %d, want %d", got, wantAfterSummary)
 	}
@@ -468,6 +473,12 @@ func TestPrepareConversationContextEmitsMemoryEventsWhenCompressionSucceedsBefor
 		switch emit.eventType {
 		case coretasks.EventMemoryCompressed:
 			compressedEmits++
+		case coretasks.EventMemoryContextState:
+			t.Fatalf("memory.context_state should be live-only, but found in persistent emits")
+		}
+	}
+	for _, emit := range runtime.liveEmits {
+		switch emit.eventType {
 		case coretasks.EventMemoryContextState:
 			contextStateEmits++
 		}

@@ -2554,6 +2554,9 @@ func TestRunnerMemoryContextStateUsesLiveOnlyForTaskEvents(t *testing.T) {
 	if len(recorder.liveEmits) != 1 || recorder.liveEmits[0].eventType != coretasks.EventMemoryContextState {
 		t.Fatalf("liveEmits = %#v, want one memory.context_state live event", recorder.liveEmits)
 	}
+	if len(recorder.emits) != 0 {
+		t.Fatalf("persisted emits = %#v, want none for memory.context_state", recorder.emits)
+	}
 }
 
 type stubClient struct {
@@ -2864,7 +2867,6 @@ func (r *recordingTaskRuntime) Emit(_ context.Context, eventType string, level s
 }
 
 func (r *recordingTaskRuntime) EmitLive(_ context.Context, eventType string, level string, payload any) error {
-	r.emits = append(r.emits, recordedEmit{eventType: eventType, level: level, payload: payload})
 	r.liveEmits = append(r.liveEmits, recordedEmit{eventType: eventType, level: level, payload: payload})
 	return nil
 }
