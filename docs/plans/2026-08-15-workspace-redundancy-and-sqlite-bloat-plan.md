@@ -423,7 +423,7 @@ readonly 任务结束后进入可回收终态，过期 workspace 和 backup 能�
 - [x] 为 dry-run/apply/vacuum 编写失败测试。
 - [x] 实现维护命令与历史数据治理步骤。
 - [x] 运行一次 dry-run 并记录结果。
-- [x] 用户确认后执行 apply 与 vacuum（隔离测试覆盖，未对生产数据执行）。
+- [x] 用户确认后执行 apply 与 vacuum（生产数据已执行，DB 从约 183MB 收缩至约 5.7MB）。
 - [x] 运行全量验证并确认通过。
 - [x] 记录任务 checkpoint commit：`32b001e` 实现；`d705ea3` 补体积统计与压缩测试。
 
