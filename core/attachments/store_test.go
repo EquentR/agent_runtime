@@ -451,6 +451,157 @@ func TestAttachmentStoreGCExpiredRetriesAfterStorageDeleteFailure(t *testing.T) 
 	}
 }
 
+func TestAttachmentStoreScanOrphansClassifiesRecordsAndFiles(t *testing.T) {
+	ctx := context.Background()
+	storage, err := NewFilesystemStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFilesystemStore() error = %v", err)
+	}
+	store := newTestStoreWithStorage(t, storage)
+	if err := store.db.Exec(`CREATE TABLE conversations (id TEXT PRIMARY KEY)`).Error; err != nil {
+		t.Fatalf("create conversations table error = %v", err)
+	}
+	if err := store.db.Exec(`CREATE TABLE conversation_messages (id INTEGER PRIMARY KEY, conversation_id TEXT, message_json TEXT)`).Error; err != nil {
+		t.Fatalf("create conversation_messages table error = %v", err)
+	}
+	if err := store.db.Exec(`INSERT INTO conversations (id) VALUES (?)`, "conv_existing").Error; err != nil {
+		t.Fatalf("insert conversation error = %v", err)
+	}
+	if err := store.db.Exec(`INSERT INTO conversation_messages (conversation_id, message_json) VALUES (?, ?)`, "conv_existing", `{"message":{"attachments":[{"id":"att_referenced"}]}}`).Error; err != nil {
+		t.Fatalf("insert conversation message error = %v", err)
+	}
+
+	expiresAt := time.Now().UTC().Add(time.Hour)
+	createOrphanFixture := func(id string, conversationID string, storageKey string, withFile bool) {
+		t.Helper()
+		if withFile {
+			if _, err := storage.PutDraft(ctx, PutDraftInput{StorageKey: storageKey, FileName: "fixture.txt", MimeType: "text/plain", Data: []byte("x")}); err != nil {
+				t.Fatalf("PutDraft(%s) error = %v", storageKey, err)
+			}
+		}
+		if _, err := store.CreateDraft(ctx, CreateDraftInput{
+			ID: id, ConversationID: conversationID, StorageBackend: BackendFilesystem,
+			StorageKey: storageKey, FileName: "fixture.txt", MimeType: "text/plain", SizeBytes: 1, ExpiresAt: &expiresAt,
+		}); err != nil {
+			t.Fatalf("CreateDraft(%s) error = %v", id, err)
+		}
+	}
+	createOrphanFixture("att_referenced", "conv_existing", "drafts/ref.txt", true)
+	createOrphanFixture("att_unreferenced", "conv_existing", "drafts/unref.txt", true)
+	createOrphanFixture("att_missing_conv", "conv_missing", "drafts/missing.txt", true)
+	createOrphanFixture("att_file_missing", "conv_existing", "sent/ghost.txt", false)
+	if _, err := storage.PutDraft(ctx, PutDraftInput{StorageKey: "drafts/orphan.txt", FileName: "orphan.txt", MimeType: "text/plain", Data: []byte("x")}); err != nil {
+		t.Fatalf("PutDraft(orphan) error = %v", err)
+	}
+
+	report, err := store.ScanOrphans(ctx)
+	if err != nil {
+		t.Fatalf("ScanOrphans() error = %v", err)
+	}
+	reasonsByID := make(map[string][]string)
+	for _, orphan := range report.Attachments {
+		reasonsByID[orphan.Attachment.ID] = orphan.Reasons
+	}
+	if len(reasonsByID["att_referenced"]) != 0 {
+		t.Fatalf("referenced attachment reasons = %#v, want none", reasonsByID["att_referenced"])
+	}
+	if !containsReason(reasonsByID["att_missing_conv"], "conversation_missing") || !containsReason(reasonsByID["att_missing_conv"], "unreferenced") {
+		t.Fatalf("missing conversation reasons = %#v, want conversation_missing and unreferenced", reasonsByID["att_missing_conv"])
+	}
+	if !containsReason(reasonsByID["att_unreferenced"], "unreferenced") {
+		t.Fatalf("unreferenced reasons = %#v, want unreferenced", reasonsByID["att_unreferenced"])
+	}
+	if !containsReason(reasonsByID["att_file_missing"], "file_missing") {
+		t.Fatalf("file missing reasons = %#v, want file_missing", reasonsByID["att_file_missing"])
+	}
+	foundOrphanFile := false
+	for _, orphanFile := range report.Files {
+		if orphanFile.StorageKey == "drafts/orphan.txt" {
+			foundOrphanFile = true
+		}
+	}
+	if !foundOrphanFile {
+		t.Fatalf("orphan files = %#v, want drafts/orphan.txt", report.Files)
+	}
+}
+
+func TestAttachmentStoreCleanupOrphansDryRunAndApply(t *testing.T) {
+	ctx := context.Background()
+	storage, err := NewFilesystemStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFilesystemStore() error = %v", err)
+	}
+	store := newTestStoreWithStorage(t, storage)
+	if err := store.db.Exec(`CREATE TABLE conversations (id TEXT PRIMARY KEY)`).Error; err != nil {
+		t.Fatalf("create conversations table error = %v", err)
+	}
+	if err := store.db.Exec(`CREATE TABLE conversation_messages (id INTEGER PRIMARY KEY, conversation_id TEXT, message_json TEXT)`).Error; err != nil {
+		t.Fatalf("create conversation_messages table error = %v", err)
+	}
+	if err := store.db.Exec(`INSERT INTO conversations (id) VALUES (?)`, "conv_existing").Error; err != nil {
+		t.Fatalf("insert conversation error = %v", err)
+	}
+
+	expiresAt := time.Now().UTC().Add(time.Hour)
+	if _, err := storage.PutDraft(ctx, PutDraftInput{StorageKey: "drafts/unref.txt", FileName: "unref.txt", MimeType: "text/plain", Data: []byte("x")}); err != nil {
+		t.Fatalf("PutDraft() error = %v", err)
+	}
+	if _, err := store.CreateDraft(ctx, CreateDraftInput{
+		ID: "att_unref", ConversationID: "conv_existing", StorageBackend: BackendFilesystem,
+		StorageKey: "drafts/unref.txt", FileName: "unref.txt", MimeType: "text/plain", SizeBytes: 1, ExpiresAt: &expiresAt,
+	}); err != nil {
+		t.Fatalf("CreateDraft() error = %v", err)
+	}
+	if _, err := storage.PutDraft(ctx, PutDraftInput{StorageKey: "drafts/orphan.txt", FileName: "orphan.txt", MimeType: "text/plain", Data: []byte("x")}); err != nil {
+		t.Fatalf("PutDraft(orphan) error = %v", err)
+	}
+
+	report, err := store.CleanupOrphans(ctx, true)
+	if err != nil {
+		t.Fatalf("CleanupOrphans(dry-run) error = %v", err)
+	}
+	if len(report.Attachments) != 1 || len(report.Files) != 1 {
+		t.Fatalf("dry-run report = %#v, want one attachment and one file", report)
+	}
+	if _, err := storage.Stat(ctx, "drafts/unref.txt"); err != nil {
+		t.Fatalf("dry-run must not delete object: %v", err)
+	}
+	loaded, err := store.GetAttachment(ctx, "att_unref")
+	if err != nil {
+		t.Fatalf("GetAttachment() error = %v", err)
+	}
+	if loaded.Status != StatusDraft {
+		t.Fatalf("dry-run status = %q, want unchanged draft", loaded.Status)
+	}
+
+	report, err = store.CleanupOrphans(ctx, false)
+	if err != nil {
+		t.Fatalf("CleanupOrphans(apply) error = %v", err)
+	}
+	if _, err := storage.Stat(ctx, "drafts/unref.txt"); !errors.Is(err, ErrObjectNotFound) {
+		t.Fatalf("unreferenced object should be deleted, Stat error = %v", err)
+	}
+	if _, err := storage.Stat(ctx, "drafts/orphan.txt"); !errors.Is(err, ErrObjectNotFound) {
+		t.Fatalf("orphan file should be deleted, Stat error = %v", err)
+	}
+	loaded, err = store.GetAttachment(ctx, "att_unref")
+	if err != nil {
+		t.Fatalf("GetAttachment() error = %v", err)
+	}
+	if loaded.Status != StatusExpired {
+		t.Fatalf("applied status = %q, want expired", loaded.Status)
+	}
+}
+
+func containsReason(reasons []string, want string) bool {
+	for _, reason := range reasons {
+		if reason == want {
+			return true
+		}
+	}
+	return false
+}
+
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
 
@@ -495,6 +646,10 @@ func (f *failingDeleteStorage) Delete(_ context.Context, storageKey string) erro
 
 func (f *failingDeleteStorage) Stat(context.Context, string) (ObjectMeta, error) {
 	return ObjectMeta{}, ErrObjectNotFound
+}
+
+func (f *failingDeleteStorage) List(context.Context) ([]ObjectMeta, error) {
+	return nil, nil
 }
 
 func (f *failingDeleteStorage) GCExpired(context.Context, time.Time, int) (int, error) {

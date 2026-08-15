@@ -238,6 +238,48 @@ func (s *FilesystemStore) Stat(ctx context.Context, storageKey string) (ObjectMe
 	}, nil
 }
 
+// List 返回存储根目录下除 .meta.json 外的所有对象元数据。
+func (s *FilesystemStore) List(ctx context.Context) ([]ObjectMeta, error) {
+	if err := s.requireStore(); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	var objects []ObjectMeta
+	err := filepath.WalkDir(s.root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if entry.IsDir() || strings.HasSuffix(entry.Name(), ".meta.json") {
+			return nil
+		}
+		rel, err := filepath.Rel(s.root, path)
+		if err != nil {
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		objects = append(objects, ObjectMeta{
+			StorageKey: filepath.ToSlash(rel),
+			FileName:   entry.Name(),
+			SizeBytes:  info.Size(),
+			ModTime:    info.ModTime().UTC(),
+		})
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return objects, nil
+}
+
 func (s *FilesystemStore) GCExpired(ctx context.Context, now time.Time, limit int) (int, error) {
 	if err := s.requireStore(); err != nil {
 		return 0, err

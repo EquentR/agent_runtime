@@ -388,7 +388,12 @@ func TestBuildBudgetedRequestEmitsAuthoritativeMemoryContextStateAndCompressionT
 		t.Fatalf("memory.compressed total_tokens_after = %d, want %d", got, wantAfterTotal)
 	}
 
-	statePayload := requireRecordedEmitPayloadMap(t, runtime.emits, coretasks.EventMemoryContextState)
+	for _, emit := range runtime.emits {
+		if emit.eventType == coretasks.EventMemoryContextState {
+			t.Fatalf("memory.context_state should be live-only, but found in persistent emits")
+		}
+	}
+	statePayload := requireRecordedEmitPayloadMap(t, runtime.liveEmits, coretasks.EventMemoryContextState)
 	if got := requireRecordedEmitInt64(t, statePayload, "short_term_tokens"); got != wantAfterShort {
 		t.Fatalf("memory.context_state short_term_tokens = %d, want %d", got, wantAfterShort)
 	}
@@ -431,7 +436,7 @@ func TestBuildBudgetedRequestUsesValidatedRenderedSummaryBudgetSemantics(t *test
 		t.Fatalf("buildBudgetedRequest() error = %v", err)
 	}
 
-	statePayload := requireRecordedEmitPayloadMap(t, runtime.emits, coretasks.EventMemoryContextState)
+	statePayload := requireRecordedEmitPayloadMap(t, runtime.liveEmits, coretasks.EventMemoryContextState)
 	if got := requireRecordedEmitInt64(t, statePayload, "summary_limit"); got != 10 {
 		t.Fatalf("memory.context_state summary_limit = %d, want 10", got)
 	}
@@ -491,6 +496,12 @@ func TestBuildBudgetedRequestEmitsMemoryEventsWhenFirstPassCompressionPrecedesBl
 		case coretasks.EventMemoryCompressed:
 			compressedEmits++
 		case coretasks.EventMemoryContextState:
+			t.Fatalf("memory.context_state should be live-only, but found in persistent emits")
+		}
+	}
+	for _, emit := range runtime.liveEmits {
+		switch emit.eventType {
+		case coretasks.EventMemoryContextState:
 			contextStateEmits++
 		}
 	}
@@ -549,6 +560,12 @@ func TestBuildBudgetedRequestEmitsMemoryEventsWhenReserveAwareCompressionStillEn
 		case coretasks.EventMemoryCompressed:
 			compressedEmits++
 		case coretasks.EventMemoryContextState:
+			t.Fatalf("memory.context_state should be live-only, but found in persistent emits")
+		}
+	}
+	for _, emit := range runtime.liveEmits {
+		switch emit.eventType {
+		case coretasks.EventMemoryContextState:
 			contextStateEmits++
 		}
 	}
@@ -603,6 +620,12 @@ func TestBuildBudgetedRequestEmitsMemoryEventsWhenPromptBuildFailsAfterCompressi
 		switch emit.eventType {
 		case coretasks.EventMemoryCompressed:
 			compressedEmits++
+		case coretasks.EventMemoryContextState:
+			t.Fatalf("memory.context_state should be live-only, but found in persistent emits")
+		}
+	}
+	for _, emit := range runtime.liveEmits {
+		switch emit.eventType {
 		case coretasks.EventMemoryContextState:
 			contextStateEmits++
 		}

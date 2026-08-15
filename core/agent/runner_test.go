@@ -936,7 +936,14 @@ func TestRunnerToolContextCarriesMetadataToolCallAndEmitter(t *testing.T) {
 	if _, err := runner.Run(context.Background(), RunInput{Messages: []model.Message{{Role: model.RoleUser, Content: "capture"}}, Tools: registry.List()}); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if len(recorder.emits) == 0 || recorder.emits[0].eventType != coretasks.EventLogMessage {
+	foundToolLog := false
+	for _, emit := range recorder.emits {
+		if emit.eventType == coretasks.EventLogMessage {
+			foundToolLog = true
+			break
+		}
+	}
+	if !foundToolLog {
 		t.Fatalf("recorder.emits = %#v, want tool-emitted log.message", recorder.emits)
 	}
 }

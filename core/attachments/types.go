@@ -91,6 +91,7 @@ type Storage interface {
 	Open(ctx context.Context, storageKey string) (io.ReadCloser, ObjectMeta, error)
 	Delete(ctx context.Context, storageKey string) error
 	Stat(ctx context.Context, storageKey string) (ObjectMeta, error)
+	List(ctx context.Context) ([]ObjectMeta, error)
 	GCExpired(ctx context.Context, now time.Time, limit int) (int, error)
 }
 

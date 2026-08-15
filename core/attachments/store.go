@@ -169,6 +169,20 @@ func (s *Store) ListExpiredAttachments(ctx context.Context, now time.Time, limit
 	return attachments, nil
 }
 
+func (s *Store) CountExpiredAttachments(ctx context.Context, now time.Time) (int64, error) {
+	if err := s.requireDB(); err != nil {
+		return 0, err
+	}
+	var count int64
+	err := s.db.WithContext(ctx).
+		Model(&Attachment{}).
+		Where("status IN ?", []Status{StatusDraft, StatusSent, StatusExpired}).
+		Where("expires_at IS NOT NULL").
+		Where("expires_at <= ?", now.UTC()).
+		Count(&count).Error
+	return count, err
+}
+
 func (s *Store) GCExpired(ctx context.Context, now time.Time, limit int) (int, error) {
 	if err := s.requireDB(); err != nil {
 		return 0, err
@@ -226,6 +240,131 @@ func (s *Store) GCExpired(ctx context.Context, now time.Time, limit int) (int, e
 		processed++
 	}
 	return processed, nil
+}
+
+// OrphanAttachment 描述仍保留在数据库但已失去有效引用的附件。
+type OrphanAttachment struct {
+	Attachment Attachment
+	Reasons    []string
+}
+
+// OrphanFile 描述存储中存在但没有数据库记录的附件文件。
+type OrphanFile struct {
+	StorageKey string
+	FileName   string
+}
+
+// OrphanReport 汇总孤立附件扫描结果。
+type OrphanReport struct {
+	Attachments []OrphanAttachment
+	Files       []OrphanFile
+}
+
+// ScanOrphans 识别孤立附件：会话已删除、无会话消息引用、存储文件缺失，以及存储中无记录的文件。
+func (s *Store) ScanOrphans(ctx context.Context) (OrphanReport, error) {
+	if err := s.requireDB(); err != nil {
+		return OrphanReport{}, err
+	}
+	var attachments []Attachment
+	if err := s.db.WithContext(ctx).Find(&attachments).Error; err != nil {
+		return OrphanReport{}, err
+	}
+
+	report := OrphanReport{}
+	for _, attachment := range attachments {
+		reasons := make([]string, 0, 3)
+		if conversationID := strings.TrimSpace(attachment.ConversationID); conversationID != "" {
+			var conversationCount int64
+			if err := s.db.WithContext(ctx).Table("conversations").Where("id = ?", conversationID).Count(&conversationCount).Error; err != nil {
+				return OrphanReport{}, err
+			}
+			if conversationCount == 0 {
+				reasons = append(reasons, "conversation_missing")
+			}
+		}
+		var referenceCount int64
+		pattern := fmt.Sprintf("%%\"id\":\"%s\"%%", escapeLike(attachment.ID))
+		if err := s.db.WithContext(ctx).Table("conversation_messages").
+			Where("message_json LIKE ? ESCAPE '\\'", pattern).
+			Count(&referenceCount).Error; err != nil {
+			return OrphanReport{}, err
+		}
+		if referenceCount == 0 {
+			reasons = append(reasons, "unreferenced")
+		}
+		if s.storage != nil && strings.TrimSpace(attachment.StorageKey) != "" {
+			if _, err := s.storage.Stat(ctx, attachment.StorageKey); err != nil {
+				if errors.Is(err, ErrObjectNotFound) {
+					reasons = append(reasons, "file_missing")
+				} else {
+					return OrphanReport{}, err
+				}
+			}
+		}
+		if len(reasons) > 0 {
+			report.Attachments = append(report.Attachments, OrphanAttachment{Attachment: attachment, Reasons: reasons})
+		}
+	}
+
+	if s.storage != nil {
+		objects, err := s.storage.List(ctx)
+		if err != nil {
+			return OrphanReport{}, err
+		}
+		knownKeys := make(map[string]struct{}, len(attachments))
+		for _, attachment := range attachments {
+			knownKeys[attachment.StorageKey] = struct{}{}
+		}
+		for _, object := range objects {
+			if _, ok := knownKeys[object.StorageKey]; !ok {
+				report.Files = append(report.Files, OrphanFile{StorageKey: object.StorageKey, FileName: object.FileName})
+			}
+		}
+	}
+	return report, nil
+}
+
+// CleanupOrphans 扫描孤立附件；dryRun 为 true 时只报告不修改。
+func (s *Store) CleanupOrphans(ctx context.Context, dryRun bool) (OrphanReport, error) {
+	if err := s.requireDB(); err != nil {
+		return OrphanReport{}, err
+	}
+	report, err := s.ScanOrphans(ctx)
+	if err != nil || dryRun {
+		return report, err
+	}
+
+	for _, orphan := range report.Attachments {
+		if s.storage != nil && strings.TrimSpace(orphan.Attachment.StorageKey) != "" {
+			if err := s.storage.Delete(ctx, orphan.Attachment.StorageKey); err != nil && !errors.Is(err, ErrObjectNotFound) {
+				return report, err
+			}
+		}
+		now := time.Now().UTC()
+		result := s.db.WithContext(ctx).Model(&Attachment{}).
+			Where("id = ?", orphan.Attachment.ID).
+			Updates(map[string]any{
+				"status":     StatusExpired,
+				"updated_at": now,
+				"expires_at": &now,
+			})
+		if result.Error != nil {
+			return report, result.Error
+		}
+	}
+	for _, orphanFile := range report.Files {
+		if s.storage == nil {
+			continue
+		}
+		if err := s.storage.Delete(ctx, orphanFile.StorageKey); err != nil && !errors.Is(err, ErrObjectNotFound) {
+			return report, err
+		}
+	}
+	return report, nil
+}
+
+func escapeLike(value string) string {
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(value)
 }
 
 func (s *Store) requireDB() error {
