@@ -89,6 +89,7 @@ type Manager struct {
 
 	mu            sync.RWMutex
 	maintenanceMu sync.RWMutex
+	creationMu    sync.RWMutex
 	executors     map[string]Executor
 	activeCancel  map[string]context.CancelFunc
 	claimsPaused  bool
@@ -181,7 +182,10 @@ func (m *Manager) CreateTask(ctx context.Context, input CreateTaskInput) (*Task,
 		return nil, err
 	}
 	corelog.Info("task created", corelog.String("component", "tasks"), corelog.String("module", "task_manager"), corelog.String("task_id", task.ID), corelog.String("task_type", task.TaskType), corelog.String("status", string(task.Status)))
+	// creationMu 只串行化审计事件写入，不让 worker 在 run.created 前写入 run.started。
+	m.creationMu.Lock()
 	m.recordTaskCreated(task)
+	m.creationMu.Unlock()
 	m.publish(events...)
 	return task, nil
 }
@@ -491,7 +495,9 @@ func (m *Manager) RetryTask(ctx context.Context, id string) (*Task, error) {
 	if err != nil {
 		return nil, err
 	}
+	m.creationMu.Lock()
 	m.recordTaskCreated(task)
+	m.creationMu.Unlock()
 	m.publish(events...)
 	return task, nil
 }
@@ -608,7 +614,10 @@ func (m *Manager) runWorker(ctx context.Context, workerIndex int) {
 		}
 
 		corelog.Info("task claimed", corelog.String("component", "tasks"), corelog.String("module", "task_manager"), corelog.String("task_id", task.ID), corelog.String("task_type", task.TaskType), corelog.String("runner_id", m.runnerID), corelog.Int("worker_index", workerIndex))
+		// 等待创建方完成 run.created 审计事件，再写 run.started。
+		m.creationMu.RLock()
 		m.recordTaskStarted(task)
+		m.creationMu.RUnlock()
 		m.publish(events...)
 		m.executeTask(ctx, task)
 	}
