@@ -455,6 +455,9 @@ func TestRunnerRunStreamRecordsRuntimePromptEnvelopeArtifact(t *testing.T) {
 	if _, ok := promptPayload["segments"]; ok {
 		t.Fatalf("prompt payload = %#v, want compact payload without segments", promptPayload)
 	}
+	if promptPayload["message_count"] != float64(2) {
+		t.Fatalf("prompt payload = %#v, want message_count=2", promptPayload)
+	}
 	if promptPayload["prompt_message_count"] != float64(1) {
 		t.Fatalf("prompt payload = %#v, want prompt_message_count=1", promptPayload)
 	}
@@ -475,6 +478,9 @@ func TestRunnerRunStreamRecordsRuntimePromptEnvelopeArtifact(t *testing.T) {
 
 	promptArtifact := recorder.requireArtifactByKind(t, "run_stream_1", coreaudit.ArtifactKindRuntimePromptEnvelope)
 	envelope := decodeRuntimePromptEnvelopeArtifact(t, promptArtifact)
+	if envelope.MessageCount != 2 {
+		t.Fatalf("runtime prompt message_count = %d, want 2", envelope.MessageCount)
+	}
 	if envelope.PromptMessageCount != 1 {
 		t.Fatalf("runtime prompt prompt_message_count = %d, want 1", envelope.PromptMessageCount)
 	}
@@ -627,6 +633,9 @@ func TestRunnerRunStreamRecordsPromptArtifactsPerStepWithPhaseAwareInjection(t *
 	if stepOnePromptPayload["scene"] != "agent.run.review" {
 		t.Fatalf("step 1 prompt payload = %#v, want scene=agent.run.review", stepOnePromptPayload)
 	}
+	if stepOnePromptPayload["message_count"] != float64(3) {
+		t.Fatalf("step 1 prompt payload = %#v, want message_count=3", stepOnePromptPayload)
+	}
 	if stepOnePromptPayload["prompt_message_count"] != float64(2) {
 		t.Fatalf("step 1 prompt payload = %#v, want prompt_message_count=2", stepOnePromptPayload)
 	}
@@ -646,6 +655,9 @@ func TestRunnerRunStreamRecordsPromptArtifactsPerStepWithPhaseAwareInjection(t *
 	}
 	stepTwoPromptEvent := recorder.requireEventForStep(t, "run_stream_prompt_steps", "prompt.resolved", 2)
 	stepTwoPromptPayload := decodeAuditPayload(t, stepTwoPromptEvent)
+	if stepTwoPromptPayload["message_count"] != float64(6) {
+		t.Fatalf("step 2 prompt payload = %#v, want message_count=6", stepTwoPromptPayload)
+	}
 	if stepTwoPromptPayload["prompt_message_count"] != float64(3) {
 		t.Fatalf("step 2 prompt payload = %#v, want prompt_message_count=3", stepTwoPromptPayload)
 	}
@@ -662,6 +674,9 @@ func TestRunnerRunStreamRecordsPromptArtifactsPerStepWithPhaseAwareInjection(t *
 	}
 
 	firstPrompt := decodeRuntimePromptEnvelopeArtifact(t, promptArtifacts[0])
+	if firstPrompt.MessageCount != 3 {
+		t.Fatalf("step 1 runtime prompt message_count = %d, want 3", firstPrompt.MessageCount)
+	}
 	if len(firstPrompt.Segments) != 2 {
 		t.Fatalf("step 1 runtime prompt segment count = %d, want 2", len(firstPrompt.Segments))
 	}
@@ -682,6 +697,9 @@ func TestRunnerRunStreamRecordsPromptArtifactsPerStepWithPhaseAwareInjection(t *
 	}
 
 	secondPrompt := decodeRuntimePromptEnvelopeArtifact(t, promptArtifacts[1])
+	if secondPrompt.MessageCount != 6 {
+		t.Fatalf("step 2 runtime prompt message_count = %d, want 6", secondPrompt.MessageCount)
+	}
 	if secondPrompt.SegmentCount != 3 {
 		t.Fatalf("step 2 runtime prompt segment count = %d, want 3", secondPrompt.SegmentCount)
 	}
@@ -1059,6 +1077,7 @@ type resolvedPromptAuditArtifact struct {
 type runtimePromptEnvelopeAuditArtifact struct {
 	Segments           []runnerPromptSegmentSummary `json:"segments,omitempty"`
 	SegmentCount       int                          `json:"segment_count"`
+	MessageCount       int                          `json:"message_count"`
 	PromptMessageCount int                          `json:"prompt_message_count"`
 	PhaseSegmentCounts map[string]int               `json:"phase_segment_counts,omitempty"`
 	SourceCounts       map[string]int               `json:"source_counts,omitempty"`

@@ -19,6 +19,7 @@ type runnerPromptSegmentSummary struct {
 
 type runnerRuntimePromptArtifact struct {
 	Segments           []runnerPromptSegmentSummary `json:"segments,omitempty"`
+	MessageCount       int                          `json:"message_count"`
 	PromptMessageCount int                          `json:"prompt_message_count"`
 	SegmentCount       int                          `json:"segment_count"`
 	PhaseSegmentCounts map[string]int               `json:"phase_segment_counts,omitempty"`
@@ -29,6 +30,7 @@ func buildRunnerRuntimePromptArtifact(options Options, buildResult runtimeprompt
 	segments := filterRuntimePromptSegmentsForStep(buildResult.Envelope.Segments, buildResult.AfterToolTurn)
 	return runnerRuntimePromptArtifact{
 		Segments:           summarizeRuntimePromptSegments(segments),
+		MessageCount:       len(requestMessages),
 		PromptMessageCount: promptMessageCountForRuntimePrompt(buildResult, requestMessages),
 		SegmentCount:       len(segments),
 		PhaseSegmentCounts: countRuntimePromptSegmentsByPhase(segments),
@@ -38,6 +40,7 @@ func buildRunnerRuntimePromptArtifact(options Options, buildResult runtimeprompt
 
 func buildRunnerRuntimePromptPayload(options Options, artifact runnerRuntimePromptArtifact) map[string]any {
 	payload := map[string]any{
+		"message_count":        artifact.MessageCount,
 		"prompt_message_count": artifact.PromptMessageCount,
 		"segment_count":        artifact.SegmentCount,
 	}

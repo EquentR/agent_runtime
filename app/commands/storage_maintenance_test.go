@@ -36,7 +36,7 @@ func TestRunStorageMaintenanceDryRun(t *testing.T) {
 		},
 		Security: config.SecurityConfig{AppSecret: "maintenance-test"},
 	}
-	if err := RunStorageMaintenance(&cfg, true, false, false); err != nil {
+	if err := RunStorageMaintenance(&cfg, "0.1.3-test", true, false, false); err != nil {
 		t.Fatalf("RunStorageMaintenance(dry run) error = %v", err)
 	}
 
@@ -60,7 +60,7 @@ func TestRunStorageMaintenanceDryRun(t *testing.T) {
 		t.Fatalf("CreateArtifact() error = %v", err)
 	}
 
-	if err := RunStorageMaintenance(&cfg, false, true, true); err != nil {
+	if err := RunStorageMaintenance(&cfg, "0.1.3-test", false, true, true); err != nil {
 		t.Fatalf("RunStorageMaintenance(apply+vacuum) error = %v", err)
 	}
 	count, err := taskStore.CountStreamDeltaEvents(ctx)
@@ -83,6 +83,21 @@ func TestRunStorageMaintenanceDryRun(t *testing.T) {
 	}
 	if len(backupEntries) == 0 {
 		t.Fatal("maintenance backup file missing after apply")
+	}
+}
+
+func TestRunStorageMaintenanceRejectsMissingVersion(t *testing.T) {
+	cfg := config.Config{}
+	if err := RunStorageMaintenance(&cfg, "", false, false, false); err == nil {
+		t.Fatal("RunStorageMaintenance(empty version) error = nil, want non-nil")
+	}
+}
+
+func TestRunStorageMaintenanceRejectsVacuumWhenDisabled(t *testing.T) {
+	disabled := false
+	cfg := config.Config{Storage: config.StorageConfig{VacuumEnabled: &disabled}}
+	if err := RunStorageMaintenance(&cfg, "0.1.3-test", false, true, true); err == nil {
+		t.Fatal("RunStorageMaintenance(vacuum disabled) error = nil, want non-nil")
 	}
 }
 

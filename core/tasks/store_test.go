@@ -1280,3 +1280,83 @@ func TestStoreDeleteStreamDeltaEventsRemovesOnlyDeltaRows(t *testing.T) {
 		}
 	}
 }
+
+func TestStoreDeleteExpiredEventsRemovesOnlyFinishedTaskEventsPastRetention(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	expired, _, err := store.CreateTask(ctx, CreateTaskInput{TaskType: "agent.run"})
+	if err != nil {
+		t.Fatalf("CreateTask(expired) error = %v", err)
+	}
+	if _, _, err := store.MarkSucceeded(ctx, expired.ID, map[string]any{"message": "done"}); err != nil {
+		t.Fatalf("MarkSucceeded(expired) error = %v", err)
+	}
+	if _, err := store.AppendEvent(ctx, expired.ID, EventTaskStarted, "info", map[string]any{"status": "running"}); err != nil {
+		t.Fatalf("AppendEvent(expired) error = %v", err)
+	}
+	if err := store.db.Model(&Task{}).Where("id = ?", expired.ID).Update("finished_at", now.Add(-8*24*time.Hour)).Error; err != nil {
+		t.Fatalf("backdate finished_at error = %v", err)
+	}
+
+	recent, _, err := store.CreateTask(ctx, CreateTaskInput{TaskType: "agent.run"})
+	if err != nil {
+		t.Fatalf("CreateTask(recent) error = %v", err)
+	}
+	if _, _, err := store.MarkSucceeded(ctx, recent.ID, map[string]any{"message": "done"}); err != nil {
+		t.Fatalf("MarkSucceeded(recent) error = %v", err)
+	}
+	if _, err := store.AppendEvent(ctx, recent.ID, EventTaskStarted, "info", map[string]any{"status": "running"}); err != nil {
+		t.Fatalf("AppendEvent(recent) error = %v", err)
+	}
+	if err := store.db.Model(&Task{}).Where("id = ?", recent.ID).Update("finished_at", now.Add(-24*time.Hour)).Error; err != nil {
+		t.Fatalf("set recent finished_at error = %v", err)
+	}
+
+	active, _, err := store.CreateTask(ctx, CreateTaskInput{TaskType: "agent.run"})
+	if err != nil {
+		t.Fatalf("CreateTask(active) error = %v", err)
+	}
+	if _, err := store.AppendEvent(ctx, active.ID, EventTaskStarted, "info", map[string]any{"status": "running"}); err != nil {
+		t.Fatalf("AppendEvent(active) error = %v", err)
+	}
+
+	count, err := store.CountExpiredEvents(ctx, now, 7*24*time.Hour)
+	if err != nil {
+		t.Fatalf("CountExpiredEvents() error = %v", err)
+	}
+	if count != 3 {
+		t.Fatalf("CountExpiredEvents() = %d, want 3 events for the expired task", count)
+	}
+
+	deleted, err := store.DeleteExpiredEvents(ctx, now, 7*24*time.Hour, 10)
+	if err != nil {
+		t.Fatalf("DeleteExpiredEvents() error = %v", err)
+	}
+	if deleted != 3 {
+		t.Fatalf("DeleteExpiredEvents() = %d, want 3", deleted)
+	}
+
+	expiredEvents, err := store.ListEvents(ctx, expired.ID, 0, 0)
+	if err != nil {
+		t.Fatalf("ListEvents(expired) error = %v", err)
+	}
+	if len(expiredEvents) != 0 {
+		t.Fatalf("expired task events = %#v, want all removed", expiredEvents)
+	}
+	recentEvents, err := store.ListEvents(ctx, recent.ID, 0, 0)
+	if err != nil {
+		t.Fatalf("ListEvents(recent) error = %v", err)
+	}
+	if len(recentEvents) == 0 {
+		t.Fatal("recent task events = 0, want retained")
+	}
+	activeEvents, err := store.ListEvents(ctx, active.ID, 0, 0)
+	if err != nil {
+		t.Fatalf("ListEvents(active) error = %v", err)
+	}
+	if len(activeEvents) == 0 {
+		t.Fatal("active task events = 0, want retained")
+	}
+}

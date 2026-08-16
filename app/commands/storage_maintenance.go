@@ -18,13 +18,21 @@ import (
 	"github.com/EquentR/agent_runtime/pkg/log"
 )
 
-func RunStorageMaintenance(cfg *config.Config, dryRun bool, apply bool, vacuum bool) error {
+// RunStorageMaintenance 执行存储维护。version 必须与正式启动使用同一应用版本，
+// 保证数据版本迁移路径与 Serve 一致。
+func RunStorageMaintenance(cfg *config.Config, version string, dryRun bool, apply bool, vacuum bool) error {
 	if cfg == nil {
 		return fmt.Errorf("config is required")
 	}
+	if strings.TrimSpace(version) == "" {
+		return fmt.Errorf("application version is required")
+	}
+	if vacuum && !cfg.Storage.ResolvedVacuumEnabled() {
+		return fmt.Errorf("vacuum is disabled by storage.vacuumEnabled")
+	}
 	log.Init(&cfg.Log)
 	db.Init(&cfg.Sqlite)
-	migration.Bootstrap("0.0.0-maintenance")
+	migration.Bootstrap(version)
 	ctx := context.Background()
 	now := time.Now().UTC()
 
@@ -45,6 +53,7 @@ func RunStorageMaintenance(cfg *config.Config, dryRun bool, apply bool, vacuum b
 	}
 
 	auditRetention := cfg.Storage.ResolvedAuditRetention()
+	taskEventRetention := cfg.Storage.ResolvedTaskEventRetention()
 	workspaceOptions := workspaces.CleanupOptions{
 		TaskRetention:   cfg.Workspaces.ResolvedTaskRetention(),
 		BackupRetention: cfg.Workspaces.ResolvedBackupRetention(),
@@ -56,6 +65,10 @@ func RunStorageMaintenance(cfg *config.Config, dryRun bool, apply bool, vacuum b
 			return err
 		}
 		taskDeltaBytes, err := taskStore.StreamDeltaEventBytes(ctx)
+		if err != nil {
+			return err
+		}
+		taskExpiredCount, err := taskStore.CountExpiredEvents(ctx, now, taskEventRetention)
 		if err != nil {
 			return err
 		}
@@ -93,6 +106,7 @@ func RunStorageMaintenance(cfg *config.Config, dryRun bool, apply bool, vacuum b
 		}
 		fmt.Printf("DRY RUN maintenance\n")
 		fmt.Printf("  task stream delta events: %d (%d bytes)\n", taskDeltaCount, taskDeltaBytes)
+		fmt.Printf("  expired task events: %d\n", taskExpiredCount)
 		fmt.Printf("  legacy redundant audit artifacts: %d\n", legacyArtifactCount)
 		fmt.Printf("  expired audit runs: %d\n", auditRunCount)
 		fmt.Printf("  expired audit artifact bytes: %d\n", auditArtifactBytes)
@@ -123,6 +137,19 @@ func RunStorageMaintenance(cfg *config.Config, dryRun bool, apply bool, vacuum b
 		}
 		totalTaskDeltaDeleted += deleted
 		fmt.Printf("  task delta batch deleted: %d\n", deleted)
+		if deleted == 0 {
+			break
+		}
+	}
+	totalTaskEventDeleted := int64(0)
+	fmt.Println("cleaning expired task events")
+	for {
+		deleted, err := taskStore.DeleteExpiredEvents(ctx, now, taskEventRetention, 500)
+		if err != nil {
+			return err
+		}
+		totalTaskEventDeleted += deleted
+		fmt.Printf("  task event batch deleted: %d\n", deleted)
 		if deleted == 0 {
 			break
 		}
@@ -197,6 +224,7 @@ func RunStorageMaintenance(cfg *config.Config, dryRun bool, apply bool, vacuum b
 
 	fmt.Printf("APPLY maintenance\n")
 	fmt.Printf("  task stream delta events deleted: %d\n", totalTaskDeltaDeleted)
+	fmt.Printf("  expired task events deleted: %d\n", totalTaskEventDeleted)
 	fmt.Printf("  legacy redundant audit artifacts compacted: %d\n", totalLegacyCompacted)
 	fmt.Printf("  expired audit runs deleted: %d\n", totalAuditDeleted)
 	fmt.Printf("  expired attachments processed: %d\n", totalAttachmentDeleted)

@@ -271,7 +271,7 @@ type StorageConfig struct {
 	TaskEventRetention  *time.Duration `yaml:"taskEventRetention"`
 	SessionRetention    *time.Duration `yaml:"sessionRetention"`
 	MaintenanceInterval *time.Duration `yaml:"maintenanceInterval"`
-	VacuumEnabled       bool           `yaml:"vacuumEnabled"`
+	VacuumEnabled       *bool          `yaml:"vacuumEnabled"`
 }
 
 func (c StorageConfig) ResolvedAuditRetention() time.Duration {
@@ -300,6 +300,12 @@ func (c StorageConfig) ResolvedTaskEventRetention() time.Duration {
 		return *c.TaskEventRetention
 	}
 	return defaultTaskEventRetention
+}
+
+// ResolvedVacuumEnabled 返回是否允许显式维护命令执行 VACUUM。
+// 默认允许，配置为 false 时拒绝 --vacuum 请求。
+func (c StorageConfig) ResolvedVacuumEnabled() bool {
+	return c.VacuumEnabled == nil || *c.VacuumEnabled
 }
 
 type AttachmentFilesystemConfig struct {

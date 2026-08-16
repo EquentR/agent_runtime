@@ -1216,6 +1216,53 @@ func TestStartSessionGCLoopDeletesExpiredSessions(t *testing.T) {
 	t.Fatal("expired session was not deleted by GC loop")
 }
 
+func TestStartTaskEventGCLoopDeletesExpiredEvents(t *testing.T) {
+	pkglog.Init(&pkglog.Config{Level: "error"})
+	database, store := newServeTestTaskStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	expired, _, err := store.CreateTask(ctx, coretasks.CreateTaskInput{TaskType: "agent.run"})
+	if err != nil {
+		t.Fatalf("CreateTask(expired) error = %v", err)
+	}
+	if _, _, err := store.MarkSucceeded(ctx, expired.ID, map[string]any{"message": "done"}); err != nil {
+		t.Fatalf("MarkSucceeded(expired) error = %v", err)
+	}
+	if err := database.Model(&coretasks.Task{}).Where("id = ?", expired.ID).Update("finished_at", now.Add(-8*24*time.Hour)).Error; err != nil {
+		t.Fatalf("backdate finished_at error = %v", err)
+	}
+
+	loopCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	startTaskEventGCLoop(loopCtx, store, 10*time.Millisecond, time.Nanosecond)
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		count, err := store.CountExpiredEvents(ctx, now, time.Nanosecond)
+		if err != nil {
+			t.Fatalf("CountExpiredEvents() error = %v", err)
+		}
+		if count == 0 {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("expired task events were not deleted by GC loop")
+}
+
+func newServeTestTaskStore(t *testing.T) (*gorm.DB, *coretasks.Store) {
+	t.Helper()
+	database, err := gorm.Open(sqlite.Open("file:"+strings.ReplaceAll(t.Name(), "/", "_")+"?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("gorm.Open() error = %v", err)
+	}
+	if err := database.AutoMigrate(&coretasks.Task{}, &coretasks.TaskEvent{}); err != nil {
+		t.Fatalf("AutoMigrate() error = %v", err)
+	}
+	return database, coretasks.NewStore(database)
+}
+
 func TestCheckpointDatabaseRunsWalCheckpoint(t *testing.T) {
 	db := newServeTestDB(t)
 	if err := db.Exec("PRAGMA journal_mode=WAL").Error; err != nil {

@@ -87,6 +87,7 @@ func Serve(c *config.Config, version, commit string, buildArgs ...string) {
 	}
 	startAuditGCLoop(globalCtx, auditRuntime.Store, c.Storage.ResolvedMaintenanceInterval(), c.Storage.ResolvedAuditRetention())
 	taskManager := newTaskManager(taskStore, approvalStore, interactionStore, c.Tasks, auditRuntime.TaskRecorder)
+	startTaskEventGCLoop(globalCtx, taskStore, c.Storage.ResolvedMaintenanceInterval(), c.Storage.ResolvedTaskEventRetention())
 	conversationStore := coreagent.NewConversationStore(db.DB())
 	if err := conversationStore.AutoMigrate(); err != nil {
 		log.Panicf("Failed to migrate conversation store: %v", err)
@@ -189,7 +190,9 @@ func checkpointDatabase(database *gorm.DB) error {
 	if err := database.Raw("PRAGMA wal_checkpoint(TRUNCATE)").Scan(&result).Error; err != nil {
 		return err
 	}
-	_ = result
+	if len(result) > 0 && result[0].Busy != 0 {
+		return fmt.Errorf("wal checkpoint busy: %d log frames, %d checkpointed", result[0].Log, result[0].Checkpointed)
+	}
 	return nil
 }
 
@@ -550,6 +553,31 @@ func startAuditGCLoop(ctx context.Context, store *coreaudit.Store, interval time
 				}
 				if processed > 0 {
 					log.Infof("Audit GC processed %d expired runs", processed)
+				}
+			}
+		}
+	}()
+}
+
+func startTaskEventGCLoop(ctx context.Context, store *coretasks.Store, interval time.Duration, retention time.Duration) {
+	if ctx == nil || store == nil || interval <= 0 || retention <= 0 {
+		return
+	}
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				processed, err := store.DeleteExpiredEvents(ctx, time.Now().UTC(), retention, 500)
+				if err != nil {
+					log.Warnf("Task event GC failed: %v", err)
+					continue
+				}
+				if processed > 0 {
+					log.Infof("Task event GC processed %d expired events", processed)
 				}
 			}
 		}

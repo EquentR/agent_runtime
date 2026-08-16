@@ -24,15 +24,12 @@ var (
 )
 
 var (
-	configFile               = flag.String("config", "conf/app.yaml", "config file")
-	runtimeMode              = flag.String("runtime-mode", "", "runtime mode (direct, systemd, windows-service)")
-	serviceName              = flag.String("service-name", "IceArt", "service name")
-	updateHelperJob          = flag.String("update-helper-job", "", "internal updater helper job")
-	updateStateOwner         = flag.String("update-state-owner", "", "internal updater state owner")
-	updateProtectedRoot      = flag.String("update-protected-root", "", "internal protected updater root")
-	storageMaintenanceDryRun = flag.Bool("storage-maintenance-dry-run", false, "print storage maintenance dry run summary")
-	storageMaintenanceApply  = flag.Bool("storage-maintenance-apply", false, "apply storage maintenance cleanup")
-	storageMaintenanceVacuum = flag.Bool("storage-maintenance-vacuum", false, "run storage maintenance and vacuum database")
+	configFile          = flag.String("config", "conf/app.yaml", "config file")
+	runtimeMode         = flag.String("runtime-mode", "", "runtime mode (direct, systemd, windows-service)")
+	serviceName         = flag.String("service-name", "IceArt", "service name")
+	updateHelperJob     = flag.String("update-helper-job", "", "internal updater helper job")
+	updateStateOwner    = flag.String("update-state-owner", "", "internal updater state owner")
+	updateProtectedRoot = flag.String("update-protected-root", "", "internal protected updater root")
 )
 
 // init 打印当前构建版本信息，便于启动时快速确认二进制来源。
@@ -66,16 +63,6 @@ func main() {
 		}
 		return
 	}
-	if *storageMaintenanceDryRun || *storageMaintenanceApply || *storageMaintenanceVacuum {
-		cfg, err := loadConfig(*configFile)
-		if err != nil {
-			panic(err)
-		}
-		if err := commands.RunStorageMaintenance(cfg, *storageMaintenanceDryRun, *storageMaintenanceApply || *storageMaintenanceVacuum, *storageMaintenanceVacuum); err != nil {
-			panic(err)
-		}
-		return
-	}
 	if err := runProgram(*runtimeMode, *serviceName, func() error {
 		cfg, err := loadConfig(*configFile)
 		if err != nil {
@@ -104,7 +91,7 @@ func runStorageMaintenanceCommand(args []string) error {
 	if err != nil {
 		return err
 	}
-	return commands.RunStorageMaintenance(cfg, *dryRun, *apply || *vacuum, *vacuum)
+	return commands.RunStorageMaintenance(cfg, Version, *dryRun, *apply || *vacuum, *vacuum)
 }
 
 func openConfiguredBrowserWhenReady(cfg *config.Config, waiter func(string) bool, opener func(string) error) {

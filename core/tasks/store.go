@@ -705,6 +705,49 @@ func (s *Store) StreamDeltaEventBytes(ctx context.Context) (int64, error) {
 	return total, err
 }
 
+func (s *Store) expiredTaskEventQuery(ctx context.Context, query *gorm.DB, now time.Time, retention time.Duration) *gorm.DB {
+	cutoff := now.UTC().Add(-retention)
+	return query.Where("task_id IN (?)",
+		s.db.WithContext(ctx).Model(&Task{}).
+			Select("id").
+			Where("finished_at IS NOT NULL").
+			Where("finished_at < ?", cutoff),
+	)
+}
+
+// CountExpiredEvents 统计已结束任务中超过保留期的事件数量。
+func (s *Store) CountExpiredEvents(ctx context.Context, now time.Time, retention time.Duration) (int64, error) {
+	if s == nil || s.db == nil {
+		return 0, fmt.Errorf("store db cannot be nil")
+	}
+	var count int64
+	err := s.expiredTaskEventQuery(ctx, s.db.WithContext(ctx).Model(&TaskEvent{}), now, retention).Count(&count).Error
+	return count, err
+}
+
+// DeleteExpiredEvents 分批删除已结束任务中超过保留期的事件。
+func (s *Store) DeleteExpiredEvents(ctx context.Context, now time.Time, retention time.Duration, limit int) (int64, error) {
+	if s == nil || s.db == nil {
+		return 0, fmt.Errorf("store db cannot be nil")
+	}
+	query := s.expiredTaskEventQuery(ctx, s.db.WithContext(ctx).Model(&TaskEvent{}), now, retention).Order("id asc")
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	var events []TaskEvent
+	if err := query.Find(&events).Error; err != nil {
+		return 0, err
+	}
+	deleted := int64(0)
+	for _, event := range events {
+		if err := s.db.WithContext(ctx).Delete(&TaskEvent{}, "id = ?", event.ID).Error; err != nil {
+			return deleted, err
+		}
+		deleted++
+	}
+	return deleted, nil
+}
+
 // MarkCancelled 将任务推进到 cancelled 终态。
 func (s *Store) MarkCancelled(ctx context.Context, id string, reason any) (*Task, []TaskEvent, error) {
 	return s.finishTask(ctx, id, StatusCancelled, nil, reason)

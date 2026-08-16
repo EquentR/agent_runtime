@@ -149,6 +149,10 @@ func (r *Runtime) ListChildTasks(ctx context.Context) ([]Task, error) {
 }
 
 // Emit 追加一个自定义任务事件并广播给实时订阅者。
+//
+// RuntimeEventPayload 会把持久化摘要写入 task_events，同时以独立 live 事件
+// 广播完整载荷。live 事件不携带持久化 seq，避免实时订阅方把摘要事件序号
+// 记入重连游标后跳过同一 seq 的持久化事件。
 func (r *Runtime) Emit(ctx context.Context, eventType string, level string, payload any) error {
 	persistentPayload := payload
 	var livePayloadJSON json.RawMessage
@@ -176,9 +180,14 @@ func (r *Runtime) Emit(ctx context.Context, eventType string, level string, payl
 		return err
 	}
 	if len(livePayloadJSON) > 0 {
-		liveEvent := event
-		liveEvent.PayloadJSON = cloneRawMessage(livePayloadJSON)
-		r.manager.publish(liveEvent)
+		r.manager.publish(TaskEvent{
+			TaskID:      r.taskID,
+			EventType:   eventType,
+			Level:       event.Level,
+			PayloadJSON: cloneRawMessage(livePayloadJSON),
+			CreatedAt:   event.CreatedAt,
+			Live:        true,
+		})
 		return nil
 	}
 	r.manager.publish(event)

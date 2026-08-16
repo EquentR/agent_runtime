@@ -4243,6 +4243,7 @@ func decodeErrorSnapshotArtifact(t *testing.T, artifact *coreaudit.Artifact) err
 type executorRuntimePromptEnvelopeAuditArtifact struct {
 	Segments           []runnerPromptSegmentSummary `json:"segments,omitempty"`
 	SegmentCount       int                          `json:"segment_count"`
+	MessageCount       int                          `json:"message_count"`
 	PromptMessageCount int                          `json:"prompt_message_count"`
 	PhaseSegmentCounts map[string]int               `json:"phase_segment_counts,omitempty"`
 	SourceCounts       map[string]int               `json:"source_counts,omitempty"`
