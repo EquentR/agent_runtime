@@ -324,7 +324,7 @@ readonly 任务结束后进入可回收终态，过期 workspace 和 backup 能�
 - [x] 调整 GC 事务顺序并处理历史 `expired` 记录。
 - [x] 实现孤立附件 dry-run 与清理能力。
 - [x] 运行聚焦测试并确认通过。
-- [x] 记录任务 checkpoint commit：`88fba29` 重试语义；`c65d789` 孤立附件扫描/清理。
+- [x] 记录任务 checkpoint commit：`88fba29` 重试语义；`c65d789` 孤立附件扫描/清理；`4611d08` 清理历史 expired 遗留文件。
 
 ## TASK-10: Session GC
 
