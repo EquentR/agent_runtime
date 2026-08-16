@@ -99,7 +99,7 @@ func (s *Store) FindLatestTaskByConversation(ctx context.Context, conversationID
 	err := s.db.WithContext(ctx).
 		Where("json_extract(input_json, '$.conversation_id') = ? OR json_extract(result_json, '$.conversation_id') = ?", trimmedConversationID, trimmedConversationID).
 		Order("created_at desc").
-		Order("id desc").
+		Order("rowid desc").
 		Take(&task).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
@@ -122,7 +122,7 @@ func (s *Store) FindLatestActiveTaskByConversation(ctx context.Context, conversa
 		Where("status IN ?", []Status{StatusQueued, StatusRunning, StatusWaiting, StatusCancelRequested}).
 		Where("json_extract(input_json, '$.conversation_id') = ? OR json_extract(result_json, '$.conversation_id') = ?", trimmedConversationID, trimmedConversationID).
 		Order("created_at desc").
-		Order("id desc").
+		Order("rowid desc").
 		Take(&task).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil

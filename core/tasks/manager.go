@@ -69,6 +69,13 @@ var ErrTaskSuspended = errors.New("task suspended")
 
 const defaultTaskPollInterval = 5 * time.Second
 
+// taskCreatedAuditWaitTimeout 是 worker 等待 run.created 审计完成的超时时间。
+// 只影响当前进程刚创建的任务，重启恢复的任务不会阻塞等待。
+const taskCreatedAuditWaitTimeout = 200 * time.Millisecond
+
+// taskCreatedAuditGrace 用于识别当前进程刚创建、但信号登记窗口尚未完成的任务。
+const taskCreatedAuditGrace = time.Second
+
 // minWaitingTaskReconciliationAge 给 Runtime.Suspend 的正常审批收尾路径留出短暂窗口。
 const minWaitingTaskReconciliationAge = 50 * time.Millisecond
 
@@ -89,11 +96,47 @@ type Manager struct {
 
 	mu            sync.RWMutex
 	maintenanceMu sync.RWMutex
-	creationMu    sync.RWMutex
+	createdAudit  createdAuditTracker
 	executors     map[string]Executor
 	activeCancel  map[string]context.CancelFunc
 	claimsPaused  bool
 	startOnce     sync.Once
+}
+
+// createdAuditTracker 让 worker 在 run.created 审计事件完成前不记录后续生命周期事件。
+type createdAuditTracker struct {
+	mu   sync.Mutex
+	done map[string]chan struct{}
+}
+
+func newCreatedAuditTracker() createdAuditTracker {
+	return createdAuditTracker{done: make(map[string]chan struct{})}
+}
+
+func (t *createdAuditTracker) begin(taskID string) <-chan struct{} {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	done := t.done[taskID]
+	if done == nil {
+		done = make(chan struct{})
+		t.done[taskID] = done
+	}
+	return done
+}
+
+func (t *createdAuditTracker) finish(taskID string) {
+	t.mu.Lock()
+	done := t.done[taskID]
+	t.mu.Unlock()
+	if done != nil {
+		close(done)
+	}
+}
+
+func (t *createdAuditTracker) doneFor(taskID string) <-chan struct{} {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.done[taskID]
 }
 
 // NewManager 创建一个串行任务管理器实例。
@@ -136,6 +179,7 @@ func NewManager(store *Store, options ManagerOptions) *Manager {
 		heartbeatInterval: heartbeatInterval,
 		executors:         make(map[string]Executor),
 		activeCancel:      make(map[string]context.CancelFunc),
+		createdAudit:      newCreatedAuditTracker(),
 	}
 }
 
@@ -182,10 +226,9 @@ func (m *Manager) CreateTask(ctx context.Context, input CreateTaskInput) (*Task,
 		return nil, err
 	}
 	corelog.Info("task created", corelog.String("component", "tasks"), corelog.String("module", "task_manager"), corelog.String("task_id", task.ID), corelog.String("task_type", task.TaskType), corelog.String("status", string(task.Status)))
-	// creationMu 只串行化审计事件写入，不让 worker 在 run.created 前写入 run.started。
-	m.creationMu.Lock()
+	m.createdAudit.begin(task.ID)
+	defer m.createdAudit.finish(task.ID)
 	m.recordTaskCreated(task)
-	m.creationMu.Unlock()
 	m.publish(events...)
 	return task, nil
 }
@@ -495,9 +538,9 @@ func (m *Manager) RetryTask(ctx context.Context, id string) (*Task, error) {
 	if err != nil {
 		return nil, err
 	}
-	m.creationMu.Lock()
+	m.createdAudit.begin(task.ID)
+	defer m.createdAudit.finish(task.ID)
 	m.recordTaskCreated(task)
-	m.creationMu.Unlock()
 	m.publish(events...)
 	return task, nil
 }
@@ -614,12 +657,36 @@ func (m *Manager) runWorker(ctx context.Context, workerIndex int) {
 		}
 
 		corelog.Info("task claimed", corelog.String("component", "tasks"), corelog.String("module", "task_manager"), corelog.String("task_id", task.ID), corelog.String("task_type", task.TaskType), corelog.String("runner_id", m.runnerID), corelog.Int("worker_index", workerIndex))
-		// 等待创建方完成 run.created 审计事件，再写 run.started。
-		m.creationMu.RLock()
+		m.waitForCreatedAudit(task)
 		m.recordTaskStarted(task)
-		m.creationMu.RUnlock()
 		m.publish(events...)
 		m.executeTask(ctx, task)
+	}
+}
+
+// waitForCreatedAudit 等待创建方完成 run.created 审计事件。
+// 若任务来自历史队列或当前进程重启后的恢复，信号不存在时按领取时间兜底，避免 worker 永久阻塞。
+func (m *Manager) waitForCreatedAudit(task *Task) {
+	if task == nil {
+		return
+	}
+	done := m.createdAudit.doneFor(task.ID)
+	if done != nil {
+		timer := time.NewTimer(taskCreatedAuditWaitTimeout)
+		defer timer.Stop()
+		select {
+		case <-done:
+		case <-timer.C:
+		}
+		return
+	}
+	if task.CreatedAt.After(time.Now().UTC().Add(-taskCreatedAuditGrace)) {
+		timer := time.NewTimer(taskCreatedAuditWaitTimeout)
+		defer timer.Stop()
+		select {
+		case <-m.createdAudit.begin(task.ID):
+		case <-timer.C:
+		}
 	}
 }
 
