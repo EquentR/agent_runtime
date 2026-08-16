@@ -212,13 +212,23 @@ func (s *Store) GCExpired(ctx context.Context, now time.Time, limit int) (int, e
 
 	processed := 0
 	for _, attachment := range expired {
-		if attachment.Status == StatusExpired {
-			continue
-		}
+		alreadyExpired := attachment.Status == StatusExpired
 		if s.storage != nil && strings.TrimSpace(attachment.StorageKey) != "" {
-			if err := s.storage.Delete(ctx, attachment.StorageKey); err != nil && !errors.Is(err, ErrObjectNotFound) {
-				return processed, err
+			if err := s.storage.Delete(ctx, attachment.StorageKey); err != nil {
+				if errors.Is(err, ErrObjectNotFound) {
+					if alreadyExpired {
+						continue
+					}
+				} else {
+					return processed, err
+				}
 			}
+		}
+		if alreadyExpired {
+			if s.storage != nil && strings.TrimSpace(attachment.StorageKey) != "" {
+				processed++
+			}
+			continue
 		}
 		if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 			switch attachment.Status {

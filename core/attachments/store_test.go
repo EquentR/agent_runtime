@@ -406,6 +406,76 @@ func TestAttachmentStoreMarksSentAttachmentExpiredWithoutRemovingMetadata(t *tes
 	}
 }
 
+func TestAttachmentStoreGCExpiredCleansLegacyExpiredFile(t *testing.T) {
+	ctx := context.Background()
+	storage, err := NewFilesystemStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFilesystemStore() error = %v", err)
+	}
+	store := newTestStoreWithStorage(t, storage)
+
+	storedObject, err := storage.PutDraft(ctx, PutDraftInput{
+		FileName: "legacy-expired.txt",
+		MimeType: "text/plain",
+		Data:     []byte("legacy"),
+	})
+	if err != nil {
+		t.Fatalf("PutDraft() error = %v", err)
+	}
+	draft, err := store.CreateDraft(ctx, CreateDraftInput{
+		ID:             "att_legacy_expired",
+		CreatedBy:      "alice",
+		StorageBackend: storedObject.StorageBackend,
+		StorageKey:     storedObject.StorageKey,
+		FileName:       storedObject.FileName,
+		MimeType:       storedObject.MimeType,
+		SizeBytes:      storedObject.SizeBytes,
+		Kind:           storedObject.Kind,
+	})
+	if err != nil {
+		t.Fatalf("CreateDraft() error = %v", err)
+	}
+	expiredAt := time.Now().UTC().Add(-time.Minute)
+	sent, err := store.PromoteDraftToSent(ctx, draft.ID, PromoteInput{
+		ConversationID: "conv_legacy",
+		RetainUntil:    &expiredAt,
+	})
+	if err != nil {
+		t.Fatalf("PromoteDraftToSent() error = %v", err)
+	}
+	if err := store.db.WithContext(ctx).Model(&Attachment{}).
+		Where("id = ?", sent.ID).
+		Update("status", StatusExpired).Error; err != nil {
+		t.Fatalf("mark attachment expired directly error = %v", err)
+	}
+
+	processed, err := store.GCExpired(ctx, time.Now().UTC(), 10)
+	if err != nil {
+		t.Fatalf("GCExpired() error = %v", err)
+	}
+	if processed != 1 {
+		t.Fatalf("GCExpired() processed = %d, want 1", processed)
+	}
+	if _, err := storage.Stat(ctx, sent.StorageKey); !errors.Is(err, ErrObjectNotFound) {
+		t.Fatalf("Stat() error = %v, want ErrObjectNotFound", err)
+	}
+	loaded, err := store.GetAttachment(ctx, sent.ID)
+	if err != nil {
+		t.Fatalf("GetAttachment() error = %v", err)
+	}
+	if loaded.Status != StatusExpired {
+		t.Fatalf("loaded status = %q, want %q", loaded.Status, StatusExpired)
+	}
+
+	processed, err = store.GCExpired(ctx, time.Now().UTC(), 10)
+	if err != nil {
+		t.Fatalf("second GCExpired() error = %v", err)
+	}
+	if processed != 0 {
+		t.Fatalf("second GCExpired() processed = %d, want 0", processed)
+	}
+}
+
 func TestAttachmentStoreGCExpiredRetriesAfterStorageDeleteFailure(t *testing.T) {
 	ctx := context.Background()
 	storage := &failingDeleteStorage{deleteErr: errors.New("disk full")}
