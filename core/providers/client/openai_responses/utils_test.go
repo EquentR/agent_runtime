@@ -272,8 +272,10 @@ func TestBuildResponseRequestParams_ReplaysAssistantReasoningItems(t *testing.T)
 	if first["type"] != "reasoning" || first["id"] != "rs_1" {
 		t.Fatalf("replayed reasoning item = %#v", first)
 	}
-	if first["encrypted_content"] != "enc_123" {
-		t.Fatalf("encrypted_content = %v, want enc_123", first["encrypted_content"])
+	// encrypted_content must NOT be sent: it references server-side state that is not
+	// persisted (store=false) and expires, causing "Item not found" errors on continuation.
+	if first["encrypted_content"] != nil {
+		t.Fatalf("encrypted_content = %v, want nil (should not be sent with store=false)", first["encrypted_content"])
 	}
 }
 
