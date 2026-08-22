@@ -18,8 +18,8 @@ const (
 )
 
 type chatMessageState struct {
-	Role             string              `json:"role,omitempty"`
-	Content          string              `json:"content,omitempty"`
+	Role             string              `json:"role"`
+	Content          string              `json:"content"`
 	ReasoningContent string              `json:"reasoning_content,omitempty"`
 	Refusal          string              `json:"refusal,omitempty"`
 	ToolCalls        []chatToolCallState `json:"tool_calls,omitempty"`

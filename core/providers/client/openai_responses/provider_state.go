@@ -18,10 +18,29 @@ const (
 )
 
 type persistedResponseState struct {
-	ResponseID   string                              `json:"response_id,omitempty"`
-	Conversation string                              `json:"conversation,omitempty"`
-	Output       []responses.ResponseOutputItemUnion `json:"output"`
-	Items        []persistedResponseItem             `json:"items,omitempty"`
+	ResponseID   string                  `json:"response_id,omitempty"`
+	Conversation string                  `json:"conversation,omitempty"`
+	Output       []persistedOutputItem   `json:"output"`
+	Items        []persistedResponseItem `json:"items,omitempty"`
+}
+
+type persistedOutputItem struct {
+	ID               string                                   `json:"id,omitempty"`
+	Type             string                                   `json:"type,omitempty"`
+	Role             string                                   `json:"role,omitempty"`
+	Status           string                                   `json:"status,omitempty"`
+	Content          []persistedOutputMessageContent          `json:"content,omitempty"`
+	Summary          []responses.ResponseReasoningItemSummary `json:"summary,omitempty"`
+	EncryptedContent string                                   `json:"encrypted_content,omitempty"`
+	CallID           string                                   `json:"call_id,omitempty"`
+	Name             string                                   `json:"name,omitempty"`
+	Arguments        json.RawMessage                          `json:"arguments,omitempty"`
+}
+
+type persistedOutputMessageContent struct {
+	Type    string `json:"type,omitempty"`
+	Text    string `json:"text,omitempty"`
+	Refusal string `json:"refusal,omitempty"`
 }
 
 type persistedResponseItem struct {
@@ -73,7 +92,15 @@ func outputArchiveFromProviderState(state *model.ProviderState) ([]responses.Res
 		if len(persisted.Output) == 0 {
 			return nil, true, nil
 		}
-		return persisted.Output, true, nil
+		items := make([]responses.ResponseOutputItemUnion, 0, len(persisted.Output))
+		for _, persistedItem := range persisted.Output {
+			item, err := persistedOutputItemToResponse(persistedItem)
+			if err != nil {
+				return nil, true, err
+			}
+			items = append(items, item)
+		}
+		return items, true, nil
 	case outputItemsFormat:
 		var items []responses.ResponseOutputItemUnion
 		if err := json.Unmarshal(state.Payload, &items); err != nil {
@@ -86,7 +113,15 @@ func outputArchiveFromProviderState(state *model.ProviderState) ([]responses.Res
 }
 
 func providerStateFromOutputItems(responseID string, items []responses.ResponseOutputItemUnion) (*model.ProviderState, error) {
-	payload, err := json.Marshal(persistedResponseState{ResponseID: strings.TrimSpace(responseID), Output: items, Items: persistedResponseItems(items)})
+	persisted := make([]persistedOutputItem, 0, len(items))
+	for _, item := range items {
+		persistedItem, err := responseOutputItemToPersisted(item)
+		if err != nil {
+			return nil, err
+		}
+		persisted = append(persisted, persistedItem)
+	}
+	payload, err := json.Marshal(persistedResponseState{ResponseID: strings.TrimSpace(responseID), Output: persisted, Items: persistedResponseItems(items)})
 	if err != nil {
 		return nil, err
 	}
@@ -97,6 +132,83 @@ func providerStateFromOutputItems(responseID string, items []responses.ResponseO
 		ResponseID: strings.TrimSpace(responseID),
 		Payload:    payload,
 	}, nil
+}
+
+func responseOutputItemToPersisted(item responses.ResponseOutputItemUnion) (persistedOutputItem, error) {
+	persisted := persistedOutputItem{
+		ID:               strings.TrimSpace(item.ID),
+		Type:             item.Type,
+		Role:             item.Role,
+		Status:           item.Status,
+		EncryptedContent: strings.TrimSpace(item.EncryptedContent),
+	}
+	switch item.Type {
+	case "message":
+		persisted.Content = make([]persistedOutputMessageContent, 0, len(item.Content))
+		for _, part := range item.Content {
+			content := persistedOutputMessageContent{Type: part.Type, Text: part.Text, Refusal: part.Refusal}
+			persisted.Content = append(persisted.Content, content)
+		}
+	case "reasoning":
+		persisted.Summary = append([]responses.ResponseReasoningItemSummary(nil), item.Summary...)
+	case "function_call":
+		persisted.CallID = strings.TrimSpace(item.CallID)
+		persisted.Name = strings.TrimSpace(item.Name)
+		raw, err := json.Marshal(item.Arguments.OfString)
+		if err != nil {
+			raw = json.RawMessage(`""`)
+		}
+		persisted.Arguments = raw
+	default:
+		return persistedOutputItem{}, fmt.Errorf("unsupported output item type in provider state: %s", item.Type)
+	}
+	return persisted, nil
+}
+
+func persistedOutputItemToResponse(persisted persistedOutputItem) (responses.ResponseOutputItemUnion, error) {
+	item := responses.ResponseOutputItemUnion{
+		ID:               strings.TrimSpace(persisted.ID),
+		Type:             persisted.Type,
+		Role:             persisted.Role,
+		Status:           persisted.Status,
+		EncryptedContent: strings.TrimSpace(persisted.EncryptedContent),
+	}
+	switch persisted.Type {
+	case "message":
+		item.Content = make([]responses.ResponseOutputMessageContentUnion, 0, len(persisted.Content))
+		for _, part := range persisted.Content {
+			switch part.Type {
+			case "", "output_text":
+				item.Content = append(item.Content, responses.ResponseOutputMessageContentUnion{Type: "output_text", Text: part.Text})
+			case "refusal":
+				item.Content = append(item.Content, responses.ResponseOutputMessageContentUnion{Type: "refusal", Refusal: part.Refusal})
+			default:
+				return responses.ResponseOutputItemUnion{}, fmt.Errorf("unsupported persisted output message content type: %s", part.Type)
+			}
+		}
+	case "reasoning":
+		item.Summary = append([]responses.ResponseReasoningItemSummary(nil), persisted.Summary...)
+	case "function_call":
+		item.CallID = strings.TrimSpace(persisted.CallID)
+		item.Name = strings.TrimSpace(persisted.Name)
+		if len(persisted.Arguments) > 0 {
+			var arguments string
+			if err := json.Unmarshal(persisted.Arguments, &arguments); err != nil {
+				// Legacy payloads stored the SDK union object as arguments.
+				var legacy struct {
+					OfString string `json:"OfString"`
+				}
+				if legacyErr := json.Unmarshal(persisted.Arguments, &legacy); legacyErr != nil {
+					return responses.ResponseOutputItemUnion{}, err
+				}
+				arguments = legacy.OfString
+			}
+			item.Arguments.OfString = arguments
+		}
+	default:
+		return responses.ResponseOutputItemUnion{}, fmt.Errorf("unsupported persisted output item type: %s", persisted.Type)
+	}
+	return item, nil
 }
 
 func persistedResponseItems(items []responses.ResponseOutputItemUnion) []persistedResponseItem {
